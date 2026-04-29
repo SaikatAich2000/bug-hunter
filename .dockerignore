@@ -1,0 +1,28 @@
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Local DBs / envs / build artefacts
+*.db
+*.sqlite
+*.sqlite3
+.env
+.venv
+venv
+env
+
+# Tests aren't needed at runtime
+tests
+
+# Docs / VCS
+.git
+.gitignore
+README.md
+*.md
+
+# OS noise
+.DS_Store
+Thumbs.db

@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bug Hunter</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=3.0.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.0.0" />
+</head>
+<body>
+  <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+
+  <div class="app">
+    <!-- ============================== SIDEBAR ============================== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-logo">
+          <!-- RDR2-flavored emblem: antique revolver + ladybug -->
+          <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="brassG" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#f5d089"/>
+                <stop offset="50%" stop-color="#c9954a"/>
+                <stop offset="100%" stop-color="#7a5621"/>
+              </linearGradient>
+              <linearGradient id="woodG" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#7a4a2a"/>
+                <stop offset="100%" stop-color="#4a2a18"/>
+              </linearGradient>
+              <radialGradient id="bugG" cx="0.4" cy="0.35">
+                <stop offset="0%" stop-color="#ff6b5e"/>
+                <stop offset="60%" stop-color="#c83a30"/>
+                <stop offset="100%" stop-color="#7a1e18"/>
+              </radialGradient>
+            </defs>
+
+            <!-- Revolver, tilted slightly -->
+            <g transform="rotate(-18 32 32)">
+              <!-- Barrel -->
+              <rect x="14" y="28" width="28" height="6" rx="1.5"
+                    fill="url(#brassG)" stroke="#3a2410" stroke-width="0.8"/>
+              <!-- Muzzle -->
+              <circle cx="13.5" cy="31" r="1.2" fill="#1a0e08"/>
+              <!-- Cylinder -->
+              <circle cx="38" cy="31" r="6" fill="url(#brassG)" stroke="#3a2410" stroke-width="0.8"/>
+              <circle cx="38" cy="31" r="1.6" fill="#1a0e08"/>
+              <circle cx="35" cy="29" r="0.9" fill="#3a2410"/>
+              <circle cx="41" cy="29" r="0.9" fill="#3a2410"/>
+              <circle cx="35" cy="33" r="0.9" fill="#3a2410"/>
+              <circle cx="41" cy="33" r="0.9" fill="#3a2410"/>
+              <!-- Hammer -->
+              <path d="M42 27 L46 24 L47 27 L44 29 Z"
+                    fill="url(#brassG)" stroke="#3a2410" stroke-width="0.6"/>
+              <!-- Trigger guard -->
+              <path d="M40 36 Q42 42 44 42 L46 42 Q48 42 48 39 L48 36 Z"
+                    fill="none" stroke="#3a2410" stroke-width="1.4"/>
+              <!-- Grip (wood) -->
+              <path d="M44 36 L52 50 L48 52 L41 38 Z"
+                    fill="url(#woodG)" stroke="#2a1408" stroke-width="0.8"/>
+              <!-- Wood grain -->
+              <path d="M46 40 L50 49" stroke="#2a1408" stroke-width="0.4" opacity="0.5"/>
+              <path d="M44 41 L48 50" stroke="#2a1408" stroke-width="0.4" opacity="0.5"/>
+            </g>
+
+            <!-- Ladybug, perched on the muzzle area -->
+            <g transform="translate(14 16)">
+              <!-- Shadow -->
+              <ellipse cx="8" cy="15" rx="7" ry="1.2" fill="#000" opacity="0.25"/>
+              <!-- Body -->
+              <ellipse cx="8" cy="9" rx="7" ry="6" fill="url(#bugG)"
+                       stroke="#3a0d0a" stroke-width="0.7"/>
+              <!-- Center seam -->
+              <line x1="8" y1="3.5" x2="8" y2="14.5" stroke="#3a0d0a" stroke-width="0.7"/>
+              <!-- Spots -->
+              <circle cx="4.5" cy="7" r="1.1" fill="#1a0a08"/>
+              <circle cx="11.5" cy="7" r="1.1" fill="#1a0a08"/>
+              <circle cx="4" cy="11" r="0.9" fill="#1a0a08"/>
+              <circle cx="12" cy="11" r="0.9" fill="#1a0a08"/>
+              <circle cx="6.5" cy="12.5" r="0.7" fill="#1a0a08"/>
+              <circle cx="9.5" cy="12.5" r="0.7" fill="#1a0a08"/>
+              <!-- Head -->
+              <ellipse cx="8" cy="3.8" rx="3" ry="2.2" fill="#1a0a08"/>
+              <!-- Eyes -->
+              <circle cx="6.7" cy="3.5" r="0.55" fill="#fff"/>
+              <circle cx="9.3" cy="3.5" r="0.55" fill="#fff"/>
+              <!-- Antennae -->
+              <path d="M6.5 2.4 Q5.5 0.8 4.5 0.5" stroke="#1a0a08" stroke-width="0.7" fill="none"/>
+              <path d="M9.5 2.4 Q10.5 0.8 11.5 0.5" stroke="#1a0a08" stroke-width="0.7" fill="none"/>
+              <circle cx="4.4" cy="0.5" r="0.5" fill="#1a0a08"/>
+              <circle cx="11.6" cy="0.5" r="0.5" fill="#1a0a08"/>
+              <!-- Highlight on shell -->
+              <ellipse cx="5.5" cy="6.5" rx="1.2" ry="0.8" fill="#fff" opacity="0.35"/>
+            </g>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">Bug Hunter</div>
+          <div class="brand-version" id="brandVersion">v—</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-btn active" data-view="list"><span class="nav-icon">📋</span><span>Bugs</span></button>
+        <button class="nav-btn" data-view="analytics"><span class="nav-icon">📊</span><span>Analytics</span></button>
+        <button class="nav-btn" data-view="audit"><span class="nav-icon">🛡</span><span>Audit Trail</span></button>
+      </nav>
+
+      <section class="side-section">
+        <div class="side-section-header">
+          <span>Projects</span>
+          <button class="icon-btn" id="newProjectBtn" title="New project" aria-label="New project">+</button>
+        </div>
+        <ul class="side-list" id="projectList"></ul>
+      </section>
+
+      <section class="side-section">
+        <div class="side-section-header">
+          <span>Users</span>
+          <button class="icon-btn" id="newUserBtn" title="New user" aria-label="New user">+</button>
+        </div>
+        <ul class="side-list" id="userList"></ul>
+      </section>
+
+      <section class="side-section">
+        <div class="side-section-header"><span>Acting As</span></div>
+        <select id="actorSelect" class="actor-select" aria-label="Acting as">
+          <option value="">— select user —</option>
+        </select>
+      </section>
+
+      <div class="side-footer">
+        <button class="link-btn" id="exportCsvBtn">⬇ Export CSV</button>
+        <button class="link-btn" id="themeBtn">🌗 Theme</button>
+      </div>
+    </aside>
+
+    <!-- ============================== MAIN ============================== -->
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu">☰</button>
+        <h1 class="page-title" id="pageTitle">All Bugs</h1>
+        <div class="search-wrap">
+          <input id="search" type="search" placeholder="Search bugs…" autocomplete="off" />
+        </div>
+        <button class="btn primary" id="newBugBtn">+ New Bug</button>
+      </header>
+
+      <!-- KPI strip -->
+      <section class="kpi-strip">
+        <div class="kpi"><div class="kpi-num" id="kpiBugs">0</div><div class="kpi-label">Total Bugs</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiOpen">0</div><div class="kpi-label">Open</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiResolved">0</div><div class="kpi-label">Resolved</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiUsers">0</div><div class="kpi-label">Users</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiProjects">0</div><div class="kpi-label">Projects</div></div>
+      </section>
+
+      <!-- Filter bar (visible only on list view) -->
+      <section class="filter-bar" id="filterBar">
+        <select id="filterProject" aria-label="Filter by project"><option value="">All Projects</option></select>
+        <select id="filterStatus" aria-label="Filter by status"><option value="">All Statuses</option></select>
+        <select id="filterPriority" aria-label="Filter by priority"><option value="">All Priorities</option></select>
+        <select id="filterEnvironment" aria-label="Filter by environment">
+          <option value="">All Envs</option>
+          <option value="DEV">DEV</option>
+          <option value="UAT">UAT</option>
+          <option value="PROD">PROD</option>
+        </select>
+        <select id="filterAssignee" aria-label="Filter by assignee"><option value="">All Assignees</option></select>
+        <button class="btn ghost" id="clearFiltersBtn">Clear</button>
+      </section>
+
+      <!-- VIEW: List -->
+      <section class="view" id="viewList">
+        <div class="table-scroll">
+          <table class="bug-table">
+            <thead>
+              <tr>
+                <th class="col-id">#</th>
+                <th>Title</th>
+                <th>Project</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Env</th>
+                <th>Assignees</th>
+                <th>📎</th>
+                <th>Updated</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="bugTableBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="empty-state" hidden>
+          <p>No bugs match your filters.</p>
+        </div>
+        <div class="pagination" id="paginationBar"></div>
+      </section>
+
+      <!-- VIEW: Analytics -->
+      <section class="view" id="viewAnalytics" hidden>
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Bugs over the last 14 days</h3>
+            <div id="chartTimeline" class="chart-host"></div>
+          </div>
+          <div class="chart-card">
+            <h3>By Status</h3>
+            <div id="chartStatus" class="chart-host"></div>
+          </div>
+          <div class="chart-card">
+            <h3>By Priority</h3>
+            <div id="chartPriority" class="chart-host"></div>
+          </div>
+          <div class="chart-card">
+            <h3>By Environment</h3>
+            <div id="chartEnvironment" class="chart-host"></div>
+          </div>
+          <div class="chart-card">
+            <h3>By Project</h3>
+            <div id="chartProject" class="chart-host"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Top Assignees</h3>
+            <div id="chartAssignee" class="chart-host"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW: Audit Trail -->
+      <section class="view" id="viewAudit" hidden>
+        <div class="audit-controls">
+          <select id="auditEntityFilter">
+            <option value="">All entities</option>
+            <option value="bug">Bugs</option>
+            <option value="user">Users</option>
+            <option value="project">Projects</option>
+            <option value="attachment">Attachments</option>
+          </select>
+          <select id="auditActorFilter">
+            <option value="">All actors</option>
+          </select>
+          <input id="auditSearch" type="search" placeholder="Search audit log…" />
+          <button class="btn ghost" id="auditRefreshBtn">Refresh</button>
+        </div>
+        <div class="audit-list" id="auditList"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============================== MODALS ============================== -->
+  <!-- Bug create/edit -->
+  <div class="modal" id="modalBug" hidden>
+    <div class="modal-card lg">
+      <div class="modal-head">
+        <h2 id="modalBugTitle">New Bug</h2>
+        <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+      </div>
+      <form id="formBug" class="modal-body" novalidate>
+        <input type="hidden" name="id" />
+        <div class="row">
+          <label class="field f-grow">
+            <span>Title <em>*</em></span>
+            <input name="title" required minlength="3" maxlength="200" />
+          </label>
+          <label class="field">
+            <span>Project <em>*</em></span>
+            <select name="project_id" required></select>
+          </label>
+        </div>
+        <div class="row">
+          <label class="field">
+            <span>Reporter <em>*</em></span>
+            <select name="reporter_id" required></select>
+          </label>
+          <label class="field">
+            <span>Status</span>
+            <select name="status"></select>
+          </label>
+          <label class="field">
+            <span>Priority</span>
+            <select name="priority"></select>
+          </label>
+          <label class="field">
+            <span>Environment</span>
+            <select name="environment">
+              <option value="DEV">DEV</option>
+              <option value="UAT">UAT</option>
+              <option value="PROD">PROD</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Assignees</span>
+          <div class="chip-picker" id="assigneePicker"></div>
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <textarea name="description" rows="4" maxlength="10000"></textarea>
+        </label>
+        <label class="field">
+          <span>Due date</span>
+          <input name="due_date" type="date" />
+        </label>
+        <div class="modal-foot">
+          <button type="button" class="btn ghost" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary" id="bugSubmitBtn">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Bug detail -->
+  <div class="modal" id="modalDetail" hidden>
+    <div class="modal-card xl">
+      <div class="modal-head">
+        <h2 id="detailTitle">Bug Details</h2>
+        <div class="detail-head-actions">
+          <button class="btn ghost" id="detailEditBtn">✎ Edit</button>
+          <button class="btn danger" id="detailDeleteBtn">🗑 Delete</button>
+          <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" id="detailBody"></div>
+    </div>
+  </div>
+
+  <!-- Project create/edit -->
+  <div class="modal" id="modalProject" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="modalProjectTitle">New Project</h2>
+        <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+      </div>
+      <form id="formProject" class="modal-body" novalidate>
+        <input type="hidden" name="id" />
+        <label class="field">
+          <span>Name <em>*</em></span>
+          <input name="name" required minlength="2" maxlength="120" />
+        </label>
+        <label class="field">
+          <span>Color</span>
+          <input name="color" type="color" value="#c9764f" />
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <textarea name="description" rows="2" maxlength="1000"></textarea>
+        </label>
+        <div class="modal-foot">
+          <button type="button" class="btn ghost" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- User create/edit -->
+  <div class="modal" id="modalUser" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="modalUserTitle">New User</h2>
+        <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+      </div>
+      <form id="formUser" class="modal-body" novalidate>
+        <input type="hidden" name="id" />
+        <label class="field">
+          <span>Name <em>*</em></span>
+          <input name="name" required minlength="2" maxlength="120" />
+        </label>
+        <label class="field">
+          <span>Email <em>*</em></span>
+          <input name="email" type="email" required maxlength="254" />
+        </label>
+        <label class="field">
+          <span>Role</span>
+          <input name="role" placeholder="e.g. Frontend Engineer, QA, PM" maxlength="80" />
+        </label>
+        <label class="field check-row">
+          <input type="checkbox" name="is_active" checked />
+          <span>Active</span>
+        </label>
+        <div class="modal-foot">
+          <button type="button" class="btn ghost" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Confirm dialog -->
+  <div class="modal" id="modalConfirm" hidden>
+    <div class="modal-card sm">
+      <div class="modal-head">
+        <h2 id="confirmTitle">Confirm</h2>
+      </div>
+      <div class="modal-body">
+        <p id="confirmMessage"></p>
+        <div class="modal-foot">
+          <button class="btn ghost" id="confirmCancel">Cancel</button>
+          <button class="btn danger" id="confirmOk">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js?v=3.0.0" defer></script>
+</body>
+</html>

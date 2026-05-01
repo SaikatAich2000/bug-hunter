@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ALLOWED_STATUSES = ["New", "In Progress", "Resolved", "Closed", "Reopened"]
 ALLOWED_PRIORITIES = ["Low", "Medium", "High", "Critical"]
 ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
+ALLOWED_ROLES = ["admin", "manager", "user"]
+MIN_PASSWORD_LENGTH = 8
 
 
 def _normalize_choice(value: str, allowed: list[str], label: str) -> str:
@@ -36,10 +38,31 @@ def _validate_email(value: str) -> str:
 # ---------------------------------------------------------------------------
 # User
 # ---------------------------------------------------------------------------
+def _normalize_role(v: str) -> str:
+    if not isinstance(v, str):
+        raise ValueError("role must be a string")
+    needle = v.strip().lower()
+    if needle in ALLOWED_ROLES:
+        return needle
+    raise ValueError(f"Invalid role. Allowed: {', '.join(ALLOWED_ROLES)}")
+
+
+def _check_password_strength(v: str) -> str:
+    if not isinstance(v, str):
+        raise ValueError("Password must be a string")
+    if len(v) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    if len(v) > 200:
+        raise ValueError("Password is too long")
+    return v
+
+
 class UserIn(BaseModel):
+    """Admin creates a user (with a password)."""
     name: str = Field(min_length=2, max_length=120)
     email: str = Field(min_length=5, max_length=254)
-    role: str = Field(default="", max_length=80)
+    role: str = Field(default="user")
+    password: str
     is_active: bool = True
 
     @field_validator("name")
@@ -51,20 +74,28 @@ class UserIn(BaseModel):
 
     @field_validator("role")
     @classmethod
-    def _strip_role(cls, v: str) -> str:
-        return (v or "").strip()
+    def _check_role(cls, v: str) -> str:
+        return _normalize_role(v)
 
     @field_validator("email")
     @classmethod
     def _check_email(cls, v: str) -> str:
         return _validate_email(v)
 
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, v: str) -> str:
+        return _check_password_strength(v)
+
 
 class UserUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=120)
     email: Optional[str] = Field(default=None, max_length=254)
-    role: Optional[str] = Field(default=None, max_length=80)
+    role: Optional[str] = None
     is_active: Optional[bool] = None
+    # Optional password reset by admin. If present, replaces the current
+    # hash. Use None / omit to leave password unchanged.
+    password: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -76,8 +107,9 @@ class UserUpdate(BaseModel):
 
     @field_validator("role")
     @classmethod
-    def _strip_role(cls, v: Optional[str]) -> Optional[str]:
-        return v.strip() if isinstance(v, str) else v
+    def _check_role(cls, v: Optional[str]) -> Optional[str]:
+        if v is None: return None
+        return _normalize_role(v)
 
     @field_validator("email")
     @classmethod
@@ -85,8 +117,15 @@ class UserUpdate(BaseModel):
         if v is None: return None
         return _validate_email(v)
 
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is None: return None
+        return _check_password_strength(v)
+
 
 class UserOut(BaseModel):
+    """Public, password never serialized."""
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
@@ -95,6 +134,58 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        return _validate_email(v)
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _check_password(cls, v: str) -> str:
+        return _check_password_strength(v)
+
+
+class ForgotPasswordIn(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        return _validate_email(v)
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _check_password(cls, v: str) -> str:
+        return _check_password_strength(v)
+
+
+class MeOut(BaseModel):
+    """Returned to the frontend after login or on refresh."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    email: str
+    role: str
+    is_active: bool
 
 
 class UserBrief(BaseModel):
@@ -206,7 +297,6 @@ class BugUpdate(BaseModel):
     priority: Optional[str] = None
     environment: Optional[str] = None
     due_date: Optional[str] = None
-    actor_user_id: Optional[int] = None
 
     @field_validator("title")
     @classmethod
@@ -284,6 +374,7 @@ class BugOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     attachment_count: int = 0
+    can_edit: bool = False
 
 
 class BugListResponse(BaseModel):
@@ -298,7 +389,6 @@ class BugListResponse(BaseModel):
 # Comment / Activity / Detail
 # ---------------------------------------------------------------------------
 class CommentIn(BaseModel):
-    author_user_id: Optional[int] = None
     body: str = Field(min_length=1, max_length=10000)
 
     @field_validator("body")

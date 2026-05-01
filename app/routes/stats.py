@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Bug, Project, User, bug_assignees
 from app.schemas import StatsOut
@@ -15,7 +16,10 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
 @router.get("", response_model=StatsOut)
-def stats(db: Session = Depends(get_db)) -> StatsOut:
+def stats(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> StatsOut:
     project_count = db.scalar(select(func.count(Project.id))) or 0
     bug_count = db.scalar(select(func.count(Bug.id))) or 0
     user_count = db.scalar(select(func.count(User.id))) or 0

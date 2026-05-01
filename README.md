@@ -6,11 +6,13 @@ external file storage — attachments live in the database itself.
 
 ## Features
 
+- **Login + role-based access** — admin, manager, user; bcrypt password hashing
 - **Bug tracking** with status, priority, environment (DEV / UAT / PROD)
 - **Multi-assignee** support — many users per bug
 - **Comments and attachments** (PDF, image, video) stored as BLOBs in Postgres
 - **Email notifications** on bug create / update / assignment / new comment (Gmail / Outlook / SMTP)
-- **Full audit trail** — every create / update / delete logged and viewable
+- **Forgot-password** flow via email reset link
+- **Full audit trail** — every create / update / delete / login logged and viewable
 - **Light / dark themes**, fully responsive (mobile, tablet, desktop)
 - **CSV export** of all bugs
 
@@ -34,6 +36,38 @@ Open **http://localhost:8765** in your browser.
 That's it. Postgres runs in its own isolated Docker container on port `55432`
 (intentionally non-standard so it won't collide with anything you have on
 `5432`). The app listens on port `8765`.
+
+### First login
+
+On first run, Bug Hunter auto-creates an admin user from the `BOOTSTRAP_ADMIN_*`
+env vars. Defaults:
+
+- email: `admin@bughunter.local`
+- password: `ChangeMe123!`
+
+Log in, then **immediately** change the password from the Account panel in the
+sidebar. After that, only admins can create new accounts (User Management
+section, sidebar). Roles:
+
+| Role    | What they can do                                                |
+|---------|-----------------------------------------------------------------|
+| admin   | Everything — including creating, editing, deleting users        |
+| manager | Edit any bug, manage projects; cannot manage users              |
+| user    | Edit only their own bugs (where they're reporter or assignee)   |
+
+### Production checklist
+
+Before exposing this to a real network, set these in `.env`:
+
+```bash
+SESSION_SECRET=$(openssl rand -hex 32)   # generate a long random secret
+COOKIE_SECURE=true                        # only if serving over HTTPS
+BOOTSTRAP_ADMIN_EMAIL=you@yourcompany.com
+BOOTSTRAP_ADMIN_PASSWORD=<a strong password>
+APP_BASE_URL=https://bugs.yourcompany.com
+```
+
+Then `docker compose down && docker compose up -d` to apply.
 
 ## Configuring email (optional)
 

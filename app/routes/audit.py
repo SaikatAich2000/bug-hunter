@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
-from app.models import Activity
+from app.models import Activity, User
 from app.schemas import ActivityOut
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -21,6 +22,7 @@ def list_audit(
     q: Optional[str] = None,
     limit: int = Query(default=200, le=1000),
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> list[Activity]:
     stmt = select(Activity)
     if entity_type:

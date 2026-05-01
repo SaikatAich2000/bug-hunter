@@ -108,12 +108,12 @@
       <section class="side-section">
         <div class="side-section-header">
           <span>Projects</span>
-          <button class="icon-btn" id="newProjectBtn" title="New project" aria-label="New project">+</button>
+          <button class="icon-btn" id="newProjectBtn" title="New project" aria-label="New project" data-needs-role="manager">+</button>
         </div>
         <ul class="side-list" id="projectList"></ul>
       </section>
 
-      <section class="side-section">
+      <section class="side-section" data-needs-role="admin">
         <div class="side-section-header">
           <span>Users</span>
           <button class="icon-btn" id="newUserBtn" title="New user" aria-label="New user">+</button>
@@ -121,11 +121,19 @@
         <ul class="side-list" id="userList"></ul>
       </section>
 
-      <section class="side-section">
-        <div class="side-section-header"><span>Acting As</span></div>
-        <select id="actorSelect" class="actor-select" aria-label="Acting as">
-          <option value="">— select user —</option>
-        </select>
+      <section class="side-section side-account">
+        <div class="side-section-header"><span>Account</span></div>
+        <div class="account-card">
+          <div class="account-avatar" id="accountAvatar">?</div>
+          <div class="account-info">
+            <div class="account-name" id="accountName">—</div>
+            <div class="account-meta"><span id="accountRole">—</span> · <span id="accountEmail">—</span></div>
+          </div>
+        </div>
+        <div class="account-actions">
+          <button class="link-btn" id="changePasswordBtn">🔑 Change password</button>
+          <button class="link-btn" id="logoutBtn">🚪 Log out</button>
+        </div>
       </section>
 
       <div class="side-footer">
@@ -371,16 +379,55 @@
           <input name="email" type="email" required maxlength="254" />
         </label>
         <label class="field">
-          <span>Role</span>
-          <input name="role" placeholder="e.g. Frontend Engineer, QA, PM" maxlength="80" />
+          <span>Role <em>*</em></span>
+          <select name="role">
+            <option value="user">User — only edit own bugs</option>
+            <option value="manager">Manager — edit any bug, manage projects</option>
+            <option value="admin">Admin — full access including users</option>
+          </select>
+        </label>
+        <label class="field" id="userPasswordField">
+          <span>Password <em class="js-required">*</em></span>
+          <input name="password" type="password" minlength="8" maxlength="200"
+                 placeholder="Min 8 characters" autocomplete="new-password" />
+          <small class="hint" id="userPasswordHint">At least 8 characters.</small>
         </label>
         <label class="field check-row">
           <input type="checkbox" name="is_active" checked />
-          <span>Active</span>
+          <span>Active (can log in)</span>
         </label>
         <div class="modal-foot">
           <button type="button" class="btn ghost" data-close-modal>Cancel</button>
           <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Change password modal -->
+  <div class="modal" id="modalChangePassword" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Change password</h2>
+        <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+      </div>
+      <form id="formChangePassword" class="modal-body" novalidate>
+        <label class="field">
+          <span>Current password <em>*</em></span>
+          <input name="current_password" type="password" required autocomplete="current-password" />
+        </label>
+        <label class="field">
+          <span>New password <em>*</em></span>
+          <input name="new_password" type="password" required minlength="8" maxlength="200" autocomplete="new-password" />
+          <small class="hint">At least 8 characters.</small>
+        </label>
+        <label class="field">
+          <span>Confirm new password <em>*</em></span>
+          <input name="confirm_password" type="password" required minlength="8" maxlength="200" autocomplete="new-password" />
+        </label>
+        <div class="modal-foot">
+          <button type="button" class="btn ghost" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary">Update password</button>
         </div>
       </form>
     </div>

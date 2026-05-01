@@ -24,7 +24,7 @@ const STATE = {
   view: "list",
   currentBugId: null,
   detailTab: "info",
-  actorUserId: null,
+  currentUser: null,   // populated from /api/auth/me at boot
 };
 
 const API = "/api";
@@ -87,11 +87,24 @@ async function api(path, opts = {}) {
   if (opts.body && !(opts.body instanceof FormData) && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const apiKey = localStorage.getItem("apiKey");
-  if (apiKey) headers["X-API-Key"] = apiKey;
 
-  const res = await fetch(API + path, { ...opts, headers });
+  const res = await fetch(API + path, {
+    ...opts,
+    headers,
+    credentials: "include",   // send/receive session cookies
+  });
   if (!res.ok) {
+    // Session expired or otherwise rejected — bounce to login. Use replace()
+    // so the broken state isn't in browser history. Throw a flag-error so
+    // callers can swallow it without showing user-visible toasts.
+    if (res.status === 401 && path !== "/auth/login") {
+      const next = encodeURIComponent(location.pathname + location.search);
+      location.replace("/login.html?next=" + next);
+      const err = new Error("Not authenticated");
+      err.status = 401;
+      err.silent = true;
+      throw err;
+    }
     let detail = `HTTP ${res.status}`;
     try {
       const body = await res.json();
@@ -121,6 +134,14 @@ function toast(msg, type = "info") {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
+}
+
+// Show an error toast UNLESS the error is a silent auth-redirect from api().
+// This prevents the brief flash of "Not authenticated" toasts during the
+// navigation from / to /login.html when a session expires.
+function toastError(err) {
+  if (err && err.silent) return;
+  toast(err?.message || "Something went wrong", "error");
 }
 
 function openModal(id) {
@@ -164,8 +185,25 @@ async function boot() {
   const theme = localStorage.getItem("theme") || "dark";
   document.documentElement.setAttribute("data-theme", theme);
 
-  const stored = localStorage.getItem("actorUserId");
-  if (stored) STATE.actorUserId = parseInt(stored, 10);
+  // Auth check first. Use a direct fetch (not api()) so we control the
+  // 401 path explicitly: redirect before *any* other code can run, so the
+  // user never sees error toasts from cookie-less follow-up calls.
+  let me;
+  try {
+    const res = await fetch(API + "/auth/me", { credentials: "include" });
+    if (!res.ok) {
+      location.replace("/login.html");
+      return;
+    }
+    me = await res.json();
+  } catch {
+    location.replace("/login.html");
+    return;
+  }
+  STATE.currentUser = me;
+
+  applyRoleVisibility();
+  renderAccountCard();
 
   await loadHealth();
   await loadMeta();
@@ -173,6 +211,33 @@ async function boot() {
   await loadProjects();
   await refreshAll();
   bindGlobalListeners();
+}
+
+function applyRoleVisibility() {
+  const role = STATE.currentUser?.role || "";
+  // role rank: admin > manager > user
+  const rank = { admin: 3, manager: 2, user: 1 }[role] || 0;
+  $$("[data-needs-role]").forEach(el => {
+    const need = el.getAttribute("data-needs-role");
+    const needRank = { admin: 3, manager: 2, user: 1 }[need] || 0;
+    if (rank >= needRank) {
+      // Drop the attribute so `[data-needs-role] { display:none }` no longer
+      // matches. Setting style.display = "" alone is not enough — that CSS
+      // rule still wins on specificity.
+      el.removeAttribute("data-needs-role");
+    } else {
+      el.style.display = "none";
+    }
+  });
+}
+
+function renderAccountCard() {
+  const u = STATE.currentUser;
+  if (!u) return;
+  $("#accountAvatar").textContent = initials(u.name);
+  $("#accountName").textContent = u.name;
+  $("#accountRole").textContent = u.role;
+  $("#accountEmail").textContent = u.email;
 }
 
 async function loadHealth() {
@@ -192,7 +257,6 @@ async function loadUsers() {
   STATE.users = await api("/users");
   renderUserList();
   fillUserFilterSelect();
-  fillActorSelect();
   fillAuditActorSelect();
 }
 
@@ -262,8 +326,10 @@ function renderBugTable() {
       <td>${formatDate(bug.updated_at)}</td>
       <td class="col-actions">
         <div class="row-actions">
-          <button class="icon-btn" data-act="edit" data-id="${bug.id}" title="Edit">✎</button>
-          <button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>
+          ${bug.can_edit ? `
+            <button class="icon-btn" data-act="edit" data-id="${bug.id}" title="Edit">✎</button>
+            <button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>
+          ` : `<span class="muted small" title="You don't have permission to edit this bug">🔒</span>`}
         </div>
       </td>`;
     frag.appendChild(tr);
@@ -361,14 +427,6 @@ function fillUserFilterSelect() {
     STATE.users.filter(u => u.is_active)
       .map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join("");
   if (cur) sel.value = cur;
-}
-
-function fillActorSelect() {
-  const sel = $("#actorSelect");
-  if (!sel) return;
-  sel.innerHTML = `<option value="">— select user —</option>` +
-    STATE.users.filter(u => u.is_active)
-      .map(u => `<option value="${u.id}" ${STATE.actorUserId == u.id ? "selected" : ""}>${escapeHtml(u.name)}</option>`).join("");
 }
 
 function fillAuditActorSelect() {
@@ -508,7 +566,7 @@ function openBugForm(bug = null) {
                  bug ? bug.project_id : "");
   fillFormSelect(form.elements.reporter_id,
                  STATE.users.filter(u => u.is_active).map(u => [u.id, `${u.name} <${u.email}>`]),
-                 bug ? (bug.reporter ? bug.reporter.id : "") : (STATE.actorUserId || ""));
+                 bug ? (bug.reporter ? bug.reporter.id : "") : (STATE.currentUser?.id || ""));
   fillFormSelect(form.elements.status, STATE.meta.statuses.map(s => [s, s]),
                  bug ? bug.status : "New");
   fillFormSelect(form.elements.priority, STATE.meta.priorities.map(s => [s, s]),
@@ -582,7 +640,6 @@ async function submitBugForm(e) {
 
   try {
     if (id) {
-      payload.actor_user_id = STATE.actorUserId || payload.reporter_id;
       await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       toast(`Bug #${id} updated`, "success");
     } else {
@@ -592,7 +649,7 @@ async function submitBugForm(e) {
     closeModal("modalBug");
     await refreshAll();
   } catch (err) {
-    toast(err.message, "error");
+    toastError(err);
   }
 }
 
@@ -607,12 +664,16 @@ async function openBugDetail(bugId) {
     renderBugDetail(bug);
     openModal("modalDetail");
   } catch (err) {
-    toast(err.message, "error");
+    toastError(err);
   }
 }
 
 function renderBugDetail(bug) {
   $("#detailTitle").textContent = `#${bug.id} — ${bug.title}`;
+  // Show / hide edit + delete based on permission flag from API.
+  $("#detailEditBtn").style.display = bug.can_edit ? "" : "none";
+  $("#detailDeleteBtn").style.display = bug.can_edit ? "" : "none";
+
   const reporter = bug.reporter
     ? `<span class="assignee-chip"><span class="avatar">${initials(bug.reporter.name)}</span>${escapeHtml(bug.reporter.name)} <span class="muted small"> ${escapeHtml(bug.reporter.email)}</span></span>`
     : '<span class="muted">—</span>';
@@ -793,17 +854,12 @@ function updateFilePreview(input, previewSel, labelSel) {
 
 async function uploadFiles(files, commentId) {
   if (!files || !files.length) return;
-  if (!STATE.actorUserId) {
-    toast("Please pick 'Acting As' user in the sidebar first", "error");
-    return;
-  }
   const total = files.length;
   let done = 0;
   toast(`Uploading ${total} file(s)…`, "info");
   for (const f of files) {
     const fd = new FormData();
     fd.append("file", f);
-    fd.append("uploader_user_id", String(STATE.actorUserId));
     if (commentId) fd.append("comment_id", String(commentId));
     try {
       await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
@@ -859,7 +915,7 @@ async function submitProjectForm(e) {
     await loadProjects();
     await refreshAll();
   } catch (err) {
-    toast(err.message, "error");
+    toastError(err);
   }
 }
 
@@ -868,13 +924,26 @@ function openUserForm(user = null) {
   form.reset();
   $("#modalUserTitle").textContent = user ? `Edit ${user.name}` : "New User";
   form.elements.id.value = user ? user.id : "";
+
   if (user) {
     form.elements.name.value = user.name;
     form.elements.email.value = user.email;
-    form.elements.role.value = user.role || "";
+    form.elements.role.value = user.role || "user";
     form.elements.is_active.checked = user.is_active;
+    // On edit, password is OPTIONAL — leave blank to keep current
+    form.elements.password.required = false;
+    form.elements.password.value = "";
+    form.elements.password.placeholder = "Leave blank to keep current password";
+    $("#userPasswordHint").textContent = "Leave blank to keep current password.";
+    $("#userPasswordField").querySelector(".js-required")?.classList.add("hidden");
   } else {
+    form.elements.role.value = "user";
     form.elements.is_active.checked = true;
+    // On create, password is REQUIRED
+    form.elements.password.required = true;
+    form.elements.password.placeholder = "Min 8 characters";
+    $("#userPasswordHint").textContent = "At least 8 characters.";
+    $("#userPasswordField").querySelector(".js-required")?.classList.remove("hidden");
   }
   openModal("modalUser");
   setTimeout(() => form.elements.name.focus(), 50);
@@ -887,27 +956,35 @@ async function submitUserForm(e) {
   const payload = {
     name: form.elements.name.value.trim(),
     email: form.elements.email.value.trim(),
-    role: form.elements.role.value.trim(),
+    role: form.elements.role.value,
     is_active: form.elements.is_active.checked,
   };
+  // Only include password if user typed one (on edit, blank = keep current)
+  const pw = form.elements.password.value;
+  if (pw) {
+    if (pw.length < 8) {
+      toast("Password must be at least 8 characters", "error");
+      return;
+    }
+    payload.password = pw;
+  } else if (!id) {
+    toast("Password is required for new users", "error");
+    return;
+  }
+
   try {
-    let user;
     if (id) {
-      user = await api(`/users/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      await api(`/users/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       toast("User updated", "success");
     } else {
-      user = await api("/users", { method: "POST", body: JSON.stringify(payload) });
+      await api("/users", { method: "POST", body: JSON.stringify(payload) });
       toast("User created", "success");
-      if (!STATE.actorUserId) {
-        STATE.actorUserId = user.id;
-        localStorage.setItem("actorUserId", user.id);
-      }
     }
     closeModal("modalUser");
     await loadUsers();
     await refreshAll();
   } catch (err) {
-    toast(err.message, "error");
+    toastError(err);
   }
 }
 
@@ -918,7 +995,7 @@ async function handleEditBug(bugId) {
   try {
     const bug = await api(`/bugs/${bugId}`);
     openBugForm(bug);
-  } catch (err) { toast(err.message, "error"); }
+  } catch (err) { toastError(err); }
 }
 
 async function handleDeleteBug(bugId) {
@@ -929,7 +1006,7 @@ async function handleDeleteBug(bugId) {
     toast(`Bug #${bugId} deleted`, "success");
     closeModal("modalDetail");
     await refreshAll();
-  } catch (err) { toast(err.message, "error"); }
+  } catch (err) { toastError(err); }
 }
 
 async function handleDeleteProject(id) {
@@ -946,7 +1023,7 @@ async function handleDeleteProject(id) {
     }
     await loadProjects();
     await refreshAll();
-  } catch (err) { toast(err.message, "error"); }
+  } catch (err) { toastError(err); }
 }
 
 async function handleEditProject(id) {
@@ -964,13 +1041,9 @@ async function handleDeleteUser(id) {
   try {
     await api(`/users/${id}`, { method: "DELETE" });
     toast(`User "${name}" deleted`, "success");
-    if (STATE.actorUserId === id) {
-      STATE.actorUserId = null;
-      localStorage.removeItem("actorUserId");
-    }
     await loadUsers();
     await refreshAll();
-  } catch (err) { toast(err.message, "error"); }
+  } catch (err) { toastError(err); }
 }
 
 async function handleEditUser(id) {
@@ -982,26 +1055,21 @@ async function handleDeleteAttachment(attId) {
   const ok = await confirmDialog("Delete this attachment?");
   if (!ok) return;
   try {
-    const q = STATE.actorUserId ? `?actor_user_id=${STATE.actorUserId}` : "";
-    await api(`/bugs/${STATE.currentBugId}/attachments/${attId}${q}`, { method: "DELETE" });
+    await api(`/bugs/${STATE.currentBugId}/attachments/${attId}`, { method: "DELETE" });
     toast("Attachment deleted", "success");
     const bug = await api(`/bugs/${STATE.currentBugId}`);
     renderBugDetail(bug);
     await refreshBugs();
-  } catch (err) { toast(err.message, "error"); }
+  } catch (err) { toastError(err); }
 }
 
 async function postComment(form) {
   const body = form.elements.body.value.trim();
   if (!body) return;
-  if (!STATE.actorUserId) {
-    toast("Please pick 'Acting As' user in the sidebar first", "error");
-    return;
-  }
   try {
     const comment = await api(`/bugs/${STATE.currentBugId}/comments`, {
       method: "POST",
-      body: JSON.stringify({ author_user_id: STATE.actorUserId, body }),
+      body: JSON.stringify({ body }),
     });
 
     // Upload any attached files to this comment
@@ -1010,7 +1078,6 @@ async function postComment(form) {
       for (const f of files) {
         const fd = new FormData();
         fd.append("file", f);
-        fd.append("uploader_user_id", String(STATE.actorUserId));
         fd.append("comment_id", String(comment.id));
         try {
           await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
@@ -1024,7 +1091,7 @@ async function postComment(form) {
     const bug = await api(`/bugs/${STATE.currentBugId}`);
     renderBugDetail(bug);
     await refreshBugs();
-  } catch (err) { toast(err.message, "error"); }
+  } catch (err) { toastError(err); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,7 +1124,7 @@ async function refreshAudit() {
         <span class="audit-time">${formatDate(r.created_at)}</span>
       </div>`).join("");
   } catch (err) {
-    toast(err.message, "error");
+    toastError(err);
   }
 }
 
@@ -1077,13 +1144,47 @@ function bindGlobalListeners() {
     localStorage.setItem("theme", nxt);
   });
 
-  // Acting As selector
-  $("#actorSelect").addEventListener("change", (e) => {
-    const v = e.target.value;
-    STATE.actorUserId = v ? parseInt(v, 10) : null;
-    if (STATE.actorUserId) localStorage.setItem("actorUserId", STATE.actorUserId);
-    else localStorage.removeItem("actorUserId");
-    toast(STATE.actorUserId ? `Now acting as ${STATE.users.find(u => u.id === STATE.actorUserId)?.name}` : "Cleared actor", "info");
+  // Logout
+  $("#logoutBtn").addEventListener("click", async () => {
+    const ok = await confirmDialog("Log out now?", { title: "Log out", okLabel: "Log out", danger: false });
+    if (!ok) return;
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch { /* ignore */ }
+    location.href = "/login.html";
+  });
+
+  // Change password
+  $("#changePasswordBtn").addEventListener("click", () => {
+    const form = $("#formChangePassword");
+    form.reset();
+    openModal("modalChangePassword");
+    setTimeout(() => form.elements.current_password.focus(), 50);
+  });
+  $("#formChangePassword").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const cur = f.elements.current_password.value;
+    const next = f.elements.new_password.value;
+    const conf = f.elements.confirm_password.value;
+    if (next !== conf) {
+      toast("New passwords don't match", "error");
+      return;
+    }
+    if (next.length < 8) {
+      toast("Password must be at least 8 characters", "error");
+      return;
+    }
+    try {
+      await api("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current_password: cur, new_password: next }),
+      });
+      toast("Password updated", "success");
+      closeModal("modalChangePassword");
+    } catch (err) {
+      toastError(err);
+    }
   });
 
   // Mobile hamburger

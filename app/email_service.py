@@ -244,3 +244,24 @@ def notify_comment_added(
     lines += _bug_meta_lines(bug)
     lines += ["", f"View: {_bug_link(bug.id)}"]
     deliver(subject, to, "\n".join(lines))
+
+
+def notify_password_reset(email: str, name: str, reset_url: str) -> None:
+    """Send the user a password-reset link."""
+    if not email:
+        return
+    subject = "[Bug Hunter] Reset your password"
+    body = "\n".join([
+        f"Hi {name or 'there'},",
+        "",
+        "We received a request to reset your Bug Hunter password.",
+        "Click the link below to choose a new one. The link is valid for 2 hours.",
+        "",
+        reset_url,
+        "",
+        "If you didn't request this, you can ignore this email — your password "
+        "won't change unless someone uses the link.",
+        "",
+        "— Bug Hunter",
+    ])
+    deliver(subject, [email], body)

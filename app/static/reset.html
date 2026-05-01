@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bug Hunter — Reset password</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=3.0.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.0.0" />
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <h1>Reset your password</h1>
+        <p class="auth-tagline">Pick a new password to finish the reset.</p>
+      </div>
+
+      <form id="resetForm" class="auth-form" novalidate>
+        <div id="resetAlert" class="auth-alert" hidden></div>
+        <label class="field">
+          <span>New password</span>
+          <input name="new_password" type="password" required minlength="8" maxlength="200"
+                 autocomplete="new-password" autofocus />
+          <small class="hint">At least 8 characters.</small>
+        </label>
+        <label class="field">
+          <span>Confirm new password</span>
+          <input name="confirm_password" type="password" required minlength="8" maxlength="200"
+                 autocomplete="new-password" />
+        </label>
+        <button type="submit" class="btn primary auth-submit" id="resetSubmit">Set new password</button>
+        <div class="auth-links">
+          <a href="/login.html">← Back to sign in</a>
+        </div>
+      </form>
+    </div>
+    <div class="auth-footnote">v3.0.0 · self-hosted · MIT</div>
+  </main>
+
+  <script>
+  (() => {
+    "use strict";
+    const $ = (sel) => document.querySelector(sel);
+    document.documentElement.setAttribute("data-theme", localStorage.getItem("theme") || "dark");
+
+    const params = new URLSearchParams(location.search);
+    const token = params.get("token") || "";
+
+    function showAlert(msg, kind = "error") {
+      const el = $("#resetAlert");
+      el.textContent = msg;
+      el.className = "auth-alert " + kind;
+      el.hidden = false;
+    }
+
+    if (!token) {
+      showAlert("Reset link is missing or malformed. Request a new one from the sign-in page.");
+      $("#resetForm").querySelectorAll("input, button").forEach(e => e.disabled = true);
+    }
+
+    $("#resetForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const newPw = f.elements.new_password.value;
+      const confirmPw = f.elements.confirm_password.value;
+      if (newPw !== confirmPw) {
+        showAlert("Passwords don't match.");
+        return;
+      }
+      if (newPw.length < 8) {
+        showAlert("Password must be at least 8 characters.");
+        return;
+      }
+
+      const btn = $("#resetSubmit");
+      btn.disabled = true; btn.textContent = "Saving…";
+      try {
+        const res = await fetch("/api/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, new_password: newPw }),
+        });
+        if (res.status === 204) {
+          showAlert("Password updated. Redirecting to sign in…", "success");
+          setTimeout(() => { location.href = "/login.html"; }, 1500);
+        } else {
+          let msg = "Reset failed";
+          try { msg = (await res.json()).detail || msg; } catch {}
+          showAlert(msg);
+        }
+      } catch (err) {
+        showAlert("Network error. Try again.");
+      } finally {
+        btn.disabled = false; btn.textContent = "Set new password";
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

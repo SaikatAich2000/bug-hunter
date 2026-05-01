@@ -1,4 +1,4 @@
-"""Users API."""
+"""Users API. Admin-only for create / update / delete."""
 from __future__ import annotations
 
 from typing import Optional
@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user, hash_password, require_admin
 from app.database import get_db
 from app.models import Activity, User
 from app.schemas import UserIn, UserOut, UserUpdate
@@ -24,16 +25,12 @@ def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail:
     ))
 
 
-def _resolve_actor(db: Session, actor_user_id: Optional[int]) -> User | None:
-    if actor_user_id is None: return None
-    return db.get(User, actor_user_id)
-
-
 @router.get("", response_model=list[UserOut])
 def list_users(
     include_inactive: bool = Query(default=True),
     q: Optional[str] = None,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> list[User]:
     stmt = select(User)
     if not include_inactive:
@@ -52,26 +49,35 @@ def list_users(
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: UserIn,
-    actor_user_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
+    actor: User = Depends(require_admin),
 ) -> User:
-    user = User(**payload.model_dump())
+    user = User(
+        name=payload.name,
+        email=payload.email,
+        role=payload.role,
+        is_active=payload.is_active,
+        password_hash=hash_password(payload.password),
+    )
     db.add(user)
     try:
         db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Email already exists") from exc
-    actor = _resolve_actor(db, actor_user_id)
     _audit(db, actor, "user_created", user.id,
-           f"Created user '{user.name}' <{user.email}> ({user.role or 'no role'})")
+           f"Created user '{user.name}' <{user.email}> ({user.role})")
     db.commit()
     db.refresh(user)
     return user
 
 
 @router.get("/{user_id}", response_model=UserOut)
-def get_user(user_id: int, db: Session = Depends(get_db)) -> User:
+def get_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> User:
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -82,26 +88,55 @@ def get_user(user_id: int, db: Session = Depends(get_db)) -> User:
 def update_user(
     user_id: int,
     payload: UserUpdate,
-    actor_user_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
+    actor: User = Depends(require_admin),
 ) -> User:
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+
     fields = payload.model_dump(exclude_unset=True)
+    new_password = fields.pop("password", None)
     changes = []
+
+    # Guardrail: don't let admins demote/disable themselves into a corner.
+    if actor.id == user_id:
+        if "role" in fields and fields["role"] != "admin":
+            raise HTTPException(status_code=400, detail="You cannot demote yourself from admin")
+        if fields.get("is_active") is False:
+            raise HTTPException(status_code=400, detail="You cannot deactivate yourself")
+
+    # Guardrail: don't allow demoting/disabling the last admin.
+    will_be_role = fields.get("role", user.role)
+    will_be_active = fields.get("is_active", user.is_active)
+    if user.role == "admin" and (will_be_role != "admin" or not will_be_active):
+        n_other_admins = db.scalar(
+            select(func.count(User.id))
+            .where(User.role == "admin", User.is_active.is_(True), User.id != user_id)
+        ) or 0
+        if n_other_admins == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot remove the last admin. Promote another user first.",
+            )
+
     for key, value in fields.items():
         old = getattr(user, key)
         if old != value:
             changes.append(f"{key}: {old!r} → {value!r}")
             setattr(user, key, value)
+
+    if new_password:
+        user.password_hash = hash_password(new_password)
+        changes.append("password reset by admin")
+
     try:
         db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Email already exists") from exc
+
     if changes:
-        actor = _resolve_actor(db, actor_user_id)
         _audit(db, actor, "user_updated", user.id,
                f"Updated user '{user.name}': " + "; ".join(changes))
     db.commit()
@@ -112,13 +147,27 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: int,
-    actor_user_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
+    actor: User = Depends(require_admin),
 ) -> dict[str, str]:
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    actor = _resolve_actor(db, actor_user_id)
+
+    if actor.id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete yourself")
+
+    if user.role == "admin":
+        n_other_admins = db.scalar(
+            select(func.count(User.id))
+            .where(User.role == "admin", User.is_active.is_(True), User.id != user_id)
+        ) or 0
+        if n_other_admins == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the last admin. Promote another user first.",
+            )
+
     label = f"{user.name} <{user.email}>"
     db.delete(user)
     _audit(db, actor, "user_deleted", user_id, f"Deleted user {label}")

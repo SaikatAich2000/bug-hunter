@@ -50,21 +50,58 @@ bug_assignees = Table(
 
 # ---------------------------------------------------------------------------
 # User
+#
+# Roles (enforced in app code, not DB constraints, for flexibility):
+#   admin    - full access; only admins manage users
+#   manager  - can edit any bug or project, but not users
+#   user     - default; can only edit bugs they reported or are assigned to
 # ---------------------------------------------------------------------------
+ROLE_ADMIN = "admin"
+ROLE_MANAGER = "manager"
+ROLE_USER = "user"
+VALID_ROLES = (ROLE_ADMIN, ROLE_MANAGER, ROLE_USER)
+
+
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True)
-    role: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default=ROLE_USER)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # bcrypt hash of password. Nullable to support the unlikely case of
+    # SSO integration later, but normally always set.
+    password_hash: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
     __table_args__ = (Index("idx_users_email", "email"),)
+
+
+# ---------------------------------------------------------------------------
+# PasswordResetToken
+#
+# Single-use tokens emailed to users to reset a forgotten password.
+# Stored as a sha256 hash; never the plaintext.
+# ---------------------------------------------------------------------------
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_prt_token_hash", "token_hash"),)
 
 
 # ---------------------------------------------------------------------------

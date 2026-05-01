@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.auth import can_edit_bug, get_current_user
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import (
@@ -48,7 +49,7 @@ def _attachment_brief(a: Attachment) -> dict:
     }
 
 
-def _bug_to_out_dict(bug: Bug, attachment_count: int = 0) -> dict:
+def _bug_to_out_dict(bug: Bug, attachment_count: int = 0, can_edit: bool = False) -> dict:
     return {
         "id": bug.id,
         "project_id": bug.project_id,
@@ -64,6 +65,7 @@ def _bug_to_out_dict(bug: Bug, attachment_count: int = 0) -> dict:
         "created_at": bug.created_at,
         "updated_at": bug.updated_at,
         "attachment_count": attachment_count,
+        "can_edit": can_edit,
     }
 
 
@@ -130,7 +132,10 @@ def _attachment_count(db: Session, bug_id: int) -> int:
 # CSV export — must come before /{bug_id}
 # ---------------------------------------------------------------------------
 @router.get("/export.csv")
-def export_bugs_csv(db: Session = Depends(get_db)) -> Response:
+def export_bugs_csv(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> Response:
     rows = db.scalars(_eager_bug(db).order_by(Bug.id.asc())).all()
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -174,6 +179,7 @@ def list_bugs(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> BugListResponse:
     if page < 1 or page_size < 1 or page_size > 200:
         raise HTTPException(status_code=400, detail="Invalid pagination parameters")
@@ -215,7 +221,11 @@ def list_bugs(
 
     items = []
     for b in bugs:
-        items.append(_bug_to_out_dict(b, _attachment_count(db, b.id)))
+        items.append(_bug_to_out_dict(
+            b,
+            _attachment_count(db, b.id),
+            can_edit_bug(_user, b.reporter_id, [a.id for a in b.assignees]),
+        ))
 
     return BugListResponse.model_validate({
         "items": items,
@@ -229,7 +239,11 @@ def list_bugs(
 # Detail
 # ---------------------------------------------------------------------------
 @router.get("/{bug_id}", response_model=BugDetail)
-def get_bug(bug_id: int, db: Session = Depends(get_db)) -> BugDetail:
+def get_bug(
+    bug_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> BugDetail:
     bug = db.scalar(
         _eager_bug(db).options(
             selectinload(Bug.comments),
@@ -252,7 +266,11 @@ def get_bug(bug_id: int, db: Session = Depends(get_db)) -> BugDetail:
         else:
             by_comment.setdefault(a.comment_id, []).append(a)
 
-    payload = _bug_to_out_dict(bug, len(all_atts))
+    payload = _bug_to_out_dict(
+        bug,
+        len(all_atts),
+        can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees]),
+    )
     payload["attachments"] = [_attachment_brief(a) for a in bug_level]
     payload["comments"] = []
     for c in bug.comments:
@@ -282,18 +300,27 @@ def create_bug(
     payload: BugCreate,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> BugOut:
     if db.get(Project, payload.project_id) is None:
         raise HTTPException(status_code=400, detail="Project does not exist")
 
-    reporter = _resolve_user(db, payload.reporter_id)
+    # Reporter: if explicit one provided, only admin/manager can override.
+    # Otherwise reporter = the current user.
+    if payload.reporter_id is not None and payload.reporter_id != actor.id:
+        if actor.role not in ("admin", "manager"):
+            raise HTTPException(status_code=403, detail="You can only file bugs as yourself")
+        reporter = _resolve_user(db, payload.reporter_id)
+    else:
+        reporter = actor
+
     assignees = _resolve_users(db, payload.assignee_ids)
 
     bug = Bug(
         project_id=payload.project_id,
         title=payload.title,
         description=payload.description,
-        reporter_id=reporter.id if reporter else None,
+        reporter_id=reporter.id,
         status=payload.status,
         priority=payload.priority,
         environment=payload.environment,
@@ -302,26 +329,27 @@ def create_bug(
     bug.assignees = list(assignees)
     db.add(bug)
     db.flush()
-    _log(db, bug.id, reporter, "bug_created", f"Bug created with status '{bug.status}'.")
+    _log(db, bug.id, actor, "bug_created", f"Bug created with status '{bug.status}'.")
     if assignees:
         names = ", ".join(a.name for a in assignees)
-        _log(db, bug.id, reporter, "assignees_added", f"Assigned to: {names}")
+        _log(db, bug.id, actor, "assignees_added", f"Assigned to: {names}")
     db.commit()
 
     fresh = db.scalar(_eager_bug(db).where(Bug.id == bug.id))
     snap = _bug_snapshot(fresh)
-    actor_uid = reporter.id if reporter else None
 
-    background.add_task(notify_bug_created, snap, actor_uid)
+    background.add_task(notify_bug_created, snap, actor.id)
     if assignees:
-        actor_name = reporter.name if reporter else "system"
         background.add_task(
             notify_assignment, snap,
             tuple(UserSnapshot(id=a.id, name=a.name, email=a.email) for a in assignees),
-            actor_name,
+            actor.name,
         )
 
-    return BugOut.model_validate(_bug_to_out_dict(fresh, 0))
+    return BugOut.model_validate(_bug_to_out_dict(
+        fresh, 0,
+        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees]),
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -333,15 +361,20 @@ def update_bug(
     payload: BugUpdate,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
 ) -> BugOut:
     bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
 
+    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees]):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only edit bugs you reported or are assigned to",
+        )
+
     fields = payload.model_dump(exclude_unset=True)
-    actor_user_id = fields.pop("actor_user_id", None)
-    actor = _resolve_user(db, actor_user_id) if actor_user_id else None
-    actor_name = actor.name if actor else "system"
+    actor_name = actor.name
 
     if "project_id" in fields and db.get(Project, fields["project_id"]) is None:
         raise HTTPException(status_code=400, detail="Project does not exist")
@@ -359,6 +392,9 @@ def update_bug(
         setattr(bug, key, value)
 
     if new_reporter_id != "__omit__":
+        # Only admin/manager can change the reporter.
+        if actor.role not in ("admin", "manager"):
+            raise HTTPException(status_code=403, detail="Only admins or managers can change the reporter")
         old_reporter_label = bug.reporter.name if bug.reporter else "—"
         if new_reporter_id is None:
             bug.reporter_id = None
@@ -400,8 +436,7 @@ def update_bug(
 
     if changes:
         background.add_task(
-            notify_bug_updated, snap, list(changes), actor_name,
-            actor.id if actor else None,
+            notify_bug_updated, snap, list(changes), actor_name, actor.id,
         )
     if newly_assigned:
         background.add_task(
@@ -410,7 +445,10 @@ def update_bug(
             actor_name,
         )
 
-    return BugOut.model_validate(_bug_to_out_dict(fresh, _attachment_count(db, bug_id)))
+    return BugOut.model_validate(_bug_to_out_dict(
+        fresh, _attachment_count(db, bug_id),
+        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees]),
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -420,12 +458,16 @@ def update_bug(
 def delete_bug(
     bug_id: int,
     db: Session = Depends(get_db),
-    actor_user_id: Optional[int] = Query(default=None),
+    actor: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    bug = db.get(Bug, bug_id)
+    bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
-    actor = _resolve_user(db, actor_user_id) if actor_user_id else None
+    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees]):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete bugs you reported or are assigned to",
+        )
     title = bug.title
     db.delete(bug)
     # Bug delete cascades comments/attachments/assignees, but the activity_log
@@ -433,8 +475,7 @@ def delete_bug(
     # so the global trail keeps a record.
     db.add(Activity(
         bug_id=None, entity_type="bug", entity_id=bug_id,
-        actor_user_id=actor.id if actor else None,
-        actor_name=actor.name if actor else "system",
+        actor_user_id=actor.id, actor_name=actor.name,
         action="bug_deleted",
         detail=f"Deleted bug #{bug_id}: {title}",
     ))
@@ -446,7 +487,11 @@ def delete_bug(
 # Comments (with optional attachments)
 # ---------------------------------------------------------------------------
 @router.get("/{bug_id}/comments", response_model=list[CommentOut])
-def list_comments(bug_id: int, db: Session = Depends(get_db)) -> list[dict]:
+def list_comments(
+    bug_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> list[dict]:
     if db.get(Bug, bug_id) is None:
         raise HTTPException(status_code=404, detail="Bug not found")
     comments = list(db.scalars(
@@ -476,31 +521,28 @@ def add_comment(
     payload: CommentIn,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
+    author: User = Depends(get_current_user),
 ) -> dict:
     bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
 
-    author = _resolve_user(db, payload.author_user_id)
-    author_name = author.name if author else "anonymous"
-
     c = Comment(
         bug_id=bug_id,
-        author_user_id=author.id if author else None,
-        author_name=author_name,
+        author_user_id=author.id,
+        author_name=author.name,
         body=payload.body,
     )
     db.add(c)
     db.flush()
     _log(db, bug_id, author, "comment_added",
-         f"Comment by {author_name}: {payload.body[:80]}")
+         f"Comment by {author.name}: {payload.body[:80]}")
     db.commit()
     db.refresh(c)
 
     snap = _bug_snapshot(bug)
     background.add_task(
-        notify_comment_added, snap, author_name,
-        author.id if author else None, payload.body,
+        notify_comment_added, snap, author.name, author.id, payload.body,
     )
     return {
         "id": c.id, "bug_id": c.bug_id,
@@ -516,9 +558,9 @@ def add_comment(
 async def upload_attachment(
     bug_id: int,
     file: UploadFile = File(...),
-    uploader_user_id: Optional[int] = Form(default=None),
     comment_id: Optional[int] = Form(default=None),
     db: Session = Depends(get_db),
+    uploader: User = Depends(get_current_user),
 ) -> dict:
     bug = db.get(Bug, bug_id)
     if bug is None:
@@ -537,14 +579,11 @@ async def upload_attachment(
             detail=f"File too large. Max {MAX_FILE_BYTES // (1024 * 1024)} MB.",
         )
 
-    uploader = _resolve_user(db, uploader_user_id) if uploader_user_id else None
-    uploader_name = uploader.name if uploader else "anonymous"
-
     att = Attachment(
         bug_id=bug_id,
         comment_id=comment_id,
-        uploader_user_id=uploader.id if uploader else None,
-        uploader_name=uploader_name,
+        uploader_user_id=uploader.id,
+        uploader_name=uploader.name,
         filename=(file.filename or "unnamed")[:255],
         content_type=(file.content_type or "application/octet-stream")[:120],
         size_bytes=len(data),
@@ -554,7 +593,7 @@ async def upload_attachment(
     db.flush()
     _log(
         db, bug_id, uploader, "attachment_added",
-        f"{uploader_name} uploaded '{att.filename}' ({len(data)} bytes)"
+        f"{uploader.name} uploaded '{att.filename}' ({len(data)} bytes)"
         + (f" on comment #{comment_id}" if comment_id else ""),
         entity_type="attachment", entity_id=att.id,
     )
@@ -564,7 +603,11 @@ async def upload_attachment(
 
 
 @router.get("/{bug_id}/attachments/{att_id}/download")
-def download_attachment(bug_id: int, att_id: int, db: Session = Depends(get_db)):
+def download_attachment(
+    bug_id: int, att_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
     a = db.get(Attachment, att_id)
     if a is None or a.bug_id != bug_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
@@ -585,12 +628,20 @@ def download_attachment(bug_id: int, att_id: int, db: Session = Depends(get_db))
 def delete_attachment(
     bug_id: int, att_id: int,
     db: Session = Depends(get_db),
-    actor_user_id: Optional[int] = Query(default=None),
+    actor: User = Depends(get_current_user),
 ) -> dict:
     a = db.get(Attachment, att_id)
     if a is None or a.bug_id != bug_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    actor = _resolve_user(db, actor_user_id) if actor_user_id else None
+    # Only admin/manager OR uploader OR person who can edit the bug.
+    bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
+    can_delete = (
+        actor.role in ("admin", "manager")
+        or a.uploader_user_id == actor.id
+        or (bug is not None and can_edit_bug(actor, bug.reporter_id, [u.id for u in bug.assignees]))
+    )
+    if not can_delete:
+        raise HTTPException(status_code=403, detail="You can't delete this attachment")
     fname = a.filename
     db.delete(a)
     _log(
@@ -606,7 +657,11 @@ def delete_attachment(
 # Activity
 # ---------------------------------------------------------------------------
 @router.get("/{bug_id}/activity", response_model=list[ActivityOut])
-def list_activity(bug_id: int, db: Session = Depends(get_db)) -> list[Activity]:
+def list_activity(
+    bug_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> list[Activity]:
     if db.get(Bug, bug_id) is None:
         raise HTTPException(status_code=404, detail="Bug not found")
     return list(db.scalars(

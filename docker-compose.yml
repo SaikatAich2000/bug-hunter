@@ -36,6 +36,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"       # max 50 % of one CPU core
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
 
   app:
     build: .
@@ -81,6 +89,14 @@ services:
       - "8765:8000"
     networks:
       - bugtracker_net
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"       # max 1 full CPU core
+          memory: 512M
+        reservations:
+          cpus: "0.10"
+          memory: 128M
 
 networks:
   bugtracker_net:
@@ -90,3 +106,4 @@ networks:
 volumes:
   bugtracker_pgdata:
     name: bugtracker_pgdata
+

@@ -126,7 +126,13 @@ body {
   flex-shrink: 0;
   filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
 }
-.brand-logo svg { width: 100%; height: 100%; }
+.brand-logo svg,
+.brand-logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
 .brand-title {
   font-weight: 700;
   font-size: 17px;
@@ -244,6 +250,17 @@ body {
   font-family: inherit;
 }
 .link-btn:hover { color: var(--text); background: var(--bg-elev-2); }
+
+/* Theme toggle icon — half navy / half white circle that mirrors the
+   actual theme colors. The visible half tells the user which theme
+   they'd switch TO if they click. */
+.theme-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
 
 /* ---------- Main ---------- */
 .main { display: flex; flex-direction: column; min-width: 0; }
@@ -1312,14 +1329,17 @@ body {
   margin-bottom: 24px;
 }
 .auth-logo {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   margin: 0 auto 12px;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.25));
 }
-.auth-logo svg {
+.auth-logo svg,
+.auth-logo img {
   width: 100%;
   height: 100%;
   display: block;
+  object-fit: contain;
 }
 .auth-brand h1 {
   margin: 0 0 4px;

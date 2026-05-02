@@ -12,17 +12,23 @@ which means stolen XSS payloads can't exfiltrate the session. The price
 is CSRF risk — but our cookie is `SameSite=Lax`, which blocks
 cross-site POST/PUT/DELETE from third-party origins, so the practical
 attack surface is small for an internal tool.
+
+Session-version invalidation:
+  Each session token also carries the user's `session_version`. When the
+  user changes or resets their password, we bump that integer in the DB,
+  which makes every previously-issued cookie fail validation on the next
+  request — effectively logging out other devices. Cookies are signed by
+  the server so a client can't tamper with the version they present.
 """
 from __future__ import annotations
 
 import hashlib
 import secrets
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from fastapi import Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from sqlalchemy.orm import Session
 
@@ -40,7 +46,8 @@ from app.models import (
 COOKIE_NAME = "bh_session"
 
 # Process-local fallback so dev works without setting SESSION_SECRET.
-# In production, set SESSION_SECRET in .env so it survives restarts.
+# In production, set SESSION_SECRET in .env so it survives restarts AND
+# is shared across multi-worker uvicorn deployments.
 _FALLBACK_SECRET = secrets.token_hex(32)
 
 
@@ -74,35 +81,46 @@ def verify_password(plain: str, hashed: Optional[str]) -> bool:
 # ---------------------------------------------------------------------------
 def _signer() -> TimestampSigner:
     s = get_settings().SESSION_SECRET or _FALLBACK_SECRET
-    return TimestampSigner(s, salt="bh-session-v1")
+    return TimestampSigner(s, salt="bh-session-v2")
 
 
-def make_session_token(user_id: int) -> str:
-    """Return a signed token containing the user id."""
-    return _signer().sign(str(user_id).encode("utf-8")).decode("utf-8")
+def make_session_token(user_id: int, session_version: int = 0) -> str:
+    """Return a signed token containing the user id and session version."""
+    payload = f"{user_id}:{session_version}"
+    return _signer().sign(payload.encode("utf-8")).decode("utf-8")
 
 
-def parse_session_token(token: str) -> Optional[int]:
-    """Verify a session cookie and return the user id, or None if invalid/expired."""
+def parse_session_token(token: str) -> Optional[tuple[int, int]]:
+    """Verify a session cookie and return (user_id, session_version),
+    or None if invalid/expired/malformed."""
     if not token:
         return None
     try:
         raw = _signer().unsign(token, max_age=get_settings().SESSION_TTL_SECONDS)
-    except SignatureExpired:
-        return None
-    except BadSignature:
+    except (SignatureExpired, BadSignature):
         return None
     try:
-        return int(raw.decode("utf-8"))
-    except (ValueError, AttributeError):
+        text = raw.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return None
+    parts = text.split(":")
+    try:
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1])
+        # Fallback for legacy single-int cookies issued before the version
+        # was added — accept once so live deploys don't kick everyone out.
+        if len(parts) == 1:
+            return int(parts[0]), 0
+        return None
+    except ValueError:
         return None
 
 
-def set_session_cookie(response: Response, user_id: int) -> None:
+def set_session_cookie(response: Response, user: User) -> None:
     settings = get_settings()
     response.set_cookie(
         key=COOKIE_NAME,
-        value=make_session_token(user_id),
+        value=make_session_token(user.id, user.session_version or 0),
         max_age=settings.SESSION_TTL_SECONDS,
         httponly=True,
         secure=settings.COOKIE_SECURE,
@@ -132,16 +150,36 @@ def hash_reset_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
+    """Mark every still-unused reset token for this user as used. Called on
+    successful password change/reset so old email links can't be replayed.
+    Returns the number of tokens invalidated (for audit logging)."""
+    now = datetime.now(timezone.utc)
+    rows = (
+        db.query(PasswordResetToken)
+        .filter(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
+        .all()
+    )
+    for r in rows:
+        r.used_at = now
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
 def _user_from_request(request: Request, db: Session) -> Optional[User]:
     token = request.cookies.get(COOKIE_NAME, "")
-    user_id = parse_session_token(token)
-    if user_id is None:
+    parsed = parse_session_token(token)
+    if parsed is None:
         return None
+    user_id, session_version = parsed
     user = db.get(User, user_id)
     if user is None or not user.is_active:
+        return None
+    # Token's session_version must match the user's current — bump on
+    # password change / reset / forced logout.
+    if (user.session_version or 0) != session_version:
         return None
     return user
 

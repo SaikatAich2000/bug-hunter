@@ -11,6 +11,7 @@ Tables:
                        OR to a comment. Stored INSIDE the database so they
                        persist across restarts and survive backups.
   - activity_log     : audit trail
+  - password_reset_tokens : single-use email-based password reset tokens
 """
 from __future__ import annotations
 
@@ -74,6 +75,11 @@ class User(Base):
     # bcrypt hash of password. Nullable to support the unlikely case of
     # SSO integration later, but normally always set.
     password_hash: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    # Bumped on password change / reset / forced logout. Sessions baked
+    # with an old session_version no longer validate. This is what makes
+    # "I changed my password" actually log out other devices.
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -158,9 +164,14 @@ class Bug(Base):
         "Comment", back_populates="bug", cascade="all, delete-orphan",
         order_by="Comment.created_at",
     )
+    # Activities ordered newest-first with an id-DESC tiebreaker so two
+    # events recorded in the same second still come back in a stable,
+    # insert-consistent order. Without the id tiebreaker the relationship
+    # ordering disagreed with the dedicated /activity endpoint, which had
+    # this same tuple already.
     activities: Mapped[list["Activity"]] = relationship(
         "Activity", back_populates="bug", cascade="all, delete-orphan",
-        order_by="Activity.created_at.desc()",
+        order_by="(Activity.created_at.desc(), Activity.id.desc())",
     )
     attachments: Mapped[list["Attachment"]] = relationship(
         "Attachment", back_populates="bug", cascade="all, delete-orphan",

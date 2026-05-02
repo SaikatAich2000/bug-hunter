@@ -13,9 +13,15 @@ ALLOWED_PRIORITIES = ["Low", "Medium", "High", "Critical"]
 ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
 ALLOWED_ROLES = ["admin", "manager", "user"]
 MIN_PASSWORD_LENGTH = 8
+MIN_TITLE_LENGTH = 3
+MIN_NAME_LENGTH = 2
+MIN_PROJECT_NAME_LENGTH = 2
 
 
-def _normalize_choice(value: str, allowed: list[str], label: str) -> str:
+def normalize_choice(value: str, allowed: list[str], label: str) -> str:
+    """Case-insensitive match against `allowed`; returns canonical form.
+    Public helper — also called from filter routes so list-filter and
+    create-payload accept the same casings."""
     if not isinstance(value, str):
         raise ValueError(f"Invalid {label}. Allowed: {', '.join(allowed)}")
     needle = value.strip().lower()
@@ -25,6 +31,10 @@ def _normalize_choice(value: str, allowed: list[str], label: str) -> str:
     raise ValueError(f"Invalid {label}. Allowed: {', '.join(allowed)}")
 
 
+# Kept as private alias for backward-compat inside this module.
+_normalize_choice = normalize_choice
+
+
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 
@@ -32,6 +42,20 @@ def _validate_email(value: str) -> str:
     v = (value or "").strip().lower()
     if not _EMAIL_RE.match(v):
         raise ValueError("Invalid email address")
+    return v
+
+
+def _strip_and_check_min_length(v: str, min_len: int, label: str) -> str:
+    """Strip whitespace, then enforce min length. Without the post-strip
+    check, '  a  ' would slip past Field(min_length=...) which only sees
+    the raw, padded value."""
+    if not isinstance(v, str):
+        raise ValueError(f"{label} must be a string")
+    v = v.strip()
+    if len(v) < min_len:
+        if min_len == 1:
+            raise ValueError(f"{label} cannot be empty")
+        raise ValueError(f"{label} must be at least {min_len} characters")
     return v
 
 
@@ -59,8 +83,8 @@ def _check_password_strength(v: str) -> str:
 
 class UserIn(BaseModel):
     """Admin creates a user (with a password)."""
-    name: str = Field(min_length=2, max_length=120)
-    email: str = Field(min_length=5, max_length=254)
+    name: str = Field(max_length=120)
+    email: str = Field(max_length=254)
     role: str = Field(default="user")
     password: str
     is_active: bool = True
@@ -68,9 +92,7 @@ class UserIn(BaseModel):
     @field_validator("name")
     @classmethod
     def _strip_name(cls, v: str) -> str:
-        v = v.strip()
-        if not v: raise ValueError("Name cannot be empty")
-        return v
+        return _strip_and_check_min_length(v, MIN_NAME_LENGTH, "Name")
 
     @field_validator("role")
     @classmethod
@@ -101,9 +123,7 @@ class UserUpdate(BaseModel):
     @classmethod
     def _strip_name(cls, v: Optional[str]) -> Optional[str]:
         if v is None: return None
-        v = v.strip()
-        if not v: raise ValueError("Name cannot be empty")
-        return v
+        return _strip_and_check_min_length(v, MIN_NAME_LENGTH, "Name")
 
     @field_validator("role")
     @classmethod
@@ -150,7 +170,10 @@ class LoginIn(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    current_password: str
+    # Allow any non-empty current password — the server will bcrypt-verify
+    # it. Length must match what we ever issued, but we can't introspect
+    # historical hashes, so just guard against trivially-empty input.
+    current_password: str = Field(min_length=1, max_length=200)
     new_password: str
 
     @field_validator("new_password")
@@ -200,21 +223,19 @@ class UserBrief(BaseModel):
 # Project
 # ---------------------------------------------------------------------------
 class ProjectIn(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
+    name: str = Field(max_length=120)
     description: str = Field(default="", max_length=1000)
     color: str = Field(default="#c9764f", pattern=r"^#[0-9a-fA-F]{6}$")
 
     @field_validator("name")
     @classmethod
     def _strip_name(cls, v: str) -> str:
-        v = v.strip()
-        if not v: raise ValueError("Project name cannot be empty")
-        return v
+        return _strip_and_check_min_length(v, MIN_PROJECT_NAME_LENGTH, "Project name")
 
     @field_validator("description")
     @classmethod
     def _strip_desc(cls, v: str) -> str:
-        return v.strip()
+        return v.strip() if isinstance(v, str) else v
 
 
 class ProjectOut(BaseModel):
@@ -232,7 +253,7 @@ class ProjectOut(BaseModel):
 # ---------------------------------------------------------------------------
 class BugCreate(BaseModel):
     project_id: int
-    title: str = Field(min_length=3, max_length=200)
+    title: str = Field(max_length=200)
     description: str = Field(default="", max_length=10000)
     reporter_id: Optional[int] = None
     assignee_ids: list[int] = Field(default_factory=list)
@@ -244,9 +265,7 @@ class BugCreate(BaseModel):
     @field_validator("title")
     @classmethod
     def _strip_title(cls, v: str) -> str:
-        v = v.strip()
-        if not v: raise ValueError("Title cannot be empty")
-        return v
+        return _strip_and_check_min_length(v, MIN_TITLE_LENGTH, "Title")
 
     @field_validator("description")
     @classmethod
@@ -289,7 +308,7 @@ class BugCreate(BaseModel):
 
 class BugUpdate(BaseModel):
     project_id: Optional[int] = None
-    title: Optional[str] = Field(default=None, min_length=3, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, max_length=10000)
     reporter_id: Optional[int] = None
     assignee_ids: Optional[list[int]] = None
@@ -302,9 +321,7 @@ class BugUpdate(BaseModel):
     @classmethod
     def _strip_title(cls, v: Optional[str]) -> Optional[str]:
         if v is None: return None
-        v = v.strip()
-        if not v: raise ValueError("Title cannot be empty")
-        return v
+        return _strip_and_check_min_length(v, MIN_TITLE_LENGTH, "Title")
 
     @field_validator("description")
     @classmethod
@@ -394,9 +411,7 @@ class CommentIn(BaseModel):
     @field_validator("body")
     @classmethod
     def _strip(cls, v: str) -> str:
-        v = v.strip()
-        if not v: raise ValueError("Body cannot be empty")
-        return v
+        return _strip_and_check_min_length(v, 1, "Comment body")
 
 
 class CommentOut(BaseModel):

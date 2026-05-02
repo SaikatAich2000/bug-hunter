@@ -21,7 +21,7 @@ from typing import Iterable
 
 from app.config import Settings, get_settings
 
-logger = logging.getLogger("bug_tracker.email")
+logger = logging.getLogger("bug_hunter.email")
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ class BugSnapshot:
     project_name: str
     status: str
     priority: str
-    severity: str
+    environment: str
     description: str
     reporter: UserSnapshot | None
     assignees: tuple[UserSnapshot, ...]
@@ -157,12 +157,12 @@ def _bug_link(bug_id: int) -> str:
 def _bug_meta_lines(bug: BugSnapshot) -> list[str]:
     return [
         f"Bug #{bug.id}: {bug.title}",
-        f"Project: {bug.project_name}",
-        f"Status:    {bug.status}",
-        f"Priority:  {bug.priority}",
-        f"Severity:  {bug.severity}",
-        f"Reporter:  {bug.reporter.display if bug.reporter else '—'}",
-        "Assignees: " + (
+        f"Project:     {bug.project_name}",
+        f"Status:      {bug.status}",
+        f"Priority:    {bug.priority}",
+        f"Environment: {bug.environment}",
+        f"Reporter:    {bug.reporter.display if bug.reporter else '—'}",
+        "Assignees:   " + (
             ", ".join(a.display for a in bug.assignees) if bug.assignees else "—"
         ),
     ]

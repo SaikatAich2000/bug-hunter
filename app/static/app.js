@@ -25,6 +25,10 @@ const STATE = {
   currentBugId: null,
   detailTab: "info",
   currentUser: null,   // populated from /api/auth/me at boot
+  // Asset hash served by /api/health at boot; if it changes later we
+  // know the server has been redeployed.
+  bootAssetVersion: null,
+  versionDriftWarned: false,
 };
 
 const API = "/api";
@@ -158,22 +162,40 @@ function closeTopModal() {
 }
 
 function confirmDialog(message, { title = "Confirm", okLabel = "Delete", danger = true } = {}) {
+  // Track the in-flight resolve so Escape / backdrop-click handlers can
+  // also resolve the promise (as cancel). Without this, dismissing the
+  // dialog with Escape leaves the await dangling forever AND the next
+  // confirmDialog stacks new listeners on top of the stale ones, so
+  // clicking OK fires both old and new resolves — silently triggering
+  // the previously-abandoned action (e.g. an unintended delete).
   return new Promise((resolve) => {
     $("#confirmTitle").textContent = title;
     $("#confirmMessage").textContent = message;
     const ok = $("#confirmOk");
     const cancel = $("#confirmCancel");
+    const modalEl = document.getElementById("modalConfirm");
     ok.textContent = okLabel;
     ok.className = "btn " + (danger ? "danger" : "primary");
-    const cleanup = () => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
       ok.removeEventListener("click", onOk);
       cancel.removeEventListener("click", onCancel);
+      modalEl.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKey, true);
       closeModal("modalConfirm");
+      resolve(value);
     };
-    const onOk = () => { cleanup(); resolve(true); };
-    const onCancel = () => { cleanup(); resolve(false); };
+    const onOk      = () => settle(true);
+    const onCancel  = () => settle(false);
+    const onBackdrop = (e) => { if (e.target === modalEl) settle(false); };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); settle(false); } };
     ok.addEventListener("click", onOk);
     cancel.addEventListener("click", onCancel);
+    modalEl.addEventListener("click", onBackdrop);
+    // Use capture so we beat the global Escape handler at lower layer.
+    document.addEventListener("keydown", onKey, true);
     openModal("modalConfirm");
   });
 }
@@ -211,6 +233,7 @@ async function boot() {
   await loadProjects();
   await refreshAll();
   bindGlobalListeners();
+  scheduleVersionCheck();
 }
 
 function applyRoleVisibility() {
@@ -244,7 +267,32 @@ async function loadHealth() {
   try {
     const h = await api("/health");
     $("#brandVersion").textContent = "v" + h.version;
+    // Note the asset_version we booted under so we can detect server
+    // redeploys later (see scheduleVersionCheck).
+    if (h.asset_version) STATE.bootAssetVersion = h.asset_version;
   } catch { /* ignore */ }
+}
+
+// If the server gets redeployed while a tab is open, future API calls
+// continue to work but the in-page JS can be subtly stale. Poll
+// /api/health every 5 minutes; if asset_version changes, the next page
+// navigation should pull the fresh HTML+JS. We just notify the user;
+// don't auto-reload because they might have unsaved input.
+function scheduleVersionCheck() {
+  setInterval(async () => {
+    try {
+      const h = await fetch("/api/health", { credentials: "include" }).then(r => r.json());
+      if (
+        STATE.bootAssetVersion &&
+        h.asset_version &&
+        h.asset_version !== STATE.bootAssetVersion &&
+        !STATE.versionDriftWarned
+      ) {
+        STATE.versionDriftWarned = true;
+        toast("New version available — reload the page when ready.", "info");
+      }
+    } catch { /* ignore */ }
+  }, 5 * 60 * 1000);
 }
 
 async function loadMeta() {
@@ -788,7 +836,12 @@ function renderAttachmentCard(a, deletable) {
   const url = `/api/bugs/${STATE.currentBugId}/attachments/${a.id}/download`;
   const ct = (a.content_type || "").toLowerCase();
   let preview = "";
-  if (ct.startsWith("image/")) {
+  // Inline rendering is safe for raster images and video. SVG is a vector
+  // image but can carry inline JS (server already downgrades it on
+  // download), so we treat it like any other downloadable file rather
+  // than embedding it as <img>.
+  const isRasterImg = ct.startsWith("image/") && ct !== "image/svg+xml";
+  if (isRasterImg) {
     preview = `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${escapeHtml(a.filename)}" loading="lazy"/></a>`;
   } else if (ct.startsWith("video/")) {
     preview = `<video controls preload="metadata"><source src="${url}" type="${escapeHtml(a.content_type)}"/></video>`;

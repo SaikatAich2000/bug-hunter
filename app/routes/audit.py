@@ -15,6 +15,16 @@ from app.schemas import ActivityOut
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 
+def _like_escape(needle: str) -> str:
+    """Escape SQL LIKE wildcards so a query containing literal '%' or '_'
+    matches those characters exactly instead of acting as wildcards."""
+    return (
+        needle.replace("\\", "\\\\")
+              .replace("%", "\\%")
+              .replace("_", "\\_")
+    )
+
+
 @router.get("", response_model=list[ActivityOut])
 def list_audit(
     entity_type: Optional[str] = None,
@@ -30,11 +40,11 @@ def list_audit(
     if actor_user_id is not None:
         stmt = stmt.where(Activity.actor_user_id == actor_user_id)
     if q:
-        like = f"%{q.lower()}%"
+        like = f"%{_like_escape(q.lower())}%"
         stmt = stmt.where(or_(
-            Activity.action.ilike(like),
-            Activity.detail.ilike(like),
-            Activity.actor_name.ilike(like),
+            Activity.action.ilike(like, escape="\\"),
+            Activity.detail.ilike(like, escape="\\"),
+            Activity.actor_name.ilike(like, escape="\\"),
         ))
     stmt = stmt.order_by(Activity.created_at.desc(), Activity.id.desc()).limit(limit)
     return list(db.scalars(stmt).all())

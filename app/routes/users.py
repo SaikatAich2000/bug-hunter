@@ -8,7 +8,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, hash_password, require_admin
+from app.auth import (
+    get_current_user, hash_password, invalidate_outstanding_reset_tokens,
+    require_admin,
+)
 from app.database import get_db
 from app.models import Activity, User
 from app.schemas import UserIn, UserOut, UserUpdate
@@ -25,6 +28,16 @@ def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail:
     ))
 
 
+def _like_escape(needle: str) -> str:
+    """Escape LIKE wildcards so `%` and `_` match the literal characters
+    rather than 'any'. Pair with escape='\\\\' on the LIKE clause."""
+    return (
+        needle.replace("\\", "\\\\")
+              .replace("%", "\\%")
+              .replace("_", "\\_")
+    )
+
+
 @router.get("", response_model=list[UserOut])
 def list_users(
     include_inactive: bool = Query(default=True),
@@ -36,11 +49,11 @@ def list_users(
     if not include_inactive:
         stmt = stmt.where(User.is_active.is_(True))
     if q:
-        like = f"%{q.lower()}%"
+        like = f"%{_like_escape(q.lower())}%"
         stmt = stmt.where(or_(
-            func.lower(User.name).like(like),
-            func.lower(User.email).like(like),
-            func.lower(User.role).like(like),
+            func.lower(User.name).like(like, escape="\\"),
+            func.lower(User.email).like(like, escape="\\"),
+            func.lower(User.role).like(like, escape="\\"),
         ))
     stmt = stmt.order_by(func.lower(User.name))
     return list(db.scalars(stmt).all())
@@ -120,6 +133,10 @@ def update_user(
                 detail="Cannot remove the last admin. Promote another user first.",
             )
 
+    # If the admin is deactivating someone, kick their existing sessions.
+    if fields.get("is_active") is False and user.is_active:
+        user.session_version = (user.session_version or 0) + 1
+
     for key, value in fields.items():
         old = getattr(user, key)
         if old != value:
@@ -128,6 +145,10 @@ def update_user(
 
     if new_password:
         user.password_hash = hash_password(new_password)
+        # An admin password-reset is a security event — kick all existing
+        # sessions for this user and revoke their reset tokens too.
+        user.session_version = (user.session_version or 0) + 1
+        invalidate_outstanding_reset_tokens(db, user.id)
         changes.append("password reset by admin")
 
     try:

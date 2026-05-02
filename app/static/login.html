@@ -4,51 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bug Hunter — Sign in</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=3.0.0" />
-  <link rel="stylesheet" href="/static/styles.css?v=3.0.0" />
+  <link rel="icon" type="image/png" href="/static/favicon.png?v=__ASSET_VERSION__" />
+  <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
 </head>
 <body class="auth-body">
   <main class="auth-shell">
     <div class="auth-card">
       <div class="auth-brand">
         <div class="auth-logo">
-          <!-- Same revolver + ladybug brand -->
-          <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <defs>
-              <linearGradient id="brassG2" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#f5d089"/>
-                <stop offset="50%" stop-color="#c9954a"/>
-                <stop offset="100%" stop-color="#7a5621"/>
-              </linearGradient>
-              <linearGradient id="woodG2" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#7a4a2a"/>
-                <stop offset="100%" stop-color="#4a2a18"/>
-              </linearGradient>
-              <radialGradient id="bugG2" cx="0.4" cy="0.35">
-                <stop offset="0%" stop-color="#ff6b5e"/>
-                <stop offset="60%" stop-color="#c83a30"/>
-                <stop offset="100%" stop-color="#7a1e18"/>
-              </radialGradient>
-            </defs>
-            <g transform="rotate(-18 32 32)">
-              <rect x="14" y="28" width="28" height="6" rx="1.5" fill="url(#brassG2)" stroke="#3a2410" stroke-width="0.8"/>
-              <circle cx="13.5" cy="31" r="1.2" fill="#1a0e08"/>
-              <circle cx="38" cy="31" r="6" fill="url(#brassG2)" stroke="#3a2410" stroke-width="0.8"/>
-              <circle cx="38" cy="31" r="1.6" fill="#1a0e08"/>
-              <path d="M42 27 L46 24 L47 27 L44 29 Z" fill="url(#brassG2)" stroke="#3a2410" stroke-width="0.6"/>
-              <path d="M40 36 Q42 42 44 42 L46 42 Q48 42 48 39 L48 36 Z" fill="none" stroke="#3a2410" stroke-width="1.4"/>
-              <path d="M44 36 L52 50 L48 52 L41 38 Z" fill="url(#woodG2)" stroke="#2a1408" stroke-width="0.8"/>
-            </g>
-            <g transform="translate(14 16)">
-              <ellipse cx="8" cy="9" rx="7" ry="6" fill="url(#bugG2)" stroke="#3a0d0a" stroke-width="0.7"/>
-              <line x1="8" y1="3.5" x2="8" y2="14.5" stroke="#3a0d0a" stroke-width="0.7"/>
-              <circle cx="4.5" cy="7" r="1.1" fill="#1a0a08"/>
-              <circle cx="11.5" cy="7" r="1.1" fill="#1a0a08"/>
-              <circle cx="4" cy="11" r="0.9" fill="#1a0a08"/>
-              <circle cx="12" cy="11" r="0.9" fill="#1a0a08"/>
-              <ellipse cx="8" cy="3.8" rx="3" ry="2.2" fill="#1a0a08"/>
-            </g>
-          </svg>
+          <img src="/static/icon.png?v=__ASSET_VERSION__" alt="Bug Hunter" />
         </div>
         <h1>Bug Hunter</h1>
         <p class="auth-tagline">Sign in to continue</p>
@@ -68,7 +32,7 @@
         <button type="submit" class="btn primary auth-submit" id="loginSubmit">Sign in</button>
         <div class="auth-links">
           <a href="#" id="showForgot">Forgot your password?</a>
-          <button type="button" class="link-btn" id="loginThemeBtn">🌗 Theme</button>
+          <button type="button" class="link-btn" id="loginThemeBtn"><svg class="theme-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M 8 2 A 6 6 0 0 0 8 14 Z" fill="#0b1020"/><path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#ffffff"/><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1" stroke-opacity="0.55"/><line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" stroke-width="0.6" stroke-opacity="0.4"/></svg> Theme</button>
         </div>
       </form>
 
@@ -86,7 +50,6 @@
         </div>
       </form>
     </div>
-    <div class="auth-footnote">v3.0.0 · self-hosted · MIT</div>
   </main>
 
   <script>

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter, BackgroundTasks, Depends, File, Form, HTTPException,
@@ -14,7 +16,6 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import can_edit_bug, get_current_user
-from app.config import get_settings
 from app.database import get_db
 from app.email_service import (
     BugSnapshot, UserSnapshot,
@@ -22,8 +23,9 @@ from app.email_service import (
 )
 from app.models import Activity, Attachment, Bug, Comment, Project, User
 from app.schemas import (
+    ALLOWED_ENVIRONMENTS, ALLOWED_PRIORITIES, ALLOWED_STATUSES,
     ActivityOut, AttachmentBrief, BugCreate, BugDetail, BugListResponse,
-    BugOut, BugUpdate, CommentIn, CommentOut,
+    BugOut, BugUpdate, CommentIn, CommentOut, normalize_choice,
 )
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
@@ -31,6 +33,32 @@ router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 # Soft cap on individual attachment size — protects the DB from a 4 GB video
 # upload. Configurable via env if the team needs bigger files later.
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Read uploads in 1 MB chunks so we abort over-sized requests before
+# they consume RAM. Anything above MAX_FILE_BYTES is rejected mid-stream.
+_UPLOAD_CHUNK = 1024 * 1024
+
+# Content types we MUST NOT serve as-is, because a browser would render
+# them inline and execute embedded scripts in our same-origin context.
+# These get downgraded to application/octet-stream at download time and
+# served with Content-Disposition: attachment to force the browser to
+# save them rather than render them.
+_ACTIVE_CONTENT_TYPES = {
+    "text/html", "application/xhtml+xml", "application/xml", "text/xml",
+    "image/svg+xml", "application/javascript", "text/javascript",
+    "application/x-javascript", "text/javascript;charset=utf-8",
+}
+
+# Sanitize filename when echoed in headers — we still keep the original
+# in the DB; this is purely the bytes that go into Content-Disposition.
+_HEADER_FILENAME_BAD = re.compile(r'[\r\n"\\]+')
+
+
+def _safe_filename_for_header(name: str) -> str:
+    """Strip CR/LF/quotes/backslashes from a filename so it can't break
+    the Content-Disposition header. Returns ASCII-safe form with the
+    original (possibly-Unicode) form preserved via filename* per RFC 5987."""
+    return _HEADER_FILENAME_BAD.sub("_", name) or "file"
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +101,7 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
     return BugSnapshot(
         id=bug.id, title=bug.title,
         project_name=bug.project.name if bug.project else "",
-        status=bug.status, priority=bug.priority, severity=bug.environment,
+        status=bug.status, priority=bug.priority, environment=bug.environment,
         description=bug.description,
         reporter=(UserSnapshot(id=bug.reporter.id, name=bug.reporter.name, email=bug.reporter.email)
                   if bug.reporter else None),
@@ -126,6 +154,17 @@ def _attachment_count(db: Session, bug_id: int) -> int:
     return db.scalar(
         select(func.count(Attachment.id)).where(Attachment.bug_id == bug_id)
     ) or 0
+
+
+def _like_escape(needle: str) -> str:
+    """Escape SQL LIKE wildcards so a user typing `_` or `%` matches the
+    literal characters, not 'any character' / 'any sequence'. We pair this
+    with `escape='\\\\'` on the LIKE clause so the engine knows about it."""
+    return (
+        needle.replace("\\", "\\\\")
+              .replace("%", "\\%")
+              .replace("_", "\\_")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +223,25 @@ def list_bugs(
     if page < 1 or page_size < 1 or page_size > 200:
         raise HTTPException(status_code=400, detail="Invalid pagination parameters")
 
+    # Normalize the enum-like filters case-insensitively, the same way we
+    # normalize values on create. Without this the create flow stored
+    # 'New' but a filter like ?status=new returned zero results.
+    if status_filter is not None and status_filter != "":
+        try:
+            status_filter = normalize_choice(status_filter, ALLOWED_STATUSES, "status")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if priority is not None and priority != "":
+        try:
+            priority = normalize_choice(priority, ALLOWED_PRIORITIES, "priority")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if environment is not None and environment != "":
+        try:
+            environment = normalize_choice(environment, ALLOWED_ENVIRONMENTS, "environment")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     stmt = _eager_bug(db)
     count_stmt = select(func.count(Bug.id))
 
@@ -192,11 +250,11 @@ def list_bugs(
 
     if project_id is not None:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.project_id == project_id)
-    if status_filter is not None:
+    if status_filter:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.status == status_filter)
-    if priority is not None:
+    if priority:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.priority == priority)
-    if environment is not None:
+    if environment:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.environment == environment)
     if reporter_id is not None:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.reporter_id == reporter_id)
@@ -206,11 +264,14 @@ def list_bugs(
         q_clean = q.strip().lstrip("#")
         if q_clean.isdigit():
             stmt, count_stmt = apply((stmt, count_stmt), Bug.id == int(q_clean))
-        else:
-            like = f"%{q.lower()}%"
+        elif q_clean:
+            # Use the cleaned query — old code used the un-stripped `q` here,
+            # which made `?q=  needle  ` never match anything because the
+            # LIKE pattern itself contained the leading/trailing spaces.
+            like = f"%{_like_escape(q_clean.lower())}%"
             clause = or_(
-                func.lower(Bug.title).like(like),
-                func.lower(Bug.description).like(like),
+                func.lower(Bug.title).like(like, escape="\\"),
+                func.lower(Bug.description).like(like, escape="\\"),
             )
             stmt, count_stmt = apply((stmt, count_stmt), clause)
 
@@ -376,25 +437,45 @@ def update_bug(
     fields = payload.model_dump(exclude_unset=True)
     actor_name = actor.name
 
-    if "project_id" in fields and db.get(Project, fields["project_id"]) is None:
-        raise HTTPException(status_code=400, detail="Project does not exist")
+    if "project_id" in fields and fields["project_id"] is not None:
+        if db.get(Project, fields["project_id"]) is None:
+            raise HTTPException(status_code=400, detail="Project does not exist")
 
     assignee_ids = fields.pop("assignee_ids", None)
-    new_reporter_id = fields.pop("reporter_id", None) if "reporter_id" in fields else "__omit__"
+    has_reporter_in_payload = "reporter_id" in fields
+    new_reporter_id = fields.pop("reporter_id", None)
 
-    tracked = ["status", "priority", "environment", "project_id", "due_date", "title"]
+    # ----- Reporter change permission gate (BUG-2 fix) -----
+    # Only run the role check when the reporter would actually CHANGE.
+    # Previously, the SPA always sent reporter_id in PUTs, which made
+    # owner-edits 403 with "Only admins or managers can change the reporter"
+    # even when they weren't trying to.
+    reporter_actually_changes = (
+        has_reporter_in_payload and new_reporter_id != bug.reporter_id
+    )
+    if reporter_actually_changes and actor.role not in ("admin", "manager"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins or managers can change the reporter",
+        )
+
+    # ----- Compute audit changes for tracked fields -----
+    # Now includes `description` so a description-only edit no longer falls
+    # through to the rollback branch (BUG-5 fix). All editable fields that
+    # the API accepts are listed here.
+    tracked = ["status", "priority", "environment", "project_id",
+               "due_date", "title", "description"]
     changes: list[tuple[str, str, str]] = []
     for f in tracked:
         if f in fields and getattr(bug, f) != fields[f]:
             changes.append((f, str(getattr(bug, f) or ""), str(fields[f] or "")))
 
+    # ----- Apply the simple field changes -----
     for key, value in fields.items():
         setattr(bug, key, value)
 
-    if new_reporter_id != "__omit__":
-        # Only admin/manager can change the reporter.
-        if actor.role not in ("admin", "manager"):
-            raise HTTPException(status_code=403, detail="Only admins or managers can change the reporter")
+    # ----- Reporter change -----
+    if reporter_actually_changes:
         old_reporter_label = bug.reporter.name if bug.reporter else "—"
         if new_reporter_id is None:
             bug.reporter_id = None
@@ -406,6 +487,7 @@ def update_bug(
         if old_reporter_label != new_reporter_label:
             changes.append(("reporter", old_reporter_label, new_reporter_label))
 
+    # ----- Assignee diff -----
     newly_assigned: list[User] = []
     if assignee_ids is not None:
         new_users = _resolve_users(db, assignee_ids)
@@ -422,13 +504,16 @@ def update_bug(
                 ", ".join(new_names) or "(none)",
             ))
             newly_assigned = [u for u in new_users if u.id in added_ids]
-        bug.assignees = new_users
+            bug.assignees = new_users   # only re-bind when actually different
 
+    # ----- Commit / rollback -----
     if changes:
         for field, old, new in changes:
             _log(db, bug.id, actor, f"{field}_changed", f"{field}: '{old}' → '{new}'")
         db.commit()
     else:
+        # Nothing meaningful changed — discard any side-effecting setattrs
+        # so we don't bump updated_at for a no-op PUT.
         db.rollback()
 
     fresh = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
@@ -554,6 +639,25 @@ def add_comment(
 # ---------------------------------------------------------------------------
 # Attachments — upload, list, download, delete
 # ---------------------------------------------------------------------------
+async def _read_upload_with_limit(file: UploadFile, limit: int) -> bytes:
+    """Stream the upload in chunks and abort EARLY if it exceeds the limit.
+    Replaces the prior `await file.read()` which buffered the entire body
+    in memory before checking — letting an attacker waste GBs of RAM with
+    a single oversized request."""
+    buf = bytearray()
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Max {limit // (1024 * 1024)} MB.",
+            )
+    return bytes(buf)
+
+
 @router.post("/{bug_id}/attachments", response_model=AttachmentBrief, status_code=status.HTTP_201_CREATED)
 async def upload_attachment(
     bug_id: int,
@@ -570,14 +674,9 @@ async def upload_attachment(
         if c is None or c.bug_id != bug_id:
             raise HTTPException(status_code=400, detail="Invalid comment_id for this bug")
 
-    data = await file.read()
+    data = await _read_upload_with_limit(file, MAX_FILE_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
-    if len(data) > MAX_FILE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Max {MAX_FILE_BYTES // (1024 * 1024)} MB.",
-        )
 
     att = Attachment(
         bug_id=bug_id,
@@ -612,14 +711,39 @@ def download_attachment(
     if a is None or a.bug_id != bug_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
-    # We use StreamingResponse rather than Response so big files don't load
-    # entirely into the response buffer twice.
+    # Decide content-type and disposition.
+    #
+    # Active types like text/html, image/svg+xml, JS, etc. can carry
+    # executable script. If we let the browser render them inline they'll
+    # run in our origin's context — same-origin XSS via stored attachment.
+    # For those types we force `attachment` disposition AND downgrade the
+    # content-type to octet-stream so the browser saves rather than executes.
+    ct_lower = (a.content_type or "").lower().split(";")[0].strip()
+    is_active = ct_lower in _ACTIVE_CONTENT_TYPES
+    safe_ct = "application/octet-stream" if is_active else (a.content_type or "application/octet-stream")
+    disposition = "attachment" if is_active else "inline"
+
+    safe_fname = _safe_filename_for_header(a.filename)
+    # RFC 5987 form for non-ASCII filenames; keeps a plain ASCII fallback.
+    cd = (
+        f'{disposition}; filename="{safe_fname}"; '
+        f"filename*=UTF-8''{quote(a.filename, safe='')}"
+    )
+
     return StreamingResponse(
         io.BytesIO(a.data),
-        media_type=a.content_type,
+        media_type=safe_ct,
         headers={
-            "Content-Disposition": f'inline; filename="{a.filename}"',
+            "Content-Disposition": cd,
             "Content-Length": str(a.size_bytes),
+            # Defense-in-depth: even if some future code path ends up
+            # serving HTML inline, these headers make it harder to weaponize.
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "X-Frame-Options": "DENY",
+            # Keep a Cache-Control here so the global middleware doesn't
+            # try to override us — attachments may be private.
+            "Cache-Control": "private, max-age=0, no-cache",
         },
     )
 

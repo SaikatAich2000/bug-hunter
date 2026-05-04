@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -148,6 +149,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Gzip compression
+#
+# Performance win for low-resource VMs: shrinks JSON / HTML / JS / CSS
+# responses by ~70-90% over the wire so the small server spends less time
+# pushing bytes. Skips bodies smaller than 1 KB (the CPU cost of compression
+# isn't worth it for tiny payloads) and naturally skips already-compressed
+# binary types (images / video) because Starlette's GZipMiddleware checks
+# the Accept-Encoding header rather than blindly compressing.
+#
+# Attachment downloads are unaffected — they ship their own Cache-Control
+# header which exits the cache middleware early; gzip is also typically
+# unhelpful for already-compressed media (PDFs, JPEGs, MP4s, etc.).
+# ---------------------------------------------------------------------------
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 # ---------------------------------------------------------------------------

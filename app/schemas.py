@@ -8,7 +8,19 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-ALLOWED_STATUSES = ["New", "In Progress", "Resolved", "Closed", "Reopened"]
+# Statuses:
+#   New / In Progress / Reopened  → "open" (active work)
+#   Resolved                      → fixed, awaiting verification
+#   Closed                        → fully closed
+#   Resolve Later                 → triaged but deferred (counted, but parked)
+#   Not a Bug                     → invalid; explicitly EXCLUDED from totals
+ALLOWED_STATUSES = [
+    "New", "In Progress", "Resolved", "Closed", "Reopened",
+    "Not a Bug", "Resolve Later",
+]
+# Statuses that should NOT be counted in the "total bugs" KPI because the
+# user explicitly said "Not a Bug means it isn't really a bug, don't count it".
+EXCLUDED_FROM_TOTAL_STATUSES = ["Not a Bug"]
 ALLOWED_PRIORITIES = ["Low", "Medium", "High", "Critical"]
 ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
 ALLOWED_ROLES = ["admin", "manager", "user"]
@@ -448,11 +460,18 @@ class BugDetail(BugOut):
 # Stats
 # ---------------------------------------------------------------------------
 class StatsOut(BaseModel):
-    projects: int
+    # Total bugs — EXCLUDES the "Not a Bug" status per product requirement.
     bugs: int
-    users: int
+    # Operational status buckets used by the KPI strip on the dashboard.
     open: int
     resolved: int
+    closed: int
+    resolve_later: int
+    # Kept for backward compatibility with any external integrations or
+    # cached frontends that haven't reloaded yet. The UI no longer renders
+    # them, but removing them outright would break out-of-date clients.
+    projects: int = 0
+    users: int = 0
     by_status: dict[str, int]
     by_priority: dict[str, int]
     by_environment: dict[str, int]

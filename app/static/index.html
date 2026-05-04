@@ -17,10 +17,12 @@
         <div class="brand-logo">
           <img src="/static/icon.png?v=__ASSET_VERSION__" alt="Bug Hunter" />
         </div>
-        <div>
+        <div class="brand-text">
           <div class="brand-title">Bug Hunter</div>
           <div class="brand-version" id="brandVersion">v—</div>
         </div>
+        <button class="icon-btn sidebar-collapse-btn" id="sidebarCollapseBtn"
+                title="Collapse sidebar" aria-label="Collapse sidebar">«</button>
       </div>
 
       <nav class="nav">
@@ -77,27 +79,47 @@
         <button class="btn primary" id="newBugBtn">+ New Bug</button>
       </header>
 
-      <!-- KPI strip -->
+      <!-- KPI strip: Total | Open | Resolved | Closed | Resolve Later -->
       <section class="kpi-strip">
-        <div class="kpi"><div class="kpi-num" id="kpiBugs">0</div><div class="kpi-label">Total Bugs</div></div>
-        <div class="kpi"><div class="kpi-num" id="kpiOpen">0</div><div class="kpi-label">Open</div></div>
-        <div class="kpi"><div class="kpi-num" id="kpiResolved">0</div><div class="kpi-label">Resolved</div></div>
-        <div class="kpi"><div class="kpi-num" id="kpiUsers">0</div><div class="kpi-label">Users</div></div>
-        <div class="kpi"><div class="kpi-num" id="kpiProjects">0</div><div class="kpi-label">Projects</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiBugs">0</div><div class="kpi-label">Total</div></div>
+        <div class="kpi"><div class="kpi-num kpi-open" id="kpiOpen">0</div><div class="kpi-label">Open</div></div>
+        <div class="kpi"><div class="kpi-num kpi-resolved" id="kpiResolved">0</div><div class="kpi-label">Resolved</div></div>
+        <div class="kpi"><div class="kpi-num kpi-closed" id="kpiClosed">0</div><div class="kpi-label">Closed</div></div>
+        <div class="kpi"><div class="kpi-num kpi-later" id="kpiResolveLater">0</div><div class="kpi-label">Resolve Later</div></div>
       </section>
 
-      <!-- Filter bar (visible only on list view) -->
+      <!-- Filter bar (visible only on list view). Multi-select dropdowns. -->
       <section class="filter-bar" id="filterBar">
-        <select id="filterProject" aria-label="Filter by project"><option value="">All Projects</option></select>
-        <select id="filterStatus" aria-label="Filter by status"><option value="">All Statuses</option></select>
-        <select id="filterPriority" aria-label="Filter by priority"><option value="">All Priorities</option></select>
-        <select id="filterEnvironment" aria-label="Filter by environment">
-          <option value="">All Envs</option>
-          <option value="DEV">DEV</option>
-          <option value="UAT">UAT</option>
-          <option value="PROD">PROD</option>
-        </select>
-        <select id="filterAssignee" aria-label="Filter by assignee"><option value="">All Assignees</option></select>
+        <div class="ms-wrap" data-filter="project_id">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+            <span class="ms-btn-label">All Projects</span><span class="ms-caret">▾</span>
+          </button>
+          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+        </div>
+        <div class="ms-wrap" data-filter="status">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+            <span class="ms-btn-label">All Statuses</span><span class="ms-caret">▾</span>
+          </button>
+          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+        </div>
+        <div class="ms-wrap" data-filter="priority">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+            <span class="ms-btn-label">All Priorities</span><span class="ms-caret">▾</span>
+          </button>
+          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+        </div>
+        <div class="ms-wrap" data-filter="environment">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+            <span class="ms-btn-label">All Envs</span><span class="ms-caret">▾</span>
+          </button>
+          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+        </div>
+        <div class="ms-wrap" data-filter="assignee_id">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+            <span class="ms-btn-label">All Assignees</span><span class="ms-caret">▾</span>
+          </button>
+          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+        </div>
         <button class="btn ghost" id="clearFiltersBtn">Clear</button>
       </section>
 
@@ -108,14 +130,13 @@
             <thead>
               <tr>
                 <th class="col-id">#</th>
-                <th>Title</th>
-                <th>Project</th>
-                <th>Status</th>
-                <th>Priority</th>
-                <th>Env</th>
-                <th>Assignees</th>
-                <th>📎</th>
-                <th>Updated</th>
+                <th class="col-title">Title</th>
+                <th class="col-project">Project</th>
+                <th class="col-status">Status</th>
+                <th class="col-priority">Priority</th>
+                <th class="col-env">Env</th>
+                <th class="col-assignees">Assignees</th>
+                <th class="col-att">📎</th>
                 <th class="col-actions">Actions</th>
               </tr>
             </thead>
@@ -199,11 +220,13 @@
             <select name="project_id" required></select>
           </label>
         </div>
+        <!-- Reporter on its own row prevents the long "Name <email>" string
+             from squeezing the other fields and overflowing the modal. -->
+        <label class="field">
+          <span>Reporter <em>*</em></span>
+          <select name="reporter_id" required class="reporter-select"></select>
+        </label>
         <div class="row">
-          <label class="field">
-            <span>Reporter <em>*</em></span>
-            <select name="reporter_id" required></select>
-          </label>
           <label class="field">
             <span>Status</span>
             <select name="status"></select>

@@ -208,39 +208,50 @@ def export_bugs_csv(
 # ---------------------------------------------------------------------------
 @router.get("", response_model=BugListResponse)
 def list_bugs(
-    project_id: Optional[int] = None,
-    status_filter: Optional[str] = Query(default=None, alias="status"),
-    priority: Optional[str] = None,
-    environment: Optional[str] = None,
+    project_id: Optional[list[int]] = Query(default=None),
+    status_filter: Optional[list[str]] = Query(default=None, alias="status"),
+    priority: Optional[list[str]] = Query(default=None),
+    environment: Optional[list[str]] = Query(default=None),
     reporter_id: Optional[int] = None,
-    assignee_id: Optional[int] = None,
+    assignee_id: Optional[list[int]] = Query(default=None),
     q: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> BugListResponse:
+    """List bugs with filtering. All enum-like filters now accept MULTIPLE
+    values via repeated query params (e.g. ?status=New&status=Resolved) so
+    the SPA's multi-select dropdowns can pass them through directly. Single-
+    value calls (?status=New) still work — FastAPI parses them into a list
+    of one, which we then `.in_(...)` against."""
     if page < 1 or page_size < 1 or page_size > 200:
         raise HTTPException(status_code=400, detail="Invalid pagination parameters")
 
-    # Normalize the enum-like filters case-insensitively, the same way we
-    # normalize values on create. Without this the create flow stored
-    # 'New' but a filter like ?status=new returned zero results.
-    if status_filter is not None and status_filter != "":
-        try:
-            status_filter = normalize_choice(status_filter, ALLOWED_STATUSES, "status")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if priority is not None and priority != "":
-        try:
-            priority = normalize_choice(priority, ALLOWED_PRIORITIES, "priority")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if environment is not None and environment != "":
-        try:
-            environment = normalize_choice(environment, ALLOWED_ENVIRONMENTS, "environment")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Normalize each multi-valued enum filter case-insensitively. We strip
+    # empty strings (the SPA sometimes sends ?status= for "no filter") and
+    # reject unknown values with 400 — same behavior as the old single-value
+    # path, just per-element.
+    def _normalize_list(values: Optional[list[str]], allowed: list[str], label: str) -> list[str]:
+        if not values:
+            return []
+        out: list[str] = []
+        for v in values:
+            if v is None or v == "":
+                continue
+            try:
+                out.append(normalize_choice(v, allowed, label))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return out
+
+    statuses = _normalize_list(status_filter, ALLOWED_STATUSES, "status")
+    priorities = _normalize_list(priority, ALLOWED_PRIORITIES, "priority")
+    environments = _normalize_list(environment, ALLOWED_ENVIRONMENTS, "environment")
+
+    # Strip None / 0 from the int lists so callers can send blanks safely.
+    project_ids = [p for p in (project_id or []) if p]
+    assignee_ids = [a for a in (assignee_id or []) if a]
 
     stmt = _eager_bug(db)
     count_stmt = select(func.count(Bug.id))
@@ -248,18 +259,21 @@ def list_bugs(
     def apply(both, clause):
         return both[0].where(clause), both[1].where(clause)
 
-    if project_id is not None:
-        stmt, count_stmt = apply((stmt, count_stmt), Bug.project_id == project_id)
-    if status_filter:
-        stmt, count_stmt = apply((stmt, count_stmt), Bug.status == status_filter)
-    if priority:
-        stmt, count_stmt = apply((stmt, count_stmt), Bug.priority == priority)
-    if environment:
-        stmt, count_stmt = apply((stmt, count_stmt), Bug.environment == environment)
+    if project_ids:
+        stmt, count_stmt = apply((stmt, count_stmt), Bug.project_id.in_(project_ids))
+    if statuses:
+        stmt, count_stmt = apply((stmt, count_stmt), Bug.status.in_(statuses))
+    if priorities:
+        stmt, count_stmt = apply((stmt, count_stmt), Bug.priority.in_(priorities))
+    if environments:
+        stmt, count_stmt = apply((stmt, count_stmt), Bug.environment.in_(environments))
     if reporter_id is not None:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.reporter_id == reporter_id)
-    if assignee_id is not None:
-        stmt, count_stmt = apply((stmt, count_stmt), Bug.assignees.any(User.id == assignee_id))
+    if assignee_ids:
+        stmt, count_stmt = apply(
+            (stmt, count_stmt),
+            Bug.assignees.any(User.id.in_(assignee_ids)),
+        )
     if q:
         q_clean = q.strip().lstrip("#")
         if q_clean.isdigit():
@@ -280,11 +294,24 @@ def list_bugs(
     stmt = stmt.order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(page_size).offset(offset)
     bugs = list(db.scalars(stmt).all())
 
+    # Perf: previously this loop called `_attachment_count(db, b.id)` once per
+    # bug, which is N+1 queries (50 extra round-trips for a single page on a
+    # low-resource VM). Replaced with one aggregate query keyed by bug_id.
+    bug_ids_in_page = [b.id for b in bugs]
+    if bug_ids_in_page:
+        att_counts = dict(db.execute(
+            select(Attachment.bug_id, func.count(Attachment.id))
+            .where(Attachment.bug_id.in_(bug_ids_in_page))
+            .group_by(Attachment.bug_id)
+        ).all())
+    else:
+        att_counts = {}
+
     items = []
     for b in bugs:
         items.append(_bug_to_out_dict(
             b,
-            _attachment_count(db, b.id),
+            int(att_counts.get(b.id, 0)),
             can_edit_bug(_user, b.reporter_id, [a.id for a in b.assignees]),
         ))
 

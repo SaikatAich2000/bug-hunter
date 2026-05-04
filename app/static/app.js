@@ -17,9 +17,12 @@ const STATE = {
   pageSize: 50,
   totalPages: 1,
   total: 0,
+  // Filters: each enum-like filter is now an ARRAY (multi-select). The free-
+  // text search `q` and the legacy single-value `reporter_id` stay scalar.
   filters: {
-    project_id: "", status: "", priority: "",
-    environment: "", reporter_id: "", assignee_id: "", q: "",
+    project_id: [], status: [], priority: [],
+    environment: [], assignee_id: [],
+    reporter_id: "", q: "",
   },
   view: "list",
   currentBugId: null,
@@ -29,6 +32,9 @@ const STATE = {
   // know the server has been redeployed.
   bootAssetVersion: null,
   versionDriftWarned: false,
+  // Sidebar collapsed flag. Persisted to localStorage so the layout the
+  // user picked survives page reloads.
+  sidebarCollapsed: false,
 };
 
 const API = "/api";
@@ -207,6 +213,15 @@ async function boot() {
   const theme = localStorage.getItem("theme") || "dark";
   document.documentElement.setAttribute("data-theme", theme);
 
+  // Restore the sidebar's collapsed state BEFORE first paint to avoid a
+  // visible flash of the wrong layout. The CSS class is what actually
+  // changes the grid columns; we just make sure it's on the body before
+  // the user sees anything.
+  STATE.sidebarCollapsed = localStorage.getItem("sidebarCollapsed") === "1";
+  if (STATE.sidebarCollapsed) {
+    document.body.classList.add("sidebar-collapsed");
+  }
+
   // Auth check first. Use a direct fetch (not api()) so we control the
   // 401 path explicitly: redirect before *any* other code can run, so the
   // user never sees error toasts from cookie-less follow-up calls.
@@ -231,6 +246,9 @@ async function boot() {
   await loadMeta();
   await loadUsers();
   await loadProjects();
+  // Multi-select dropdowns depend on STATE.users / STATE.projects / STATE.meta
+  // being populated, so initialise them after the loaders above.
+  initMultiSelects();
   await refreshAll();
   bindGlobalListeners();
   scheduleVersionCheck();
@@ -297,21 +315,21 @@ function scheduleVersionCheck() {
 
 async function loadMeta() {
   STATE.meta = await api("/meta");
-  fillSelect("filterStatus", "All Statuses", STATE.meta.statuses);
-  fillSelect("filterPriority", "All Priorities", STATE.meta.priorities);
+  // Multi-select panels are repopulated by refreshMultiSelects(); the legacy
+  // <select> filters were removed in favour of the new dropdowns.
 }
 
 async function loadUsers() {
   STATE.users = await api("/users");
   renderUserList();
-  fillUserFilterSelect();
   fillAuditActorSelect();
+  refreshMultiSelects();
 }
 
 async function loadProjects() {
   STATE.projects = await api("/projects");
   renderProjectList();
-  fillProjectFilterSelect();
+  refreshMultiSelects();
 }
 
 async function refreshAll() {
@@ -323,11 +341,15 @@ async function refreshAll() {
 // ---------------------------------------------------------------------------
 async function refreshStats() {
   STATE.stats = await api("/stats");
-  $("#kpiBugs").textContent = STATE.stats.bugs;
-  $("#kpiOpen").textContent = STATE.stats.open;
-  $("#kpiResolved").textContent = STATE.stats.resolved;
-  $("#kpiUsers").textContent = STATE.stats.users;
-  $("#kpiProjects").textContent = STATE.stats.projects;
+  // KPI strip: Total | Open | Resolved | Closed | Resolve Later. We
+  // defensively coalesce missing fields to 0 so an older server that
+  // hasn't shipped the new schema yet doesn't render `undefined`.
+  const s = STATE.stats || {};
+  $("#kpiBugs").textContent = s.bugs ?? 0;
+  $("#kpiOpen").textContent = s.open ?? 0;
+  $("#kpiResolved").textContent = s.resolved ?? 0;
+  $("#kpiClosed").textContent = s.closed ?? (s.by_status?.Closed ?? 0);
+  $("#kpiResolveLater").textContent = s.resolve_later ?? (s.by_status?.["Resolve Later"] ?? 0);
   if (STATE.view === "analytics") renderCharts();
 }
 
@@ -335,12 +357,20 @@ async function refreshStats() {
 // Bug list
 // ---------------------------------------------------------------------------
 async function refreshBugs() {
-  const params = new URLSearchParams({
-    page: String(STATE.page),
-    page_size: String(STATE.pageSize),
-  });
+  const params = new URLSearchParams();
+  params.set("page", String(STATE.page));
+  params.set("page_size", String(STATE.pageSize));
+  // Multi-value filters: append each value as its own query param so the
+  // backend sees `?status=A&status=B`. FastAPI parses repeated params
+  // into a list. Scalar filters (q, reporter_id) are appended once.
   for (const [k, v] of Object.entries(STATE.filters)) {
-    if (v !== "" && v != null) params.set(k, v);
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item !== "" && item != null) params.append(k, String(item));
+      }
+    } else if (v !== "" && v != null) {
+      params.set(k, String(v));
+    }
   }
   const data = await api("/bugs?" + params.toString());
   STATE.bugs = data.items;
@@ -362,16 +392,23 @@ function renderBugTable() {
     const assigneesHtml = bug.assignees.length
       ? bug.assignees.map(a => `<span class="assignee-chip" title="${escapeHtml(a.email)}"><span class="avatar">${initials(a.name)}</span>${escapeHtml(a.name)}</span>`).join("")
       : `<span class="muted">—</span>`;
+    // Title cell carries the bug's `updated_at` as a small timestamp under
+    // the title, so we can drop the dedicated "Updated" column without
+    // losing the freshness signal entirely.
     tr.innerHTML = `
       <td class="col-id">#${bug.id}</td>
-      <td><strong>${escapeHtml(bug.title)}</strong></td>
-      <td>${escapeHtml(bug.project_name || "")}</td>
-      <td><span class="badge" data-status="${escapeHtml(bug.status)}">${escapeHtml(bug.status)}</span></td>
-      <td><span class="badge" data-priority="${escapeHtml(bug.priority)}">${escapeHtml(bug.priority)}</span></td>
-      <td><span class="badge" data-env="${escapeHtml(bug.environment)}">${escapeHtml(bug.environment)}</span></td>
-      <td><div class="assignee-stack">${assigneesHtml}</div></td>
-      <td>${bug.attachment_count > 0 ? `<span class="att-count">📎 ${bug.attachment_count}</span>` : '<span class="muted">—</span>'}</td>
-      <td>${formatDate(bug.updated_at)}</td>
+      <td class="col-title">
+        <div class="title-cell">
+          <strong class="title-text" title="${escapeHtml(bug.title)}">${escapeHtml(bug.title)}</strong>
+          <span class="title-meta">Updated ${formatDate(bug.updated_at)}</span>
+        </div>
+      </td>
+      <td class="col-project">${escapeHtml(bug.project_name || "")}</td>
+      <td class="col-status"><span class="badge" data-status="${escapeHtml(bug.status)}">${escapeHtml(bug.status)}</span></td>
+      <td class="col-priority"><span class="badge" data-priority="${escapeHtml(bug.priority)}">${escapeHtml(bug.priority)}</span></td>
+      <td class="col-env"><span class="badge" data-env="${escapeHtml(bug.environment)}">${escapeHtml(bug.environment)}</span></td>
+      <td class="col-assignees"><div class="assignee-stack">${assigneesHtml}</div></td>
+      <td class="col-att">${bug.attachment_count > 0 ? `<span class="att-count">📎 ${bug.attachment_count}</span>` : '<span class="muted">—</span>'}</td>
       <td class="col-actions">
         <div class="row-actions">
           ${bug.can_edit ? `
@@ -406,10 +443,13 @@ function renderProjectList() {
     ul.innerHTML = `<li class="side-item muted no-cursor">No projects — click + to add.</li>`;
     return;
   }
+  // Active = the project's id is currently in the multi-select filter array.
+  const activeIds = new Set((STATE.filters.project_id || []).map(String));
   for (const p of STATE.projects) {
     const li = document.createElement("li");
-    li.className = "side-item" + (STATE.filters.project_id == p.id ? " active" : "");
+    li.className = "side-item" + (activeIds.has(String(p.id)) ? " active" : "");
     li.dataset.projectId = String(p.id);
+    li.title = p.name;
     li.innerHTML = `
       <span class="swatch" style="background:${escapeHtml(p.color)}"></span>
       <span class="label-text" data-act="filter">${escapeHtml(p.name)}</span>
@@ -449,34 +489,8 @@ function renderUserList() {
 }
 
 // ---------------------------------------------------------------------------
-// Selects
+// Selects (form-level only — filter bar uses the multi-select widgets below)
 // ---------------------------------------------------------------------------
-function fillSelect(id, defaultLabel, values) {
-  const sel = document.getElementById(id);
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = `<option value="">${defaultLabel}</option>` +
-    values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
-  if (cur) sel.value = cur;
-}
-
-function fillProjectFilterSelect() {
-  const sel = $("#filterProject");
-  const cur = sel.value;
-  sel.innerHTML = `<option value="">All Projects</option>` +
-    STATE.projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  if (cur) sel.value = cur;
-}
-
-function fillUserFilterSelect() {
-  const sel = $("#filterAssignee");
-  const cur = sel.value;
-  sel.innerHTML = `<option value="">All Assignees</option>` +
-    STATE.users.filter(u => u.is_active)
-      .map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join("");
-  if (cur) sel.value = cur;
-}
-
 function fillAuditActorSelect() {
   const sel = $("#auditActorFilter");
   if (!sel) return;
@@ -484,6 +498,117 @@ function fillAuditActorSelect() {
   sel.innerHTML = `<option value="">All actors</option>` +
     STATE.users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join("");
   if (cur) sel.value = cur;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-select dropdowns (filter bar)
+//
+// One panel per filter, each driven by `STATE.filters[<key>]` which is
+// always an array. Clicking a row toggles that value's membership in the
+// array. The panel header button shows a summary ("All X" / "X (n)" /
+// the single value) and is the click target for opening / closing the panel.
+// ---------------------------------------------------------------------------
+const MS_LABELS = {
+  project_id:  "All Projects",
+  status:      "All Statuses",
+  priority:    "All Priorities",
+  environment: "All Envs",
+  assignee_id: "All Assignees",
+};
+const MS_NOUNS = {
+  project_id: "Projects", status: "Statuses", priority: "Priorities",
+  environment: "Envs",    assignee_id: "Assignees",
+};
+
+function _msOptions(key) {
+  // Each option is [value, label]. value is what we send to the API,
+  // label is what the user sees.
+  if (key === "project_id") {
+    return STATE.projects.map(p => [String(p.id), p.name]);
+  }
+  if (key === "assignee_id") {
+    return STATE.users.filter(u => u.is_active).map(u => [String(u.id), u.name]);
+  }
+  if (key === "status")      return (STATE.meta.statuses     || []).map(s => [s, s]);
+  if (key === "priority")    return (STATE.meta.priorities   || []).map(s => [s, s]);
+  if (key === "environment") return (STATE.meta.environments || ["DEV","UAT","PROD"]).map(s => [s, s]);
+  return [];
+}
+
+function initMultiSelects() {
+  $$(".ms-wrap").forEach(wrap => {
+    const key = wrap.dataset.filter;
+    const toggle = wrap.querySelector("[data-ms-toggle]");
+    const panel = wrap.querySelector(".ms-panel");
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Close any other open panels first — only one open at a time.
+      $$(".ms-panel").forEach(p => { if (p !== panel) p.hidden = true; });
+      $$(".ms-btn").forEach(b => { if (b !== toggle) b.setAttribute("aria-expanded", "false"); });
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      toggle.setAttribute("aria-expanded", String(willOpen));
+    });
+    panel.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-ms-value]");
+      if (!row) return;
+      e.stopPropagation();
+      const v = row.dataset.msValue;
+      const cur = STATE.filters[key];
+      const idx = cur.indexOf(v);
+      if (idx >= 0) cur.splice(idx, 1);
+      else cur.push(v);
+      STATE.page = 1;
+      refreshMultiSelects();
+      refreshBugs();
+      // If the panel had a project click, also restyle the sidebar so the
+      // active dot matches.
+      if (key === "project_id") renderProjectList();
+    });
+  });
+  // Click outside to close any open panel.
+  document.addEventListener("click", () => {
+    $$(".ms-panel").forEach(p => { p.hidden = true; });
+    $$(".ms-btn").forEach(b => b.setAttribute("aria-expanded", "false"));
+  });
+  refreshMultiSelects();
+}
+
+function refreshMultiSelects() {
+  $$(".ms-wrap").forEach(wrap => {
+    const key = wrap.dataset.filter;
+    const opts = _msOptions(key);
+    const selected = new Set(STATE.filters[key] || []);
+    const panel = wrap.querySelector(".ms-panel");
+    const labelEl = wrap.querySelector(".ms-btn-label");
+    const btn = wrap.querySelector(".ms-btn");
+
+    // Render rows. Building HTML once via join() is faster than appendChild
+    // in a loop for the small option sets we deal with.
+    panel.innerHTML = opts.length
+      ? opts.map(([v, lbl]) => {
+          const isOn = selected.has(v);
+          return `<div class="ms-row${isOn ? " on" : ""}" data-ms-value="${escapeHtml(v)}" role="option" aria-selected="${isOn}">
+            <span class="ms-check">${isOn ? "✓" : ""}</span>
+            <span class="ms-text">${escapeHtml(lbl)}</span>
+          </div>`;
+        }).join("")
+      : `<div class="ms-empty">No options</div>`;
+
+    // Update header label and "active" outline.
+    if (selected.size === 0) {
+      labelEl.textContent = MS_LABELS[key] || "All";
+      btn.classList.remove("active");
+    } else if (selected.size === 1) {
+      const only = [...selected][0];
+      const match = opts.find(([v]) => v === only);
+      labelEl.textContent = match ? match[1] : only;
+      btn.classList.add("active");
+    } else {
+      labelEl.textContent = `${MS_NOUNS[key] || "Items"} (${selected.size})`;
+      btn.classList.add("active");
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +690,11 @@ function drawBars(sel, obj, kind) {
 
 function kindColor(kind, key) {
   const map = {
-    status:   { New: "#5a9fd4", "In Progress": "#d4a05a", Resolved: "#7ca860", Closed: "#8b8270", Reopened: "#a87fb8" },
+    status:   {
+      "New": "#5a9fd4", "In Progress": "#d4a05a", "Resolved": "#7ca860",
+      "Closed": "#8b8270", "Reopened": "#a87fb8",
+      "Not a Bug": "#64748b", "Resolve Later": "#f59e0b",
+    },
     priority: { Low: "#8b8270", Medium: "#5a9fd4", High: "#d4a05a", Critical: "#c5524a" },
     env:      { DEV: "#5a9fd4", UAT: "#d4a05a", PROD: "#c5524a" },
   };
@@ -612,8 +741,12 @@ function openBugForm(bug = null) {
 
   fillFormSelect(form.elements.project_id, STATE.projects.map(p => [p.id, p.name]),
                  bug ? bug.project_id : "");
+  // Reporter dropdown: label is just the name; the email (which can be long
+  // and was causing the field to spill out of the modal during edit) goes
+  // into the option's `title` so it's still discoverable on hover, but no
+  // longer drives the field's intrinsic width.
   fillFormSelect(form.elements.reporter_id,
-                 STATE.users.filter(u => u.is_active).map(u => [u.id, `${u.name} <${u.email}>`]),
+                 STATE.users.filter(u => u.is_active).map(u => [u.id, u.name, u.email]),
                  bug ? (bug.reporter ? bug.reporter.id : "") : (STATE.currentUser?.id || ""));
   fillFormSelect(form.elements.status, STATE.meta.statuses.map(s => [s, s]),
                  bug ? bug.status : "New");
@@ -639,8 +772,15 @@ function openBugForm(bug = null) {
 }
 
 function fillFormSelect(selEl, items, current = "") {
+  // Items can be [value, label] or [value, label, title]. The optional
+  // 3rd element becomes the option's `title` attr (hover tooltip) so we
+  // can keep the visible label short without losing extra context.
   selEl.innerHTML = `<option value="">— select —</option>` +
-    items.map(([v, lbl]) => `<option value="${v}">${escapeHtml(lbl)}</option>`).join("");
+    items.map((row) => {
+      const [v, lbl, ttl] = row;
+      const titleAttr = ttl ? ` title="${escapeHtml(ttl)}"` : "";
+      return `<option value="${v}"${titleAttr}>${escapeHtml(lbl)}</option>`;
+    }).join("");
   if (current !== "" && current != null) selEl.value = current;
 }
 
@@ -1070,10 +1210,10 @@ async function handleDeleteProject(id) {
   try {
     await api(`/projects/${id}`, { method: "DELETE" });
     toast(`Project "${name}" deleted`, "success");
-    if (STATE.filters.project_id == id) {
-      STATE.filters.project_id = "";
-      $("#filterProject").value = "";
-    }
+    // Drop the deleted project from the multi-select filter so we don't
+    // keep filtering by a no-longer-existing id.
+    const sid = String(id);
+    STATE.filters.project_id = (STATE.filters.project_id || []).filter(v => v !== sid);
     await loadProjects();
     await refreshAll();
   } catch (err) { toastError(err); }
@@ -1247,21 +1387,38 @@ function bindGlobalListeners() {
   });
   $("#sidebarBackdrop").addEventListener("click", closeSidebar);
 
+  // Sidebar collapse / expand. Toggling a body class is the cheapest way
+  // to flip the grid template + contents (CSS does the rest), and the new
+  // state survives reload via localStorage.
+  $("#sidebarCollapseBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    STATE.sidebarCollapsed = !STATE.sidebarCollapsed;
+    document.body.classList.toggle("sidebar-collapsed", STATE.sidebarCollapsed);
+    localStorage.setItem("sidebarCollapsed", STATE.sidebarCollapsed ? "1" : "0");
+    e.currentTarget.title = STATE.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar";
+    e.currentTarget.textContent = STATE.sidebarCollapsed ? "»" : "«";
+  });
+  // Reflect the initial state on the button glyph too.
+  if (STATE.sidebarCollapsed) {
+    const btn = $("#sidebarCollapseBtn");
+    if (btn) { btn.textContent = "»"; btn.title = "Expand sidebar"; }
+  }
+
   // Nav buttons
   $$(".nav-btn").forEach(b => b.addEventListener("click", () => { setView(b.dataset.view); closeSidebar(); }));
 
-  // Filters
-  $("#filterProject").addEventListener("change", (e) => { STATE.filters.project_id = e.target.value; STATE.page = 1; refreshBugs(); });
-  $("#filterStatus").addEventListener("change", (e) => { STATE.filters.status = e.target.value; STATE.page = 1; refreshBugs(); });
-  $("#filterPriority").addEventListener("change", (e) => { STATE.filters.priority = e.target.value; STATE.page = 1; refreshBugs(); });
-  $("#filterEnvironment").addEventListener("change", (e) => { STATE.filters.environment = e.target.value; STATE.page = 1; refreshBugs(); });
-  $("#filterAssignee").addEventListener("change", (e) => { STATE.filters.assignee_id = e.target.value; STATE.page = 1; refreshBugs(); });
+  // Filter bar — clear all
   $("#clearFiltersBtn").addEventListener("click", () => {
-    STATE.filters = { project_id: "", status: "", priority: "", environment: "", reporter_id: "", assignee_id: "", q: "" };
-    $("#filterProject").value = ""; $("#filterStatus").value = "";
-    $("#filterPriority").value = ""; $("#filterEnvironment").value = "";
-    $("#filterAssignee").value = ""; $("#search").value = "";
-    STATE.page = 1; refreshBugs();
+    STATE.filters = {
+      project_id: [], status: [], priority: [],
+      environment: [], assignee_id: [],
+      reporter_id: "", q: "",
+    };
+    $("#search").value = "";
+    STATE.page = 1;
+    refreshMultiSelects();
+    renderProjectList();
+    refreshBugs();
   });
   $("#search").addEventListener("input", debounce((e) => {
     STATE.filters.q = e.target.value.trim();
@@ -1297,10 +1454,15 @@ function bindGlobalListeners() {
     if (btn.dataset.act === "delete-project") return handleDeleteProject(id);
     if (btn.dataset.act === "filter") {
       const li = btn.closest("[data-project-id]");
-      const pid = parseInt(li.dataset.projectId, 10);
-      STATE.filters.project_id = STATE.filters.project_id == pid ? "" : String(pid);
-      $("#filterProject").value = STATE.filters.project_id;
-      STATE.page = 1; refreshBugs(); renderProjectList();
+      const pid = String(li.dataset.projectId);
+      // Toggle the project in the multi-select array.
+      const arr = STATE.filters.project_id;
+      const idx = arr.indexOf(pid);
+      if (idx >= 0) arr.splice(idx, 1); else arr.push(pid);
+      STATE.page = 1;
+      refreshMultiSelects();
+      refreshBugs();
+      renderProjectList();
     }
   });
 
@@ -1314,10 +1476,13 @@ function bindGlobalListeners() {
     if (btn.dataset.act === "delete-user") return handleDeleteUser(id);
     if (btn.dataset.act === "filter-user") {
       const li = btn.closest("[data-user-id]");
-      const uid = parseInt(li.dataset.userId, 10);
-      STATE.filters.assignee_id = STATE.filters.assignee_id == uid ? "" : String(uid);
-      $("#filterAssignee").value = STATE.filters.assignee_id;
-      STATE.page = 1; refreshBugs();
+      const uid = String(li.dataset.userId);
+      const arr = STATE.filters.assignee_id;
+      const idx = arr.indexOf(uid);
+      if (idx >= 0) arr.splice(idx, 1); else arr.push(uid);
+      STATE.page = 1;
+      refreshMultiSelects();
+      refreshBugs();
     }
   });
 

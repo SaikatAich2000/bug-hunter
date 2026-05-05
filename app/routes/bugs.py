@@ -575,10 +575,10 @@ def delete_bug(
     bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
-    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees]):
+    if actor.role not in ("admin", "manager"):
         raise HTTPException(
             status_code=403,
-            detail="You can only delete bugs you reported or are assigned to",
+            detail="Only admins and managers can delete bugs.",
         )
     title = bug.title
     db.delete(bug)

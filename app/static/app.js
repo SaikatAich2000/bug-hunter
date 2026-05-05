@@ -188,18 +188,17 @@ function confirmDialog(message, { title = "Confirm", okLabel = "Delete", danger 
       settled = true;
       ok.removeEventListener("click", onOk);
       cancel.removeEventListener("click", onCancel);
-      modalEl.removeEventListener("click", onBackdrop);
+      document.getElementById("confirmClose").removeEventListener("click", onCancel);
       document.removeEventListener("keydown", onKey, true);
       closeModal("modalConfirm");
       resolve(value);
     };
     const onOk      = () => settle(true);
     const onCancel  = () => settle(false);
-    const onBackdrop = (e) => { if (e.target === modalEl) settle(false); };
     const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); settle(false); } };
     ok.addEventListener("click", onOk);
     cancel.addEventListener("click", onCancel);
-    modalEl.addEventListener("click", onBackdrop);
+    document.getElementById("confirmClose").addEventListener("click", onCancel);
     // Use capture so we beat the global Escape handler at lower layer.
     document.addEventListener("keydown", onKey, true);
     openModal("modalConfirm");
@@ -395,6 +394,7 @@ function renderBugTable() {
     // Title cell carries the bug's `updated_at` as a small timestamp under
     // the title, so we can drop the dedicated "Updated" column without
     // losing the freshness signal entirely.
+    const canDeleteBug = ["admin", "manager"].includes(STATE.currentUser?.role);
     tr.innerHTML = `
       <td class="col-id">#${bug.id}</td>
       <td class="col-title">
@@ -412,8 +412,8 @@ function renderBugTable() {
       <td class="col-actions">
         <div class="row-actions">
           ${bug.can_edit ? `
-            <button class="icon-btn" data-act="edit" data-id="${bug.id}" title="Edit">✎</button>
-            <button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>
+          <button class="icon-btn" data-act="edit" data-id="${bug.id}" title="Edit">✎</button>
+          ${canDeleteBug ? `<button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>` : ""}
           ` : `<span class="muted small" title="You don't have permission to edit this bug">🔒</span>`}
         </div>
       </td>`;
@@ -859,8 +859,8 @@ async function openBugDetail(bugId) {
 function renderBugDetail(bug) {
   $("#detailTitle").textContent = `#${bug.id} — ${bug.title}`;
   // Show / hide edit + delete based on permission flag from API.
-  $("#detailEditBtn").style.display = bug.can_edit ? "" : "none";
-  $("#detailDeleteBtn").style.display = bug.can_edit ? "" : "none";
+  const canDeleteBug = ["admin", "manager"].includes(STATE.currentUser?.role);
+  $("#detailDeleteBtn").style.display = canDeleteBug ? "" : "none";
 
   const reporter = bug.reporter
     ? `<span class="assignee-chip"><span class="avatar">${initials(bug.reporter.name)}</span>${escapeHtml(bug.reporter.name)} <span class="muted small"> ${escapeHtml(bug.reporter.email)}</span></span>`
@@ -1529,10 +1529,6 @@ function bindGlobalListeners() {
       const modal = closeBtn.closest(".modal");
       if (modal) modal.hidden = true;
       return;
-    }
-    // Click on backdrop (the .modal element itself, not children)
-    if (e.target.classList && e.target.classList.contains("modal")) {
-      e.target.hidden = true;
     }
   });
 

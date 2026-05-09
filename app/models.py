@@ -189,6 +189,14 @@ class Bug(Base):
         Index("idx_bugs_status", "status"),
         Index("idx_bugs_priority", "priority"),
         Index("idx_bugs_environment", "environment"),
+        # v3.2 additive composite indexes — speed up the common dashboard
+        # queries which filter on multiple columns at once. Single-column
+        # indexes above still serve queries that filter on just one field.
+        # SQLAlchemy create_all() is idempotent, so adding these on a live
+        # DB is safe — existing data and indexes are untouched.
+        Index("idx_bugs_project_status", "project_id", "status"),
+        Index("idx_bugs_status_priority", "status", "priority"),
+        Index("idx_bugs_updated_at", "updated_at"),
     )
 
 
@@ -255,6 +263,9 @@ class Attachment(Base):
     __table_args__ = (
         Index("idx_attachments_bug_id", "bug_id"),
         Index("idx_attachments_comment_id", "comment_id"),
+        # v3.2: composite supports the per-bug "load all attachments and
+        # split into bug-level vs by-comment" pattern in routes/bugs.py.
+        Index("idx_attachments_bug_comment", "bug_id", "comment_id"),
     )
 
 

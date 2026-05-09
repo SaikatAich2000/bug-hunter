@@ -33,6 +33,14 @@ htmlcov/
 *.sqlite3
 bug_hunter.db
 
+# --- Sleuth (AI assistant) ---
+# Local LLM model files are large (300+ MB) and are downloaded
+# per-deployment via models/README.md. They should never be
+# committed to git.
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
 # --- Editors / IDEs ---
 .vscode/
 .idea/

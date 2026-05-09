@@ -947,16 +947,19 @@ function renderBugInlineSections(bug) {
   $("#filePreview").innerHTML = "";
   $("#fileLabel").textContent = "Attach files";
 
-  // ----- Attachments -----
-  $("#bugAttachmentsSection").hidden = false;
-  $("#attachmentsCount").textContent = `(${bug.attachments.length})`;
-  // Each attachment can be deleted by anyone who can edit the bug
-  // (everyone, in v3.1) — the backend further allows uploaders and
-  // admins/managers, but the frontend can show the button to all and
-  // let the server be the final gatekeeper.
-  $("#bugAttachmentsGrid").innerHTML = bug.attachments.length
-    ? bug.attachments.map(a => renderAttachmentCard(a, true)).join("")
-    : '<p class="no-content" style="grid-column:1/-1">No bug-level attachments yet.</p>';
+  // ----- Attachments (legacy bug-level only) -----
+  // The separate bug-level upload was removed in v3.2 — new files now
+  // attach to comments via the comment composer. We still RENDER any
+  // bug-level attachments uploaded before that change so legacy data
+  // stays visible; the section is hidden entirely when there are none.
+  if (bug.attachments.length) {
+    $("#bugAttachmentsSection").hidden = false;
+    $("#attachmentsCount").textContent = `(${bug.attachments.length})`;
+    $("#bugAttachmentsGrid").innerHTML =
+      bug.attachments.map(a => renderAttachmentCard(a, true)).join("");
+  } else {
+    $("#bugAttachmentsSection").hidden = true;
+  }
 
   // ----- Activity (collapsible <details>) -----
   $("#bugActivitySection").hidden = false;
@@ -1741,22 +1744,11 @@ function bindGlobalListeners() {
     updateFilePreview(e.target, "#filePreview", "#fileLabel");
   });
 
-  // Attachments inline section: file picker + drag-drop.
-  $("#bugAttachInput")?.addEventListener("change", (e) => {
-    uploadFiles(e.target.files, null);
-    // Reset so picking the same file again still fires `change`.
-    e.target.value = "";
-  });
-  const dropZone = $("#uploadZone");
-  if (dropZone) {
-    dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
-    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
-    dropZone.addEventListener("drop", e => {
-      e.preventDefault();
-      dropZone.classList.remove("drag-over");
-      uploadFiles(e.dataTransfer.files, null);
-    });
-  }
+  // Bug-level upload handlers used to live here (drag-drop zone + file
+  // picker firing uploadFiles(..., null)). Removed in v3.2 along with
+  // the dropzone HTML — new attachments go through the comment composer.
+  // The bug-level attachment delete handler stays so legacy attachments
+  // remain deletable.
 
   // Attachment delete buttons inside the bug modal (delegation).
   $("#bugAttachmentsGrid")?.addEventListener("click", (e) => {
@@ -1800,6 +1792,16 @@ function bindGlobalListeners() {
       }
       closeTopModal();
     }
+  });
+
+  // Sleuth chatbot integration: when the user clicks a bug in chat results,
+  // chatbot.js dispatches this CustomEvent. We claim it (preventDefault)
+  // and open the bug detail modal via the existing route.
+  window.addEventListener("sleuth:open-bug", (e) => {
+    const bugId = e.detail && e.detail.bugId;
+    if (!bugId) return;
+    e.preventDefault();
+    openBugDetail(parseInt(bugId, 10));
   });
 }
 

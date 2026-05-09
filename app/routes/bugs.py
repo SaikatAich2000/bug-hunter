@@ -51,14 +51,28 @@ _ACTIVE_CONTENT_TYPES = {
 
 # Sanitize filename when echoed in headers — we still keep the original
 # in the DB; this is purely the bytes that go into Content-Disposition.
+# HTTP header values must be ASCII (RFC 7230); RFC 6266 says the plain
+# `filename=` parameter is US-ASCII only, with `filename*=` carrying any
+# non-ASCII form via percent-encoding. We enforce ASCII here.
 _HEADER_FILENAME_BAD = re.compile(r'[\r\n"\\]+')
 
 
 def _safe_filename_for_header(name: str) -> str:
-    """Strip CR/LF/quotes/backslashes from a filename so it can't break
-    the Content-Disposition header. Returns ASCII-safe form with the
-    original (possibly-Unicode) form preserved via filename* per RFC 5987."""
-    return _HEADER_FILENAME_BAD.sub("_", name) or "file"
+    """Return an ASCII-only, header-safe version of the filename.
+
+    Strips CR/LF/quotes/backslashes that would break the
+    Content-Disposition header, and replaces any non-ASCII byte with an
+    underscore. The original (possibly-Unicode) form is still preserved
+    on the wire via the RFC 5987 ``filename*=`` parameter the caller
+    appends — see ``download_attachment``. Without this ASCII pass, a
+    non-ASCII filename would be Latin-1 encoded by the HTTP layer and
+    arrive at the client as garbage bytes (or, with strict clients,
+    reject the response outright).
+    """
+    cleaned = _HEADER_FILENAME_BAD.sub("_", name)
+    # Replace anything outside printable ASCII with `_`.
+    ascii_only = "".join(c if 32 <= ord(c) < 127 else "_" for c in cleaned)
+    return ascii_only or "file"
 
 
 # ---------------------------------------------------------------------------

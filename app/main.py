@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock
 
 from datetime import datetime, timezone
 
@@ -20,6 +23,7 @@ from app.auth import COOKIE_NAME, hash_password, parse_session_token
 from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.models import Project, Session as SessionRow, User
+from app.chatbot.router import router as chatbot_router
 from app.routes import audit, auth, bugs, projects, sessions, stats, users
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
@@ -207,6 +211,147 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
 app.add_middleware(CacheControlMiddleware)
 
 
+# ---------------------------------------------------------------------------
+# Security headers (v3.2)
+#
+# Set on every response so even cached HTML and 304s get the same protections.
+#
+# CSP notes:
+#   - script-src 'self'         no inline <script> in our HTML, so no
+#                               'unsafe-inline' or hash juggling needed.
+#   - style-src 'self' 'unsafe-inline'
+#                               app.js sets a few inline styles via DOM
+#                               (.style.x = …) which CSP treats as inline
+#                               styles. 'unsafe-inline' is the practical
+#                               escape; switching to a nonce strategy would
+#                               require touching every dynamic-style site.
+#   - img-src 'self' data: blob:
+#                               attachments and JS-generated avatars use
+#                               data: URLs; downloaded blobs use blob:.
+#   - frame-ancestors 'none'    refuses iframe embedding (modern X-Frame-Options).
+#   - base-uri 'self'           prevents <base href=…> hijack.
+#   - object-src 'none'         no plugins.
+#   - form-action 'self'        forms can only post to us.
+#
+# HSTS is conditional on COOKIE_SECURE so we don't accidentally emit it
+# behind an HTTP-only dev proxy and lock the browser into https://.
+# ---------------------------------------------------------------------------
+_CSP = (
+    "default-src 'self'; "
+    "img-src 'self' data: blob:; "
+    "media-src 'self' data: blob:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        h = response.headers
+        # Don't clobber if a downstream layer set its own.
+        h.setdefault("Content-Security-Policy", _CSP)
+        h.setdefault("X-Content-Type-Options", "nosniff")
+        h.setdefault("X-Frame-Options", "DENY")
+        h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        h.setdefault("Permissions-Policy",
+                     "camera=(), microphone=(), geolocation=(), interest-cohort=()")
+        h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        # HSTS: only safe behind real https. Production-style deploys set
+        # COOKIE_SECURE=true, which doubles as the "we're on https" signal.
+        if settings.COOKIE_SECURE:
+            h.setdefault("Strict-Transport-Security",
+                         "max-age=63072000; includeSubDomains")
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting on auth-sensitive endpoints (v3.2)
+#
+# A small in-memory sliding-window limiter — no Redis dependency. Per-IP
+# buckets so one bad actor doesn't lock out everyone. Keys are kept tiny
+# (<200 bytes/IP) and time-pruned on every check, so memory stays bounded
+# under typical load. Multi-worker deployments get per-worker buckets,
+# which means a determined attacker could still get N×limit attempts; the
+# right fix at scale is to put nginx in front (it has its own limit_req).
+#
+# Limits chosen for human users with occasional typos but tight enough to
+# meaningfully slow credential-stuffing scripts:
+#   /api/auth/login           — 8 attempts / 60s per IP
+#   /api/auth/forgot-password — 3 attempts / 60s per IP (more abusive)
+# ---------------------------------------------------------------------------
+_RATE_RULES: dict[str, tuple[int, int]] = {
+    # path: (max_requests, window_seconds)
+    "/api/auth/login": (8, 60),
+    "/api/auth/forgot-password": (3, 60),
+}
+_rate_buckets: dict[tuple[str, str], deque] = {}
+_rate_lock = Lock()
+# Soft cap to keep memory bounded if someone hammers from many IPs.
+_RATE_BUCKETS_MAX = 10_000
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP. We don't trust X-Forwarded-For by default
+    because spoofing it bypasses the limit; deploys behind a reverse proxy
+    can opt into trusting it via TRUST_PROXY_FORWARDED_FOR."""
+    if settings.TRUST_PROXY_FORWARDED_FOR:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # Left-most entry is the original client per RFC 7239 conventions.
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        rule = _RATE_RULES.get(path)
+        if rule is None or request.method.upper() != "POST":
+            return await call_next(request)
+
+        max_req, window = rule
+        ip = _client_ip(request)
+        now = time.monotonic()
+        cutoff = now - window
+
+        with _rate_lock:
+            bucket = _rate_buckets.get((path, ip))
+            if bucket is None:
+                # Bound the dict — drop a random old entry if we're at cap.
+                if len(_rate_buckets) >= _RATE_BUCKETS_MAX:
+                    _rate_buckets.pop(next(iter(_rate_buckets)), None)
+                bucket = deque()
+                _rate_buckets[(path, ip)] = bucket
+            # Evict timestamps older than the window.
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= max_req:
+                retry_after = max(1, int(window - (now - bucket[0])))
+                logger.warning(
+                    "Rate limit hit: %s from %s (%d/%d in %ss)",
+                    path, ip, len(bucket), max_req, window,
+                )
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many attempts. Please try again later."},
+                    headers={"Retry-After": str(retry_after)},
+                )
+            bucket.append(now)
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
+
+
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
@@ -316,6 +461,7 @@ app.include_router(bugs.router)
 app.include_router(stats.router)
 app.include_router(audit.router)
 app.include_router(sessions.router)
+app.include_router(chatbot_router)
 
 
 @app.exception_handler(HTTPException)

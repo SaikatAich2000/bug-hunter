@@ -67,8 +67,43 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist. Idempotent — safe to call on every boot."""
+    """Create tables if they don't exist, AND create any missing indexes on
+    existing tables. Idempotent — safe to call on every boot.
+
+    Why the second pass? SQLAlchemy's `create_all()` skips tables that
+    already exist, including their indexes. That means new indexes added
+    in a later release would never appear on a long-running production
+    database — the schema would silently lag behind the model. We close
+    that gap by inspecting existing indexes per table after `create_all()`
+    and issuing `CREATE INDEX IF NOT EXISTS` for any that the model
+    declares but the database lacks.
+
+    This is strictly ADDITIVE: nothing is dropped, altered, or renamed,
+    and existing data is never touched. Both SQLite and Postgres
+    natively support `CREATE INDEX IF NOT EXISTS`, so no per-dialect
+    branching is needed.
+    """
     # Local import avoids circular import at module load.
     from app import models  # noqa: F401  (registers tables on Base.metadata)
+    from sqlalchemy import inspect
 
     Base.metadata.create_all(bind=engine)
+
+    # Second pass: add any indexes the model declares but the DB is missing.
+    # This is what makes new composite indexes show up on an upgraded DB.
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            try:
+                existing = {idx["name"] for idx in inspector.get_indexes(table.name)}
+            except Exception:
+                # If the table doesn't exist for any reason, create_all
+                # would have made it on the line above; either way, nothing
+                # to compare against. Skip cleanly.
+                continue
+            for idx in table.indexes:
+                if idx.name and idx.name not in existing:
+                    # Use SQLAlchemy's own DDL — emits dialect-correct
+                    # CREATE INDEX with the right column escaping for
+                    # whichever backend is active.
+                    idx.create(bind=conn, checkfirst=True)

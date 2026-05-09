@@ -24,7 +24,7 @@ class Settings:
     ]
 
     APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter")
-    APP_VERSION: str = os.getenv("APP_VERSION", "3.1.1")
+    APP_VERSION: str = os.getenv("APP_VERSION", "3.2.0")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8765")
@@ -41,6 +41,12 @@ class Settings:
     SESSION_TTL_SECONDS: int = int(os.getenv("SESSION_TTL_SECONDS", "86400") or "86400")
     # Set to true behind HTTPS so cookie is only sent on TLS connections.
     COOKIE_SECURE: bool = _env_bool("COOKIE_SECURE", False)
+    # When the app sits behind a trusted reverse proxy (nginx, traefik,
+    # ALB, etc.) that sets X-Forwarded-For, set this to true so rate
+    # limiting buckets per real client IP instead of per proxy IP.
+    # Leave false in dev / direct-uvicorn deploys — spoofed XFF would
+    # otherwise let attackers bypass the limiter.
+    TRUST_PROXY_FORWARDED_FOR: bool = _env_bool("TRUST_PROXY_FORWARDED_FOR", False)
     # First-time bootstrap admin. Used only if zero users exist in the DB.
     BOOTSTRAP_ADMIN_EMAIL: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@bughunter.local")
     BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "ChangeMe123!")

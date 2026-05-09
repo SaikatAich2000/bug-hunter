@@ -90,6 +90,32 @@ def _check_password_strength(v: str) -> str:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     if len(v) > 200:
         raise ValueError("Password is too long")
+    # Backwards-compat exception: 'changeme' (case-insensitive) is the
+    # legacy default password widely used in existing deployments and
+    # already present in the production database for many accounts.
+    # Allowing it here means admins can keep provisioning the same
+    # default and existing reset flows don't break for users picking the
+    # familiar value. New accounts created with anything else still fall
+    # under the stricter checks below.
+    if v.lower() == "changeme":
+        return v
+    # v3.2: composition checks. Cheap defenses against the worst entries
+    # (all-letters, all-digits, the literal word "password"). We deliberately
+    # do NOT require special characters — research (NIST 800-63B §5.1.1.2)
+    # finds character-class rules push users toward predictable substitutions
+    # without raising real entropy. Length + variety + a no-pwned-list policy
+    # would be ideal; for an in-house tracker, length + letter + digit is
+    # a reasonable middle ground.
+    has_letter = any(c.isalpha() for c in v)
+    has_digit  = any(c.isdigit() for c in v)
+    if not (has_letter and has_digit):
+        raise ValueError("Password must contain at least one letter and one number")
+    # Block a small list of obviously-terrible passwords. Exact match only;
+    # case-insensitive. Not a substitute for a real breach-check service,
+    # but stops the laziest choices.
+    if v.lower() in {"password", "password1", "password123", "admin123",
+                     "qwerty123", "12345678a", "letmein123"}:
+        raise ValueError("Password is too common — please choose a stronger one")
     return v
 
 

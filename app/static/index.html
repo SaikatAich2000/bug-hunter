@@ -6,6 +6,7 @@
   <title>Bug Hunter</title>
   <link rel="icon" type="image/png" href="/static/favicon.png?v=__ASSET_VERSION__" />
   <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
+  <link rel="stylesheet" href="/static/chatbot.css?v=__ASSET_VERSION__" />
 </head>
 <body>
   <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
@@ -297,16 +298,12 @@
               </div>
             </section>
 
+            <!-- Bug-level attachments section. Only renders when LEGACY
+                 bug-level attachments exist (uploaded before the v3.2 UI
+                 simplification, when there was a separate dropzone here).
+                 New attachments go through the comment composer. -->
             <section class="bug-section" id="bugAttachmentsSection" hidden>
               <h3>Attachments <span class="muted small" id="attachmentsCount"></span></h3>
-              <div class="upload-zone" id="uploadZone">
-                <label class="upload-cta" for="bugAttachInput">
-                  <div class="upload-icon">📎</div>
-                  <div class="upload-title">Click or drop files here</div>
-                  <div class="upload-sub">PDF, image, video — up to 50 MB each.</div>
-                  <input type="file" multiple id="bugAttachInput" />
-                </label>
-              </div>
               <div class="attachment-grid" id="bugAttachmentsGrid"></div>
             </section>
 
@@ -501,5 +498,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="/static/app.js?v=__ASSET_VERSION__" defer></script>
+  <script src="/static/chatbot.js?v=__ASSET_VERSION__" defer></script>
 </body>
 </html>

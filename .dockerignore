@@ -17,6 +17,13 @@ env
 # Tests aren't needed at runtime
 tests
 
+# Sleuth's optional local LLM model file is mounted as a volume at
+# runtime, not baked into the image. (Model files are typically
+# 300+ MB — keeping them out of the image saves a lot of bandwidth.)
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
 # Docs / VCS
 .git
 .gitignore

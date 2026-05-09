@@ -224,8 +224,10 @@ def test_user_creates_bug_can_edit_true(user_client):
     assert bug["can_edit"] is True
 
 
-def test_user_cannot_edit_others_bugs(admin_client):
-    """Admin creates a bug; a regular user should see can_edit=False and 403 on edit."""
+def test_user_can_edit_others_bugs_but_cannot_delete(admin_client):
+    """v3.1 spec: regular users can edit and reassign any bug, but only
+    admins can delete. (Old test asserted the opposite — kept here under
+    the new name for searchability.)"""
     p = _make_project(admin_client, name="ProjA")
     bug = _make_bug(admin_client, p["id"], title="Admin's bug")
     bug_id = bug["id"]
@@ -239,15 +241,16 @@ def test_user_cannot_edit_others_bugs(admin_client):
         "email": "bob@example.com", "password": "Bob1234567",
     })
 
-    # Bob sees can_edit=False on the admin's bug
+    # Bob sees can_edit=True on the admin's bug (everyone can edit any bug)
     r = admin_client.get(f"/api/bugs/{bug_id}")
-    assert r.json()["can_edit"] is False
+    assert r.json()["can_edit"] is True
 
-    # Bob cannot update it
-    r = admin_client.put(f"/api/bugs/{bug_id}", json={"title": "hacked"})
-    assert r.status_code == 403
+    # Bob CAN update it (title, status, priority — any field)
+    r = admin_client.put(f"/api/bugs/{bug_id}", json={"title": "Bob edited this"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Bob edited this"
 
-    # Bob cannot delete it
+    # Bob CANNOT delete it — admin-only
     r = admin_client.delete(f"/api/bugs/{bug_id}")
     assert r.status_code == 403
 

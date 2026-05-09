@@ -1,4 +1,7 @@
-"""Global audit-trail endpoint — every action across the system."""
+"""Global audit-trail endpoint — every action across the system.
+
+Hidden from regular users per v3.1 spec. Managers and admins can read
+the trail; everyone else gets 403."""
 from __future__ import annotations
 
 from typing import Optional
@@ -7,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user
+from app.auth import require_manager_or_admin
 from app.database import get_db
 from app.models import Activity, User
 from app.schemas import ActivityOut
@@ -32,7 +35,7 @@ def list_audit(
     q: Optional[str] = None,
     limit: int = Query(default=200, le=1000),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_manager_or_admin),
 ) -> list[Activity]:
     stmt = select(Activity)
     if entity_type:

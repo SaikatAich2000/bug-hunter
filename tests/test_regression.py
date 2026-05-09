@@ -771,12 +771,14 @@ class TestSecurity:
         d = admin_client.get(f"/api/bugs/{bug['id']}/attachments/{att_id}/download")
         assert d.status_code == 401
 
-    def test_audit_endpoint_is_visible_to_any_user(self, user_client):
-        """Per README: audit trail is part of the app, but no role restriction in code.
-        Verify the current behavior (any authenticated user can see audit)."""
+    def test_audit_endpoint_is_hidden_from_regular_users(self, user_client):
+        """v3.1 spec: audit trail is hidden from regular users — they get
+        403. Managers and admins can read it (covered separately)."""
         r = user_client.get("/api/audit")
-        # No role check in code → any user gets 200. If you wanted admin-only, this would
-        # be a finding to harden later. Not failing the test, just documenting.
+        assert r.status_code == 403
+
+    def test_audit_endpoint_visible_to_admin(self, admin_client):
+        r = admin_client.get("/api/audit")
         assert r.status_code == 200
 
     def test_xss_in_bug_title_is_stored_as_is(self, admin_client):

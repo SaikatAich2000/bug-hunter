@@ -6,18 +6,21 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from datetime import datetime, timezone
+
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.auth import COOKIE_NAME, hash_password, parse_session_token
 from app.config import get_settings
 from app.database import SessionLocal, init_db
-from app.models import Project, User
-from app.routes import audit, auth, bugs, projects, stats, users
+from app.models import Project, Session as SessionRow, User
+from app.routes import audit, auth, bugs, projects, sessions, stats, users
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
     ALLOWED_PRIORITIES,
@@ -217,12 +220,48 @@ def _serve_html(filename: str) -> HTMLResponse:
 
 
 def _has_valid_session(request: Request) -> bool:
-    """Quick check (no DB hit) of whether the request has a non-expired
-    session cookie. Used only to gate which HTML page to serve — the API
-    routes still verify the user against the DB, which catches deleted /
-    deactivated accounts."""
+    """Check whether the request has a valid, non-revoked session cookie.
+
+    BUG FIX (v3.1.1): the original implementation only verified the cookie's
+    cryptographic signature. That meant a revoked session — where the
+    server-side sessions row had been deleted but the user's browser still
+    held the signed cookie — passed this check, and the / and /login.html
+    HTML handlers couldn't tell the cookie was dead. The SPA's API calls
+    correctly returned 401 (those go through _user_from_request which
+    checks the sessions table), so the SPA fired location.replace('/login.html'),
+    but the /login.html handler bounced them back to / because this
+    function returned True. Result: infinite redirect loop, exactly the
+    "behaving strangely after refresh" symptom the user reported.
+
+    The fix: when the cookie carries a jti, look it up in the sessions
+    table and only return True if the row exists and is not expired.
+    Tokens without a jti (legacy) keep the cookie-only check for backward
+    compat — they predate the sessions table, so there's nothing to look
+    up. Those tokens still get the proper API-side check on /api/auth/me;
+    we're just using a slightly looser HTML-routing decision for them.
+    """
     token = request.cookies.get(COOKIE_NAME, "")
-    return parse_session_token(token) is not None
+    parsed = parse_session_token(token)
+    if parsed is None:
+        return False
+    user_id, _session_version, jti = parsed
+    if jti is None:
+        # Legacy cookie pre-dates the sessions table — accept based on
+        # signature alone. _user_from_request still validates fully on
+        # any API call.
+        return True
+    # Modern cookie: verify the session row still exists and isn't expired.
+    db = SessionLocal()
+    try:
+        sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
+        if sess is None or sess.user_id != user_id:
+            return False
+        expires = sess.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return expires >= datetime.now(timezone.utc)
+    finally:
+        db.close()
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -276,6 +315,7 @@ app.include_router(projects.router)
 app.include_router(bugs.router)
 app.include_router(stats.router)
 app.include_router(audit.router)
+app.include_router(sessions.router)
 
 
 @app.exception_handler(HTTPException)

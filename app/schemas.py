@@ -457,6 +457,30 @@ class BugDetail(BugOut):
 
 
 # ---------------------------------------------------------------------------
+# Sessions (admin only)
+# ---------------------------------------------------------------------------
+class SessionOut(BaseModel):
+    """One row in the admin "active sessions" panel.
+
+    `is_current` flags the session corresponding to the cookie the admin
+    is currently using, so the UI can label it and disable the revoke
+    button (the API also rejects revoking your own current session — see
+    routes/sessions.py).
+    """
+    id: int
+    user_id: int
+    user_name: Optional[str] = None
+    user_email: Optional[str] = None
+    user_role: Optional[str] = None
+    ip_address: str
+    user_agent: str
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    is_current: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
 class StatsOut(BaseModel):

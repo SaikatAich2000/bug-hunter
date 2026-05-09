@@ -1,4 +1,12 @@
-"""Projects API. Read = any logged-in user. Write = manager or admin."""
+"""Projects API.
+
+Permissions (v3.1):
+  - Read   : any authenticated user.
+  - Create : admin or manager (require_manager_or_admin).
+  - Update : admin or manager.
+  - Delete : admin ONLY. Managers used to be able to delete projects;
+             v3.1 narrows this to admin per the role-policy spec.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_manager_or_admin
+from app.auth import get_current_user, require_admin, require_manager_or_admin
 from app.database import get_db
 from app.models import Activity, Bug, Project, User
 from app.schemas import ProjectIn, ProjectOut
@@ -95,7 +103,7 @@ def update_project(
 def delete_project(
     project_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_manager_or_admin),
+    actor: User = Depends(require_admin),
 ) -> dict[str, str]:
     p = db.get(Project, project_id)
     if p is None:

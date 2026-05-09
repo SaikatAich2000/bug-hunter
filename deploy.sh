@@ -35,6 +35,14 @@ if docker ps --format '{{.Names}}' | grep -q '^pmis-postgres$'; then
   info "Detected running pmis-postgres — Bug Hunter uses its OWN isolated db (bugtracker_db). No conflict."
 fi
 
+# ── Live-data safety ──────────────────────────────────────────────────────────
+# This script does NOT touch the named volume `bugtracker_pgdata` that holds
+# your Postgres data. The schema migration on startup is additive only:
+# init_db() -> Base.metadata.create_all() creates any tables that don't yet
+# exist (in v3.1, the new `sessions` table) and leaves everything else alone.
+# Existing rows are not modified. Existing session cookies stay valid.
+info "Live-data safety: bugtracker_pgdata volume will NOT be touched by this script."
+
 # ── Build & deploy ────────────────────────────────────────────────────────────
 info "Building application image..."
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build --no-cache

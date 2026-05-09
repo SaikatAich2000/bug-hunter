@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import can_edit_bug, get_current_user
+from app.auth import can_delete_bug, can_edit_bug, get_current_user
 from app.database import get_db
 from app.email_service import (
     BugSnapshot, UserSnapshot,
@@ -456,9 +456,12 @@ def update_bug(
         raise HTTPException(status_code=404, detail="Bug not found")
 
     if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees]):
+        # Defensive: under v3.1 every authenticated user can edit any bug,
+        # so this branch is unreachable. Kept so a future tightening of
+        # can_edit_bug doesn't have to re-add the role check here.
         raise HTTPException(
             status_code=403,
-            detail="You can only edit bugs you reported or are assigned to",
+            detail="You don't have permission to edit this bug.",
         )
 
     fields = payload.model_dump(exclude_unset=True)
@@ -575,10 +578,12 @@ def delete_bug(
     bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
-    if actor.role not in ("admin", "manager"):
+    # v3.1 spec: bug deletion is admin-only. Managers used to be able to
+    # delete; no longer. Reporters and assignees never could.
+    if not can_delete_bug(actor):
         raise HTTPException(
             status_code=403,
-            detail="Only admins and managers can delete bugs.",
+            detail="Only admins can delete bugs.",
         )
     title = bug.title
     db.delete(bug)

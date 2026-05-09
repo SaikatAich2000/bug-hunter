@@ -1,170 +1,242 @@
-# Bug Hunter — change notes for this release
+# Bug Hunter — v3.1 release notes
 
-This patch is **fully additive** with respect to the database. No DDL is run,
-no columns change type, no indexes drop. You can roll forward and back without
-risk to existing rows.
+This release narrows the role policy on destructive actions, adds
+admin-only session management (Keycloak-style), and replaces the
+two-modal "list → detail → edit" bug flow with a single Jira-style
+inline screen.
+
+The schema change is **purely additive**: one new `sessions` table.
+No existing table's columns, types, indexes or constraints change.
+You can roll forward and back without risk to existing rows.
+
+---
 
 ## What changed (by your numbered list)
 
-### 1. Two new statuses
+### 1 & 2 & 3. Role policy
 
-`ALLOWED_STATUSES` in `app/schemas.py` now contains:
+| Action                       | Before        | After (v3.1)               |
+|------------------------------|---------------|----------------------------|
+| Bug — create / edit / reassign | mixed by ownership | any authenticated user |
+| Bug — delete                 | admin + manager | **admin only** |
+| Project — create / edit      | admin + manager | admin + manager (unchanged) |
+| Project — delete             | admin + manager | **admin only** |
+| User — create / edit         | admin only      | admin + manager |
+| User — delete                | admin only      | admin only (unchanged) |
+| User — grant admin role      | admin only      | admin only (manager blocked, even on create) |
+| User — edit / disable an admin | admin only    | admin only (manager blocked) |
+| Audit Trail                  | every user      | **admin + manager only** |
+| Sessions — list + revoke     | (didn't exist)  | **admin only** |
 
+Backend enforcement (always the source of truth) lives in
+`app/auth.py` (the `can_*` helpers) and the FastAPI dependencies
+`require_admin` / `require_manager_or_admin`. Frontend visibility uses
+`data-needs-role` attributes plus a defensive
+`[data-needs-role] { display: none }` CSS rule, so role-gated UI never
+flashes visible before the auth check resolves.
+
+### 4. Per-session management (Keycloak-style)
+
+A new `sessions` table tracks every active server-side session keyed
+by a unique `jti` baked into the signed cookie. On every authenticated
+request the jti is looked up; if the row is missing or expired, the
+cookie is rejected. This is what makes per-session revocation possible
+— the existing `session_version` mechanism logs out *every* device for
+a user; revoking a session row logs out only the one device.
+
+UI: new **Sessions** sidebar item, sits below Audit Trail, admin-only.
+Lists every active session with user, role, IP, short browser+OS hint,
+created / last-seen / expires timestamps, and a Revoke button per row.
+The admin's own current session is flagged "This is you" and the
+Revoke button is disabled (use Log out for that). The API also
+hard-rejects revoking your own current session as a safety net.
+
+Side effects:
+
+- Login: creates one session row, captures IP + user-agent.
+- Logout: deletes the row keyed by the cookie's jti. Other sessions
+  for the same user untouched.
+- Change password / reset password: bumps `session_version` (which
+  invalidates every previously-issued token for that user) AND deletes
+  every session row for that user, then re-establishes a fresh row +
+  cookie for the device that just changed the password so the user
+  isn't bounced to login by their own action.
+- `last_seen_at` is updated at most once per minute per session so the
+  request hot-path stays cheap.
+- Expired session rows are swept on read by the admin list endpoint.
+
+Backward compatibility: tokens issued by v3.0 builds don't carry a
+jti. The auth layer accepts those legacy tokens and treats them as
+authenticated; they just don't appear in the admin session list. As
+soon as a user logs in fresh under v3.1, their next session has a jti
+and shows up.
+
+### 5. Audit Trail hidden from regular users
+
+`/api/audit` now requires manager+ via `require_manager_or_admin`;
+plain users get a 403. The sidebar nav button has
+`data-needs-role="manager"` so it's not even shown to them.
+
+### 6. Single-screen Jira-style bug detail
+
+The old flow was: list → row click opens read-only detail modal with
+4 tabs → click pencil/edit → small modal with editable form. Two
+separate modals, four tabs, no editing inline.
+
+v3.1 collapses that to one modal:
+
+- Click any row → unified bug modal opens with all fields editable
+  inline.
+- Title is a full-width input at the top.
+- Two-column body (Jira-style): main column has description,
+  comments, attachments, activity (collapsible); side rail has
+  status, priority, environment, project, reporter, assignees, due
+  date, plus read-only Created / Updated timestamps.
+- Comments and attachment uploads are inline — no tab to switch to.
+- Save button at the bottom; on save, sections re-render in place.
+- Delete button in the modal header — admin-only.
+- Pencil edit button on table rows is gone. Row click is the only way.
+
+### 7. Modal width
+
+The bug modal is now `.modal-card.xxl` — `width: 95vw`, `max-width:
+1400px`, `max-height: 92vh` on desktop. Wider than 90%, never 100%, as
+specified. Responsive collapse:
+
+- ≤ 900 px : two-column body collapses to one column (side rail
+            stacks below the main content).
+- ≤ 700 px : modal goes full viewport width (max-width: 100%).
+- ≤ 500 px : modal goes full screen (no border radius, full height) —
+            the same rule the other modals already had.
+
+---
+
+## Schema changes — additive only
+
+One new table:
+
+```sql
+CREATE TABLE sessions (
+    id            INTEGER PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    jti           VARCHAR(64) NOT NULL UNIQUE,
+    user_agent    VARCHAR(400) NOT NULL DEFAULT '',
+    ip_address    VARCHAR(64) NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL,
+    last_seen_at  TIMESTAMPTZ NOT NULL,
+    expires_at    TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_sessions_jti        ON sessions(jti);
+CREATE INDEX idx_sessions_user_id    ON sessions(user_id);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 ```
-New, In Progress, Resolved, Closed, Reopened, Not a Bug, Resolve Later
-```
 
-The `bugs.status` column is `String(20)` — both new values fit (`"Resolve Later"` is 13 chars).
+`init_db()` calls `Base.metadata.create_all(bind=engine)` which is
+idempotent and only creates tables that don't already exist. So:
 
-### 2. KPI strip rebuilt
+- On a v3.0 → v3.1 deploy, the new `sessions` table is created the
+  first time the v3.1 image starts. Nothing else changes.
+- On any subsequent restart, `create_all()` sees the table is already
+  there and does nothing.
 
-The dashboard now shows: **Total · Open · Resolved · Closed · Resolve Later**.
-"Users" and "Projects" KPIs are removed from the UI.
+No existing table is altered. No column type changes. No index drops.
 
-`/api/stats` returns the new fields (`closed`, `resolve_later`) in addition
-to the existing ones. `users` and `projects` stay in the response (defaulting
-to 0 in the schema) so any older cached SPA doesn't crash on the field
-disappearing.
-
-**Important rule:** rows with `status="Not a Bug"` are **excluded from the
-`bugs` total** because the spec says "Not a Bug means the bug is actually
-not a bug so we don't count it." They are still preserved in the DB and
-still appear in the per-status breakdown chart on the analytics page.
-
-### 3. Multi-select filters
-
-All five filter-bar dropdowns (Project, Status, Priority, Environment,
-Assignee) accept multiple selections. The API change is backward-compatible:
-
-- Old call: `?status=New` → still works (parsed as a 1-element list).
-- New call: `?status=New&status=Resolved` → OR-match.
-
-Each repeated value is normalized case-insensitively and validated; one
-unknown value 400s the whole request.
-
-The sidebar Project / Assignee click-to-filter shortcut now toggles
-membership in the multi-select array (clicking the same project twice
-removes it).
-
-### 4. Reporter name spillover during edit
-
-The Reporter field is now on its own row in the bug create/edit modal.
-Option labels show only the user's name (the email moved to a `title`
-tooltip) and the select has `max-width: 100%`, `width: 100%` so a long
-display name can no longer push other fields out of the modal.
-
-### 5. "Updated" column removed; Title gets the space
-
-The bug table's `Updated` column is gone. The freshness signal isn't
-lost — `updated_at` is rendered as a small muted line under each title
-("Updated 3 days ago"). The Title column has `width: auto` and a larger
-font, and the table's `min-width` dropped from 900 → 820 px so it fits
-on smaller laptops without horizontal scroll.
-
-### 6. Collapsible sidebar
-
-A `«` button in the brand area toggles the sidebar between full (280 px)
-and rail (60 px) widths. State is persisted to `localStorage` under the
-key `sidebarCollapsed` so the layout survives reload. On screens
-≤ 900 px the sidebar reverts to the existing off-canvas mobile drawer.
-
-### 7. Performance — for low-resource VMs
-
-Three changes:
-
-1. **GZip middleware** (`fastapi.middleware.gzip.GZipMiddleware`,
-   `minimum_size=1024`, `compresslevel=5`). Compresses HTML / JS / CSS /
-   JSON over the wire. Skipped for already-compressed media (images,
-   video, attachment downloads which set their own `Cache-Control`).
-
-2. **N+1 fix in `GET /api/bugs`** — previously the listing endpoint
-   issued one extra `SELECT count(*)` per bug to compute
-   `attachment_count`. With `page_size=50` that was 50 extra round-trips.
-   Now a single aggregate query keyed by `bug_id` returns all counts at
-   once. There's a regression test in `tests/test_changes.py::TestAttachmentCountPerf`
-   that asserts the listing endpoint stays under 15 SQL queries for 10
-   bugs.
-
-3. **Static-asset caching** is unchanged (was already 1-year, immutable
-   via the asset-version hash). Combined with gzip the SPA shell now
-   ships in ~25 KB compressed instead of ~80 KB.
-
-No worker count, image size, or compose memory limit was changed — your
-existing 512 MB cap stays valid.
-
-### 8. Responsive
-
-Breakpoints reviewed end-to-end:
-
-- ≤ 1100 px : KPI strip drops to 3 columns (5th wraps).
-- ≤ 900 px  : sidebar becomes off-canvas drawer; layout stacks.
-- ≤ 700 px  : 2-column KPIs; multi-select buttons go 50% wide; the table
-              hides Env and Attachment-count columns.
-- ≤ 500 px  : KPIs go 2-up with the 5th spanning both; modals go full-screen;
-              table additionally hides Priority and Assignees columns and
-              its `min-width` drops to 480 px so phones don't horizontal-scroll.
-
-The collapsible sidebar respects the mobile breakpoint — collapsed-rail
-mode only applies above 900 px.
+---
 
 ## Live-data safety checklist
 
-- [x] No DDL; `Base.metadata.create_all()` is idempotent and adds nothing
-      because every table already exists in your DB.
-- [x] `status` column type unchanged (`String(20)`); both new values fit.
-- [x] All existing status values remain in `ALLOWED_STATUSES`, so any
-      pre-existing row deserializes cleanly. Test:
-      `tests/test_changes.py::TestBackwardCompat::test_existing_bug_with_old_status_still_listable`.
-- [x] `?status=New` (the legacy single-value query) still returns the
-      expected results. Test:
-      `tests/test_changes.py::TestBackwardCompat::test_old_single_status_query_unchanged`.
-- [x] `users` and `projects` are still present in `/api/stats`, defaulting
-      to 0 so older cached SPA copies don't crash before reload.
-- [x] Cookie name, session secret, bootstrap admin flow — all untouched.
-- [x] No environment variables added or renamed in `docker-compose.yml`
-      or `.env.example`.
+- [x] No DDL on existing tables. Only the new `sessions` table is
+      created (idempotent — `IF NOT EXISTS` semantics from
+      `create_all`).
+- [x] All existing status / priority / environment / role values
+      remain accepted, so any pre-existing row deserializes cleanly.
+- [x] Existing session cookies (no jti) keep authenticating after the
+      deploy — verified by `parse_session_token` accepting both
+      2-part and 3-part tokens.
+- [x] `users` row layout unchanged — `session_version` was already
+      there in v3.0.
+- [x] `bugs.status` column type unchanged (still `String(20)`).
+- [x] Cookie name (`bh_session`), session secret, bootstrap admin
+      flow — all untouched.
+- [x] No environment variables added or renamed in
+      `docker-compose.yml` or `.env.example`.
+- [x] `./deploy.sh` rebuilds the image and restarts containers; it
+      does **not** touch the named volume `bugtracker_pgdata`.
+- [x] `./down.sh` (no flags) keeps the volume. Only `./down.sh
+      --wipe-db` removes data, and it asks the operator to type `YES`
+      first.
+
+---
 
 ## Tests
 
 ```
-pytest tests/                # 196 passed (174 pre-existing + 22 new)
+pytest tests/                # 225 passing (197 v3.0 + 28 new for v3.1)
 ```
 
-The new tests live in `tests/test_changes.py` and cover:
+The new tests live in `tests/test_v31.py` and cover:
 
-- New statuses round-trip through create / list / filter.
-- KPI shape and per-status counting (Not a Bug excluded from total,
-  still appears in `by_status`).
-- Multi-select OR-matching, empty-string ignoring, and 400 on bogus values.
-- Backward compat (old single-value queries, old statuses).
-- Attachment-count perf (single aggregate query, not N+1).
+- Bug delete admin-only (admin allowed; manager 403; user 403; even
+  the user who reported the bug gets 403).
+- Users can edit any bug, including changing assignees on someone
+  else's bug.
+- `can_edit` flag is True for every authenticated user on every bug.
+- Project delete admin-only (manager 403); manager can still create
+  and edit; users can do neither.
+- Manager can create + edit users, but cannot grant the admin role,
+  cannot edit existing admins, cannot delete users.
+- Audit endpoint: 403 for user, 200 for manager and admin.
+- Sessions endpoint: 403 for user and manager, 200 for admin. List
+  carries `is_current` flag and user metadata. Revoke kills the
+  target's cookie immediately. Admin can't revoke their own current
+  session. Admin CAN revoke their own session on a different device.
+  Logout removes the session row.
+- Password change keeps the current device authenticated (jti
+  re-issued).
+
+Two pre-existing tests were updated to assert the new behavior
+rather than the old:
+
+- `test_user_cannot_edit_others_bugs` →
+  `test_user_can_edit_others_bugs_but_cannot_delete`
+- `test_audit_endpoint_is_visible_to_any_user` → split into
+  `test_audit_endpoint_is_hidden_from_regular_users` +
+  `test_audit_endpoint_visible_to_admin`.
+
+---
 
 ## Deploy steps
 
-This is a code-only deploy. No DB migration, no config change.
+This is a code-only deploy. The DB migration is automatic and additive.
 
 ```bash
-# 1) On the server, in the bug-hunter checkout:
+# 1) On the server, in your bug-hunter checkout, stop the running stack.
+#    (Plain `down`, NOT `--wipe-db`. The Postgres volume bugtracker_pgdata
+#    is preserved.)
 ./down.sh
 
-# 2) Replace the source tree with the contents of bug-hunter.zip
-#    (preserve your existing .env file — DO NOT overwrite it).
+# 2) Replace the source tree with the contents of bug-hunter.zip.
+#    Preserve your existing .env file — DO NOT overwrite it.
 unzip -o bug-hunter.zip   # the zip extracts INTO ./bug-hunter/
 
 # 3) Re-deploy. This rebuilds the image and restarts the stack.
-#    Postgres data lives in the named volume `bugtracker_pgdata` and is
-#    NOT touched.
+#    Postgres data lives in the named volume `bugtracker_pgdata`
+#    and is NOT touched.
 ./deploy.sh
 ```
 
 After it comes up:
 
-- `/api/health` should return `200 ok`.
-- The header bar should show 5 KPIs (no Users / Projects tiles).
-- The filter bar dropdowns should accept multiple checks.
-- The brand area should have a `«` collapse button.
+- `/api/health` returns `200 ok`.
+- The brand area shows version `v3.1.0`.
+- Existing user sessions still work (legacy cookie compat).
+- A fresh login, then **Sessions** in the sidebar → you should see
+  your own session with "This is you".
 
 ## Rollback
 
-If anything goes sideways, redeploying the previous zip is enough. The DB
-needs no rollback — nothing was migrated.
+If anything goes sideways, redeploying the previous zip is enough.
+The DB needs no rollback — the only schema change is the new
+`sessions` table, which a v3.0 build harmlessly ignores. You can
+leave it in place; or run `DROP TABLE sessions;` from psql if you
+want to reclaim the space.

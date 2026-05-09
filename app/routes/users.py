@@ -1,4 +1,18 @@
-"""Users API. Admin-only for create / update / delete."""
+"""Users API.
+
+Permissions (v3.1):
+  - List / Read : any authenticated user (so they can be picked as
+                  assignees / reporters in bug forms).
+  - Create / Update : admin or manager.
+  - Delete : admin ONLY. Managers used to have no user-management rights
+             at all; v3.1 lifts them to "manage but not delete".
+
+Role-change & deactivation safety rules:
+  - Only admins can grant or revoke the admin role. A manager creating
+    a user can pick role=user or role=manager only.
+  - You cannot demote / deactivate / delete yourself into a corner.
+  - You cannot demote / deactivate / delete the last remaining admin.
+"""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import (
     get_current_user, hash_password, invalidate_outstanding_reset_tokens,
-    require_admin,
+    require_admin, require_manager_or_admin,
 )
 from app.database import get_db
 from app.models import Activity, User
@@ -63,8 +77,15 @@ def list_users(
 def create_user(
     payload: UserIn,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_admin),
+    actor: User = Depends(require_manager_or_admin),
 ) -> User:
+    # Managers can create users — but they can't manufacture peers above
+    # them. Only admins are allowed to grant the admin role.
+    if payload.role == "admin" and actor.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can create admin users.",
+        )
     user = User(
         name=payload.name,
         email=payload.email,
@@ -102,7 +123,7 @@ def update_user(
     user_id: int,
     payload: UserUpdate,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_admin),
+    actor: User = Depends(require_manager_or_admin),
 ) -> User:
     user = db.get(User, user_id)
     if user is None:
@@ -111,6 +132,22 @@ def update_user(
     fields = payload.model_dump(exclude_unset=True)
     new_password = fields.pop("password", None)
     changes = []
+
+    # Managers may not edit admins at all (can't demote them, can't change
+    # their email or password) and may not promote anyone TO admin. This
+    # keeps the role boundary intact: an admin can always do everything a
+    # manager can, but never the reverse.
+    if actor.role != "admin":
+        if user.role == "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can edit admin accounts.",
+            )
+        if "role" in fields and fields["role"] == "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can grant the admin role.",
+            )
 
     # Guardrail: don't let admins demote/disable themselves into a corner.
     if actor.id == user_id:

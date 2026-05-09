@@ -6,6 +6,8 @@ Responsibilities:
   - Generate + verify password-reset tokens.
   - Provide FastAPI dependencies that resolve the current user from
     the session cookie, with role-based access checks.
+  - Track every active session in the DB (jti) so admins can list and
+    revoke individual sessions Keycloak-style.
 
 Why cookies, not bearer tokens? HTTP-only cookies can't be read by JS,
 which means stolen XSS payloads can't exfiltrate the session. The price
@@ -13,12 +15,22 @@ is CSRF risk — but our cookie is `SameSite=Lax`, which blocks
 cross-site POST/PUT/DELETE from third-party origins, so the practical
 attack surface is small for an internal tool.
 
-Session-version invalidation:
+Token payload format:
+  `user_id:session_version[:jti]`
+  - `jti` is the unique server-side session ID. Tokens issued by older
+    builds don't have one; we accept them (legacy mode) but they won't
+    appear in the admin session list until the user logs in again.
+
+Session-version invalidation (global, blunt):
   Each session token also carries the user's `session_version`. When the
   user changes or resets their password, we bump that integer in the DB,
   which makes every previously-issued cookie fail validation on the next
-  request — effectively logging out other devices. Cookies are signed by
-  the server so a client can't tamper with the version they present.
+  request — effectively logging out every device for that user.
+
+Per-session revocation (precise, Keycloak-style):
+  When admin revokes a session row from the `sessions` table, the
+  matching jti no longer resolves on validation, so just that one device
+  is logged out. Other sessions for the same user are untouched.
 """
 from __future__ import annotations
 
@@ -30,6 +42,7 @@ from typing import Optional
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response, status
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -39,6 +52,7 @@ from app.models import (
     ROLE_MANAGER,
     ROLE_USER,
     PasswordResetToken,
+    Session as SessionRow,
     User,
     VALID_ROLES,
 )
@@ -84,15 +98,26 @@ def _signer() -> TimestampSigner:
     return TimestampSigner(s, salt="bh-session-v2")
 
 
-def make_session_token(user_id: int, session_version: int = 0) -> str:
-    """Return a signed token containing the user id and session version."""
-    payload = f"{user_id}:{session_version}"
+def make_session_token(user_id: int, session_version: int = 0, jti: str | None = None) -> str:
+    """Return a signed token containing the user id, session version, and
+    optional per-session jti. The jti is what lets admins revoke an
+    individual session without bumping session_version (which would log
+    out every device the user has)."""
+    if jti:
+        payload = f"{user_id}:{session_version}:{jti}"
+    else:
+        payload = f"{user_id}:{session_version}"
     return _signer().sign(payload.encode("utf-8")).decode("utf-8")
 
 
-def parse_session_token(token: str) -> Optional[tuple[int, int]]:
-    """Verify a session cookie and return (user_id, session_version),
-    or None if invalid/expired/malformed."""
+def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
+    """Verify a session cookie and return (user_id, session_version, jti),
+    or None if invalid/expired/malformed.
+
+    `jti` is None for legacy 2-part tokens issued before the sessions
+    table existed — those cookies still authenticate, but they're not
+    visible in the admin session-list screen.
+    """
     if not token:
         return None
     try:
@@ -105,22 +130,30 @@ def parse_session_token(token: str) -> Optional[tuple[int, int]]:
         return None
     parts = text.split(":")
     try:
+        if len(parts) == 3:
+            return int(parts[0]), int(parts[1]), parts[2] or None
         if len(parts) == 2:
-            return int(parts[0]), int(parts[1])
+            return int(parts[0]), int(parts[1]), None
         # Fallback for legacy single-int cookies issued before the version
         # was added — accept once so live deploys don't kick everyone out.
         if len(parts) == 1:
-            return int(parts[0]), 0
+            return int(parts[0]), 0, None
         return None
     except ValueError:
         return None
 
 
-def set_session_cookie(response: Response, user: User) -> None:
+def new_jti() -> str:
+    """Random opaque session ID. 192 bits is plenty for collision resistance
+    even at billions of concurrent sessions."""
+    return secrets.token_urlsafe(24)
+
+
+def set_session_cookie(response: Response, user: User, jti: str | None = None) -> None:
     settings = get_settings()
     response.set_cookie(
         key=COOKIE_NAME,
-        value=make_session_token(user.id, user.session_version or 0),
+        value=make_session_token(user.id, user.session_version or 0, jti=jti),
         max_age=settings.SESSION_TTL_SECONDS,
         httponly=True,
         secure=settings.COOKIE_SECURE,
@@ -168,12 +201,18 @@ def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
+# How often we touch `last_seen_at` on each authenticated request. Updating
+# it on every request would be a hot write; throttling to once per minute
+# is precise enough for the admin "active sessions" view.
+_LAST_SEEN_THROTTLE_SECONDS = 60
+
+
 def _user_from_request(request: Request, db: Session) -> Optional[User]:
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
     if parsed is None:
         return None
-    user_id, session_version = parsed
+    user_id, session_version, jti = parsed
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         return None
@@ -181,6 +220,39 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
     # password change / reset / forced logout.
     if (user.session_version or 0) != session_version:
         return None
+
+    # Per-session revocation: if the cookie carries a jti, look it up.
+    # Missing or expired row → token rejected. Legacy tokens (no jti)
+    # pre-date the sessions table, so we accept them without a row.
+    if jti is not None:
+        sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
+        if sess is None or sess.user_id != user.id:
+            return None
+        now = datetime.now(timezone.utc)
+        expires = sess.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires < now:
+            # Cleanly remove expired rows so the admin list doesn't get
+            # cluttered. A single delete-on-touch is cheaper than a
+            # background sweeper.
+            try:
+                db.delete(sess)
+                db.commit()
+            except Exception:
+                db.rollback()
+            return None
+        # Throttled last_seen update — only writes once per minute per
+        # session, which keeps the request hot path cheap on busy users.
+        last_seen = sess.last_seen_at
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if (now - last_seen).total_seconds() >= _LAST_SEEN_THROTTLE_SECONDS:
+            try:
+                sess.last_seen_at = now
+                db.commit()
+            except Exception:
+                db.rollback()
     return user
 
 
@@ -219,15 +291,50 @@ def require_manager_or_admin(user: User = Depends(get_current_user)) -> User:
 
 
 def can_edit_bug(user: User, bug_reporter_id: Optional[int], assignee_ids: list[int]) -> bool:
-    """Centralised rule: admins/managers can edit any bug; users only their own."""
-    if user.role in (ROLE_ADMIN, ROLE_MANAGER):
-        return True
-    if bug_reporter_id == user.id:
-        return True
-    if user.id in assignee_ids:
-        return True
-    return False
+    """Centralised rule: every authenticated, active user can edit any bug.
+
+    This was tightened to "reporter / assignee / manager / admin" in earlier
+    builds, but the v3.1 product spec relaxed it: a regular user can now
+    edit any bug and reassign it to anyone. Deletion is the only bug
+    operation still restricted (admin-only — see can_delete_bug)."""
+    return True
+
+
+def can_delete_bug(user: User) -> bool:
+    """Bug deletion is admin-only across all roles. The original code
+    allowed managers too; the v3.1 spec moved this to admin-only so a
+    bug — once filed — can't be erased by anyone except the very top of
+    the hierarchy. Reporters / assignees / managers all still have full
+    edit rights, just not delete."""
+    return user.role == ROLE_ADMIN
 
 
 def can_manage_projects(user: User) -> bool:
+    """Create / edit projects: admin or manager. Delete is admin-only —
+    see can_delete_project."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
+
+
+def can_delete_project(user: User) -> bool:
+    return user.role == ROLE_ADMIN
+
+
+def can_manage_users(user: User) -> bool:
+    """Create / edit users: admin or manager (per v3.1 spec). Previously
+    admin-only. Delete is still admin-only — see can_delete_user."""
+    return user.role in (ROLE_ADMIN, ROLE_MANAGER)
+
+
+def can_delete_user(user: User) -> bool:
+    return user.role == ROLE_ADMIN
+
+
+def can_view_audit(user: User) -> bool:
+    """Audit trail is hidden from regular users per v3.1 spec — they don't
+    need to see who did what across the system."""
+    return user.role in (ROLE_ADMIN, ROLE_MANAGER)
+
+
+def can_manage_sessions(user: User) -> bool:
+    """Only admins can list / revoke other users' sessions."""
+    return user.role == ROLE_ADMIN

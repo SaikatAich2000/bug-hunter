@@ -1,43 +1,49 @@
-# --- Secrets — never commit .env ---
-.env
-.env.*
-!.env.example
-
 # --- Python ---
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+.eggs/
+dist/
+build/
+
+# --- Virtualenvs ---
 .venv/
 venv/
 env/
-ENV/
 
-# --- Local databases ---
+# --- Test / coverage artefacts ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- Local secrets ---
+# IMPORTANT: never commit a real .env. Use .env.example as the template.
+.env
+.env.local
+.env.*.local
+
+# --- Local databases (SQLite fallback for dev) ---
 *.db
 *.sqlite
 *.sqlite3
+bug_hunter.db
 
-# --- IDE / editor ---
+# --- Editors / IDEs ---
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
+*.iml
 
 # --- OS noise ---
 .DS_Store
 Thumbs.db
 
-# --- Build artifacts ---
-dist/
-build/
-*.zip
-
-# --- Logs ---
-*.log
+# --- Node (in case anyone runs frontend tooling) ---
+node_modules/
+npm-debug.log*

@@ -831,10 +831,25 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .modal-card.sm { max-width: 400px; }
 .modal-card.lg { max-width: 760px; }
 .modal-card.xl { max-width: 920px; }
+
+/*
+ * Wide bug modal — covers > 90 % of the viewport width but stops short
+ * of full-screen so it still reads as a modal layer over the app rather
+ * than replacing it. The Jira-style two-column body fits comfortably at
+ * this size on a laptop. On screens narrower than 900 px we collapse to
+ * one column (see the responsive blocks at the end of this file).
+ */
+.modal-card.xxl {
+  max-width: 1400px;
+  width: 95vw;
+  max-height: 92vh;
+}
+
 .modal-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -850,6 +865,24 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 }
 .detail-head-actions { display: flex; gap: 6px; align-items: center; }
 
+/* Header within the unified bug modal: title block + action buttons. */
+.bug-modal-head-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.bug-modal-head-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.bug-modal-subtitle {
+  font-weight: 400;
+}
+
 .modal-body {
   padding: 16px 18px;
   overflow-y: auto;
@@ -862,6 +895,119 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   margin-top: 8px;
   border-top: 1px solid var(--border);
 }
+
+/* ---------- Unified bug modal body ----------
+ *
+ * The bug modal hosts the form AND (in edit mode) the comments,
+ * attachments and activity sections inline — Jira-style. Two-column grid
+ * with metadata in the side rail; collapses to single column under 900 px.
+ */
+.bug-modal-body { padding: 0; }
+.bug-modal-body .bug-title-field {
+  margin: 16px 20px 0;
+}
+.bug-modal-body .bug-title-field input {
+  font-size: 18px;
+  font-weight: 600;
+  padding: 10px 12px;
+}
+
+.bug-modal-grid {
+  display: grid;
+  /* Side rail: 360 px so the wide "Reporter" select (which can hold
+     "Long Name <very.long.email@company.com>") doesn't truncate awkwardly,
+     and Project / Status / Priority / Environment selects show their full
+     option text without ellipsis. */
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 28px;
+  padding: 18px 20px 20px;
+  align-items: start;
+}
+.bug-modal-main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.bug-modal-main textarea {
+  /* Don't let the description textarea's resize handle drift into the
+     side rail's whitespace — vertical-only resize keeps the column
+     boundary visually clean. */
+  resize: vertical;
+  min-height: 120px;
+}
+.bug-modal-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  position: sticky;
+  top: 0;
+}
+.bug-modal-side .field select,
+.bug-modal-side .field input {
+  width: 100%;
+  /* Selects need to stretch to fill the rail so the chevron sits at
+     the right edge and the option text has room to breathe. */
+  min-width: 0;
+}
+/* Disabled (read-only) reporter — keep it visually distinct so users
+   understand it isn't editable, but don't make it look "broken". */
+.bug-modal-side .field select:disabled {
+  cursor: not-allowed;
+  background: var(--bg-elev);
+  opacity: 0.85;
+}
+
+.bug-modal-body .modal-foot {
+  /* Breathing room around the Cancel / Create buttons so they don't
+     touch the rounded modal corners on the right and bottom. */
+  margin: 0;
+  padding: 16px 24px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.bug-section h3 {
+  font-size: 13px;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.bug-section + .bug-section { margin-top: 18px; }
+.bug-comments-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.bug-activity-list { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
+.bug-activity-section details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 0;
+  user-select: none;
+}
+.bug-activity-section details summary:hover { color: var(--text); }
+
+.bug-side-meta {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bug-side-meta-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  gap: 12px;
+}
+.bug-side-meta-row .v { color: var(--text); text-align: right; }
 
 /* Form fields */
 .field {
@@ -1278,6 +1424,9 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 @media (max-width: 1100px) {
   /* Drop from 5 → 3 KPI columns; the last two wrap to the next row. */
   .kpi-strip { grid-template-columns: repeat(3, 1fr); }
+  /* Slim the bug-modal side rail a bit on smaller laptops so the main
+     column doesn't get squeezed too narrow. */
+  .bug-modal-grid { grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; }
 }
 
 @media (max-width: 900px) {
@@ -1293,6 +1442,20 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   }
   .sidebar.open { transform: translateX(0); }
   .menu-btn { display: inline-flex; }
+
+  /* Bug modal collapses to one column under 900 px — the metadata side
+     rail stacks under the main content rather than next to it. */
+  .bug-modal-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .bug-modal-side {
+    position: static;
+    /* When the side rail goes full-width, drop the elevated background
+       so it doesn't double up with the modal's own background. */
+    background: transparent;
+    border: 1px dashed var(--border);
+  }
 }
 
 @media (max-width: 700px) {
@@ -1302,6 +1465,9 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   .view { padding: 0 12px 24px; }
   .row { flex-direction: column; }
   .modal-card { max-height: 95vh; }
+  /* Big bug modal goes full viewport width on tablets so it doesn't
+     waste the available real estate. */
+  .modal-card.xxl { width: 100%; max-width: 100%; }
   .charts-grid { grid-template-columns: 1fr; }
   .audit-item { grid-template-columns: 28px 1fr; }
   .audit-item .audit-time { grid-column: 2; margin-top: 4px; }
@@ -1309,6 +1475,10 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
      duplicate info available elsewhere (env shows in the detail modal). */
   .col-project { width: 110px; }
   .col-env, .col-att { display: none; }
+
+  .sessions-controls { flex-direction: column; align-items: stretch; }
+  .session-row { grid-template-columns: 1fr; }
+  .session-actions { justify-self: stretch; }
 }
 
 @media (max-width: 500px) {
@@ -1319,13 +1489,19 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   .search-wrap { display: none; }
   .modal { padding: 0; }
   .modal-card { max-height: 100vh; height: 100vh; border-radius: 0; max-width: 100%; }
+  .modal-card.xxl { width: 100%; }
   .attachment-grid { grid-template-columns: 1fr 1fr; }
-  .detail-head-actions .btn { padding: 6px 10px; font-size: 12px; }
+  .detail-head-actions .btn,
+  .bug-modal-head-actions .btn { padding: 6px 10px; font-size: 12px; }
   /* Drop the assignee column on the smallest screens — the detail modal
      surfaces it instead, and removing it stops the table from horizontally
      scrolling on a typical phone width. */
   .col-assignees, .col-priority { display: none; }
   .bug-table { min-width: 480px; }
+
+  .bug-modal-body .bug-title-field { margin: 12px 12px 0; }
+  .bug-modal-grid { padding: 12px; }
+  .bug-modal-body .modal-foot { padding: 10px 12px; }
 }
 
 /* ---------- Upload zone (attachments tab) ---------- */
@@ -1728,3 +1904,113 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   .kpi-strip { grid-template-columns: repeat(2, 1fr); }
   .kpi:nth-child(5) { grid-column: span 2; }
 }
+/* ---------- Sessions admin view ---------- */
+.sessions-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.sessions-help {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  min-width: 240px;
+}
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  min-width: 0;
+}
+.session-row.is-current {
+  /* Visually distinguish the admin's own session — they can't revoke it. */
+  border-color: var(--accent);
+  background: var(--bg-elev-2);
+}
+.session-avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 12px;
+  flex-shrink: 0;
+}
+.session-main { min-width: 0; }
+.session-line1 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: var(--text);
+}
+.session-line1 .session-name { font-weight: 600; }
+.session-line1 .session-role-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-line1 .session-current-flag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+}
+.session-line2 {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  word-break: break-word;
+}
+.session-line3 {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.session-actions { display: flex; gap: 6px; align-items: center; }
+.sessions-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+/* Hide the sidebar item that's been gated off by data-needs-role. The
+   helper applyRoleVisibility() sets style.display = "none", but if the
+   user is a manager the rank-comparison drops the attribute (so the CSS
+   below would no longer hide it anyway). Defensive selector kept here
+   for the small-screen drawer where we want fully-hidden gates to
+   stay hidden. */
+[data-needs-role] { display: none; }
+
+/* Hide the activity-history details summary marker on Safari/old Edge for a cleaner look */
+.bug-activity-section details > summary { list-style: none; }
+.bug-activity-section details > summary::-webkit-details-marker { display: none; }
+.bug-activity-section details > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  margin-right: 4px;
+}
+.bug-activity-section details[open] > summary::before { content: "▾ "; }

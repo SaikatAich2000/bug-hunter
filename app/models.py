@@ -12,6 +12,10 @@ Tables:
                        persist across restarts and survive backups.
   - activity_log     : audit trail
   - password_reset_tokens : single-use email-based password reset tokens
+  - sessions         : server-side record of every active login. Lets
+                       admins see who's currently signed in (Keycloak-style)
+                       and revoke individual sessions to forcibly log a
+                       specific device out without affecting any others.
 """
 from __future__ import annotations
 
@@ -286,4 +290,49 @@ class Activity(Base):
         Index("idx_activity_bug_id", "bug_id"),
         Index("idx_activity_entity", "entity_type", "entity_id"),
         Index("idx_activity_created", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session
+#
+# Server-side record of every active login. We need this for the Keycloak-
+# style "list / revoke active sessions" admin feature: stateless signed
+# cookies alone can't be selectively revoked because the server keeps no
+# record of which tokens it has issued.
+#
+# Each session row is keyed by a unique `jti` (JWT-style ID) which is also
+# baked into the signed session cookie. On every authenticated request we
+# look up the row by jti — if it's missing or expired, the cookie is
+# rejected. The admin "revoke" action just deletes the row.
+#
+# Backward compatibility note: tokens issued before this table existed
+# don't carry a jti. The auth layer accepts those legacy tokens but they
+# don't appear in the session list (they will the next time the user logs
+# in fresh).
+# ---------------------------------------------------------------------------
+class Session(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # Random opaque ID baked into the signed cookie. We look up sessions
+    # by this on every authenticated request.
+    jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # Best-effort metadata for the admin session-list screen. Never used
+    # for auth decisions — purely informational.
+    user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("idx_sessions_jti", "jti"),
+        Index("idx_sessions_user_id", "user_id"),
+        Index("idx_sessions_expires_at", "expires_at"),
     )

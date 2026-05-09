@@ -26,7 +26,11 @@ const STATE = {
   },
   view: "list",
   currentBugId: null,
+  // Detail tabs are gone in v3.1 — bug detail is now a single inline
+  // screen (Jira-style). detailTab kept here as a no-op for backward
+  // compat in case any external code path still touches it.
   detailTab: "info",
+  sessions: [],
   currentUser: null,   // populated from /api/auth/me at boot
   // Asset hash served by /api/health at boot; if it changes later we
   // know the server has been redeployed.
@@ -104,12 +108,11 @@ async function api(path, opts = {}) {
     credentials: "include",   // send/receive session cookies
   });
   if (!res.ok) {
-    // Session expired or otherwise rejected — bounce to login. Use replace()
-    // so the broken state isn't in browser history. Throw a flag-error so
-    // callers can swallow it without showing user-visible toasts.
+    // Session expired or otherwise rejected — bounce to login. We delegate
+    // to bounceToLogin() so multiple in-flight 401s during a session
+    // revocation only trigger one redirect (sessionRedirectInFlight guard).
     if (res.status === 401 && path !== "/auth/login") {
-      const next = encodeURIComponent(location.pathname + location.search);
-      location.replace("/login.html?next=" + next);
+      bounceToLogin();
       const err = new Error("Not authenticated");
       err.status = 401;
       err.silent = true;
@@ -251,6 +254,9 @@ async function boot() {
   await refreshAll();
   bindGlobalListeners();
   scheduleVersionCheck();
+  // Polls /api/auth/me every 15 s so admin session-revocation kicks the
+  // user out within seconds, not only when they next click something.
+  scheduleSessionPoll();
 }
 
 function applyRoleVisibility() {
@@ -310,6 +316,62 @@ function scheduleVersionCheck() {
       }
     } catch { /* ignore */ }
   }, 5 * 60 * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Session-validity poll — Keycloak-style revocation should kick the user
+// out of the SPA quickly, not only when they happen to make an API call.
+// We hit /api/auth/me every 15 seconds (cheap — single indexed DB lookup
+// + maybe one last_seen_at update). On 401, we redirect to /login.html.
+//
+// We also re-check on tab visibility change, so a user who tabs back to
+// the app gets bounced immediately rather than after the next interval.
+// ---------------------------------------------------------------------------
+const SESSION_POLL_MS = 15 * 1000;
+let sessionPollTimer = null;
+let sessionRedirectInFlight = false;
+
+function bounceToLogin() {
+  if (sessionRedirectInFlight) return;
+  sessionRedirectInFlight = true;
+  // Stop the poll so we don't queue further requests during the redirect.
+  if (sessionPollTimer) { clearInterval(sessionPollTimer); sessionPollTimer = null; }
+  // Best-effort toast — won't always be visible (we're navigating away).
+  try { toast("Your session ended. Redirecting to login…", "info"); } catch {}
+  // location.replace is preferred so the broken-state URL isn't in history.
+  // Fall back to .href in case replace is blocked for any reason.
+  try { location.replace("/login.html"); }
+  catch { location.href = "/login.html"; }
+}
+
+async function checkSessionValid() {
+  try {
+    const res = await fetch(API + "/auth/me", {
+      credentials: "include",
+      // Skip the browser cache so a revoked session can't be hidden by a
+      // stale 200 response.
+      cache: "no-store",
+      headers: { "X-Session-Check": "1" },
+    });
+    if (res.status === 401 || res.status === 403) {
+      bounceToLogin();
+      return false;
+    }
+    return res.ok;
+  } catch {
+    // Network error — don't kick the user out for a transient blip.
+    return true;
+  }
+}
+
+function scheduleSessionPoll() {
+  if (sessionPollTimer) clearInterval(sessionPollTimer);
+  sessionPollTimer = setInterval(checkSessionValid, SESSION_POLL_MS);
+  // Also re-check whenever the tab becomes visible — covers the case
+  // where the laptop slept for an hour and the interval didn't fire.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkSessionValid();
+  });
 }
 
 async function loadMeta() {
@@ -385,6 +447,11 @@ function renderBugTable() {
   $("#emptyState").hidden = STATE.bugs.length > 0;
 
   const frag = document.createDocumentFragment();
+  // v3.1: row-level pencil button is gone. Clicking the row opens the
+  // unified bug modal (which is editable inline, Jira-style). The only
+  // row-level action is delete, and that's admin-only per the new
+  // permission policy.
+  const isAdmin = STATE.currentUser?.role === "admin";
   for (const bug of STATE.bugs) {
     const tr = document.createElement("tr");
     tr.dataset.bugId = String(bug.id);
@@ -394,7 +461,6 @@ function renderBugTable() {
     // Title cell carries the bug's `updated_at` as a small timestamp under
     // the title, so we can drop the dedicated "Updated" column without
     // losing the freshness signal entirely.
-    const canDeleteBug = ["admin", "manager"].includes(STATE.currentUser?.role);
     tr.innerHTML = `
       <td class="col-id">#${bug.id}</td>
       <td class="col-title">
@@ -411,10 +477,7 @@ function renderBugTable() {
       <td class="col-att">${bug.attachment_count > 0 ? `<span class="att-count">📎 ${bug.attachment_count}</span>` : '<span class="muted">—</span>'}</td>
       <td class="col-actions">
         <div class="row-actions">
-          ${bug.can_edit ? `
-          <button class="icon-btn" data-act="edit" data-id="${bug.id}" title="Edit">✎</button>
-          ${canDeleteBug ? `<button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>` : ""}
-          ` : `<span class="muted small" title="You don't have permission to edit this bug">🔒</span>`}
+          ${isAdmin ? `<button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>` : ""}
         </div>
       </td>`;
     frag.appendChild(tr);
@@ -443,6 +506,14 @@ function renderProjectList() {
     ul.innerHTML = `<li class="side-item muted no-cursor">No projects — click + to add.</li>`;
     return;
   }
+  // v3.1 permissions:
+  //   • edit project  : admin or manager
+  //   • delete project: admin only
+  // (Plain users see neither button — the side rail header is hidden
+  // for them via data-needs-role on the section itself.)
+  const role = STATE.currentUser?.role || "";
+  const canManage = role === "admin" || role === "manager";
+  const canDelete = role === "admin";
   // Active = the project's id is currently in the multi-select filter array.
   const activeIds = new Set((STATE.filters.project_id || []).map(String));
   for (const p of STATE.projects) {
@@ -454,8 +525,8 @@ function renderProjectList() {
       <span class="swatch" style="background:${escapeHtml(p.color)}"></span>
       <span class="label-text" data-act="filter">${escapeHtml(p.name)}</span>
       <span class="row-actions">
-        <button class="icon-btn" data-act="edit-project" data-id="${p.id}" title="Edit">✎</button>
-        <button class="icon-btn danger" data-act="delete-project" data-id="${p.id}" title="Delete">🗑</button>
+        ${canManage ? `<button class="icon-btn" data-act="edit-project" data-id="${p.id}" title="Edit">✎</button>` : ""}
+        ${canDelete ? `<button class="icon-btn danger" data-act="delete-project" data-id="${p.id}" title="Delete">🗑</button>` : ""}
       </span>`;
     ul.appendChild(li);
   }
@@ -469,6 +540,17 @@ function renderUserList() {
     ul.innerHTML = `<li class="side-item muted no-cursor">No users yet — click + to add.</li>`;
     return;
   }
+  // v3.1 permissions:
+  //   • edit user  : admin or manager  (managers can't edit admins; the
+  //                  backend enforces it. We still show the button so a
+  //                  manager can edit non-admins; if they click on an
+  //                  admin row, they'll get a 403 toast.)
+  //   • delete user: admin only.
+  // The Users sidebar section is gated on data-needs-role="manager" so
+  // plain users never see this list at all.
+  const role = STATE.currentUser?.role || "";
+  const canEdit = role === "admin" || role === "manager";
+  const canDelete = role === "admin";
   for (const u of active) {
     const li = document.createElement("li");
     li.className = "side-item";
@@ -481,8 +563,8 @@ function renderUserList() {
         ${u.role ? `<span class="meta"> · ${escapeHtml(u.role)}</span>` : ""}
       </span>
       <span class="row-actions">
-        <button class="icon-btn" data-act="edit-user" data-id="${u.id}" title="Edit">✎</button>
-        <button class="icon-btn danger" data-act="delete-user" data-id="${u.id}" title="Delete">🗑</button>
+        ${canEdit ? `<button class="icon-btn" data-act="edit-user" data-id="${u.id}" title="Edit">✎</button>` : ""}
+        ${canDelete ? `<button class="icon-btn danger" data-act="delete-user" data-id="${u.id}" title="Delete">🗑</button>` : ""}
       </span>`;
     ul.appendChild(li);
   }
@@ -620,12 +702,15 @@ function setView(view) {
   $("#viewList").hidden = view !== "list";
   $("#viewAnalytics").hidden = view !== "analytics";
   $("#viewAudit").hidden = view !== "audit";
+  $("#viewSessions").hidden = view !== "sessions";
   $("#filterBar").hidden = view !== "list";
   $("#pageTitle").textContent = ({
-    list: "All Bugs", analytics: "Analytics", audit: "Audit Trail",
+    list: "All Bugs", analytics: "Analytics",
+    audit: "Audit Trail", sessions: "Active Sessions",
   }[view] || "Bug Hunter");
   if (view === "analytics") renderCharts();
   if (view === "audit") refreshAudit();
+  if (view === "sessions") refreshSessions();
 }
 
 // ---------------------------------------------------------------------------
@@ -730,45 +815,155 @@ function drawAssigneeBars(sel, rows) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug form
+// Bug modal — unified create / edit / view (Jira-style single screen).
+//
+// One modal handles three modes:
+//   • Create       — bug == null, no comments / attachments / activity
+//                    sections rendered (we don't have a bug id yet).
+//   • Edit / View  — bug != null, all fields editable inline; comments,
+//                    attachments and activity rendered below.
+//
+// On submit we PUT/POST the form, then if it was an edit we re-fetch the
+// bug detail and re-render the inline sections in place — without
+// closing the modal — so the user sees the updated bug straight away.
 // ---------------------------------------------------------------------------
 function openBugForm(bug = null) {
   const form = $("#formBug");
+  const isEdit = !!bug;
+  STATE.currentBugId = bug ? bug.id : null;
   form.reset();
-  $("#modalBugTitle").textContent = bug ? `Edit Bug #${bug.id}` : "New Bug";
-  $("#bugSubmitBtn").textContent = bug ? "Save" : "Create";
-  form.elements.id.value = bug ? bug.id : "";
+
+  // Header: short numeric label + the saved title as a faded subtitle so
+  // the user can see what they originally filed without it getting
+  // muddled with the editable input below.
+  if (isEdit) {
+    $("#modalBugTitle").textContent = `Bug #${bug.id}`;
+    $("#modalBugSubtitle").textContent = bug.title || "";
+    $("#bugSubmitBtn").textContent = "Save changes";
+  } else {
+    $("#modalBugTitle").textContent = "New Bug";
+    $("#modalBugSubtitle").textContent = "";
+    $("#bugSubmitBtn").textContent = "Create";
+  }
+  form.elements.id.value = isEdit ? bug.id : "";
+
+  // Delete button — admin only, edit mode only. The HTML already has
+  // data-needs-role="admin" on it; applyRoleVisibility() at boot stripped
+  // that attribute for admins, so we just need to flip its hidden state
+  // for create/edit modes.
+  const delBtn = $("#bugDeleteBtn");
+  if (delBtn) {
+    const isAdmin = STATE.currentUser?.role === "admin";
+    delBtn.hidden = !(isEdit && isAdmin);
+  }
 
   fillFormSelect(form.elements.project_id, STATE.projects.map(p => [p.id, p.name]),
-                 bug ? bug.project_id : "");
-  // Reporter dropdown: label is just the name; the email (which can be long
-  // and was causing the field to spill out of the modal during edit) goes
-  // into the option's `title` so it's still discoverable on hover, but no
-  // longer drives the field's intrinsic width.
-  fillFormSelect(form.elements.reporter_id,
-                 STATE.users.filter(u => u.is_active).map(u => [u.id, u.name, u.email]),
-                 bug ? (bug.reporter ? bug.reporter.id : "") : (STATE.currentUser?.id || ""));
+                 isEdit ? bug.project_id : "");
+  // Reporter is fixed to whoever is currently logged in. We populate the
+  // (disabled) select with just one option — the current user — so it
+  // always shows their name. The actual reporter_id sent on submit comes
+  // from STATE.currentUser.id, not from this select, so even if a
+  // browser oddly omits disabled-select values we still send something
+  // valid. For an existing bug, we additionally inject the original
+  // reporter as a second option so the bug's true reporter still
+  // displays correctly when someone else opens it.
+  const me = STATE.currentUser;
+  let reporterOptions = me ? [[me.id, me.name, me.email]] : [];
+  if (isEdit && bug.reporter && (!me || bug.reporter.id !== me.id)) {
+    reporterOptions = [[bug.reporter.id, bug.reporter.name, bug.reporter.email]];
+  }
+  fillFormSelect(form.elements.reporter_id, reporterOptions,
+                 isEdit && bug.reporter ? bug.reporter.id : (me ? me.id : ""));
   fillFormSelect(form.elements.status, STATE.meta.statuses.map(s => [s, s]),
-                 bug ? bug.status : "New");
+                 isEdit ? bug.status : "New");
   fillFormSelect(form.elements.priority, STATE.meta.priorities.map(s => [s, s]),
-                 bug ? bug.priority : "Medium");
-
+                 isEdit ? bug.priority : "Medium");
   // Environment - already DEV/UAT/PROD options in the HTML, just set value
-  form.elements.environment.value = bug ? bug.environment : "DEV";
+  form.elements.environment.value = isEdit ? bug.environment : "DEV";
 
-  const assignedIds = new Set((bug && bug.assignees ? bug.assignees.map(a => a.id) : []));
+  const assignedIds = new Set(isEdit && bug.assignees ? bug.assignees.map(a => a.id) : []);
   renderChips("#assigneePicker",
     STATE.users.filter(u => u.is_active),
     (u) => ({ id: u.id, label: u.name, sub: u.role }),
     assignedIds);
 
-  if (bug) {
+  if (isEdit) {
     form.elements.title.value = bug.title || "";
     form.elements.description.value = bug.description || "";
     form.elements.due_date.value = bug.due_date || "";
+    // Read-only timestamps in the side rail.
+    $("#bugSideMeta").hidden = false;
+    $("#bugMetaCreated").textContent = formatDate(bug.created_at);
+    $("#bugMetaUpdated").textContent = formatDate(bug.updated_at);
+    // Render the inline detail sections (comments, attachments, activity).
+    renderBugInlineSections(bug);
+  } else {
+    // Create mode — hide all detail sections (comments need a saved bug
+    // id to attach to). Reset side meta panel.
+    $("#bugSideMeta").hidden = true;
+    $("#bugCommentsSection").hidden = true;
+    $("#bugAttachmentsSection").hidden = true;
+    $("#bugActivitySection").hidden = true;
   }
+
   openModal("modalBug");
   setTimeout(() => form.elements.title.focus(), 50);
+}
+
+// Inline render of comments + attachments + activity inside the bug
+// modal. Replaces the old separate "detail modal with tabs" — everything
+// lives in one screen now.
+function renderBugInlineSections(bug) {
+  const isAdmin = STATE.currentUser?.role === "admin";
+
+  // ----- Comments -----
+  $("#bugCommentsSection").hidden = false;
+  $("#commentsCount").textContent = `(${bug.comments.length})`;
+  const commentsList = $("#bugCommentsList");
+  commentsList.innerHTML = bug.comments.length
+    ? bug.comments.map(c => {
+        const atts = (c.attachments || []).map(a => renderAttachmentCard(a, false)).join("");
+        return `
+          <div class="comment">
+            <div class="comment-head">
+              <div class="comment-head-left">
+                <span class="avatar">${initials(c.author_name)}</span>
+                <span class="comment-author">${escapeHtml(c.author_name)}</span>
+              </div>
+              <span class="comment-time">${formatDate(c.created_at)}</span>
+            </div>
+            <div class="comment-body">${escapeHtml(c.body)}</div>
+            ${atts ? `<div class="comment-attachments"><div class="attachment-grid">${atts}</div></div>` : ""}
+          </div>`;
+      }).join("")
+    : '<p class="no-content">No comments yet — be the first to add one.</p>';
+  // The comment form lives in the static HTML (now a <div>, not a
+  // <form> — see the long note in index.html for why). Clear any
+  // leftover input from a previous bug.
+  const bodyEl = $("#commentBody");
+  const filesEl = $("#commentFiles");
+  if (bodyEl) bodyEl.value = "";
+  if (filesEl) filesEl.value = "";
+  $("#filePreview").innerHTML = "";
+  $("#fileLabel").textContent = "Attach files";
+
+  // ----- Attachments -----
+  $("#bugAttachmentsSection").hidden = false;
+  $("#attachmentsCount").textContent = `(${bug.attachments.length})`;
+  // Each attachment can be deleted by anyone who can edit the bug
+  // (everyone, in v3.1) — the backend further allows uploaders and
+  // admins/managers, but the frontend can show the button to all and
+  // let the server be the final gatekeeper.
+  $("#bugAttachmentsGrid").innerHTML = bug.attachments.length
+    ? bug.attachments.map(a => renderAttachmentCard(a, true)).join("")
+    : '<p class="no-content" style="grid-column:1/-1">No bug-level attachments yet.</p>';
+
+  // ----- Activity (collapsible <details>) -----
+  $("#bugActivitySection").hidden = false;
+  $("#activityCount").textContent = `(${bug.activities.length})`;
+  $("#bugActivityList").innerHTML = bug.activities.length
+    ? bug.activities.map(a => renderActivityRow(a)).join("")
+    : '<p class="no-content">No activity yet.</p>';
 }
 
 function fillFormSelect(selEl, items, current = "") {
@@ -811,11 +1006,22 @@ async function submitBugForm(e) {
   e.preventDefault();
   const form = e.target;
   const id = form.elements.id.value;
+  // Reporter is always the logged-in user — the field in the modal is
+  // disabled and we read the id from STATE here so the request is
+  // independent of the form element's state.
+  // For EDIT, we preserve whoever the original reporter was: the disabled
+  // select still carries `bug.reporter.id` (set by openBugForm), so
+  // form.elements.reporter_id.value is the right value.
+  const reporterFromForm = form.elements.reporter_id.value
+    ? parseInt(form.elements.reporter_id.value, 10) : null;
+  const reporterFromMe = STATE.currentUser?.id || null;
+  // For NEW bugs use the current user; for EDIT use whatever the form
+  // already has (which is the bug's existing reporter).
   const payload = {
     project_id: parseInt(form.elements.project_id.value, 10),
     title: form.elements.title.value.trim(),
     description: form.elements.description.value,
-    reporter_id: form.elements.reporter_id.value ? parseInt(form.elements.reporter_id.value, 10) : null,
+    reporter_id: id ? (reporterFromForm || reporterFromMe) : reporterFromMe,
     status: form.elements.status.value,
     priority: form.elements.priority.value,
     environment: form.elements.environment.value,
@@ -828,149 +1034,50 @@ async function submitBugForm(e) {
 
   try {
     if (id) {
+      // EDIT — keep the modal open and re-render the inline sections so
+      // the user sees the change immediately. Closing here would feel
+      // disorienting in the new Jira-style single-screen view.
       await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       toast(`Bug #${id} updated`, "success");
+      const fresh = await api(`/bugs/${id}`);
+      // Update header bits in case title changed.
+      $("#modalBugTitle").textContent = `Bug #${fresh.id}`;
+      $("#modalBugSubtitle").textContent = fresh.title || "";
+      $("#bugMetaUpdated").textContent = formatDate(fresh.updated_at);
+      renderBugInlineSections(fresh);
+      await refreshAll();
     } else {
+      // CREATE — close the modal and refresh the list. The new bug shows
+      // up at the top because the list orders by updated_at desc.
       await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
       toast("Bug created", "success");
+      closeModal("modalBug");
+      await refreshAll();
     }
-    closeModal("modalBug");
-    await refreshAll();
   } catch (err) {
     toastError(err);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Bug detail (with attachments)
+// Bug detail (kept as a thin alias for callers that previously opened
+// the now-removed separate detail modal — fetches the bug and routes
+// straight into the unified modal in edit/view mode).
 // ---------------------------------------------------------------------------
 async function openBugDetail(bugId) {
   STATE.currentBugId = bugId;
-  STATE.detailTab = "info";
+  STATE.detailTab = "info";  // legacy field; not read anywhere now
   try {
     const bug = await api(`/bugs/${bugId}`);
-    renderBugDetail(bug);
-    openModal("modalDetail");
+    openBugForm(bug);
   } catch (err) {
     toastError(err);
   }
 }
 
-function renderBugDetail(bug) {
-  $("#detailTitle").textContent = `#${bug.id} — ${bug.title}`;
-  // Show / hide edit + delete based on permission flag from API.
-  const canDeleteBug = ["admin", "manager"].includes(STATE.currentUser?.role);
-  $("#detailDeleteBtn").style.display = canDeleteBug ? "" : "none";
-
-  const reporter = bug.reporter
-    ? `<span class="assignee-chip"><span class="avatar">${initials(bug.reporter.name)}</span>${escapeHtml(bug.reporter.name)} <span class="muted small"> ${escapeHtml(bug.reporter.email)}</span></span>`
-    : '<span class="muted">—</span>';
-  const assignees = bug.assignees.length
-    ? bug.assignees.map(a => `<span class="assignee-chip" title="${escapeHtml(a.email)}"><span class="avatar">${initials(a.name)}</span>${escapeHtml(a.name)}</span>`).join("")
-    : '<span class="muted">—</span>';
-
-  const meta = `
-    <div class="detail-grid">
-      <div class="detail-meta-item"><div class="k">Project</div><div class="v">${escapeHtml(bug.project_name || "—")}</div></div>
-      <div class="detail-meta-item"><div class="k">Status</div><div class="v"><span class="badge" data-status="${escapeHtml(bug.status)}">${escapeHtml(bug.status)}</span></div></div>
-      <div class="detail-meta-item"><div class="k">Priority</div><div class="v"><span class="badge" data-priority="${escapeHtml(bug.priority)}">${escapeHtml(bug.priority)}</span></div></div>
-      <div class="detail-meta-item"><div class="k">Environment</div><div class="v"><span class="badge" data-env="${escapeHtml(bug.environment)}">${escapeHtml(bug.environment)}</span></div></div>
-      <div class="detail-meta-item"><div class="k">Reporter</div><div class="v">${reporter}</div></div>
-      <div class="detail-meta-item"><div class="k">Assignees</div><div class="v"><div class="assignee-stack">${assignees}</div></div></div>
-      <div class="detail-meta-item"><div class="k">Due Date</div><div class="v">${escapeHtml(bug.due_date || "—")}</div></div>
-      <div class="detail-meta-item"><div class="k">Created</div><div class="v">${formatDate(bug.created_at)}</div></div>
-      <div class="detail-meta-item"><div class="k">Updated</div><div class="v">${formatDate(bug.updated_at)}</div></div>
-    </div>`;
-
-  const tabs = `
-    <div class="detail-tabs">
-      <button class="detail-tab ${STATE.detailTab === "info" ? "active" : ""}" data-detail-tab="info">Info</button>
-      <button class="detail-tab ${STATE.detailTab === "comments" ? "active" : ""}" data-detail-tab="comments">Comments (${bug.comments.length})</button>
-      <button class="detail-tab ${STATE.detailTab === "attachments" ? "active" : ""}" data-detail-tab="attachments">Attachments (${bug.attachments.length})</button>
-      <button class="detail-tab ${STATE.detailTab === "activity" ? "active" : ""}" data-detail-tab="activity">Activity (${bug.activities.length})</button>
-    </div>`;
-
-  let tabBody = "";
-  if (STATE.detailTab === "info") {
-    tabBody = bug.description
-      ? `<div class="detail-section"><h3>Description</h3><p>${escapeHtml(bug.description)}</p></div>`
-      : '<p class="no-content">No description provided.</p>';
-  } else if (STATE.detailTab === "comments") {
-    const list = bug.comments.length
-      ? bug.comments.map(c => {
-          const atts = (c.attachments || []).map(a => renderAttachmentCard(a, false)).join("");
-          return `
-            <div class="comment">
-              <div class="comment-head">
-                <div class="comment-head-left">
-                  <span class="avatar">${initials(c.author_name)}</span>
-                  <span class="comment-author">${escapeHtml(c.author_name)}</span>
-                </div>
-                <span class="comment-time">${formatDate(c.created_at)}</span>
-              </div>
-              <div class="comment-body">${escapeHtml(c.body)}</div>
-              ${atts ? `<div class="comment-attachments"><div class="attachment-grid">${atts}</div></div>` : ""}
-            </div>`;
-        }).join("")
-      : '<p class="no-content">No comments yet — be the first to add one.</p>';
-
-    tabBody = `
-      ${list}
-      <form class="comment-form" id="commentForm" enctype="multipart/form-data">
-        <textarea name="body" placeholder="Add a comment…" required></textarea>
-        <div class="comment-form-row">
-          <label class="comment-attach-btn" title="Attach files">
-            📎 <span id="fileLabel">Attach files</span>
-            <input type="file" name="files" multiple id="commentFiles" />
-          </label>
-          <div class="attach-staged-list" id="filePreview"></div>
-          <button type="submit" class="btn primary" style="margin-left:auto">Post</button>
-        </div>
-      </form>`;
-  } else if (STATE.detailTab === "attachments") {
-    tabBody = `
-      <div class="upload-zone" id="uploadZone">
-        <form id="bugAttachForm" enctype="multipart/form-data">
-          <label class="upload-cta" for="bugAttachInput">
-            <div class="upload-icon">📎</div>
-            <div class="upload-title">Click or drop files here</div>
-            <div class="upload-sub">PDF, image, video — up to 50 MB each. Stored permanently in the database.</div>
-            <input type="file" name="files" multiple id="bugAttachInput" />
-          </label>
-        </form>
-      </div>
-      <div class="attachment-grid">
-        ${bug.attachments.length
-          ? bug.attachments.map(a => renderAttachmentCard(a, true)).join("")
-          : '<p class="no-content" style="grid-column:1/-1">No bug-level attachments yet.</p>'}
-      </div>`;
-  } else if (STATE.detailTab === "activity") {
-    tabBody = bug.activities.length
-      ? bug.activities.map(a => renderActivityRow(a)).join("")
-      : '<p class="no-content">No activity yet.</p>';
-  }
-
-  $("#detailBody").innerHTML = meta + tabs + `<div id="detailTabBody">${tabBody}</div>`;
-
-  // Wire up dynamic content
-  if (STATE.detailTab === "comments") {
-    const fileInput = $("#commentFiles");
-    fileInput?.addEventListener("change", () => updateFilePreview(fileInput, "#filePreview", "#fileLabel"));
-  }
-  if (STATE.detailTab === "attachments") {
-    const inp = $("#bugAttachInput");
-    const zone = $("#uploadZone");
-    inp?.addEventListener("change", () => uploadFiles(inp.files, null));
-    // drag-drop
-    zone?.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag-over"); });
-    zone?.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
-    zone?.addEventListener("drop", e => {
-      e.preventDefault();
-      zone.classList.remove("drag-over");
-      uploadFiles(e.dataTransfer.files, null);
-    });
-  }
-}
+// (renderBugDetail removed — its responsibilities are now split between
+//  openBugForm — which fills the editable form — and
+//  renderBugInlineSections — which renders the read-only sections.)
 
 function renderAttachmentCard(a, deletable) {
   const url = `/api/bugs/${STATE.currentBugId}/attachments/${a.id}/download`;
@@ -1019,6 +1126,10 @@ function renderActivityRow(a) {
 }
 
 function activityIcon(action) {
+  if (action.includes("session")) return "🔐";
+  if (action.includes("login")) return "🔑";
+  if (action.includes("logout")) return "👋";
+  if (action.includes("password")) return "🔒";
   if (action.includes("created")) return "✨";
   if (action.includes("delete")) return "🗑";
   if (action.includes("comment")) return "💬";
@@ -1062,9 +1173,10 @@ async function uploadFiles(files, commentId) {
     }
   }
   if (done) toast(`Uploaded ${done}/${total} file(s)`, "success");
-  // Refresh detail
+  // Refresh the unified modal's inline sections in place — no detail
+  // modal re-open dance.
   const bug = await api(`/bugs/${STATE.currentBugId}`);
-  renderBugDetail(bug);
+  renderBugInlineSections(bug);
   await refreshBugs(); // update attachment_count in list
 }
 
@@ -1197,7 +1309,7 @@ async function handleDeleteBug(bugId) {
   try {
     await api(`/bugs/${bugId}`, { method: "DELETE" });
     toast(`Bug #${bugId} deleted`, "success");
-    closeModal("modalDetail");
+    closeModal("modalBug");
     await refreshAll();
   } catch (err) { toastError(err); }
 }
@@ -1251,14 +1363,22 @@ async function handleDeleteAttachment(attId) {
     await api(`/bugs/${STATE.currentBugId}/attachments/${attId}`, { method: "DELETE" });
     toast("Attachment deleted", "success");
     const bug = await api(`/bugs/${STATE.currentBugId}`);
-    renderBugDetail(bug);
+    renderBugInlineSections(bug);
     await refreshBugs();
   } catch (err) { toastError(err); }
 }
 
-async function postComment(form) {
-  const body = form.elements.body.value.trim();
-  if (!body) return;
+async function postComment() {
+  // Comment form is no longer a <form> element (nested forms are illegal
+  // in HTML5). We read the textarea + file input directly by id.
+  const bodyEl = $("#commentBody");
+  const filesEl = $("#commentFiles");
+  const body = (bodyEl?.value || "").trim();
+  if (!body) {
+    toast("Comment can't be empty", "error");
+    bodyEl?.focus();
+    return;
+  }
   try {
     const comment = await api(`/bugs/${STATE.currentBugId}/comments`, {
       method: "POST",
@@ -1266,7 +1386,7 @@ async function postComment(form) {
     });
 
     // Upload any attached files to this comment
-    const files = form.elements.files?.files;
+    const files = filesEl?.files;
     if (files && files.length) {
       for (const f of files) {
         const fd = new FormData();
@@ -1281,10 +1401,121 @@ async function postComment(form) {
     }
 
     toast("Comment posted", "success");
+    // Clear the inputs so the next comment starts fresh.
+    if (bodyEl) bodyEl.value = "";
+    if (filesEl) filesEl.value = "";
+    $("#filePreview").innerHTML = "";
+    $("#fileLabel").textContent = "Attach files";
+
     const bug = await api(`/bugs/${STATE.currentBugId}`);
-    renderBugDetail(bug);
+    renderBugInlineSections(bug);
     await refreshBugs();
   } catch (err) { toastError(err); }
+}
+
+// ---------------------------------------------------------------------------
+// Sessions admin view
+//
+// Lists every active session row with user, role, IP, browser, when it
+// was created, when it was last seen, when it expires. Admin-only —
+// the nav button has data-needs-role="admin" so non-admins never see
+// it; the API also enforces this (403 for non-admins) so direct URL
+// access is also blocked.
+// ---------------------------------------------------------------------------
+function shortenUserAgent(ua) {
+  // The full UA string is awful to read. We pull out a short browser /
+  // OS hint instead. Anything we don't recognise falls back to the
+  // first 60 chars so the column doesn't explode.
+  if (!ua) return "Unknown";
+  const lower = ua.toLowerCase();
+  let browser = "Unknown";
+  if (lower.includes("edg/")) browser = "Edge";
+  else if (lower.includes("chrome/")) browser = "Chrome";
+  else if (lower.includes("firefox/")) browser = "Firefox";
+  else if (lower.includes("safari/") && !lower.includes("chrome/")) browser = "Safari";
+  else if (lower.includes("curl/")) browser = "curl";
+  else if (lower.includes("python-")) browser = "Python";
+  else if (lower.includes("postman")) browser = "Postman";
+  let os = "";
+  if (lower.includes("windows")) os = "Windows";
+  else if (lower.includes("mac os") || lower.includes("macintosh")) os = "macOS";
+  else if (lower.includes("linux")) os = "Linux";
+  else if (lower.includes("android")) os = "Android";
+  else if (lower.includes("iphone") || lower.includes("ios")) os = "iOS";
+  return os ? `${browser} on ${os}` : browser;
+}
+
+async function refreshSessions() {
+  try {
+    STATE.sessions = await api("/sessions");
+    renderSessions();
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+function renderSessions() {
+  const host = $("#sessionsList");
+  const rows = STATE.sessions || [];
+  if (!rows.length) {
+    host.innerHTML = `<div class="sessions-empty">No active sessions.</div>`;
+    return;
+  }
+  host.innerHTML = rows.map(s => {
+    const ua = shortenUserAgent(s.user_agent);
+    const ip = s.ip_address || "(unknown IP)";
+    const role = s.user_role
+      ? `<span class="session-role-pill">${escapeHtml(s.user_role)}</span>`
+      : "";
+    const currentTag = s.is_current
+      ? `<span class="session-current-flag" title="The session you're using right now — can't be revoked from here">This is you</span>`
+      : "";
+    return `
+      <div class="session-row${s.is_current ? " is-current" : ""}" data-session-id="${s.id}">
+        <span class="session-avatar">${initials(s.user_name || "?")}</span>
+        <div class="session-main">
+          <div class="session-line1">
+            <span class="session-name">${escapeHtml(s.user_name || "(deleted user)")}</span>
+            <span class="muted small">${escapeHtml(s.user_email || "")}</span>
+            ${role}
+            ${currentTag}
+          </div>
+          <div class="session-line2">${escapeHtml(ua)} · ${escapeHtml(ip)}</div>
+          <div class="session-line3">
+            Started ${formatDate(s.created_at)} ·
+            Last seen ${formatDate(s.last_seen_at)} ·
+            Expires ${formatDate(s.expires_at)}
+          </div>
+        </div>
+        <div class="session-actions">
+          <button class="btn danger" data-act="revoke-session" data-id="${s.id}"
+            ${s.is_current ? "disabled title='Use Log out from the sidebar to end your own session'" : ""}>
+            Revoke
+          </button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+async function handleRevokeSession(sessionId) {
+  const sess = (STATE.sessions || []).find(s => s.id === sessionId);
+  const who = sess && sess.user_name
+    ? `${sess.user_name} <${sess.user_email}>`
+    : `session #${sessionId}`;
+  const ok = await confirmDialog(
+    `Revoke this session for ${who}?\n\n` +
+    `That device will be immediately logged out. Other sessions for the ` +
+    `same user are not affected.`,
+    { title: "Revoke session", okLabel: "Revoke", danger: true },
+  );
+  if (!ok) return;
+  try {
+    await api(`/sessions/${sessionId}`, { method: "DELETE" });
+    toast("Session revoked", "success");
+    await refreshSessions();
+  } catch (err) {
+    toastError(err);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,13 +1662,14 @@ function bindGlobalListeners() {
   $("#auditSearch").addEventListener("input", debounce(refreshAudit, 300));
   $("#auditRefreshBtn").addEventListener("click", refreshAudit);
 
-  // Bug table
+  // Bug table — row click opens the unified modal in edit/view mode;
+  // delete button (admin-only) handled separately. The pencil edit
+  // button is gone; clicking the row itself is the way to open a bug.
   $("#bugTableBody").addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-act]");
     if (btn) {
       e.stopPropagation();
       const id = parseInt(btn.dataset.id, 10);
-      if (btn.dataset.act === "edit") return handleEditBug(id);
       if (btn.dataset.act === "delete") return handleDeleteBug(id);
     }
     const tr = e.target.closest("tr[data-bug-id]");
@@ -1491,35 +1723,65 @@ function bindGlobalListeners() {
   $("#formProject").addEventListener("submit", submitProjectForm);
   $("#formUser").addEventListener("submit", submitUserForm);
 
-  // Detail modal — edit, delete, tab switching, comment form, attachment delete
-  $("#detailEditBtn").addEventListener("click", async () => {
-    if (!STATE.currentBugId) return;
-    closeModal("modalDetail");
-    const bug = await api(`/bugs/${STATE.currentBugId}`);
-    openBugForm(bug);
-  });
-  $("#detailDeleteBtn").addEventListener("click", () => {
+  // ----- Unified bug modal: delete + inline comments / attachments -----
+  // The Delete button now lives inside the bug modal head (admin-only).
+  $("#bugDeleteBtn")?.addEventListener("click", () => {
     if (STATE.currentBugId) handleDeleteBug(STATE.currentBugId);
   });
-  $("#detailBody").addEventListener("click", async (e) => {
-    const tab = e.target.closest("[data-detail-tab]");
-    if (tab) {
-      STATE.detailTab = tab.dataset.detailTab;
-      const bug = await api(`/bugs/${STATE.currentBugId}`);
-      renderBugDetail(bug);
-      return;
-    }
-    const delAtt = e.target.closest("[data-act='delete-attachment']");
-    if (delAtt) {
-      e.stopPropagation();
-      handleDeleteAttachment(parseInt(delAtt.dataset.id, 10));
+
+  // Comment "form" is now a <div> (HTML5 forbids nested <form> elements
+  // and the old nesting was silently breaking the bug-create submit).
+  // We trigger postComment from the button click and a Ctrl/Cmd+Enter
+  // shortcut in the textarea.
+  $("#commentPostBtn")?.addEventListener("click", () => postComment());
+  $("#commentBody")?.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      postComment();
     }
   });
-  $("#detailBody").addEventListener("submit", (e) => {
-    if (e.target.id === "commentForm") {
+  $("#commentFiles")?.addEventListener("change", (e) => {
+    updateFilePreview(e.target, "#filePreview", "#fileLabel");
+  });
+
+  // Attachments inline section: file picker + drag-drop.
+  $("#bugAttachInput")?.addEventListener("change", (e) => {
+    uploadFiles(e.target.files, null);
+    // Reset so picking the same file again still fires `change`.
+    e.target.value = "";
+  });
+  const dropZone = $("#uploadZone");
+  if (dropZone) {
+    dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+    dropZone.addEventListener("drop", e => {
       e.preventDefault();
-      postComment(e.target);
+      dropZone.classList.remove("drag-over");
+      uploadFiles(e.dataTransfer.files, null);
+    });
+  }
+
+  // Attachment delete buttons inside the bug modal (delegation).
+  $("#bugAttachmentsGrid")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-act='delete-attachment']");
+    if (btn) {
+      e.stopPropagation();
+      handleDeleteAttachment(parseInt(btn.dataset.id, 10));
     }
+  });
+  $("#bugCommentsList")?.addEventListener("click", (e) => {
+    // Comment-level attachment cards are read-only (deletable=false in
+    // renderBugInlineSections) so there's nothing to delegate here yet,
+    // but we bind the listener anyway for forward-compat.
+  });
+
+  // ----- Sessions admin view -----
+  $("#sessionsRefreshBtn")?.addEventListener("click", refreshSessions);
+  $("#sessionsList")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-act='revoke-session']");
+    if (!btn || btn.disabled) return;
+    e.stopPropagation();
+    handleRevokeSession(parseInt(btn.dataset.id, 10));
   });
 
   // Universal modal close: ✕ buttons, Cancel buttons, click outside, Escape

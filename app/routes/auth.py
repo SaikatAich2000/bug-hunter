@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy import select
@@ -16,13 +16,14 @@ from app.auth import (
     hash_password,
     hash_reset_token,
     invalidate_outstanding_reset_tokens,
+    new_jti,
     set_session_cookie,
     verify_password,
 )
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import notify_password_reset
-from app.models import Activity, PasswordResetToken, User
+from app.models import Activity, PasswordResetToken, Session as SessionRow, User
 from app.schemas import (
     ChangePasswordIn,
     ForgotPasswordIn,
@@ -45,9 +46,26 @@ def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id:
     ))
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for the session log. Honors X-Forwarded-For
+    when running behind a reverse proxy, falls back to the socket addr.
+    Capped at 64 chars to fit the column."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        # X-F-F is a comma-separated chain; the leftmost is the original client.
+        ip = fwd.split(",")[0].strip()
+    elif request.client and request.client.host:
+        ip = request.client.host
+    else:
+        ip = ""
+    return ip[:64]
+
+
 @router.post("/login", response_model=MeOut)
-def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)) -> User:
-    """Verify credentials and set the session cookie."""
+def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)) -> User:
+    """Verify credentials, create a server-side session row, and set the
+    signed cookie. The cookie carries a `jti` that maps back to the row,
+    which is what makes per-session admin revocation possible."""
     # LoginIn already lowercases the email — no need to .lower() again here.
     user = db.scalar(select(User).where(User.email == payload.email))
     # Unified error message — never leak whether email exists.
@@ -56,7 +74,19 @@ def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)) -
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
 
-    set_session_cookie(response, user)
+    settings = get_settings()
+    jti = new_jti()
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+    sess = SessionRow(
+        user_id=user.id,
+        jti=jti,
+        user_agent=(request.headers.get("user-agent") or "")[:400],
+        ip_address=_client_ip(request),
+        expires_at=expires_at,
+    )
+    db.add(sess)
+
+    set_session_cookie(response, user, jti=jti)
     _audit(db, user, "login", f"{user.email} logged in")
     db.commit()
     return user
@@ -64,16 +94,24 @@ def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)) -
 
 @router.post("/logout", status_code=204)
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    """Clear the session cookie. Always 204 even if there's no session."""
+    """Clear the session cookie and remove the corresponding server-side
+    session row. Always 204 even if there's no session — logout should be
+    idempotent."""
     from app.auth import COOKIE_NAME, parse_session_token
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
     if parsed:
-        user_id, _version = parsed
+        user_id, _version, jti = parsed
         user = db.get(User, user_id)
         if user:
             _audit(db, user, "logout", f"{user.email} logged out")
-            db.commit()
+        if jti:
+            # Single-row delete keyed by the token's jti. Other sessions
+            # for the same user are untouched.
+            db.execute(
+                SessionRow.__table__.delete().where(SessionRow.jti == jti)
+            )
+        db.commit()
     response = Response(status_code=204)
     clear_session_cookie(response)
     return response
@@ -88,6 +126,7 @@ def me(user: User = Depends(get_current_user)) -> User:
 @router.post("/change-password", status_code=204)
 def change_password(
     payload: ChangePasswordIn,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -96,8 +135,12 @@ def change_password(
 
     Side effects (security-relevant):
       - Bumps user.session_version → all OTHER active sessions invalidated.
-      - Issues a fresh cookie for the current request so the user isn't
-        immediately logged out by their own action.
+      - Deletes ALL the user's existing session rows (Keycloak-style: a
+        password change should boot every device, including this one in
+        terms of token validity, then re-establish a fresh session for
+        the current request).
+      - Issues a fresh cookie + session row for the current request so
+        the user isn't immediately logged out by their own action.
       - Marks all outstanding password-reset tokens for this user as used.
     """
     if not verify_password(payload.current_password, user.password_hash):
@@ -107,14 +150,31 @@ def change_password(
     user.session_version = (user.session_version or 0) + 1
     invalidated = invalidate_outstanding_reset_tokens(db, user.id)
 
+    # Wipe all existing session rows for this user; they're invalidated by
+    # the session_version bump above anyway, but keeping rows around would
+    # clutter the admin "active sessions" view.
+    db.execute(SessionRow.__table__.delete().where(SessionRow.user_id == user.id))
+
+    # Re-establish a fresh session for the device that just changed the
+    # password, so they're not bounced to login immediately.
+    settings = get_settings()
+    jti = new_jti()
+    new_sess = SessionRow(
+        user_id=user.id,
+        jti=jti,
+        user_agent=(request.headers.get("user-agent") or "")[:400],
+        ip_address=_client_ip(request),
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS),
+    )
+    db.add(new_sess)
+
     _audit(db, user, "password_changed",
            f"{user.email} changed their password"
            + (f" (invalidated {invalidated} outstanding reset link(s))" if invalidated else ""))
     db.commit()
 
-    # Re-issue the cookie so this device stays logged in.
     out = Response(status_code=204)
-    set_session_cookie(out, user)
+    set_session_cookie(out, user, jti=jti)
     return out
 
 
@@ -178,6 +238,12 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> R
     user.session_version = (user.session_version or 0) + 1
     prt.used_at = now
     invalidated = invalidate_outstanding_reset_tokens(db, user.id)
+
+    # Reset == "forget every device that was logged in as me". The
+    # session_version bump alone would do this implicitly, but we also
+    # delete the session rows so the admin session-list isn't littered
+    # with stale entries for accounts that just got reset.
+    db.execute(SessionRow.__table__.delete().where(SessionRow.user_id == user.id))
 
     _audit(db, user, "password_reset",
            f"{user.email} reset their password via token"

@@ -28,7 +28,8 @@
       <nav class="nav">
         <button class="nav-btn active" data-view="list"><span class="nav-icon">📋</span><span>Bugs</span></button>
         <button class="nav-btn" data-view="analytics"><span class="nav-icon">📊</span><span>Analytics</span></button>
-        <button class="nav-btn" data-view="audit"><span class="nav-icon">🛡</span><span>Audit Trail</span></button>
+        <button class="nav-btn" data-view="audit" data-needs-role="manager"><span class="nav-icon">🛡</span><span>Audit Trail</span></button>
+        <button class="nav-btn" data-view="sessions" data-needs-role="admin"><span class="nav-icon">🔐</span><span>Sessions</span></button>
       </nav>
 
       <section class="side-section">
@@ -39,7 +40,7 @@
         <ul class="side-list" id="projectList"></ul>
       </section>
 
-      <section class="side-section" data-needs-role="admin">
+      <section class="side-section" data-needs-role="manager">
         <div class="side-section-header">
           <span>Users</span>
           <button class="icon-btn" id="newUserBtn" title="New user" aria-label="New user">+</button>
@@ -188,6 +189,8 @@
             <option value="user">Users</option>
             <option value="project">Projects</option>
             <option value="attachment">Attachments</option>
+            <option value="session">Sessions</option>
+            <option value="auth">Auth events</option>
           </select>
           <select id="auditActorFilter">
             <option value="">All actors</option>
@@ -197,85 +200,182 @@
         </div>
         <div class="audit-list" id="auditList"></div>
       </section>
+
+      <!-- VIEW: Sessions (admin-only) -->
+      <section class="view" id="viewSessions" hidden>
+        <div class="sessions-controls">
+          <p class="sessions-help">
+            Active sessions across the system. Click <strong>Revoke</strong>
+            to log a specific device out without affecting any other session
+            for that user. Your own current session can't be revoked from
+            here — use the Log out button in the sidebar instead.
+          </p>
+          <button class="btn ghost" id="sessionsRefreshBtn">Refresh</button>
+        </div>
+        <div class="sessions-list" id="sessionsList"></div>
+      </section>
     </main>
   </div>
 
   <!-- ============================== MODALS ============================== -->
-  <!-- Bug create/edit -->
+  <!--
+    Unified bug modal. The same modal handles three modes:
+
+      • Create — empty form, no comments / attachments / activity sections
+        (those need a saved bug to attach to). Header: "New Bug".
+      • View   — pre-filled form with all fields editable inline. Header:
+        "Bug #N · <title>". Comments, attachments and activity rendered
+        below in the same modal (Jira-style — no tabs, no separate "Edit"
+        modal, no pencil button to chase).
+      • Edit   — same as View. Saving submits the whole form.
+
+    Layout:
+      ┌── Title (full-width input) ─────────────────────────────────┐
+      ┌── Main column ────────────┬── Side column ──────────────────┐
+      │ Description               │ Project | Status | Priority |   │
+      │ Comments                  │ Environment | Reporter |        │
+      │ Attachments               │ Assignees | Due date | Dates    │
+      └───────────────────────────┴─────────────────────────────────┘
+
+    On screens narrower than 900 px the two columns collapse to one
+    (CSS handles it).
+  -->
   <div class="modal" id="modalBug" hidden>
-    <div class="modal-card lg">
+    <div class="modal-card xxl">
       <div class="modal-head">
-        <h2 id="modalBugTitle">New Bug</h2>
-        <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+        <div class="bug-modal-head-left">
+          <h2 id="modalBugTitle">New Bug</h2>
+          <span class="bug-modal-subtitle muted small" id="modalBugSubtitle"></span>
+        </div>
+        <div class="bug-modal-head-actions">
+          <button class="btn danger" id="bugDeleteBtn" data-needs-role="admin" hidden>🗑 Delete</button>
+          <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+        </div>
       </div>
-      <form id="formBug" class="modal-body" novalidate>
+      <form id="formBug" class="modal-body bug-modal-body" novalidate>
         <input type="hidden" name="id" />
-        <div class="row">
-          <label class="field f-grow">
-            <span>Title <em>*</em></span>
-            <input name="title" required minlength="3" maxlength="200" />
-          </label>
-          <label class="field">
-            <span>Project <em>*</em></span>
-            <select name="project_id" required></select>
-          </label>
+
+        <!-- Title — full width at the top, like Jira's headline -->
+        <label class="field f-grow bug-title-field">
+          <span>Title <em>*</em></span>
+          <input name="title" required minlength="3" maxlength="200" placeholder="Short summary of the bug…" />
+        </label>
+
+        <div class="bug-modal-grid">
+          <!-- Main column: description + comments + attachments + activity -->
+          <div class="bug-modal-main">
+            <label class="field">
+              <span>Description</span>
+              <textarea name="description" rows="6" maxlength="10000"
+                placeholder="What's happening, expected vs actual, repro steps…"></textarea>
+            </label>
+
+            <!-- Comments + attachments + activity only render when editing
+                 an existing bug. The submit handler removes all three from
+                 the DOM in create mode (no bug_id yet to attach to).
+
+                 IMPORTANT: this block uses <div>s, NOT a nested <form>.
+                 HTML5 forbids nested <form> elements — when a browser
+                 parses one, it implicitly closes the outer <form>, which
+                 detached the bug modal's "Create" submit button from its
+                 form and silently broke create-bug. We handle the
+                 "Post comment" submit programmatically (button click +
+                 Ctrl/Cmd-Enter in textarea). -->
+            <section class="bug-section" id="bugCommentsSection" hidden>
+              <h3>Comments <span class="muted small" id="commentsCount"></span></h3>
+              <div id="bugCommentsList" class="bug-comments-list"></div>
+              <div class="comment-form" id="commentForm">
+                <textarea id="commentBody" placeholder="Add a comment… (Ctrl/Cmd+Enter to post)"></textarea>
+                <div class="comment-form-row">
+                  <label class="comment-attach-btn" title="Attach files">
+                    📎 <span id="fileLabel">Attach files</span>
+                    <input type="file" multiple id="commentFiles" />
+                  </label>
+                  <div class="attach-staged-list" id="filePreview"></div>
+                  <button type="button" class="btn primary" id="commentPostBtn" style="margin-left:auto">Post comment</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="bug-section" id="bugAttachmentsSection" hidden>
+              <h3>Attachments <span class="muted small" id="attachmentsCount"></span></h3>
+              <div class="upload-zone" id="uploadZone">
+                <label class="upload-cta" for="bugAttachInput">
+                  <div class="upload-icon">📎</div>
+                  <div class="upload-title">Click or drop files here</div>
+                  <div class="upload-sub">PDF, image, video — up to 50 MB each.</div>
+                  <input type="file" multiple id="bugAttachInput" />
+                </label>
+              </div>
+              <div class="attachment-grid" id="bugAttachmentsGrid"></div>
+            </section>
+
+            <section class="bug-section bug-activity-section" id="bugActivitySection" hidden>
+              <details>
+                <summary>Activity history <span class="muted small" id="activityCount"></span></summary>
+                <div id="bugActivityList" class="bug-activity-list"></div>
+              </details>
+            </section>
+          </div>
+
+          <!-- Side column: metadata — status / priority / env / project / reporter / assignees / due date -->
+          <aside class="bug-modal-side">
+            <label class="field">
+              <span>Project <em>*</em></span>
+              <select name="project_id" required></select>
+            </label>
+            <label class="field">
+              <span>Status</span>
+              <select name="status"></select>
+            </label>
+            <label class="field">
+              <span>Priority</span>
+              <select name="priority"></select>
+            </label>
+            <label class="field">
+              <span>Environment</span>
+              <select name="environment">
+                <option value="DEV">DEV</option>
+                <option value="UAT">UAT</option>
+                <option value="PROD">PROD</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Reporter</span>
+              <!-- Reporter is fixed to whoever is logged in. We disable
+                   the <select> so the user can't pick anyone else; the
+                   submit handler reads the value from STATE.currentUser.id
+                   so the disabled state doesn't affect the request. -->
+              <select name="reporter_id" disabled class="reporter-select"></select>
+            </label>
+            <label class="field">
+              <span>Assignees</span>
+              <div class="chip-picker" id="assigneePicker"></div>
+            </label>
+            <label class="field">
+              <span>Due date</span>
+              <input name="due_date" type="date" />
+            </label>
+
+            <!-- Read-only timestamps shown only when editing an existing bug. -->
+            <div class="bug-side-meta" id="bugSideMeta" hidden>
+              <div class="bug-side-meta-row">
+                <span class="k">Created</span>
+                <span class="v" id="bugMetaCreated">—</span>
+              </div>
+              <div class="bug-side-meta-row">
+                <span class="k">Updated</span>
+                <span class="v" id="bugMetaUpdated">—</span>
+              </div>
+            </div>
+          </aside>
         </div>
-        <!-- Reporter on its own row prevents the long "Name <email>" string
-             from squeezing the other fields and overflowing the modal. -->
-        <label class="field">
-          <span>Reporter <em>*</em></span>
-          <select name="reporter_id" required class="reporter-select"></select>
-        </label>
-        <div class="row">
-          <label class="field">
-            <span>Status</span>
-            <select name="status"></select>
-          </label>
-          <label class="field">
-            <span>Priority</span>
-            <select name="priority"></select>
-          </label>
-          <label class="field">
-            <span>Environment</span>
-            <select name="environment">
-              <option value="DEV">DEV</option>
-              <option value="UAT">UAT</option>
-              <option value="PROD">PROD</option>
-            </select>
-          </label>
-        </div>
-        <label class="field">
-          <span>Assignees</span>
-          <div class="chip-picker" id="assigneePicker"></div>
-        </label>
-        <label class="field">
-          <span>Description</span>
-          <textarea name="description" rows="4" maxlength="10000"></textarea>
-        </label>
-        <label class="field">
-          <span>Due date</span>
-          <input name="due_date" type="date" />
-        </label>
+
         <div class="modal-foot">
           <button type="button" class="btn ghost" data-close-modal>Cancel</button>
           <button type="submit" class="btn primary" id="bugSubmitBtn">Create</button>
         </div>
       </form>
-    </div>
-  </div>
-
-  <!-- Bug detail -->
-  <div class="modal" id="modalDetail" hidden>
-    <div class="modal-card xl">
-      <div class="modal-head">
-        <h2 id="detailTitle">Bug Details</h2>
-        <div class="detail-head-actions">
-          <button class="btn ghost" id="detailEditBtn">✎ Edit</button>
-          <button class="btn danger" id="detailDeleteBtn">🗑 Delete</button>
-          <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
-        </div>
-      </div>
-      <div class="modal-body" id="detailBody"></div>
     </div>
   </div>
 

@@ -1034,24 +1034,20 @@ async function submitBugForm(e) {
 
   try {
     if (id) {
-      // EDIT — keep the modal open and re-render the inline sections so
-      // the user sees the change immediately. Closing here would feel
-      // disorienting in the new Jira-style single-screen view.
+      // EDIT — save, then close the modal and return to the Bugs list.
+      // (Earlier v3.1 builds kept the modal open Jira-style; reverted
+      // here because users prefer the explicit close-and-return flow.)
       await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       toast(`Bug #${id} updated`, "success");
-      const fresh = await api(`/bugs/${id}`);
-      // Update header bits in case title changed.
-      $("#modalBugTitle").textContent = `Bug #${fresh.id}`;
-      $("#modalBugSubtitle").textContent = fresh.title || "";
-      $("#bugMetaUpdated").textContent = formatDate(fresh.updated_at);
-      renderBugInlineSections(fresh);
+      closeModal("modalBug");
+      setView("list");
       await refreshAll();
     } else {
-      // CREATE — close the modal and refresh the list. The new bug shows
-      // up at the top because the list orders by updated_at desc.
+      // CREATE — close the modal and refresh the list.
       await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
       toast("Bug created", "success");
       closeModal("modalBug");
+      setView("list");
       await refreshAll();
     }
   } catch (err) {
@@ -1217,6 +1213,7 @@ async function submitProjectForm(e) {
       toast("Project created", "success");
     }
     closeModal("modalProject");
+    setView("list");
     await loadProjects();
     await refreshAll();
   } catch (err) {

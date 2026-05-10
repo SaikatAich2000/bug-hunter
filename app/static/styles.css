@@ -410,7 +410,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   top: 0;
   z-index: 5;
 }
-.menu-btn { display: none; }
+.topbar .menu-btn { display: none; }
 .page-title {
   font-size: 19px;
   font-weight: 700;
@@ -713,14 +713,14 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .bug-table tbody tr:hover { background: var(--bg-elev-2); }
 .bug-table tbody tr:last-child td { border-bottom: none; }
 
-.col-id        { width: 56px; color: var(--text-muted); font-weight: 600; }
+.col-id        { width: 58px; color: var(--text-muted); font-weight: 600; }
 .col-title     { width: auto; }
 .col-project   { width: 130px; }
-.col-status    { width: 110px; }
+.col-status    { width: 120px; }
 .col-priority  { width: 93px; }
 .col-env       { width: 71px; }
 .col-assignees { width: 200px; }
-.col-att       { width: 64px; text-align: center; }
+.col-att       { width: 70px; text-align: center; }
 .col-actions   { width: 96px; text-align: right; }
 
 .title-cell {
@@ -1545,7 +1545,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
     z-index: 20;
   }
   .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-xl); }
-  .menu-btn { display: inline-flex; }
+  .topbar .menu-btn { display: inline-flex; }
 
   .bug-modal-grid { grid-template-columns: 1fr; gap: 16px; }
   .bug-modal-side {

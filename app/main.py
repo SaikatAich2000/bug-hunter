@@ -260,8 +260,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         h.setdefault("X-Frame-Options", "DENY")
         h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         h.setdefault("Permissions-Policy",
-                     "camera=(), microphone=(), geolocation=(), interest-cohort=()")
+                     "camera=(), microphone=(), geolocation=(), interest-cohort=(), "
+                     "payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()")
         h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        # CORP blocks other origins from fetching our responses as
+        # subresources — defense in depth for the API and HTML pages.
+        # Attachment downloads override this in their own headers if a
+        # legitimate cross-origin use case ever appears.
+        h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        # Strip uvicorn's default "server: uvicorn" — minor info leak,
+        # but no reason to advertise the stack to a scanner.
+        if "server" in h:
+            del h["server"]
         # HSTS: only safe behind real https. Production-style deploys set
         # COOKIE_SECURE=true, which doubles as the "we're on https" signal.
         if settings.COOKIE_SECURE:
@@ -352,6 +362,113 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RateLimitMiddleware)
 
 
+# ---------------------------------------------------------------------------
+# CSRF defense-in-depth (v3.2.1)
+#
+# The session cookie is already SameSite=Lax which blocks most cross-site
+# CSRF, but Lax has known gaps:
+#   - it doesn't apply to subdomain attackers (if an attacker controls
+#     evil.example.com and the app is at app.example.com, they're "same
+#     site").
+#   - older / non-standard browser behaviour for some top-level POSTs.
+#
+# We add a second, simple check: for state-changing requests (POST / PUT /
+# PATCH / DELETE) to our JSON API, the Origin (or Referer) header must
+# match one of the allowed origins. Same-origin SPA requests always
+# satisfy this — fetch() includes Origin automatically. Server-to-server
+# clients that don't send Origin or Referer (e.g. curl with an API key,
+# python httpx without a Host) get a free pass since CSRF only matters
+# when a browser is being abused as a deputy.
+#
+# /api/auth/login is exempted because cross-origin login from a trusted
+# admin tool is a legitimate flow some operators want. The login itself
+# is rate-limited and credential-checked.
+#
+# Allowed origins: settings.CORS_ORIGINS (when not "*"). The request's own
+# Host is always implicitly allowed — Origin scheme is checked against
+# the cookie-secure mode to avoid http→https confusion behind a reverse
+# proxy.
+# ---------------------------------------------------------------------------
+def _allowed_origins() -> set[str]:
+    """Build the set of allowed origins for the CSRF check.
+
+    Always includes the configured CORS_ORIGINS (skipping "*"). Same-host
+    requests are accepted unconditionally via Host comparison so an
+    operator who hasn't bothered to configure CORS still gets working
+    SPA usage.
+    """
+    return {o.rstrip("/") for o in settings.CORS_ORIGINS if o and o != "*"}
+
+
+# Methods that mutate state; safe methods (GET/HEAD/OPTIONS) skip the check.
+_CSRF_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Endpoints exempt from the Origin check. Login may be invoked from
+# operator scripts during onboarding; the chatbot download is GET-only.
+_CSRF_EXEMPT_PATHS = {"/api/auth/login"}
+
+
+class CsrfOriginMiddleware(BaseHTTPMiddleware):
+    """Reject browser-driven mutating requests whose Origin doesn't match
+    the app's own host (or an explicitly-allowed CORS origin).
+
+    Non-browser clients (no Origin and no Referer) are allowed through —
+    CSRF is exclusively a browser-confused-deputy attack, so a request
+    that came from curl is by definition not a CSRF.
+    """
+    async def dispatch(self, request: Request, call_next):
+        method = request.method.upper()
+        path = request.url.path
+        if (
+            method not in _CSRF_UNSAFE_METHODS
+            or not path.startswith("/api/")
+            or path in _CSRF_EXEMPT_PATHS
+        ):
+            return await call_next(request)
+
+        origin = request.headers.get("origin", "").rstrip("/")
+        referer = request.headers.get("referer", "")
+
+        # No browser fingerprint at all → not a browser → cannot be CSRF.
+        if not origin and not referer:
+            return await call_next(request)
+
+        # Build the expected same-origin URL from the request itself.
+        # Behind a reverse proxy that terminates TLS, request.url.scheme
+        # is whatever the proxy claims it is; trusting it here is fine
+        # because if the proxy is compromised CSRF is the least of our
+        # worries.
+        host = request.headers.get("host", "")
+        if host:
+            same_origin_http = f"http://{host}"
+            same_origin_https = f"https://{host}"
+        else:
+            same_origin_http = same_origin_https = ""
+
+        allowed = _allowed_origins()
+        allowed.add(same_origin_http)
+        allowed.add(same_origin_https)
+
+        if origin:
+            if origin in allowed:
+                return await call_next(request)
+        elif referer:
+            # Origin missing but Referer present — match by URL prefix.
+            if any(referer.startswith(a + "/") or referer == a for a in allowed if a):
+                return await call_next(request)
+
+        logger.warning(
+            "CSRF check failed: method=%s path=%s origin=%r referer=%r",
+            method, path, origin, referer,
+        )
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Cross-origin request blocked."},
+        )
+
+
+app.add_middleware(CsrfOriginMiddleware)
+
+
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
@@ -405,6 +522,14 @@ def _has_valid_session(request: Request) -> bool:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
         return expires >= datetime.now(timezone.utc)
+    except Exception:
+        # This is called from the HTML page handlers (/ and /login.html).
+        # If the DB is momentarily unreachable, we'd rather fall back to
+        # "no valid session" — which sends the user to the login page —
+        # than 500 the entire HTML route. The next API call will surface
+        # the real DB error to the SPA with a proper toast.
+        logger.exception("_has_valid_session: DB lookup failed for jti=%s", jti)
+        return False
     finally:
         db.close()
 
@@ -466,7 +591,15 @@ app.include_router(chatbot_router)
 
 @app.exception_handler(HTTPException)
 async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    # Preserve any headers the raiser attached (e.g. Retry-After on 429,
+    # WWW-Authenticate on 401). The default handler used to drop them,
+    # which silently broke client retry behaviour for rate-limited
+    # endpoints.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None) or None,
+    )
 
 
 if __name__ == "__main__":

@@ -75,19 +75,24 @@ _STATUS_SYNONYMS: dict[str, list[str]] = {
 }
 
 _PRIORITY_SYNONYMS: dict[str, str] = {
-    "low":      "Low",
-    "medium":   "Medium",
-    "med":      "Medium",
-    "normal":   "Medium",
-    "high":     "High",
-    "critical": "Critical",
-    "crit":     "Critical",
-    "blocker":  "Critical",
-    "urgent":   "Critical",
-    "p0":       "Critical",
-    "p1":       "High",
-    "p2":       "Medium",
-    "p3":       "Low",
+    "low":          "Low",
+    "minor":        "Low",
+    "trivial":      "Low",
+    "medium":       "Medium",
+    "med":          "Medium",
+    "normal":       "Medium",
+    "high":         "High",
+    "important":    "High",
+    "major":        "High",
+    "critical":     "Critical",
+    "crit":         "Critical",
+    "blocker":      "Critical",
+    "urgent":       "Critical",
+    "showstopper":  "Critical",
+    "p0":           "Critical",
+    "p1":           "High",
+    "p2":           "Medium",
+    "p3":           "Low",
 }
 
 # Environment is already short — accept lowercase and a couple of common
@@ -96,9 +101,14 @@ _ENVIRONMENT_SYNONYMS: dict[str, str] = {
     "dev":          "DEV",
     "develop":      "DEV",
     "development":  "DEV",
+    "sandbox":      "DEV",
+    "local":        "DEV",
     "uat":          "UAT",
     "staging":      "UAT",
     "stage":        "UAT",
+    "preprod":      "UAT",
+    "pre-prod":     "UAT",
+    "pre-production": "UAT",
     "qa":           "UAT",
     "test":         "UAT",
     "testing":      "UAT",
@@ -155,6 +165,8 @@ _TIME_RE = re.compile(
     r"\b("
     r"today|yesterday|"
     r"this\s+week|last\s+week|this\s+month|last\s+month|"
+    r"this\s+quarter|last\s+quarter|this\s+year|last\s+year|"
+    r"since\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
     r"past\s+(\d+)\s+(day|days|week|weeks|month|months|hour|hours)|"
     r"last\s+(\d+)\s+(day|days|week|weeks|month|months|hour|hours)|"
     r"in\s+the\s+last\s+(\d+)\s+(day|days|week|weeks|month|months|hour|hours)"
@@ -308,6 +320,60 @@ _ROLE_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# v3.2.1 additions ---------------------------------------------------------
+# Unassigned / no-assignee. Matches phrasings like:
+#   "unassigned bugs", "bugs with no assignee", "bugs without an assignee",
+#   "nobody assigned", "no one is assigned"
+_UNASSIGNED_RE = re.compile(
+    r"\b(unassigned|"
+    r"(?:with\s+)?no\s+(?:assignee|owner|one\s+assigned)|"
+    r"(?:without|w/o)\s+(?:an?\s+)?(?:assignee|owner)|"
+    r"nobody(?:'s)?\s+(?:assigned|on\s+it)|"
+    r"no\s+one(?:'s)?\s+(?:assigned|on\s+it)|"
+    r"orphan(?:ed)?\s+bugs)\b",
+    re.IGNORECASE,
+)
+
+# "oldest" / "longest open" / "stale" — sort hint to surface long-running
+# work. Doesn't change the filter set, just toggles the sort order.
+_OLDEST_RE = re.compile(
+    r"\b(oldest|longest(?:\s+(?:open|running))?|"
+    r"stale|stalest|aging|oldest\s+first|"
+    r"least\s+recent(?:ly)?(?:\s+updated)?)\b",
+    re.IGNORECASE,
+)
+
+_NEWEST_RE = re.compile(
+    r"\b(newest|most\s+recent|latest|freshest|"
+    r"most\s+recent(?:ly)?(?:\s+updated)?|"
+    r"newest\s+first)\b",
+    re.IGNORECASE,
+)
+
+# First-person pronouns the user might use to mean themselves.
+# "my bugs" / "bugs assigned to me" / "bugs I reported" / "bugs I filed"
+# / "show me mine" etc. We match the SHAPE rather than the verb, so the
+# executor can decide whether "me" is assignee or reporter from context.
+_ME_ASSIGNEE_RE = re.compile(
+    r"\b(?:my\s+(?:bug|bugs|issue|issues|ticket|tickets|stuff|work|"
+    r"plate|backlog|queue|assignments?)|"
+    r"assigned\s+to\s+me\b|"
+    r"on\s+my\s+plate\b|"
+    r"mine\b|"
+    r"bugs?\s+i\s+(?:own|have|got)|"
+    r"my\s+open\s+(?:bug|bugs|issues?|tickets?))\b",
+    re.IGNORECASE,
+)
+_ME_REPORTER_RE = re.compile(
+    r"\b(?:bugs?\s+i\s+(?:filed|reported|raised|opened|logged|created|submitted)|"
+    r"reported\s+by\s+me|"
+    r"raised\s+by\s+me|"
+    r"filed\s+by\s+me|"
+    r"i\s+(?:reported|filed|raised|opened|logged|created|submitted))\b",
+    re.IGNORECASE,
+)
+# --------------------------------------------------------------------------
+
 
 # ---------------------------------------------------------------------------
 # Entities the parser produces. Kept as a plain dataclass so the executor
@@ -344,6 +410,20 @@ class ParsedQuery:
     wants_export: bool = False    # excel
     wants_count: bool = False
     limit: int = 100              # default cap on rows shown in chat
+
+    # v3.2.1 additions — common workflow filters that didn't have rule
+    # coverage before. The executor consumes these alongside the
+    # existing filter fields. All default off; if set, they're ANDed
+    # with the other filters (e.g. "my unassigned bugs" is "assignee
+    # = me AND unassigned" — which is empty by construction, and we
+    # report so).
+    unassigned: bool = False         # "unassigned bugs", "no assignee"
+    sort_oldest: bool = False        # "oldest open bugs", "longest open"
+    sort_newest: bool = False        # "newest", "latest"
+    # "me" / "mine" pronouns — the executor swaps these for the actor's id
+    # so the user doesn't have to type their own name.
+    used_pronoun_me: bool = False
+    me_role: Optional[str] = None    # "assignee" or "reporter" — which "me"
 
     # ----- ACTION FIELDS (write-side) ------------------------------------
     # Set when the user is asking Sleuth to DO something, not just retrieve.
@@ -442,17 +522,56 @@ def _parse_time_window(message: str, now: Optional[datetime] = None) -> Optional
         last_m_start = prev_day.replace(day=1)
         return TimeWindow(last_m_start, last_m_end, "last month")
 
+    # v3.2.1 — quarter / year / since-weekday additions.
+    if phrase == "this quarter":
+        q_start_month = ((today_start.month - 1) // 3) * 3 + 1
+        q_start = today_start.replace(month=q_start_month, day=1)
+        return TimeWindow(q_start, now, "this quarter")
+    if phrase == "last quarter":
+        q_start_month = ((today_start.month - 1) // 3) * 3 + 1
+        this_q_start = today_start.replace(month=q_start_month, day=1)
+        # Subtract one day, then snap to that quarter's first month.
+        prev_day = this_q_start - timedelta(days=1)
+        prev_q_start_month = ((prev_day.month - 1) // 3) * 3 + 1
+        last_q_start = prev_day.replace(month=prev_q_start_month, day=1)
+        return TimeWindow(last_q_start, this_q_start, "last quarter")
+    if phrase == "this year":
+        y_start = today_start.replace(month=1, day=1)
+        return TimeWindow(y_start, now, "this year")
+    if phrase == "last year":
+        this_y_start = today_start.replace(month=1, day=1)
+        last_y_start = this_y_start.replace(year=this_y_start.year - 1)
+        return TimeWindow(last_y_start, this_y_start, "last year")
+
+    # "since <weekday>" — group 2 holds the weekday name in the v3.2.1 regex.
+    weekday_match = m.group(2)
+    if weekday_match:
+        target_dow = {
+            "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+            "friday": 4, "saturday": 5, "sunday": 6,
+        }[weekday_match.lower()]
+        # Walk back from today until we hit that weekday. "since Monday"
+        # said on Wednesday means Monday of THIS week, not last Monday.
+        today_dow = today_start.weekday()
+        delta_days = (today_dow - target_dow) % 7
+        if delta_days == 0:
+            delta_days = 7  # "since Monday" said ON Monday means a week ago
+        anchor = today_start - timedelta(days=delta_days)
+        return TimeWindow(anchor, now, f"since {weekday_match.lower()}")
+
     # "past N days/weeks/months/hours" or "last N ..."
+    # Group indices: 3/4=past, 5/6=last, 7/8=in-the-last (shifted from
+    # the old regex by one for the new "since <weekday>" group at idx 2).
     qty: Optional[int] = None
     unit: Optional[str] = None
-    for grp in (m.group(2), m.group(4), m.group(6)):
+    for grp in (m.group(3), m.group(5), m.group(7)):
         if grp:
             try:
                 qty = int(grp)
             except ValueError:
                 continue
             break
-    for grp in (m.group(3), m.group(5), m.group(7)):
+    for grp in (m.group(4), m.group(6), m.group(8)):
         if grp:
             unit = grp.lower()
             break
@@ -499,7 +618,35 @@ def _extract_priorities(text: str) -> list[str]:
         if re.search(rf"\b{re.escape(syn)}s?\b", text, re.IGNORECASE):
             if canon not in out:
                 out.append(canon)
+    # v3.2.1 — typo-tolerant fallback. "ctitical" → Critical, etc.
+    if not out:
+        for tok in _tokenize(text):
+            hit = _typo_match(tok, _PRIORITY_SYNONYMS)
+            if hit:
+                canon = _PRIORITY_SYNONYMS[hit]
+                if canon not in out:
+                    out.append(canon)
     return out
+
+
+def _typo_match(token: str, candidates: dict, min_len: int = 4) -> Optional[str]:
+    """v3.2.1 — return the canonical key in `candidates` for `token` if
+    `token` is a close (edit-distance) match to one of the synonyms.
+
+    Uses difflib (stdlib, no dependency added). Only triggers for tokens
+    >= `min_len` to avoid "low" → "log" style noise on short words.
+    Threshold 0.82 lets through "ctitical" → "critical" and
+    "produciton" → "production" but rejects truly different words.
+    """
+    import difflib
+    if len(token) < min_len:
+        return None
+    matches = difflib.get_close_matches(
+        token.lower(), candidates.keys(), n=1, cutoff=0.82,
+    )
+    if not matches:
+        return None
+    return matches[0]
 
 
 def _extract_environments(text: str) -> list[str]:
@@ -508,6 +655,16 @@ def _extract_environments(text: str) -> list[str]:
         if re.search(rf"\b{re.escape(syn)}\b", text, re.IGNORECASE):
             if canon not in out:
                 out.append(canon)
+    # v3.2.1 typo-tolerant fallback. Only runs if the exact extractor
+    # found nothing — protects against an exact "prod" match getting
+    # blurred by a fuzzy "rod" / "prod" tie. Word-level pass.
+    if not out:
+        for tok in _tokenize(text):
+            hit = _typo_match(tok, _ENVIRONMENT_SYNONYMS)
+            if hit:
+                canon = _ENVIRONMENT_SYNONYMS[hit]
+                if canon not in out:
+                    out.append(canon)
     return out
 
 
@@ -978,6 +1135,25 @@ def parse(message: str, ctx: Context, now: Optional[datetime] = None) -> ParsedQ
     pq.wants_export = bool(_EXPORT_RE.search(msg))
     pq.wants_count = bool(_COUNT_RE.search(msg))
 
+    # v3.2.1 — workflow filter hints. These layer on top of the regular
+    # filters; the executor reads them when building the bug query.
+    if _UNASSIGNED_RE.search(msg):
+        pq.unassigned = True
+    if _OLDEST_RE.search(msg):
+        pq.sort_oldest = True
+    if _NEWEST_RE.search(msg):
+        pq.sort_newest = True
+    # First-person "me" / "mine" / "my bugs" — resolve the actor's id at
+    # executor time (we don't have a User row in the parser; the executor
+    # does). We record whether the user meant assignee or reporter so the
+    # filter goes onto the right column.
+    if _ME_REPORTER_RE.search(msg):
+        pq.used_pronoun_me = True
+        pq.me_role = "reporter"
+    elif _ME_ASSIGNEE_RE.search(msg):
+        pq.used_pronoun_me = True
+        pq.me_role = "assignee"
+
     # Pronoun bug-reference: record so the executor can fall back to
     # memory.store.last_bug_id when no explicit id was given.
     if pq.bug_id is None and _has_pronoun_bug_ref(msg):
@@ -1048,7 +1224,9 @@ def parse(message: str, ctx: Context, now: Optional[datetime] = None) -> ParsedQ
     if (pq.wants_export or pq.wants_count or _LIST_RE.search(msg)
             or pq.statuses or pq.priorities or pq.environments
             or pq.project_ids or pq.assignee_ids or pq.reporter_ids
-            or pq.text_search or pq.time_window):
+            or pq.text_search or pq.time_window
+            or pq.unassigned or pq.sort_oldest or pq.sort_newest
+            or pq.used_pronoun_me):
         pq.intent = "list_bugs"
         return pq
 
@@ -1107,10 +1285,16 @@ def describe_filters(pq: ParsedQuery) -> str:
         parts.append("assigned to " + " or ".join(pq.assignee_names))
     if pq.reporter_names:
         parts.append("reported by " + " or ".join(pq.reporter_names))
+    # v3.2.1 — surface the new filter / sort hints so the reply text
+    # echoes back what the bot understood.
+    if pq.unassigned:
+        parts.append("with no assignee")
     if pq.text_search:
         parts.append(f'matching "{pq.text_search}"')
     if pq.time_window and pq.time_window.label:
         parts.append(f"({pq.time_window.label})")
+    if pq.sort_oldest:
+        parts.append("(oldest first)")
     return " ".join(parts)
 
 

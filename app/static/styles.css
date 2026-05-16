@@ -1377,6 +1377,18 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 }
 .comment-attach-btn:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .comment-attach-btn input[type="file"] { display: none; }
+
+/* Create-mode bug attachment picker — slimmer than the comment composer
+   (no textarea above), sits just under the description. The hint line
+   gives the user the context that further attachments go via comments. */
+.bug-create-attach-section .comment-form {
+  margin-top: 8px;
+  padding-top: 12px;
+}
+.bug-create-attach-section .create-attach-hint {
+  margin: -2px 0 0;
+  opacity: 0.75;
+}
 .attach-staged-list {
   display: flex;
   flex-wrap: wrap;
@@ -1592,6 +1604,76 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   .bug-modal-body .bug-title-field { margin: 14px 14px 0; }
   .bug-modal-grid { padding: 14px; }
   .bug-modal-body .modal-foot { padding: 12px 14px; }
+}
+
+/* ---------- v3.2.1 responsive polish ----------------------------------
+   These rules are additive: they tune the existing breakpoints rather
+   than redefine the layout. Goals:
+     - Filter-bar dropdowns stop bleeding past the viewport on tablets.
+     - Bug table scrolls horizontally on narrow screens (with momentum
+       on iOS) instead of clipping.
+     - Multi-select panels never overflow off-screen.
+     - The new bug-create attachment section stays single-column on
+       narrow screens and doesn't push the metadata grid sideways.
+     - Touch targets are big enough on phones.
+---------------------------------------------------------------------- */
+
+/* Tablet portrait — keep filter buttons readable. */
+@media (max-width: 820px) {
+  .ms-btn { min-width: 120px; max-width: 200px; }
+  /* Multi-select panel must not extend beyond the visible viewport. */
+  .ms-panel { max-width: calc(100vw - 32px); }
+  /* Bug table gets horizontal scroll with momentum, instead of the
+     content overflowing the modal frame. The wrapper in the HTML is
+     `.table-scroll`; ensure it can scroll on touch. */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Phone landscape & smaller — improve touch targets and modal density. */
+@media (max-width: 600px) {
+  /* Bigger comfortable tap targets — Apple HIG / Material both ~44px. */
+  .btn, .icon-btn, .ms-btn, .chip {
+    min-height: 38px;
+  }
+  /* Tighten chips so the assignee picker still fits two-per-row. */
+  .chip { padding: 6px 10px; }
+  /* Filter-bar wraps onto two rows on phones; keep margin tight. */
+  .filter-bar { gap: 6px; padding: 0 10px 10px; }
+  /* The create-mode attachment uploader: stack the label and previews
+     vertically when the row would otherwise hide the previews under
+     the file button. */
+  .bug-create-attach-section .comment-form-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .bug-create-attach-section .attach-staged-list { width: 100%; }
+}
+
+/* Very narrow phones — fall back to a single KPI per row and trim
+   non-essential bug table columns aggressively. */
+@media (max-width: 380px) {
+  .kpi-strip { grid-template-columns: 1fr; }
+  .col-project { display: none; }
+  .bug-table { min-width: 360px; }
+  .topbar { gap: 6px; }
+  .page-title { font-size: 15px; }
+  /* Toast: avoid clipping at viewport edge. */
+  #toast { left: 12px; right: 12px; max-width: none; }
+  /* Login card: tighten padding so the form fits without scrolling on
+     small phones (iPhone SE etc.). */
+  .auth-card { padding: 24px 18px; border-radius: 14px; }
+  .auth-logo { width: 54px; height: 54px; }
+}
+
+/* Print — when someone hits print on a bug detail, drop chrome and
+   give them clean output. Was missing entirely before. */
+@media print {
+  .sidebar, .topbar, .filter-bar, .sleuth-fab, .sleuth-panel,
+  .modal-foot, .bug-modal-head-actions, .pagination-bar { display: none !important; }
+  .app { grid-template-columns: 1fr; }
+  .main, .view { padding: 0; }
+  body { background: white; color: black; }
+  a { color: inherit; text-decoration: underline; }
 }
 
 /* Helpers */

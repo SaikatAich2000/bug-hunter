@@ -7,7 +7,7 @@ from __future__ import annotations
 import io
 
 
-def _make_user(c, name="Some User", email="user@x.com", role="user", password="Password1"):
+def _make_user(c, name="Some User", email="user@x.com", role="user", password="TestUserPwd9X"):
     r = c.post("/api/users", json={
         "name": name, "email": email, "role": role, "password": password,
     })
@@ -308,13 +308,13 @@ class TestLikeWildcardEscape:
 class TestReporterPermissionFix:
     def test_user_can_save_own_bug_with_unchanged_reporter_id(self, admin_client):
         p = _make_project(admin_client, "RP-1")
-        owner = _make_user(admin_client, "Owner", "owner@x.com", password="Password1")
+        owner = _make_user(admin_client, "Owner", "owner@x.com", password="TestUserPwd9X")
         bug = _make_bug(admin_client, p["id"], reporter_id=owner["id"])
         # Owner logs in and edits the bug (mimics SPA behavior — payload
         # always includes reporter_id from the form).
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
-            "email": "owner@x.com", "password": "Password1",
+            "email": "owner@x.com", "password": "TestUserPwd9X",
         })
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={
             "title": "Owner edits their own bug now",
@@ -327,12 +327,12 @@ class TestReporterPermissionFix:
 
     def test_user_cannot_change_reporter_to_someone_else(self, admin_client):
         p = _make_project(admin_client, "RP-2")
-        owner = _make_user(admin_client, "Owner", "owner2@x.com", password="Password1")
-        other = _make_user(admin_client, "Other", "other@x.com", password="Password1")
+        owner = _make_user(admin_client, "Owner", "owner2@x.com", password="TestUserPwd9X")
+        other = _make_user(admin_client, "Other", "other@x.com", password="TestUserPwd9X")
         bug = _make_bug(admin_client, p["id"], reporter_id=owner["id"])
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
-            "email": "owner2@x.com", "password": "Password1",
+            "email": "owner2@x.com", "password": "TestUserPwd9X",
         })
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": other["id"]})
         assert r.status_code == 403
@@ -435,7 +435,7 @@ class TestTitleStripMinLength:
 
     def test_user_name_padded_whitespace_below_min_rejected(self, admin_client):
         r = admin_client.post("/api/users", json={
-            "name": " A ", "email": "shorty@x.com", "role": "user", "password": "Password1",
+            "name": " A ", "email": "shorty@x.com", "role": "user", "password": "TestUserPwd9X",
         })
         assert r.status_code == 422
 

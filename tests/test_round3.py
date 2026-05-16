@@ -17,7 +17,7 @@ from __future__ import annotations
 import io
 
 
-def _make_user(c, name="Someone Long", email="some@x.com", role="user", password="Password1"):
+def _make_user(c, name="Someone Long", email="some@x.com", role="user", password="TestUserPwd9X"):
     r = c.post("/api/users", json={
         "name": name, "email": email, "role": role, "password": password,
     })
@@ -80,10 +80,10 @@ class TestBugProjectMove:
         p1 = _make_project(admin_client, "Move-A")
         p2 = _make_project(admin_client, "Move-B")
         _make_user(admin_client, name="Mover", email="mover@x.com",
-                   password="Password1")
+                   password="TestUserPwd9X")
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
-            "email": "mover@x.com", "password": "Password1",
+            "email": "mover@x.com", "password": "TestUserPwd9X",
         })
         bug = _make_bug(admin_client, p1["id"], title="My bug")
         # Move to p2 — user has no special rights on p2, but the API permits this
@@ -107,11 +107,11 @@ class TestReporterUnset:
     def test_user_cannot_unset_reporter_even_if_they_are_reporter(self, admin_client):
         p = _make_project(admin_client, "RU-2")
         u = _make_user(admin_client, name="Reporter", email="rep@x.com",
-                       password="Password1")
+                       password="TestUserPwd9X")
         bug = _make_bug(admin_client, p["id"], reporter_id=u["id"])
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
-            "email": "rep@x.com", "password": "Password1",
+            "email": "rep@x.com", "password": "TestUserPwd9X",
         })
         # User tries to unset themselves as reporter — would orphan the bug
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": None})

@@ -30,33 +30,36 @@ def stats(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> StatsOut:
-    # Total bugs, excluding "Not a Bug" statuses. We compute the count once
-    # via SQL rather than fetching all rows.
-    bug_count = db.scalar(
-        select(func.count(Bug.id)).where(Bug.status.notin_(EXCLUDED_FROM_TOTAL_STATUSES))
-    ) or 0
+    # Perf v3.2.1: this endpoint used to fire 11 separate count queries
+    # (one per status KPI, one per dimension breakdown, plus projects /
+    # users / timeline). We collapse the per-status KPIs into a single
+    # GROUP BY status — exactly the same data, one round-trip instead
+    # of five — and reuse those counts for the by_status breakdown so
+    # we save another query there too. Net: 11 queries → 6.
 
-    open_count = db.scalar(
-        select(func.count(Bug.id)).where(Bug.status.in_(("New", "In Progress", "Reopened")))
-    ) or 0
-    resolved_count = db.scalar(
-        select(func.count(Bug.id)).where(Bug.status == "Resolved")
-    ) or 0
-    closed_count = db.scalar(
-        select(func.count(Bug.id)).where(Bug.status == "Closed")
-    ) or 0
-    resolve_later_count = db.scalar(
-        select(func.count(Bug.id)).where(Bug.status == "Resolve Later")
-    ) or 0
+    by_status: dict[str, int] = {}
+    for status_name, cnt in db.execute(
+        select(Bug.status, func.count(Bug.id)).group_by(Bug.status)
+    ).all():
+        by_status[status_name] = int(cnt)
+
+    # Derive KPIs from the same single result set. Total excludes the
+    # statuses the product owner said don't count as real bugs.
+    bug_count = sum(
+        c for s, c in by_status.items() if s not in EXCLUDED_FROM_TOTAL_STATUSES
+    )
+    open_count = sum(
+        by_status.get(s, 0) for s in ("New", "In Progress", "Reopened")
+    )
+    resolved_count = by_status.get("Resolved", 0)
+    closed_count = by_status.get("Closed", 0)
+    resolve_later_count = by_status.get("Resolve Later", 0)
 
     # Kept for backward compatibility — the dashboard no longer renders these,
     # but in-flight clients (older cached JS) may still try to read them.
     project_count = db.scalar(select(func.count(Project.id))) or 0
     user_count = db.scalar(select(func.count(User.id))) or 0
 
-    by_status = dict(db.execute(
-        select(Bug.status, func.count(Bug.id)).group_by(Bug.status)
-    ).all())
     by_priority = dict(db.execute(
         select(Bug.priority, func.count(Bug.id)).group_by(Bug.priority)
     ).all())

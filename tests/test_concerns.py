@@ -40,7 +40,7 @@ def _make_project(c, name="P"):
     return r.json()
 
 
-def _make_user(c, name="Someone", email="some@x.com", role="user", password="Password1"):
+def _make_user(c, name="Someone", email="some@x.com", role="user", password="TestUserPwd9X"):
     r = c.post("/api/users", json={
         "name": name, "email": email, "role": role, "password": password,
     })
@@ -110,9 +110,9 @@ class TestUpdateBugOrdering:
         that the title change is NOT persisted (no partial write)."""
         p = _make_project(admin_client, "U1")
         owner = _make_user(admin_client, name="Owner", email="owner@x.com",
-                           password="Password1")
+                           password="TestUserPwd9X")
         other = _make_user(admin_client, name="Other", email="other@x.com",
-                           password="Password1")
+                           password="TestUserPwd9X")
         # Admin creates the bug with owner as reporter so owner can edit
         bug = _make_bug(admin_client, p["id"], title="Original title here")
         admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": owner["id"]})
@@ -120,7 +120,7 @@ class TestUpdateBugOrdering:
         # Switch to owner
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
-            "email": "owner@x.com", "password": "Password1",
+            "email": "owner@x.com", "password": "TestUserPwd9X",
         })
 
         # Owner attempts both a legitimate title change AND an unauthorized
@@ -219,7 +219,7 @@ class TestInputValidation:
         """email max=254. Pass 300 chars — must reject."""
         r = admin_client.post("/api/users", json={
             "name": "longmail", "email": "a" * 250 + "@x.com",
-            "role": "user", "password": "Password1",
+            "role": "user", "password": "TestUserPwd9X",
         })
         assert r.status_code == 422
 
@@ -247,7 +247,7 @@ class TestInputValidation:
         """Schema lowercases role: 'ADMIN' should become 'admin'."""
         r = admin_client.post("/api/users", json={
             "name": "rolecase", "email": "rc@x.com", "role": "ADMIN",
-            "password": "Password1",
+            "password": "TestUserPwd9X",
         })
         assert r.status_code == 201, r.text
         assert r.json()["role"] == "admin"

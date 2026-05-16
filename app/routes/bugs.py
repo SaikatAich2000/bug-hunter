@@ -4,6 +4,9 @@ from __future__ import annotations
 import csv
 import io
 import re
+import threading
+import time
+from collections import deque
 from typing import Optional
 from urllib.parse import quote
 
@@ -37,6 +40,45 @@ MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
 # Read uploads in 1 MB chunks so we abort over-sized requests before
 # they consume RAM. Anything above MAX_FILE_BYTES is rejected mid-stream.
 _UPLOAD_CHUNK = 1024 * 1024
+
+# Per-user rate limit on attachment uploads (v3.2.1). Without this, an
+# authenticated user (or a stolen session) can chain 50 MB POSTs and
+# bloat the DB by tens of GB in minutes. 20/min is generous for humans
+# attaching screenshots and tight enough to make automated abuse obvious.
+_UPLOAD_RATE_WINDOW_SECONDS = 60
+_UPLOAD_RATE_MAX = 20
+_upload_buckets: dict[int, deque] = {}
+_upload_rate_lock = threading.Lock()
+# Bound the dict so a churn of test users doesn't grow memory forever.
+_UPLOAD_BUCKETS_MAX = 5_000
+
+
+def _check_upload_rate(user_id: int) -> None:
+    """Raise 429 if the user is uploading too fast.
+
+    Sliding window of timestamps per user. Cheap, no Redis. Multi-worker
+    deployments get per-worker buckets — for tighter global limits put
+    nginx limit_req in front of the upload endpoints.
+    """
+    now = time.monotonic()
+    cutoff = now - _UPLOAD_RATE_WINDOW_SECONDS
+    with _upload_rate_lock:
+        bucket = _upload_buckets.get(user_id)
+        if bucket is None:
+            if len(_upload_buckets) >= _UPLOAD_BUCKETS_MAX:
+                _upload_buckets.pop(next(iter(_upload_buckets)), None)
+            bucket = deque()
+            _upload_buckets[user_id] = bucket
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= _UPLOAD_RATE_MAX:
+            retry_after = max(1, int(_UPLOAD_RATE_WINDOW_SECONDS - (now - bucket[0])))
+            raise HTTPException(
+                status_code=429,
+                detail="Too many uploads, slow down a moment.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
 
 # Content types we MUST NOT serve as-is, because a browser would render
 # them inline and execute embedded scripts in our same-origin context.
@@ -712,6 +754,11 @@ async def upload_attachment(
     db: Session = Depends(get_db),
     uploader: User = Depends(get_current_user),
 ) -> dict:
+    # Per-user rate limit. Authenticated, yes — but the upload endpoint
+    # writes a 50 MB BLOB per call, so a hostile client can bloat the DB
+    # quickly without this guard. Raised BEFORE we touch the multipart body.
+    _check_upload_rate(uploader.id)
+
     bug = db.get(Bug, bug_id)
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")

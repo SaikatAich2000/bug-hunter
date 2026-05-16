@@ -7,7 +7,7 @@ import io
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _make_user(client, name="Alice", email=None, role="user", password="Password1"):
+def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X"):
     email = email or f"{name.lower()}@example.com"
     r = client.post("/api/users", json={
         "name": name, "email": email, "role": role, "password": password,

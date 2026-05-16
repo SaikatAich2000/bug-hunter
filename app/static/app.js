@@ -244,10 +244,19 @@ async function boot() {
   applyRoleVisibility();
   renderAccountCard();
 
-  await loadHealth();
-  await loadMeta();
-  await loadUsers();
-  await loadProjects();
+  // Perf v3.2.1: these four loaders are independent of each other — meta
+  // is a static enum, users and projects come from their own tables,
+  // health is a tiny status ping. Running them sequentially was costing
+  // sum-of-latencies on every page load. Running them concurrently with
+  // Promise.all collapses that to max-of-latencies (~4× faster on a
+  // slow connection). Errors from any one still surface via the api()
+  // helper's 401 redirect path / toastError chain.
+  await Promise.all([
+    loadHealth(),
+    loadMeta(),
+    loadUsers(),
+    loadProjects(),
+  ]);
   // Multi-select dropdowns depend on STATE.users / STATE.projects / STATE.meta
   // being populated, so initialise them after the loaders above.
   initMultiSelects();
@@ -895,6 +904,18 @@ function openBugForm(bug = null) {
     $("#bugSideMeta").hidden = false;
     $("#bugMetaCreated").textContent = formatDate(bug.created_at);
     $("#bugMetaUpdated").textContent = formatDate(bug.updated_at);
+    // Create-mode upload control is hidden when editing — attachments
+    // go through comments here, or via the legacy bug-level section.
+    const createAttach = $("#bugCreateAttachSection");
+    if (createAttach) {
+      createAttach.hidden = true;
+      const cf = $("#createBugFiles");
+      if (cf) cf.value = "";
+      const cp = $("#createFilePreview");
+      if (cp) cp.innerHTML = "";
+      const cl = $("#createFileLabel");
+      if (cl) cl.textContent = "Attach files";
+    }
     // Render the inline detail sections (comments, attachments, activity).
     renderBugInlineSections(bug);
   } else {
@@ -904,6 +925,18 @@ function openBugForm(bug = null) {
     $("#bugCommentsSection").hidden = true;
     $("#bugAttachmentsSection").hidden = true;
     $("#bugActivitySection").hidden = true;
+    // Show the create-mode attachment uploader and reset its state so
+    // files from a previous create session don't linger.
+    const createAttach = $("#bugCreateAttachSection");
+    if (createAttach) {
+      createAttach.hidden = false;
+      const cf = $("#createBugFiles");
+      if (cf) cf.value = "";
+      const cp = $("#createFilePreview");
+      if (cp) cp.innerHTML = "";
+      const cl = $("#createFileLabel");
+      if (cl) cl.textContent = "Attach files";
+    }
   }
 
   openModal("modalBug");
@@ -1046,9 +1079,43 @@ async function submitBugForm(e) {
       setView("list");
       await refreshAll();
     } else {
-      // CREATE — close the modal and refresh the list.
-      await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
-      toast("Bug created", "success");
+      // CREATE — POST the bug, then upload any files selected in the
+      // create-mode attachment picker before closing the modal. We do the
+      // upload here (not on the server side of POST /bugs) so the bug-
+      // create payload stays JSON and we can keep the existing
+      // /bugs/{id}/attachments endpoint as the single attachment-upload
+      // path. Failures on individual files are toasted but don't abort
+      // the create flow — the bug itself is already saved.
+      const created = await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
+      const filesEl = $("#createBugFiles");
+      const files = filesEl?.files;
+      if (files && files.length && created && created.id) {
+        let done = 0;
+        let failed = 0;
+        for (const f of files) {
+          const fd = new FormData();
+          fd.append("file", f);
+          try {
+            await api(`/bugs/${created.id}/attachments`, { method: "POST", body: fd });
+            done++;
+          } catch (err) {
+            failed++;
+            // Show per-file errors so the user knows which one didn't
+            // make it (e.g. a 50 MB cap hit on one big file).
+            toast(`Attachment ${f.name}: ${err.message}`, "error");
+          }
+        }
+        if (done) toast(`Bug #${created.id} created · ${done} file(s) attached`, "success");
+        else if (failed) toast(`Bug #${created.id} created (no attachments saved)`, "info");
+        else toast("Bug created", "success");
+      } else {
+        toast("Bug created", "success");
+      }
+      // Clear the file picker so reopening the create modal starts clean.
+      if (filesEl) filesEl.value = "";
+      const cp = $("#createFilePreview"); if (cp) cp.innerHTML = "";
+      const cl = $("#createFileLabel"); if (cl) cl.textContent = "Attach files";
+
       closeModal("modalBug");
       setView("list");
       await refreshAll();
@@ -1742,6 +1809,14 @@ function bindGlobalListeners() {
   });
   $("#commentFiles")?.addEventListener("change", (e) => {
     updateFilePreview(e.target, "#filePreview", "#fileLabel");
+  });
+
+  // Create-mode bug attachment picker — same preview helper used for
+  // comment uploads, just pointed at the create-mode targets. The
+  // submitBugForm() handler reads input.files at submit time and uploads
+  // each one after the bug row is created.
+  $("#createBugFiles")?.addEventListener("change", (e) => {
+    updateFilePreview(e.target, "#createFilePreview", "#createFileLabel");
   });
 
   // Bug-level upload handlers used to live here (drag-drop zone + file

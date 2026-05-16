@@ -33,7 +33,7 @@ from sqlalchemy import (
     Table,
     Text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.database import Base
 
@@ -255,7 +255,13 @@ class Attachment(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Deferred (v3.2.1) — the BLOB is only fetched when actually read
+    # (.data is touched). Listing attachments for a bug or comment no
+    # longer pulls the full file content from the DB; the download
+    # endpoint still works because accessing `a.data` lazily issues a
+    # single SELECT for the bytes. Schema unchanged — this is a Python-
+    # side loading strategy, safe for the live DB.
+    data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     bug: Mapped[Bug] = relationship("Bug", back_populates="attachments", foreign_keys=[bug_id])

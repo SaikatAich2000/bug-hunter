@@ -35,6 +35,7 @@ Per-session revocation (precise, Keycloak-style):
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -56,6 +57,8 @@ from app.models import (
     User,
     VALID_ROLES,
 )
+
+logger = logging.getLogger("bug_hunter.auth")
 
 COOKIE_NAME = "bh_session"
 
@@ -240,6 +243,10 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
                 db.delete(sess)
                 db.commit()
             except Exception:
+                # Best-effort cleanup — losing a race with another
+                # request's delete (or the row already being gone) is
+                # fine. Log so a recurring failure is debuggable.
+                logger.exception("Failed to delete expired session jti=%s", jti)
                 db.rollback()
             return None
         # Throttled last_seen update — only writes once per minute per
@@ -252,6 +259,9 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
                 sess.last_seen_at = now
                 db.commit()
             except Exception:
+                # last_seen is informational only — don't fail the request
+                # if we can't update it. Log for visibility.
+                logger.exception("Failed to bump last_seen_at for session jti=%s", jti)
                 db.rollback()
     return user
 

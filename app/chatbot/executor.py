@@ -159,6 +159,13 @@ def _apply_bug_filters(stmt, count_stmt, pq: ParsedQuery):
         count_stmt = count_stmt.where(
             Bug.assignees.any(User.id.in_(pq.assignee_ids))
         )
+    # v3.2.1 — "unassigned" / "no assignee" filter. A bug is unassigned
+    # iff it has zero entries in bug_assignees. We use ~Bug.assignees.any()
+    # which translates to NOT EXISTS — a clean index seek given the
+    # composite PK on (bug_id, user_id) for bug_assignees.
+    if pq.unassigned:
+        stmt = stmt.where(~Bug.assignees.any())
+        count_stmt = count_stmt.where(~Bug.assignees.any())
     if pq.text_search:
         # Same LIKE-escape the bugs route uses — keep `_` and `%` literal.
         needle = pq.text_search.lower().replace("\\", "\\\\")
@@ -332,12 +339,38 @@ def _handle_about(message: str) -> Response:
     )
 
 
-def _handle_unknown() -> Response:
+def _handle_unknown(message: str = "") -> Response:
+    """Friendly fallback for queries the rule engine couldn't classify.
+
+    v3.2.1 — tries to suggest a closer rephrasing based on tokens we DID
+    see. Plain-language echo so the user understands what slipped past
+    the parser. Falls back to the original generic hint if no signal.
+    """
+    msg = (message or "").lower()
+    hints: list[str] = []
+    # The user mentioned bug-shape nouns but the parser couldn't find a
+    # verb or a filter — suggest the canonical phrasings.
+    if any(w in msg for w in ("bug", "bugs", "issue", "issues",
+                              "ticket", "tickets", "defect")):
+        hints.append("*show open bugs assigned to <name>*")
+        hints.append("*how many critical bugs in PROD?*")
+    elif any(w in msg for w in ("user", "users", "team",
+                                "member", "members")):
+        hints.append("*list users* or *list admins*")
+    elif any(w in msg for w in ("project", "projects")):
+        hints.append("*list projects*")
+    elif any(w in msg for w in ("stat", "stats", "kpi",
+                                "summary", "dashboard")):
+        hints.append("*summary* or *stats*")
+    else:
+        hints.append("*show open bugs assigned to <name>*")
+        hints.append("*how many critical bugs in PROD?*")
+    bullet_lines = "\n".join(f"- {h}" for h in hints[:3])
     return Response(
         blocks=[Block("text", {"text":
-            "Hmm, I didn't catch a clear question there. Try something "
-            "like *show open bugs assigned to <name>* or *how many "
-            "critical bugs in PROD?* — or type **help** for examples."})],
+            "Hmm, I didn't quite catch that. A few things you can try:\n\n"
+            f"{bullet_lines}\n\n"
+            "Or type **help** for the full list."})],
         summary="Unknown",
         intent="unknown",
         fallback_eligible=True,
@@ -496,15 +529,33 @@ def _handle_recent_activity(db: Session, pq: ParsedQuery, actor: User) -> Respon
 
 
 def _handle_stats(db: Session) -> Response:
-    """Lightweight stats — mirrors the dashboard KPIs."""
+    """Lightweight stats — mirrors the dashboard KPIs.
+
+    Perf v3.2.1: was 7 single-cell COUNT queries plus the top-assignees
+    join. Collapsed to 3 GROUP BY scans of the bugs table (status,
+    priority, environment) which produce the same numbers but with one
+    DB round-trip each instead of one per KPI."""
     excluded = ["Not a Bug"]
-    total = db.scalar(select(func.count(Bug.id)).where(Bug.status.notin_(excluded))) or 0
-    open_n = db.scalar(select(func.count(Bug.id)).where(Bug.status.in_(OPEN_STATUSES))) or 0
-    resolved = db.scalar(select(func.count(Bug.id)).where(Bug.status == "Resolved")) or 0
-    closed = db.scalar(select(func.count(Bug.id)).where(Bug.status == "Closed")) or 0
-    later = db.scalar(select(func.count(Bug.id)).where(Bug.status == "Resolve Later")) or 0
-    crit = db.scalar(select(func.count(Bug.id)).where(Bug.priority == "Critical")) or 0
-    prod = db.scalar(select(func.count(Bug.id)).where(Bug.environment == "PROD")) or 0
+
+    by_status: dict[str, int] = {}
+    for s, c in db.execute(
+        select(Bug.status, func.count(Bug.id)).group_by(Bug.status)
+    ).all():
+        by_status[s] = int(c)
+
+    total = sum(c for s, c in by_status.items() if s not in excluded)
+    open_n = sum(by_status.get(s, 0) for s in OPEN_STATUSES)
+    resolved = by_status.get("Resolved", 0)
+    closed = by_status.get("Closed", 0)
+    later = by_status.get("Resolve Later", 0)
+
+    crit = int(db.scalar(
+        select(func.count(Bug.id)).where(Bug.priority == "Critical")
+    ) or 0)
+    prod = int(db.scalar(
+        select(func.count(Bug.id)).where(Bug.environment == "PROD")
+    ) or 0)
+
     text = (
         f"**Bug Hunter — current snapshot**\n\n"
         f"- **Total** (excluding *Not a Bug*): {total}\n"
@@ -567,6 +618,15 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
             intent="count_bugs",
         )
 
+    # v3.2.1 — sort hint. "oldest open bugs" / "stale" → ASC by updated_at.
+    # "newest" / "latest" → DESC by updated_at (same as default but kept
+    # explicit so the user's intent is visible). When neither is set we
+    # keep the original default (newest-updated first).
+    if pq.sort_oldest:
+        order_cols = (Bug.updated_at.asc(), Bug.id.asc())
+    else:
+        order_cols = (Bug.updated_at.desc(), Bug.id.desc())
+
     # Pull rows ----------------------------------------------------------
     # Excel export is its own path so we don't double-page the data.
     if pq.wants_export:
@@ -576,14 +636,14 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
         # export route in the sidebar handles it.
         export_cap = 5000
         rows = list(db.scalars(
-            stmt.order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(export_cap)
+            stmt.order_by(*order_cols).limit(export_cap)
         ).all())
         return _build_export_response(rows, pq, total, export_cap)
 
     # Inline list path ---------------------------------------------------
     limit = max(5, min(pq.limit or 100, 200))
     rows = list(db.scalars(
-        stmt.order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(limit)
+        stmt.order_by(*order_cols).limit(limit)
     ).all())
     if total == 0:
         return Response(
@@ -879,6 +939,21 @@ def execute(message: str, db: Session, actor: User,
     # back to the most recent bug the user mentioned in this session.
     _resolve_pronouns(pq, actor)
 
+    # v3.2.1 — resolve "me" / "mine" / "I" pronouns to the actor's id.
+    # The parser set used_pronoun_me + me_role; here we splice the actor
+    # into the right id list. Done before dispatch so every downstream
+    # handler sees the resolved filter exactly as if the user had typed
+    # their own name.
+    if pq.used_pronoun_me and actor is not None:
+        if pq.me_role == "reporter":
+            if actor.id not in pq.reporter_ids:
+                pq.reporter_ids.append(actor.id)
+                pq.reporter_names.append(actor.name)
+        else:  # default assignee
+            if actor.id not in pq.assignee_ids:
+                pq.assignee_ids.append(actor.id)
+                pq.assignee_names.append(actor.name)
+
     # Confirmation answers come BEFORE everything else. They have no
     # filters and shouldn't be re-routed even if the user types
     # "yes please" with extra words.
@@ -985,9 +1060,13 @@ def execute(message: str, db: Session, actor: User,
                 return llm_resp
     except Exception:
         # Defensive: an LLM failure must NEVER take down the chat path.
-        pass
+        # v3.2.1 — log so recurring LLM-layer faults are debuggable.
+        import logging
+        logging.getLogger("bug_hunter.sleuth").exception(
+            "Sleuth LLM fallback raised — swallowing and returning unknown."
+        )
 
-    return _handle_unknown()
+    return _handle_unknown(message)
 
 
 __all__ = ["Block", "Response", "execute", "build_context"]

@@ -68,11 +68,17 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     which is what makes per-session admin revocation possible."""
     # LoginIn already lowercases the email — no need to .lower() again here.
     user = db.scalar(select(User).where(User.email == payload.email))
-    # Unified error message — never leak whether email exists.
+    # Unified error message for all failure modes — never leak whether the
+    # email exists OR whether an existing account is disabled. Previously
+    # we returned 401 for bad creds but 403 for disabled accounts, which
+    # let an attacker who knew a valid password distinguish "this account
+    # exists but is disabled" from "wrong password". Both now return the
+    # same 401. Audit log still records the distinction server-side.
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="Account is disabled")
+        logger.info("Login refused: inactive account %s", user.email)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
     settings = get_settings()
     jti = new_jti()

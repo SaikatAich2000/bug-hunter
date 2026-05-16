@@ -19,7 +19,7 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Helpers (duplicated from test_api so this file is self-contained)
 # ---------------------------------------------------------------------------
-def _make_user(client, name="Alice", email=None, role="user", password="Password1"):
+def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X"):
     email = email or f"{name.lower()}@example.com"
     r = client.post("/api/users", json={
         "name": name, "email": email, "role": role, "password": password,
@@ -259,7 +259,7 @@ class TestUserManagementPermissions:
     def test_user_cannot_create_user(self, user_client):
         r = user_client.post("/api/users", json={
             "name": "X", "email": "x@x.com",
-            "role": "user", "password": "Password1",
+            "role": "user", "password": "TestUserPwd9X",
         })
         assert r.status_code == 403
 

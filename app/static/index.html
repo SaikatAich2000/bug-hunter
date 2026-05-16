@@ -271,6 +271,28 @@
                 placeholder="What's happening, expected vs actual, repro steps…"></textarea>
             </label>
 
+            <!-- Create-mode attachment uploader.
+                 Only visible when filing a NEW bug. The openBugForm() handler
+                 unhides this in create mode and hides it in edit mode (where
+                 attachments live on comments instead). After the bug is
+                 created in submitBugForm(), any files selected here are
+                 uploaded to /api/bugs/{id}/attachments as bug-level
+                 attachments (comment_id NULL). -->
+            <section class="bug-section bug-create-attach-section" id="bugCreateAttachSection" hidden>
+              <div class="comment-form">
+                <div class="comment-form-row">
+                  <label class="comment-attach-btn" title="Attach files">
+                    📎 <span id="createFileLabel">Attach files</span>
+                    <input type="file" multiple id="createBugFiles" aria-label="Attachments for new bug" />
+                  </label>
+                  <div class="attach-staged-list" id="createFilePreview"></div>
+                </div>
+                <p class="muted small create-attach-hint">
+                  Files attach to the bug itself. Add more later via comments.
+                </p>
+              </div>
+            </section>
+
             <!-- Comments + attachments + activity only render when editing
                  an existing bug. The submit handler removes all three from
                  the DOM in create mode (no bug_id yet to attach to).

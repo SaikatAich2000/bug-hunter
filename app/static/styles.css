@@ -12,6 +12,14 @@
 
 /* ---------- Reset & base ---------- */
 * { box-sizing: border-box; }
+
+/* Honour the HTML `hidden` attribute even on flex/grid containers that
+   declare their own display. Without this, [hidden] = display:none from
+   the UA sheet is silently overridden by our component CSS (e.g.
+   `.filter-bar { display: flex }`), so JS toggling `.hidden = true` did
+   nothing. This was the cause of the bug filter-bar leaking onto the
+   Audit page even though setView() correctly flagged it. */
+[hidden] { display: none !important; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
@@ -249,11 +257,26 @@ body.sidebar-collapsed .app { grid-template-columns: 64px 1fr; }
   text-transform: uppercase;
 }
 
-body.sidebar-collapsed .sidebar { padding: 14px 8px; gap: 6px; }
-body.sidebar-collapsed .brand { padding: 4px 0 10px; justify-content: center; }
+body.sidebar-collapsed .sidebar { padding: 14px 6px; gap: 6px; }
+/* Stack the brand vertically when collapsed so the logo + expand button
+   both fit inside the 64px-wide rail without clipping. The previous row
+   layout (logo + 12px gap + 26px button) was wider than the available
+   content area and chopped ~20% off the right edge of the logo. */
+body.sidebar-collapsed .brand {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 0 10px;
+  gap: 6px;
+}
 body.sidebar-collapsed .brand-text { display: none; }
-body.sidebar-collapsed .brand-logo { width: 34px; height: 34px; }
-body.sidebar-collapsed .sidebar-collapse-btn { margin-left: 0; }
+body.sidebar-collapsed .brand-logo { width: 32px; height: 32px; }
+body.sidebar-collapsed .sidebar-collapse-btn {
+  margin: 0;
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
 body.sidebar-collapsed .nav-btn { justify-content: center; padding: 10px 4px; }
 body.sidebar-collapsed .nav-btn span:not(.nav-icon) { display: none; }
 body.sidebar-collapsed .side-section { display: none; }
@@ -443,7 +466,10 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 }
 .search-wrap input::placeholder { color: var(--text-faint); }
 
-/* ---------- KPI strip ---------- */
+/* ---------- KPI strip ----------
+   Each tile is a real <button> so keyboard users can tab to it and screen
+   readers announce it as a control. We strip the browser button styling
+   and rebuild on top of the existing tile look. */
 .kpi-strip {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -458,6 +484,13 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   position: relative;
   overflow: hidden;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  /* Button reset */
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: block;
+  width: 100%;
 }
 .kpi::before {
   content: "";
@@ -474,6 +507,19 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   border-color: var(--border-strong);
 }
 .kpi:hover::before { opacity: 1; }
+.kpi:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-color: var(--accent);
+}
+.kpi:active { transform: translateY(0); }
+/* Active = the KPI's filter set matches the current status multi-select. */
+.kpi.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow);
+}
+.kpi.active::before { opacity: 1; }
+.kpi.active .kpi-label { color: var(--accent); }
 .kpi-num {
   font-size: 28px;
   font-weight: 700;
@@ -898,6 +944,48 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .chart-host { width: 100%; min-height: 180px; }
 .chart-host svg { width: 100%; height: auto; display: block; }
 
+/* ---------- Page intro banner ----------
+   The Audit Trail and Sessions screens don't have the KPI strip so without
+   this their controls bar sits flush against the topbar — visually cramped.
+   The intro banner gives the page a title + one-line purpose so the user
+   knows what they're looking at, and creates breathing room below the
+   sticky header. */
+.page-intro {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, var(--accent-soft) 0%, transparent 100%);
+}
+.page-intro-icon {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.page-intro-text { min-width: 0; }
+.page-intro-text h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.page-intro-text p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
 /* ---------- Audit list ---------- */
 .audit-controls {
   display: flex;
@@ -905,7 +993,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   margin-bottom: 12px;
   flex-wrap: wrap;
   align-items: center;
-  padding: 0 24px 12px;
+  padding: 18px 24px 12px;
 }
 .audit-controls select, .audit-controls input {
   background: var(--bg-elev);
@@ -1022,6 +1110,22 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 }
 @keyframes modal-rise { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .modal-card.sm { max-width: 400px; }
+.confirm-card { max-width: 380px; }
+.confirm-body {
+  padding: 14px 20px 4px;
+}
+.confirm-body p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.confirm-foot {
+  padding: 12px 20px 16px;
+  margin-top: 0;
+  border-top: none;
+}
 .modal-card.lg { max-width: 760px; }
 .modal-card.xl { max-width: 920px; }
 .modal-card.xxl {
@@ -1328,9 +1432,20 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .no-content {
   color: var(--text-faint);
   text-align: center;
-  padding: 28px 8px;
+  padding: 12px 8px;
   font-style: italic;
+  font-size: 12px;
 }
+
+/* When the comments list is empty (hidden by JS), drop the composer's
+   visual separator so a thin border-line doesn't hover above nothing. */
+.bug-comments-list[hidden] + .comment-form {
+  margin-top: 4px;
+  padding-top: 0;
+  border-top: none;
+}
+/* When the comments list IS rendered, keep the small gap tight. */
+.bug-comments-list { margin-bottom: 0; }
 
 /* Comment form */
 .comment-form {
@@ -1576,12 +1691,17 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   .modal-card { max-height: 95vh; }
   .modal-card.xxl { width: 100%; max-width: 100%; }
   .charts-grid { grid-template-columns: 1fr; }
-  .audit-controls { padding: 0 12px 12px; }
+  .audit-controls { padding: 14px 12px 12px; }
   .audit-list { padding: 0 12px 24px; }
+  .sessions-controls { padding: 14px 12px 12px; flex-direction: column; align-items: stretch; }
+  .sessions-list { padding: 0 12px 24px; }
+  .page-intro { padding: 16px 12px 14px; gap: 12px; }
+  .page-intro-icon { width: 40px; height: 40px; font-size: 18px; }
+  .page-intro-text h2 { font-size: 15px; }
+  .page-intro-text p { font-size: 12px; }
   .col-project { width: 110px; }
   .col-env, .col-att { display: none; }
 
-  .sessions-controls { flex-direction: column; align-items: stretch; }
   .session-row { grid-template-columns: 1fr; }
   .session-actions { justify-self: stretch; }
 }
@@ -1925,11 +2045,20 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 }
 .field em.js-required.hidden { display: none; }
 
+/* Reporter is always the logged-in user — the select is disabled and only
+   ever holds one option. Stripping the dropdown caret makes it read as a
+   static field rather than implying the user can pick someone else. */
 .reporter-select {
   width: 100% !important;
   max-width: 100%;
   text-overflow: ellipsis;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: none !important;
+  padding-right: 12px !important;
 }
+.reporter-select::-ms-expand { display: none; }
 .reporter-select option {
   text-overflow: ellipsis;
   overflow: hidden;
@@ -1963,7 +2092,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   display: flex;
   gap: 12px;
   align-items: center;
-  margin-bottom: 14px;
+  padding: 18px 24px 14px;
   flex-wrap: wrap;
 }
 .sessions-help {
@@ -1978,6 +2107,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 0 24px 24px;
 }
 .session-row {
   display: grid;

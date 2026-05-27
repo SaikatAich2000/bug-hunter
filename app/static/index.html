@@ -81,13 +81,25 @@
         <button class="btn primary" id="newBugBtn">+ New Bug</button>
       </header>
 
-      <!-- KPI strip: Total | Open | Resolved | Closed | Resolve Later -->
-      <section class="kpi-strip">
-        <div class="kpi"><div class="kpi-num" id="kpiBugs">0</div><div class="kpi-label">Total</div></div>
-        <div class="kpi"><div class="kpi-num kpi-open" id="kpiOpen">0</div><div class="kpi-label">Open</div></div>
-        <div class="kpi"><div class="kpi-num kpi-resolved" id="kpiResolved">0</div><div class="kpi-label">Resolved</div></div>
-        <div class="kpi"><div class="kpi-num kpi-closed" id="kpiClosed">0</div><div class="kpi-label">Closed</div></div>
-        <div class="kpi"><div class="kpi-num kpi-later" id="kpiResolveLater">0</div><div class="kpi-label">Resolve Later</div></div>
+      <!-- KPI strip: Total | Open | Resolved | Closed | Resolve Later
+           Each tile is a clickable filter that drives the status multi-select.
+           Clicking the active tile clears the filter. -->
+      <section class="kpi-strip" id="kpiStrip">
+        <button type="button" class="kpi" data-kpi="total" aria-label="Show all bugs">
+          <div class="kpi-num" id="kpiBugs">0</div><div class="kpi-label">Total</div>
+        </button>
+        <button type="button" class="kpi" data-kpi="open" aria-label="Filter to open bugs">
+          <div class="kpi-num kpi-open" id="kpiOpen">0</div><div class="kpi-label">Open</div>
+        </button>
+        <button type="button" class="kpi" data-kpi="resolved" aria-label="Filter to resolved bugs">
+          <div class="kpi-num kpi-resolved" id="kpiResolved">0</div><div class="kpi-label">Resolved</div>
+        </button>
+        <button type="button" class="kpi" data-kpi="closed" aria-label="Filter to closed bugs">
+          <div class="kpi-num kpi-closed" id="kpiClosed">0</div><div class="kpi-label">Closed</div>
+        </button>
+        <button type="button" class="kpi" data-kpi="resolve_later" aria-label="Filter to resolve-later bugs">
+          <div class="kpi-num kpi-later" id="kpiResolveLater">0</div><div class="kpi-label">Resolve Later</div>
+        </button>
       </section>
 
       <!-- Filter bar (visible only on list view). Multi-select dropdowns. -->
@@ -146,7 +158,7 @@
           </table>
         </div>
         <div id="emptyState" class="empty-state" hidden>
-          <p>No bugs match your filters.</p>
+          <p>No bugs match your filters</p>
         </div>
         <div class="pagination" id="paginationBar"></div>
       </section>
@@ -183,6 +195,13 @@
 
       <!-- VIEW: Audit Trail -->
       <section class="view" id="viewAudit" hidden>
+        <div class="page-intro audit-intro">
+          <div class="page-intro-icon" aria-hidden="true">🛡</div>
+          <div class="page-intro-text">
+            <h2>Audit Trail</h2>
+            <p>Every create, update, delete, login and session event across Bug Hunter — useful for incident review and compliance</p>
+          </div>
+        </div>
         <div class="audit-controls">
           <select id="auditEntityFilter">
             <option value="">All entities</option>
@@ -196,7 +215,8 @@
           <select id="auditActorFilter">
             <option value="">All actors</option>
           </select>
-          <input id="auditSearch" type="search" placeholder="Search audit log…" />
+          <input id="auditSearch" type="search" placeholder="Search audit log (try bug #, user name, action…)" />
+          <button class="btn ghost" id="auditClearBtn">Clear</button>
           <button class="btn ghost" id="auditRefreshBtn">Refresh</button>
         </div>
         <div class="audit-list" id="auditList"></div>
@@ -204,12 +224,16 @@
 
       <!-- VIEW: Sessions (admin-only) -->
       <section class="view" id="viewSessions" hidden>
+        <div class="page-intro sessions-intro">
+          <div class="page-intro-icon" aria-hidden="true">🔐</div>
+          <div class="page-intro-text">
+            <h2>Active Sessions</h2>
+            <p>Every device currently logged in to Bug Hunter. Revoke a session to log that device out without affecting anything else</p>
+          </div>
+        </div>
         <div class="sessions-controls">
           <p class="sessions-help">
-            Active sessions across the system. Click <strong>Revoke</strong>
-            to log a specific device out without affecting any other session
-            for that user. Your own current session can't be revoked from
-            here — use the Log out button in the sidebar instead.
+            Click <strong>Revoke</strong> to log a specific device out without affecting any other session for that user. Your own current session can't be revoked from here — use the Log out button in the sidebar instead
           </p>
           <button class="btn ghost" id="sessionsRefreshBtn">Refresh</button>
         </div>
@@ -288,14 +312,25 @@
                   <div class="attach-staged-list" id="createFilePreview"></div>
                 </div>
                 <p class="muted small create-attach-hint">
-                  Files attach to the bug itself. Add more later via comments.
+                  Files attach to the bug itself. Add more later via comments
                 </p>
               </div>
             </section>
 
-            <!-- Comments + attachments + activity only render when editing
-                 an existing bug. The submit handler removes all three from
-                 the DOM in create mode (no bug_id yet to attach to).
+            <!-- Bug-level attachments — files attached to the bug itself
+                 (uploaded during bug creation, or uploaded via the comment
+                 composer without any text). Sits ABOVE the comments so
+                 the bug's own files are visually grouped with the bug
+                 metadata rather than buried in the discussion thread. -->
+            <section class="bug-section" id="bugAttachmentsSection" hidden>
+              <h3>Bug attachments <span class="muted small" id="attachmentsCount"></span></h3>
+              <div class="attachment-grid" id="bugAttachmentsGrid"></div>
+            </section>
+
+            <!-- Comments + (their inline) attachments. Only render when
+                 editing an existing bug. The submit handler removes the
+                 sections from the DOM in create mode (no bug_id yet to
+                 attach to).
 
                  IMPORTANT: this block uses <div>s, NOT a nested <form>.
                  HTML5 forbids nested <form> elements — when a browser
@@ -303,30 +338,25 @@
                  detached the bug modal's "Create" submit button from its
                  form and silently broke create-bug. We handle the
                  "Post comment" submit programmatically (button click +
-                 Ctrl/Cmd-Enter in textarea). -->
+                 Ctrl/Cmd-Enter in textarea).
+
+                 Either-or: a comment can have body, attachments, or both.
+                 Posting with attachments only uploads them to the bug
+                 level (no comment record) — see postComment in app.js. -->
             <section class="bug-section" id="bugCommentsSection" hidden>
               <h3>Comments <span class="muted small" id="commentsCount"></span></h3>
               <div id="bugCommentsList" class="bug-comments-list"></div>
               <div class="comment-form" id="commentForm">
-                <textarea id="commentBody" placeholder="Add a comment… (Ctrl/Cmd+Enter to post)"></textarea>
+                <textarea id="commentBody" placeholder="Add a comment, attach a file, or both (Ctrl/Cmd+Enter to post)"></textarea>
                 <div class="comment-form-row">
                   <label class="comment-attach-btn" title="Attach files">
                     📎 <span id="fileLabel">Attach files</span>
                     <input type="file" multiple id="commentFiles" />
                   </label>
                   <div class="attach-staged-list" id="filePreview"></div>
-                  <button type="button" class="btn primary" id="commentPostBtn" style="margin-left:auto">Post comment</button>
+                  <button type="button" class="btn primary" id="commentPostBtn" style="margin-left:auto">Post</button>
                 </div>
               </div>
-            </section>
-
-            <!-- Bug-level attachments section. Only renders when LEGACY
-                 bug-level attachments exist (uploaded before the v3.2 UI
-                 simplification, when there was a separate dropzone here).
-                 New attachments go through the comment composer. -->
-            <section class="bug-section" id="bugAttachmentsSection" hidden>
-              <h3>Attachments <span class="muted small" id="attachmentsCount"></span></h3>
-              <div class="attachment-grid" id="bugAttachmentsGrid"></div>
             </section>
 
             <section class="bug-section bug-activity-section" id="bugActivitySection" hidden>
@@ -456,7 +486,7 @@
           <span>Password <em class="js-required">*</em></span>
           <input name="password" type="password" minlength="8" maxlength="200"
                  placeholder="Min 8 characters" autocomplete="new-password" />
-          <small class="hint" id="userPasswordHint">At least 8 characters.</small>
+          <small class="hint" id="userPasswordHint">At least 8 characters</small>
         </label>
         <label class="field check-row">
           <input type="checkbox" name="is_active" checked />
@@ -485,7 +515,7 @@
         <label class="field">
           <span>New password <em>*</em></span>
           <input name="new_password" type="password" required minlength="8" maxlength="200" autocomplete="new-password" />
-          <small class="hint">At least 8 characters.</small>
+          <small class="hint">At least 8 characters</small>
         </label>
         <label class="field">
           <span>Confirm new password <em>*</em></span>
@@ -499,19 +529,20 @@
     </div>
   </div>
 
-  <!-- Confirm dialog -->
+  <!-- Confirm dialog — compact layout with a tight body so single-line
+       prompts (Log out, Cancel revoke …) don't waste vertical space -->
   <div class="modal" id="modalConfirm" hidden>
-    <div class="modal-card sm">
+    <div class="modal-card sm confirm-card">
       <div class="modal-head">
         <h2 id="confirmTitle">Confirm</h2>
         <button class="icon-btn modal-close" id="confirmClose" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body confirm-body">
         <p id="confirmMessage"></p>
-        <div class="modal-foot">
-          <button class="btn ghost" id="confirmCancel">Cancel</button>
-          <button class="btn danger" id="confirmOk">Delete</button>
-        </div>
+      </div>
+      <div class="modal-foot confirm-foot">
+        <button class="btn ghost" id="confirmCancel">Cancel</button>
+        <button class="btn danger" id="confirmOk">Delete</button>
       </div>
     </div>
   </div>

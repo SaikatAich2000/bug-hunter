@@ -191,28 +191,47 @@ def forgot_password(
     request: Request,
     db: Session = Depends(get_db),
 ) -> Response:
-    """Issue a password-reset email. Always 204 — never reveal whether the email exists."""
-    user = db.scalar(select(User).where(User.email == payload.email))
-    # IMPORTANT: respond identically whether or not the user exists. This
-    # prevents an attacker from probing the system to enumerate accounts.
-    if user is not None and user.is_active:
-        raw_token, token_hash = generate_reset_token()
-        prt = PasswordResetToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=datetime.now(timezone.utc) + PASSWORD_RESET_TTL,
-        )
-        db.add(prt)
-        _audit(db, None, "password_reset_requested",
-               f"Password reset requested for {user.email}")
-        db.commit()
+    """Issue a password-reset email.
 
-        # Build the reset link; queue email send to background.
-        base = get_settings().APP_BASE_URL.rstrip("/")
-        reset_url = f"{base}/reset.html?token={raw_token}"
-        background.add_task(
-            notify_password_reset, user.email, user.name, reset_url,
+    Product decision: this endpoint validates the email against the DB
+    before sending. If no account matches we return 404 so the user
+    immediately knows they typed the wrong address instead of waiting
+    for an email that will never arrive.
+
+    (Trade-off: this allows account enumeration. The product owner
+    accepted that risk in exchange for a friendlier UX — login is
+    behind a strong password + session-revocation system, and the
+    audit log captures every reset attempt.)
+    """
+    user = db.scalar(select(User).where(User.email == payload.email))
+    if user is None or not user.is_active:
+        # Don't trigger an email — surface the failure directly so the
+        # user can correct the typo or contact an admin if their account
+        # has been disabled.
+        _audit(db, None, "password_reset_no_account",
+               f"Password reset attempted for unknown/inactive email: {payload.email}")
+        db.commit()
+        raise HTTPException(
+            status_code=404,
+            detail="We couldn't find an account with that email. Check the address or contact an administrator",
         )
+    raw_token, token_hash = generate_reset_token()
+    prt = PasswordResetToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=datetime.now(timezone.utc) + PASSWORD_RESET_TTL,
+    )
+    db.add(prt)
+    _audit(db, None, "password_reset_requested",
+           f"Password reset requested for {user.email}")
+    db.commit()
+
+    # Build the reset link; queue email send to background.
+    base = get_settings().APP_BASE_URL.rstrip("/")
+    reset_url = f"{base}/reset.html?token={raw_token}"
+    background.add_task(
+        notify_password_reset, user.email, user.name, reset_url,
+    )
     return Response(status_code=204)
 
 

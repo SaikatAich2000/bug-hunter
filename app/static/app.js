@@ -321,7 +321,7 @@ function scheduleVersionCheck() {
         !STATE.versionDriftWarned
       ) {
         STATE.versionDriftWarned = true;
-        toast("New version available — reload the page when ready.", "info");
+        toast("New version available — reload the page when ready", "info");
       }
     } catch { /* ignore */ }
   }, 5 * 60 * 1000);
@@ -427,6 +427,10 @@ async function refreshStats() {
 // Bug list
 // ---------------------------------------------------------------------------
 async function refreshBugs() {
+  // Reflect current status filter in the KPI tile highlight. Runs on every
+  // bug refresh so any filter change (multi-select, KPI click, Clear,
+  // sidebar project click) keeps the KPI active state in sync.
+  refreshKpiActiveState();
   const params = new URLSearchParams();
   params.set("page", String(STATE.page));
   params.set("page_size", String(STATE.pageSize));
@@ -512,7 +516,7 @@ function renderProjectList() {
   const ul = $("#projectList");
   ul.innerHTML = "";
   if (!STATE.projects.length) {
-    ul.innerHTML = `<li class="side-item muted no-cursor">No projects — click + to add.</li>`;
+    ul.innerHTML = `<li class="side-item muted no-cursor">No projects — click + to add</li>`;
     return;
   }
   // v3.1 permissions:
@@ -546,7 +550,7 @@ function renderUserList() {
   ul.innerHTML = "";
   const active = STATE.users.filter(u => u.is_active);
   if (!active.length) {
-    ul.innerHTML = `<li class="side-item muted no-cursor">No users yet — click + to add.</li>`;
+    ul.innerHTML = `<li class="side-item muted no-cursor">No users yet — click + to add</li>`;
     return;
   }
   // v3.1 permissions:
@@ -713,6 +717,17 @@ function setView(view) {
   $("#viewAudit").hidden = view !== "audit";
   $("#viewSessions").hidden = view !== "sessions";
   $("#filterBar").hidden = view !== "list";
+  // Search input is the BUG search — only show it on the list view.
+  // KPI strip is bug-only too; keep it on analytics so the snapshot is
+  // visible alongside the charts, but hide it on audit & sessions where
+  // it's noise. The "+ New Bug" CTA only makes sense on the bug list,
+  // so we hide it on every other view too.
+  const searchWrap = document.querySelector(".search-wrap");
+  if (searchWrap) searchWrap.style.display = view === "list" ? "" : "none";
+  const kpiStrip = $("#kpiStrip");
+  if (kpiStrip) kpiStrip.style.display = (view === "list" || view === "analytics") ? "" : "none";
+  const newBugBtn = $("#newBugBtn");
+  if (newBugBtn) newBugBtn.style.display = view === "list" ? "" : "none";
   $("#pageTitle").textContent = ({
     list: "All Bugs", analytics: "Analytics",
     audit: "Audit Trail", sessions: "Active Sessions",
@@ -720,6 +735,55 @@ function setView(view) {
   if (view === "analytics") renderCharts();
   if (view === "audit") refreshAudit();
   if (view === "sessions") refreshSessions();
+}
+
+// KPI → status filter mapping. "total" clears the filter, the others
+// drop a specific set of statuses into the multi-select.
+const KPI_FILTER_MAP = {
+  total:         [],
+  open:          ["New", "In Progress", "Reopened"],
+  resolved:      ["Resolved"],
+  closed:        ["Closed"],
+  resolve_later: ["Resolve Later"],
+};
+
+function _arraysEqualAsSets(a, b) {
+  if (a.length !== b.length) return false;
+  const sa = new Set(a);
+  for (const x of b) if (!sa.has(x)) return false;
+  return true;
+}
+
+function refreshKpiActiveState() {
+  const cur = STATE.filters.status || [];
+  $$("#kpiStrip .kpi").forEach(btn => {
+    const key = btn.dataset.kpi;
+    const target = KPI_FILTER_MAP[key];
+    if (!target) return;
+    // "Total" is active when no status filter is set.
+    const active = key === "total"
+      ? cur.length === 0
+      : _arraysEqualAsSets(cur, target);
+    btn.classList.toggle("active", active);
+  });
+}
+
+function handleKpiClick(key) {
+  const target = KPI_FILTER_MAP[key];
+  if (!target) return;
+  const cur = STATE.filters.status || [];
+  // Toggle: clicking the active filter clears it back to "all bugs".
+  if (_arraysEqualAsSets(cur, target) && target.length > 0) {
+    STATE.filters.status = [];
+  } else {
+    STATE.filters.status = [...target];
+  }
+  STATE.page = 1;
+  // Make sure we're showing the list so the user can see the result.
+  if (STATE.view !== "list") setView("list");
+  refreshMultiSelects();
+  refreshKpiActiveState();
+  refreshBugs();
 }
 
 // ---------------------------------------------------------------------------
@@ -950,26 +1014,40 @@ function renderBugInlineSections(bug) {
   const isAdmin = STATE.currentUser?.role === "admin";
 
   // ----- Comments -----
+  // When the bug has no comments, we render NOTHING in the list — the
+  // composer below is enough of a prompt on its own, and any larger
+  // empty-state placeholder just pushes the composer down without
+  // adding signal. The section heading + (0) count still tells the user
+  // there are no comments, so we don't lose information.
   $("#bugCommentsSection").hidden = false;
   $("#commentsCount").textContent = `(${bug.comments.length})`;
   const commentsList = $("#bugCommentsList");
-  commentsList.innerHTML = bug.comments.length
-    ? bug.comments.map(c => {
-        const atts = (c.attachments || []).map(a => renderAttachmentCard(a, false)).join("");
-        return `
-          <div class="comment">
-            <div class="comment-head">
-              <div class="comment-head-left">
-                <span class="avatar">${initials(c.author_name)}</span>
-                <span class="comment-author">${escapeHtml(c.author_name)}</span>
-              </div>
-              <span class="comment-time">${formatDate(c.created_at)}</span>
+  if (bug.comments.length) {
+    commentsList.innerHTML = bug.comments.map(c => {
+      const atts = (c.attachments || []).map(a => renderAttachmentCard(a, false)).join("");
+      // Comment body may be empty if the user chose to share files only
+      // — render the body block only when there's text to show.
+      const bodyHtml = (c.body || "").trim()
+        ? `<div class="comment-body">${escapeHtml(c.body)}</div>`
+        : "";
+      return `
+        <div class="comment">
+          <div class="comment-head">
+            <div class="comment-head-left">
+              <span class="avatar">${initials(c.author_name)}</span>
+              <span class="comment-author">${escapeHtml(c.author_name)}</span>
             </div>
-            <div class="comment-body">${escapeHtml(c.body)}</div>
-            ${atts ? `<div class="comment-attachments"><div class="attachment-grid">${atts}</div></div>` : ""}
-          </div>`;
-      }).join("")
-    : '<p class="no-content">No comments yet — be the first to add one.</p>';
+            <span class="comment-time">${formatDate(c.created_at)}</span>
+          </div>
+          ${bodyHtml}
+          ${atts ? `<div class="comment-attachments"><div class="attachment-grid">${atts}</div></div>` : ""}
+        </div>`;
+    }).join("");
+    commentsList.hidden = false;
+  } else {
+    commentsList.innerHTML = "";
+    commentsList.hidden = true;
+  }
   // The comment form lives in the static HTML (now a <div>, not a
   // <form> — see the long note in index.html for why). Clear any
   // leftover input from a previous bug.
@@ -999,7 +1077,7 @@ function renderBugInlineSections(bug) {
   $("#activityCount").textContent = `(${bug.activities.length})`;
   $("#bugActivityList").innerHTML = bug.activities.length
     ? bug.activities.map(a => renderActivityRow(a)).join("")
-    : '<p class="no-content">No activity yet.</p>';
+    : '<p class="no-content">No activity yet</p>';
 }
 
 function fillFormSelect(selEl, items, current = "") {
@@ -1306,7 +1384,7 @@ function openUserForm(user = null) {
     form.elements.password.required = false;
     form.elements.password.value = "";
     form.elements.password.placeholder = "Leave blank to keep current password";
-    $("#userPasswordHint").textContent = "Leave blank to keep current password.";
+    $("#userPasswordHint").textContent = "Leave blank to keep current password";
     $("#userPasswordField").querySelector(".js-required")?.classList.add("hidden");
   } else {
     form.elements.role.value = "user";
@@ -1314,7 +1392,7 @@ function openUserForm(user = null) {
     // On create, password is REQUIRED
     form.elements.password.required = true;
     form.elements.password.placeholder = "Min 8 characters";
-    $("#userPasswordHint").textContent = "At least 8 characters.";
+    $("#userPasswordHint").textContent = "At least 8 characters";
     $("#userPasswordField").querySelector(".js-required")?.classList.remove("hidden");
   }
   openModal("modalUser");
@@ -1371,7 +1449,7 @@ async function handleEditBug(bugId) {
 }
 
 async function handleDeleteBug(bugId) {
-  const ok = await confirmDialog(`Delete bug #${bugId}? This will also delete its comments and attachments. Cannot be undone.`);
+  const ok = await confirmDialog(`Delete bug #${bugId}? This will also delete its comments and attachments. Cannot be undone`);
   if (!ok) return;
   try {
     await api(`/bugs/${bugId}`, { method: "DELETE" });
@@ -1384,7 +1462,7 @@ async function handleDeleteBug(bugId) {
 async function handleDeleteProject(id) {
   const project = STATE.projects.find(p => p.id === id);
   const name = project ? project.name : `#${id}`;
-  const ok = await confirmDialog(`Delete project "${name}"?\nThis only works if it has no bugs.`);
+  const ok = await confirmDialog(`Delete project "${name}"?\nThis only works if it has no bugs`);
   if (!ok) return;
   try {
     await api(`/projects/${id}`, { method: "DELETE" });
@@ -1407,7 +1485,7 @@ async function handleDeleteUser(id) {
   const user = STATE.users.find(u => u.id === id);
   const name = user ? user.name : `#${id}`;
   const ok = await confirmDialog(
-    `Delete user "${name}"?\nThis user will be removed from all bug assignments.\nReports they filed will become "unassigned reporter".`,
+    `Delete user "${name}"?\nThis user will be removed from all bug assignments.\nReports they filed will become "unassigned reporter"`,
   );
   if (!ok) return;
   try {
@@ -1438,37 +1516,49 @@ async function handleDeleteAttachment(attId) {
 async function postComment() {
   // Comment form is no longer a <form> element (nested forms are illegal
   // in HTML5). We read the textarea + file input directly by id.
+  //
+  // Either-or: posting works with body, files, or both. If only files are
+  // attached they upload as bug-level attachments (no comment record) so
+  // the user isn't forced to type a meaningless body just to share a file.
   const bodyEl = $("#commentBody");
   const filesEl = $("#commentFiles");
   const body = (bodyEl?.value || "").trim();
-  if (!body) {
-    toast("Comment can't be empty", "error");
+  const files = Array.from(filesEl?.files || []);
+  if (!body && files.length === 0) {
+    toast("Add a comment or attach a file", "error");
     bodyEl?.focus();
     return;
   }
   try {
-    const comment = await api(`/bugs/${STATE.currentBugId}/comments`, {
-      method: "POST",
-      body: JSON.stringify({ body }),
-    });
+    let commentId = null;
+    if (body) {
+      const comment = await api(`/bugs/${STATE.currentBugId}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      });
+      commentId = comment.id;
+    }
 
-    // Upload any attached files to this comment
-    const files = filesEl?.files;
-    if (files && files.length) {
-      for (const f of files) {
-        const fd = new FormData();
-        fd.append("file", f);
-        fd.append("comment_id", String(comment.id));
-        try {
-          await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
-        } catch (err) {
-          toast(`Attachment ${f.name}: ${err.message}`, "error");
-        }
+    // Upload files. With body → attach to that comment; without body →
+    // upload as bug-level so they show in the "Bug attachments" section.
+    let failed = 0;
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("file", f);
+      if (commentId) fd.append("comment_id", String(commentId));
+      try {
+        await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
+      } catch (err) {
+        failed++;
+        toast(`Attachment ${f.name}: ${err.message}`, "error");
       }
     }
 
-    toast("Comment posted", "success");
-    // Clear the inputs so the next comment starts fresh.
+    if (body && files.length) toast("Comment posted", "success");
+    else if (body) toast("Comment posted", "success");
+    else if (files.length && !failed) toast(`${files.length} file${files.length > 1 ? "s" : ""} attached`, "success");
+
+    // Clear the inputs so the next post starts fresh.
     if (bodyEl) bodyEl.value = "";
     if (filesEl) filesEl.value = "";
     $("#filePreview").innerHTML = "";
@@ -1525,7 +1615,7 @@ function renderSessions() {
   const host = $("#sessionsList");
   const rows = STATE.sessions || [];
   if (!rows.length) {
-    host.innerHTML = `<div class="sessions-empty">No active sessions.</div>`;
+    host.innerHTML = `<div class="sessions-empty">No active sessions</div>`;
     return;
   }
   host.innerHTML = rows.map(s => {
@@ -1572,7 +1662,7 @@ async function handleRevokeSession(sessionId) {
   const ok = await confirmDialog(
     `Revoke this session for ${who}?\n\n` +
     `That device will be immediately logged out. Other sessions for the ` +
-    `same user are not affected.`,
+    `same user are not affected`,
     { title: "Revoke session", okLabel: "Revoke", danger: true },
   );
   if (!ok) return;
@@ -1600,7 +1690,7 @@ async function refreshAudit() {
   try {
     const rows = await api("/audit?" + params.toString());
     const host = $("#auditList");
-    if (!rows.length) { host.innerHTML = '<p class="no-content">No audit events match.</p>'; return; }
+    if (!rows.length) { host.innerHTML = '<p class="no-content">No audit events match</p>'; return; }
     host.innerHTML = rows.map(r => `
       <div class="audit-row">
         <span class="audit-icon">${activityIcon(r.action)}</span>
@@ -1728,6 +1818,20 @@ function bindGlobalListeners() {
   $("#auditActorFilter").addEventListener("change", refreshAudit);
   $("#auditSearch").addEventListener("input", debounce(refreshAudit, 300));
   $("#auditRefreshBtn").addEventListener("click", refreshAudit);
+  $("#auditClearBtn")?.addEventListener("click", () => {
+    const ent = $("#auditEntityFilter"); if (ent) ent.value = "";
+    const act = $("#auditActorFilter"); if (act) act.value = "";
+    const q = $("#auditSearch"); if (q) q.value = "";
+    refreshAudit();
+  });
+
+  // KPI strip — each tile is a clickable filter. Event delegation on the
+  // strip so we don't bind 5 separate listeners.
+  $("#kpiStrip")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".kpi[data-kpi]");
+    if (!btn) return;
+    handleKpiClick(btn.dataset.kpi);
+  });
 
   // Bug table — row click opens the unified modal in edit/view mode;
   // delete button (admin-only) handled separately. The pencil edit

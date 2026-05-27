@@ -20,7 +20,7 @@
   }
 
   if (!token) {
-    showAlert("Reset link is missing or malformed. Request a new one from the sign-in page.");
+    showAlert("Reset link is missing or malformed. Request a new one from the sign-in page");
     $("#resetForm").querySelectorAll("input, button").forEach(e => e.disabled = true);
   }
 
@@ -30,11 +30,11 @@
     const newPw = f.elements.new_password.value;
     const confirmPw = f.elements.confirm_password.value;
     if (newPw !== confirmPw) {
-      showAlert("Passwords don't match.");
+      showAlert("Passwords don't match");
       return;
     }
     if (newPw.length < 8) {
-      showAlert("Password must be at least 8 characters.");
+      showAlert("Password must be at least 8 characters");
       return;
     }
 
@@ -55,7 +55,7 @@
         showAlert(msg);
       }
     } catch (err) {
-      showAlert("Network error. Try again.");
+      showAlert("Network error. Try again");
     } finally {
       btn.disabled = false; btn.textContent = "Set new password";
     }

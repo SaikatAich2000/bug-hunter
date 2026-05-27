@@ -117,12 +117,20 @@ def test_change_password_requires_correct_current(admin_client):
     assert r.status_code == 400
 
 
-def test_forgot_password_no_enumeration(client):
-    """Both real and fake emails must return 204 — no info leakage."""
+def test_forgot_password_validates_email(client):
+    """Product decision: forgot-password validates against the DB.
+
+    Real registered email → 204 (we queued the reset email).
+    Unknown email → 404 with a helpful detail. (Earlier builds returned
+    204 in both cases to avoid account enumeration; the product owner
+    accepted the enumeration risk in exchange for friendlier UX so the
+    user immediately knows they typed the wrong address.)
+    """
     r = client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
     assert r.status_code == 204
     r = client.post("/api/auth/forgot-password", json={"email": "doesnotexist@nowhere.test"})
-    assert r.status_code == 204
+    assert r.status_code == 404
+    assert "couldn't find" in r.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

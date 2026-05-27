@@ -392,7 +392,7 @@ function appendBotError(message) {
   const wrap = document.createElement("div");
   wrap.className = "sleuth-msg bot error";
   const p = document.createElement("p");
-  p.textContent = message || "Something went wrong.";
+  p.textContent = message || "Something went wrong";
   wrap.appendChild(p);
   appendRaw(wrap);
 }
@@ -430,7 +430,7 @@ function showWelcome() {
     "- *set bug 3 priority to high*\n" +
     "- *comment on #5: looks fixed*\n" +
     "- *create a bug titled \"Login broken\" in project Apollo*\n\n" +
-    "Type **help** for the full guide."
+    "Type **help** for the full guide"
   );
   appendRaw(wrap);
   renderedAnyUserMsg = false;
@@ -483,7 +483,7 @@ async function sendMessage(text) {
   } catch (err) {
     hideTyping();
     if (err && err.silent) return;          // navigation already underway
-    appendBotError(err && err.message ? err.message : "Network error.");
+    appendBotError(err && err.message ? err.message : "Network error");
   } finally {
     state.inFlight = false;
     sendBtn.disabled = false;

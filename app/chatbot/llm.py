@@ -507,7 +507,7 @@ def try_understand(message: str, db: Session, actor: User) -> Optional[Response]
     if intent == "bug_detail" and pq.bug_id is not None:
         return _handle_bug_detail(db, pq)
     if intent == "list_bugs":
-        return _handle_list_bugs(db, pq)
+        return _handle_list_bugs(db, pq, ctx)
 
     # If we got an intent we don't recognise, fall back.
     return None

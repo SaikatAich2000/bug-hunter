@@ -62,7 +62,7 @@ def _check_rate(user_id: int) -> None:
     if len(bucket) >= _RATE_MAX_REQUESTS:
         raise HTTPException(
             status_code=429,
-            detail="Too many chatbot requests, slow down a moment.",
+            detail="Too many chatbot requests, slow down a moment",
         )
     bucket.append(now)
 
@@ -118,7 +118,7 @@ def ask(
             blocks=[_BlockOut(kind="text", payload={
                 "text": "Sorry — something went wrong on my side while "
                         "answering that. The error was logged. Please "
-                        "try rephrasing.",
+                        "try rephrasing",
             })],
             summary="Internal error",
             intent="error",
@@ -148,7 +148,7 @@ def download_staged(
     if entry is None:
         raise HTTPException(
             status_code=404,
-            detail="That download link has expired or is no longer valid.",
+            detail="That download link has expired or is no longer valid",
         )
     payload, filename = entry
 

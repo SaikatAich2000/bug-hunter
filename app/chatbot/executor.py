@@ -211,7 +211,7 @@ def _handle_greeting(actor: User) -> Response:
         "- *export critical bugs in PROD to excel*\n"
         "- *how many bugs were filed this week?*\n"
         "- *bug 42*\n\n"
-        "Type **help** for the full list."
+        "Type **help** for the full list"
     )
     return Response(
         blocks=[Block("text", {"text": text})],
@@ -265,7 +265,7 @@ def _handle_help() -> Response:
         "I match status synonyms (open / fixed / WIP / blocker / urgent / "
         "P0–P3), environment shortcuts (prod / staging / dev) and time "
         "windows (today, yesterday, this week, last 7 days). I'll ask "
-        "for clarification when a name matches more than one person."
+        "for clarification when a name matches more than one person"
     )
     return Response(
         blocks=[Block("text", {"text": text})],
@@ -286,40 +286,40 @@ def _handle_about(message: str) -> Response:
         "status": (
             "**Statuses**: New, In Progress, Reopened, Resolved, Closed, "
             "Resolve Later, Not a Bug. *Open* groups New + In Progress + "
-            "Reopened. *Not a Bug* is excluded from the total-bugs KPI."
+            "Reopened. *Not a Bug* is excluded from the total-bugs KPI"
         ),
         "priority": (
             "**Priorities**: Low, Medium, High, Critical. P0 → Critical, "
-            "P1 → High, P2 → Medium, P3 → Low when you use those aliases."
+            "P1 → High, P2 → Medium, P3 → Low when you use those aliases"
         ),
         "priorities": (
-            "**Priorities**: Low, Medium, High, Critical."
+            "**Priorities**: Low, Medium, High, Critical"
         ),
         "environment": (
             "**Environments**: DEV, UAT, PROD. *staging*, *qa*, *test* are "
-            "treated as UAT; *production*, *live* mean PROD."
+            "treated as UAT; *production*, *live* mean PROD"
         ),
         "role": (
             "**Roles**: admin, manager, user. Admins manage everything. "
             "Managers can edit bugs / projects / non-admin users but can't "
             "delete users or projects. Regular users can create and edit "
-            "bugs but can't manage other users."
+            "bugs but can't manage other users"
         ),
         "audit": (
             "The audit trail records every create, update, delete, login, "
             "and session revoke. Visible to admins and managers from the "
-            "Audit Trail sidebar item."
+            "Audit Trail sidebar item"
         ),
         "session": (
             "Every login creates a server-side session. Admins can see all "
             "active sessions and revoke individual ones from the Sessions "
             "sidebar item. Revoking your own current session isn't allowed "
-            "— use Log out instead."
+            "— use Log out instead"
         ),
         "attachment": (
             "Attachments (PDF, image, video — up to 50 MB each) are stored "
             "as BLOBs in PostgreSQL, so a database backup includes every "
-            "attachment automatically."
+            "attachment automatically"
         ),
     }
     for keyword, answer in facts.items():
@@ -332,7 +332,7 @@ def _handle_about(message: str) -> Response:
     return Response(
         blocks=[Block("text", {"text":
             "I'm not sure I caught that. Type **help** to see the kinds "
-            "of questions I can answer."})],
+            "of questions I can answer"})],
         summary="Unknown",
         intent="about",
         fallback_eligible=True,
@@ -370,7 +370,7 @@ def _handle_unknown(message: str = "") -> Response:
         blocks=[Block("text", {"text":
             "Hmm, I didn't quite catch that. A few things you can try:\n\n"
             f"{bullet_lines}\n\n"
-            "Or type **help** for the full list."})],
+            "Or type **help** for the full list"})],
         summary="Unknown",
         intent="unknown",
         fallback_eligible=True,
@@ -384,7 +384,7 @@ def _handle_list_users(db: Session, pq: ParsedQuery) -> Response:
     rows = list(db.scalars(stmt).all())
     if not rows:
         return Response(
-            blocks=[Block("text", {"text": "No users match that filter."})],
+            blocks=[Block("text", {"text": "No users match that filter"})],
             summary="0 users",
             intent="list_users",
         )
@@ -398,7 +398,7 @@ def _handle_list_users(db: Session, pq: ParsedQuery) -> Response:
         label = f"{pq.role_filter}s" if not pq.role_filter.endswith("s") else pq.role_filter
     return Response(
         blocks=[
-            Block("text", {"text": f"Found **{len(rows)}** {label}."}),
+            Block("text", {"text": f"Found **{len(rows)}** {label}"}),
             Block("table", {"headers": headers, "rows": data}),
         ],
         summary=f"{len(rows)} {label}",
@@ -412,7 +412,7 @@ def _handle_list_projects(db: Session) -> Response:
     ).all())
     if not rows:
         return Response(
-            blocks=[Block("text", {"text": "There are no projects yet."})],
+            blocks=[Block("text", {"text": "There are no projects yet"})],
             summary="0 projects",
             intent="list_projects",
         )
@@ -427,7 +427,7 @@ def _handle_list_projects(db: Session) -> Response:
     ]
     return Response(
         blocks=[
-            Block("text", {"text": f"Found **{len(rows)}** project(s)."}),
+            Block("text", {"text": f"Found **{len(rows)}** project(s)"}),
             Block("table", {"headers": headers, "rows": data}),
         ],
         summary=f"{len(rows)} projects",
@@ -498,8 +498,7 @@ def _handle_recent_activity(db: Session, pq: ParsedQuery, actor: User) -> Respon
         return Response(
             blocks=[Block("text", {"text":
                 "No recent activity"
-                + (f" {pq.time_window.label}" if pq.time_window else "")
-                + "."})],
+                + (f" {pq.time_window.label}" if pq.time_window else "")})],
             summary="0 events",
             intent="recent_activity",
         )
@@ -517,7 +516,7 @@ def _handle_recent_activity(db: Session, pq: ParsedQuery, actor: User) -> Respon
             Block("text", {"text":
                 f"Showing the **{len(rows)}** most recent activity entr"
                 f"{'y' if len(rows)==1 else 'ies'}"
-                + (f" {pq.time_window.label}" if pq.time_window else "") + "."}),
+                + (f" {pq.time_window.label}" if pq.time_window else "")}),
             Block("table", {
                 "headers": ["When", "Actor", "Action", "Detail"],
                 "rows": data,
@@ -589,7 +588,48 @@ def _handle_stats(db: Session) -> Response:
     )
 
 
-def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
+def _suggest_user(phrase: str, ctx: Optional[Context]) -> str:
+    """Return a short suggestion string for an unresolved user phrase.
+
+    Uses stdlib difflib to find the closest 1-2 matches against the display
+    names and email local-parts already loaded into the parser context.
+    Empty string if nothing's close enough. Phrased as a helpful nudge,
+    never as a guess we apply on the user's behalf.
+    """
+    if not ctx or not phrase:
+        return ""
+    import difflib
+    needle = phrase.strip().lower()
+    if not needle:
+        return ""
+    # Build candidate pool: full normalized name + email local-part, mapped
+    # back to the user's display name.
+    pool: dict[str, str] = {}
+    for _uid, norm_name, email_local, display in ctx.users:
+        if norm_name:
+            pool.setdefault(norm_name, display)
+        if email_local:
+            pool.setdefault(email_local, display)
+    if not pool:
+        return ""
+    matches = difflib.get_close_matches(needle, list(pool.keys()), n=2, cutoff=0.6)
+    if not matches:
+        return ""
+    suggestions = []
+    seen_display = set()
+    for m in matches:
+        d = pool.get(m)
+        if d and d not in seen_display:
+            suggestions.append(d)
+            seen_display.add(d)
+    if not suggestions:
+        return ""
+    if len(suggestions) == 1:
+        return f"Did you mean **{suggestions[0]}**?"
+    return f"Did you mean **{suggestions[0]}** or **{suggestions[1]}**?"
+
+
+def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = None) -> Response:
     """Run the parsed bug filter and render either count / list / file."""
     # If the parser flagged ambiguous names, ask before running.
     if pq.ambiguous_names:
@@ -604,6 +644,29 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
             intent="clarify",
         )
 
+    # BUG FIX: when the user named a specific person but the name didn't
+    # match anyone in the system, the old code silently dropped the filter
+    # and returned every bug — which looked like the bot ignored the user's
+    # intent. Now we stop and ask, with a suggested correction if one is
+    # close enough.
+    if pq.unresolved_assignee_names or pq.unresolved_reporter_names:
+        role = "assignee" if pq.unresolved_assignee_names else "reporter"
+        phrase = (pq.unresolved_assignee_names
+                  or pq.unresolved_reporter_names)[0]
+        suggestion_msg = _suggest_user(phrase, ctx)
+        verb = "assigned to" if role == "assignee" else "reported by"
+        body = (f"I couldn't find a user named **{phrase}** — so I'm "
+                f"not running this as a *{verb}* query. ")
+        if suggestion_msg:
+            body += suggestion_msg
+        else:
+            body += "Try the full name, the email local-part, or *list users* to see who exists"
+        return Response(
+            blocks=[Block("text", {"text": body})],
+            summary=f"Unknown {role}",
+            intent="clarify",
+        )
+
     stmt, count_stmt = _apply_bug_filters(_eager_bug_query(), select(func.count(Bug.id)), pq)
     total = db.scalar(count_stmt) or 0
 
@@ -611,7 +674,7 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
 
     # Count-only path -----------------------------------------------------
     if pq.wants_count and not pq.wants_export:
-        text = f"There {'is' if total == 1 else 'are'} **{total}** bug{'' if total==1 else 's'} {descr}."
+        text = f"There {'is' if total == 1 else 'are'} **{total}** bug{'' if total==1 else 's'} {descr}"
         return Response(
             blocks=[Block("text", {"text": text})],
             summary=f"{total} bugs",
@@ -648,8 +711,8 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
     if total == 0:
         return Response(
             blocks=[Block("text", {"text":
-                f"No bugs found {descr}." if descr != "(no filters)" else
-                "There are no bugs in the system yet."})],
+                f"No bugs found {descr}" if descr != "(no filters)" else
+                "There are no bugs in the system yet"})],
             summary="0 bugs",
             intent="list_bugs",
         )
@@ -670,10 +733,10 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
         ])
 
     summary_text = (
-        f"Found **{total}** bug{'' if total == 1 else 's'} {descr}."
+        f"Found **{total}** bug{'' if total == 1 else 's'} {descr}"
     )
     if total > limit:
-        summary_text += f" Showing the most recent {limit}."
+        summary_text += f" — showing the most recent {limit}"
     blocks = [
         Block("text", {"text": summary_text}),
         Block("table", {
@@ -685,9 +748,16 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery) -> Response:
     ]
     # Offer an export shortcut when the result set is non-trivial.
     if total > 0 and not pq.wants_export:
+        # We re-send the user's original query with " — export to excel"
+        # appended so the parser still has all the original filters. The
+        # em-dash (or comma) terminates name phrases cleanly — earlier
+        # builds used parentheses which left names like "alice (export"
+        # in the assignee regex and produced an "unknown user" reply.
+        base = (pq.raw_message or "").strip().rstrip("?.!,;:")
+        export_send = f"{base}, export to excel" if base else "export to excel"
         blocks.append(Block("suggestions", {
             "items": [
-                {"label": "Export to Excel", "send": (pq.raw_message + " (export to excel)") if pq.raw_message else "export to excel"},
+                {"label": "Export to Excel", "send": export_send},
             ],
         }))
     return Response(
@@ -708,7 +778,7 @@ def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: in
         return Response(
             blocks=[Block("text", {"text":
                 "Sorry, the Excel exporter isn't available on this server. "
-                "Try the CSV export from the sidebar instead."})],
+                "Try the CSV export from the sidebar instead"})],
             summary="Excel disabled",
             intent="export_failed",
         )
@@ -740,12 +810,12 @@ def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: in
 
     note = (
         f"I built a spreadsheet of **{len(rows)}** bug{'' if len(rows)==1 else 's'} "
-        f"{descr}."
+        f"{descr}"
     )
     if total > cap:
         note += (
-            f" The full result has **{total}** bugs — I capped the export "
-            f"at {cap} most-recently-updated rows to keep things fast."
+            f". The full result has **{total}** bugs — I capped the export "
+            f"at {cap} most-recently-updated rows to keep things fast"
         )
     return Response(
         blocks=[
@@ -795,15 +865,15 @@ def _build_action_plan(pq, actor: User) -> "tuple[Any, Optional[str]]":
     if needs_bug and pq.bug_id is None:
         if pq.used_pronoun_bug:
             return None, ("I don't know which bug you mean. "
-                          "Try mentioning the bug id, e.g. *close bug 5*.")
+                          "Try mentioning the bug id, e.g. *close bug 5*")
         return None, ("Which bug? Tell me the id — for example "
-                      "*close bug 5* or *comment on #12: works for me*.")
+                      "*close bug 5* or *comment on #12: works for me*")
     plan.bug_id = pq.bug_id
 
     if kind in ("assign", "unassign"):
         if not pq.assignee_ids:
             return None, ("I need a name. Try *assign bug 5 to alice* "
-                          "or *unassign bob from #5*.")
+                          "or *unassign bob from #5*")
         plan.target_user_ids = list(pq.assignee_ids)
         plan.target_user_names = list(pq.assignee_names)
         verb = "Assign" if kind == "assign" else "Unassign"
@@ -813,33 +883,33 @@ def _build_action_plan(pq, actor: User) -> "tuple[Any, Optional[str]]":
     elif kind == "set_status":
         if not pq.action_value:
             return None, ("What status? e.g. *mark bug 5 as resolved* or "
-                          "*close bug 5*.")
+                          "*close bug 5*")
         plan.new_value = pq.action_value
         plan.summary_human = f"Set bug #{pq.bug_id} status to {pq.action_value}"
 
     elif kind == "set_priority":
         if not pq.action_value:
-            return None, ("What priority? e.g. *set bug 5 priority to high*.")
+            return None, ("What priority? e.g. *set bug 5 priority to high*")
         plan.new_value = pq.action_value
         plan.summary_human = f"Set bug #{pq.bug_id} priority to {pq.action_value}"
 
     elif kind == "set_environment":
         if not pq.environments:
-            return None, ("Which environment? DEV / UAT / PROD.")
+            return None, ("Which environment? DEV / UAT / PROD")
         plan.new_value = pq.environments[0]
         plan.summary_human = f"Set bug #{pq.bug_id} environment to {plan.new_value}"
 
     elif kind == "set_due_date":
         if not pq.action_value:
             return None, ("What date? Use YYYY-MM-DD format, e.g. "
-                          "*due bug 5 2026-06-15*.")
+                          "*due bug 5 2026-06-15*")
         plan.new_value = pq.action_value
         plan.summary_human = f"Set bug #{pq.bug_id} due date to {pq.action_value}"
 
     elif kind == "add_comment":
         if not pq.action_comment:
             return None, ("What should the comment say? Use a colon, e.g. "
-                          "*comment on #5: works for me*.")
+                          "*comment on #5: works for me*")
         plan.comment_body = pq.action_comment
         preview = pq.action_comment if len(pq.action_comment) < 60 \
             else pq.action_comment[:57] + "..."
@@ -848,7 +918,7 @@ def _build_action_plan(pq, actor: User) -> "tuple[Any, Optional[str]]":
     elif kind == "create_bug":
         if not pq.action_title:
             return None, ("I need a title. Try *create a bug titled "
-                          '"Login broken" in project Apollo*.')
+                          '"Login broken" in project Apollo*')
         plan.new_title = pq.action_title
         if pq.priorities:
             plan.new_value = pq.priorities[0]   # priority for new bug
@@ -865,12 +935,12 @@ def _build_action_plan(pq, actor: User) -> "tuple[Any, Optional[str]]":
     elif kind == "create_project":
         if not pq.action_title:
             return None, ("I need a project name, e.g. "
-                          "*create project Mercury*.")
+                          "*create project Mercury*")
         plan.new_project_name = pq.action_title
         plan.summary_human = f'Create project "{pq.action_title}"'
 
     else:
-        return None, f"I don't know how to do '{kind}'."
+        return None, f"I don't know how to do '{kind}'"
 
     return plan, None
 
@@ -900,7 +970,7 @@ def _handle_confirm_yes(db: Session, actor: User) -> Response:
         return Response(
             blocks=[Block("text", {"text":
                 "Nothing to confirm right now. Tell me what to do — for "
-                "example *close bug 5* or *assign #12 to alice*."})],
+                "example *close bug 5* or *assign #12 to alice*"})],
             summary="No pending action",
             intent="confirm_idle",
         )
@@ -915,9 +985,9 @@ def _handle_confirm_yes(db: Session, actor: User) -> Response:
 def _handle_confirm_no(actor: User) -> Response:
     from app.chatbot.memory import store as _mem
     raw = _mem.take_pending(actor.id)
-    msg = ("Cancelled — I haven't changed anything."
+    msg = ("Cancelled — I haven't changed anything"
            if raw is not None else
-           "Nothing was pending — nothing changed.")
+           "Nothing was pending — nothing changed")
     return Response(
         blocks=[Block("text", {"text": msg})],
         summary="Cancelled",
@@ -998,7 +1068,7 @@ def execute(message: str, db: Session, actor: User,
     if pq.intent == "recent_activity":
         return _handle_recent_activity(db, pq, actor)
     if pq.intent == "list_bugs":
-        return _handle_list_bugs(db, pq)
+        return _handle_list_bugs(db, pq, ctx)
 
     # Layer 2 fallback: the rule parser said "unknown". Ask the
     # statistical classifier whether the message looks like one of the
@@ -1027,7 +1097,7 @@ def execute(message: str, db: Session, actor: User,
         if pred.intent == "list_projects":
             return _handle_list_projects(db)
         if pred.intent == "list_bugs":
-            return _handle_list_bugs(db, pq)
+            return _handle_list_bugs(db, pq, ctx)
         # For action intents the classifier surfaces, we still need a
         # bug id / target / value to build a plan. The rule parser has
         # already extracted those and would have set intent if it had

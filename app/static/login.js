@@ -80,7 +80,7 @@
       const next = params.get("next") || "/";
       location.href = next;
     } catch (err) {
-      showAlert("#loginAlert", "Network error. Try again.");
+      showAlert("#loginAlert", "Network error. Try again");
     } finally {
       btn.disabled = false; btn.textContent = "Sign in";
     }
@@ -99,8 +99,10 @@
         body: JSON.stringify({ email: f.elements.email.value.trim() }),
       });
       if (res.status === 204) {
+        // Email exists — the server queued the reset link. Be specific
+        // about what happens next so the user knows to check their inbox.
         showAlert("#forgotAlert",
-          "If that email is registered, a reset link has been sent. Check your inbox.",
+          "Reset link sent. Check your inbox — the link expires in 30 minutes",
           "success");
       } else {
         let msg = "Request failed";
@@ -115,7 +117,7 @@
         showAlert("#forgotAlert", msg);
       }
     } catch (err) {
-      showAlert("#forgotAlert", "Network error. Try again.");
+      showAlert("#forgotAlert", "Network error. Try again");
     } finally {
       btn.disabled = false; btn.textContent = "Send reset link";
     }

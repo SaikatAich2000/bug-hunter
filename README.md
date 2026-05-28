@@ -4,6 +4,42 @@ A self-hosted, internal-use issue tracker. Built with FastAPI + PostgreSQL + a
 zero-framework JavaScript SPA. One Docker command to run, no external auth, no
 external file storage — attachments live in the database itself.
 
+Current version: **v2.4**.
+
+## What's new in v2.4
+
+- **Audit history is no longer wiped when a bug is deleted.** The trail
+  preserves every original create / update / comment / assignment event
+  alongside the new `bug_deleted` row, with the original `#N 'title'`
+  baked into each detail string so searching by number or title still
+  works after the bug is gone.
+- **Audit search now actually finds things.** A LEFT JOIN against the bugs
+  table means the live item title and item type are searchable too —
+  type "Payment gateway" or "task" or `#42` or an assignee's name and
+  the right rows come back.
+- **Frontend-level read-only mode for restricted users.** A regular user
+  opening a Task or Requirement now sees the whole form rendered
+  disabled with a warm-tinted "Read-only" banner. The Save and Delete
+  buttons hide, the comment composer hides, the assignee picker locks.
+  Matches the existing server-side 403 so users see *why* before they
+  type. Bugs stay editable for regular users (unchanged).
+- **Form-field visual refresh.** Every input, select, textarea, the top
+  search bar, the audit filter strip and the multi-select filter
+  dropdowns got a contrast pass — visible borders, hover lift, focus
+  ring, and a *truly* disabled state (opacity + dashed border + not-allowed
+  cursor) so the difference between "you can type here" and "you can't"
+  finally reads at a glance.
+- **Top search placeholder updated** to make it obvious that the box
+  spans bugs / requirements / tasks: paste a title, a description
+  fragment, or `#42`.
+
+Schema migrations remain **strictly additive** — existing production
+databases are never altered or destroyed on deploy. The audit-retention
+fix is implemented at the application layer (the route handler detaches
+activity rows before issuing the bug delete) so it works on existing
+production schemas with the original `ON DELETE CASCADE` constraint
+still in place, with zero DDL change required.
+
 ## Features
 
 - **Login + role-based access** — admin, manager, user; bcrypt password hashing
@@ -43,10 +79,22 @@ external file storage — attachments live in the database itself.
   never "bug"
 - **Type-aware role enforcement** — admins do everything; managers can edit
   any item *and* events but can never delete; regular users can edit and
-  create bugs only (tasks, requirements and events are read-only for them)
+  create bugs only (tasks, requirements and events are read-only for them).
+  The restriction is enforced both server-side (403) **and** in the SPA:
+  when a regular user opens a Task or Requirement the form fields render
+  disabled with a clear "Read-only — only admins and managers can edit"
+  banner — no surprises after typing.
 - **Forgot-password** flow via email reset link
 - **Full audit trail** — every create / update / delete / login logged and
-  viewable by admins and managers
+  viewable by admins and managers. **Audit history survives item deletion**:
+  deleting a bug doesn't delete its history. The trail keeps every original
+  event with the item's original number and title baked into the detail, so
+  searching by title or number after a delete still finds the record.
+- **Powerful audit search** — paste anything into the audit search box:
+  bug number (`#42`, `42`, `bug 42`), assignee name, item type (`task`,
+  `requirement`), the current or any historical title, action keyword.
+  The query OR's against action / detail / actor / entity-type / live bug
+  title / item type, so type-as-you-think Just Works.
 - **Light / dark themes**, fully responsive (mobile, tablet, desktop)
 - **CSV export** of all items
 - **Sleuth — built-in AI assistant** 🔍 that answers natural-language questions
@@ -177,6 +225,13 @@ safe by design:
   (`ON DELETE SET NULL`, so removing an event preserves its items).
 - `event_managers` (v2.3) — many-to-many association between events and
   the admin/manager users notified for that event.
+- `activity_log.bug_id` (v2.4) — for fresh installs the FK changes from
+  `ON DELETE CASCADE` to `ON DELETE SET NULL` so audit history outlives
+  the bug it describes. **Existing production databases are not touched**:
+  the old `CASCADE` constraint stays in place, and the route handler
+  detaches activity rows (`UPDATE activity_log SET bug_id = NULL`) before
+  deleting the bug, so the same retention behaviour applies on legacy
+  schemas without a DDL change.
 - Cookies issued by older builds (which don't carry a `jti`) are still
   accepted and treated as legacy sessions, so a redeploy doesn't kick
   every user out at once.

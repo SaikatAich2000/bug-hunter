@@ -333,3 +333,86 @@ def test_stats_rejects_unknown_item_type(admin_client):
     r = admin_client.get("/api/stats?item_type=Bogus")
     assert r.status_code == 400
     assert "item_type" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Audit-trail preservation — deleting a bug must NOT wipe its history
+# ---------------------------------------------------------------------------
+def test_audit_history_survives_bug_delete(admin_client):
+    """Pre-fix behavior: cascade deletes ate every activity row for the bug
+    along with the bug. After fix: we detach the rows (bug_id NULL) before
+    delete so the global trail keeps the full history."""
+    p = _make_project(admin_client)
+    bug = _make_item(admin_client, p["id"], item_type="Bug", title="Login broken thing")
+    # Generate a real history: edit it, leave a comment, then delete.
+    admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
+    admin_client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "Investigating"})
+    audit_before = admin_client.get("/api/audit").json()
+    rows_for_bug_before = [
+        r for r in audit_before
+        if (r["entity_type"] == "bug" and r["entity_id"] == bug["id"])
+        or f"#{bug['id']}" in (r["detail"] or "")
+    ]
+    assert len(rows_for_bug_before) >= 3, rows_for_bug_before  # create + status + comment
+
+    # Delete the bug — admin only.
+    r = admin_client.delete(f"/api/bugs/{bug['id']}")
+    assert r.status_code == 200, r.text
+
+    audit_after = admin_client.get("/api/audit").json()
+    rows_for_bug_after = [
+        r for r in audit_after
+        if (r["entity_type"] == "bug" and r["entity_id"] == bug["id"])
+        or f"#{bug['id']}" in (r["detail"] or "")
+    ]
+    # The full history should still be there, PLUS the new "bug_deleted" row.
+    actions = [r["action"] for r in rows_for_bug_after]
+    assert "bug_created" in actions, actions
+    assert "comment_added" in actions, actions
+    assert "status_changed" in actions, actions
+    assert "bug_deleted" in actions, actions
+
+
+def test_audit_search_by_bug_title(admin_client):
+    """Searching the audit trail by bug title should hit history rows for
+    that bug — both via the live bug.title (LEFT JOIN) and via the title
+    baked into the detail string when the row was written."""
+    p = _make_project(admin_client)
+    bug = _make_item(admin_client, p["id"], item_type="Bug", title="Payment gateway timeout")
+    admin_client.put(f"/api/bugs/{bug['id']}", json={"priority": "Critical"})
+
+    r = admin_client.get("/api/audit?q=Payment+gateway")
+    assert r.status_code == 200
+    rows = r.json()
+    assert any(r["entity_id"] == bug["id"] for r in rows), \
+        "Searching by bug title should find audit rows for that bug"
+
+
+def test_audit_search_by_item_type_word(admin_client):
+    """Typing 'task' should narrow to task-related audit events. We have
+    the item type both in the joined Bug.item_type and in the
+    bug_created detail string."""
+    p = _make_project(admin_client)
+    _make_item(admin_client, p["id"], item_type="Task", title="Write the spec")
+    _make_item(admin_client, p["id"], item_type="Bug",  title="Crash on submit")
+    r = admin_client.get("/api/audit?q=task")
+    rows = r.json()
+    # At least one row should mention/reference the task.
+    assert any(
+        "task" in (row["detail"] or "").lower() or
+        "task" in (row["action"] or "").lower()
+        for row in rows
+    ), rows
+
+
+def test_audit_search_by_assignee_name(admin_client):
+    """Assignment audit detail bakes the assignee names in. Searching by
+    a name should find the assignment event."""
+    user = _make_user(admin_client, "Sandra", role="user", email="sandra@x.test")
+    p = _make_project(admin_client)
+    bug = _make_item(admin_client, p["id"], item_type="Bug",
+                     title="Crash on submit form", assignee_ids=[user["id"]])
+    r = admin_client.get("/api/audit?q=Sandra")
+    rows = r.json()
+    assert any(r["entity_id"] == bug["id"] for r in rows), \
+        f"Searching audit by assignee name 'Sandra' should hit bug #{bug['id']}: got {rows[:3]}"

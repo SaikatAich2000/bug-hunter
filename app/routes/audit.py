@@ -14,7 +14,7 @@ from sqlalchemy.types import String
 
 from app.auth import require_manager_or_admin
 from app.database import get_db
-from app.models import Activity, User
+from app.models import Activity, Bug, User
 from app.schemas import ActivityOut
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -42,10 +42,18 @@ def list_audit(
     """Returns audit events filtered by entity, actor and a free-text search.
 
     The search query (`q`) is broad on purpose so operators can paste in
-    anything: bug numbers (`#42` / `42` / `bug 42`), user names, actions,
-    entity types — they should all hit. We OR every plausible column
-    together rather than parsing the query into a structured form."""
-    stmt = select(Activity)
+    anything: bug numbers (`#42` / `42` / `bug 42`), user names, item
+    titles, actions, entity types, item types ("task", "requirement") —
+    they should all hit. We OR every plausible column together rather than
+    parsing the query into a structured form.
+
+    Performance: a LEFT JOIN on bugs gives us the current title for any
+    activity row still linked to a bug, so historical rows that didn't
+    bake the title into `detail` are still findable by title. The join
+    is OUTER because most audit rows aren't bug-related and even those
+    that are may have been detached (bug_id NULL) when the bug was
+    deleted — those rows still carry the original title in `detail`."""
+    stmt = select(Activity).outerjoin(Bug, Bug.id == Activity.bug_id)
     if entity_type:
         stmt = stmt.where(Activity.entity_type == entity_type)
     if actor_user_id is not None:
@@ -58,6 +66,14 @@ def list_audit(
             Activity.detail.ilike(like, escape="\\"),
             Activity.actor_name.ilike(like, escape="\\"),
             Activity.entity_type.ilike(like, escape="\\"),
+            # Search the current bug title for rows still attached to a
+            # live bug. Without this, renaming a bug after audit rows
+            # were written would make the old detail strings the only
+            # title users could search for.
+            Bug.title.ilike(like, escape="\\"),
+            # Item type ("task", "requirement", "bug") for the joined bug
+            # so typing the type word filters down to that flavor of item.
+            Bug.item_type.ilike(like, escape="\\"),
         ]
         # Numeric IDs — strip "#", "bug", "issue", "ticket" prefixes so
         # "#42", "bug 42" and "ticket #42" all behave like a search for
@@ -68,6 +84,8 @@ def list_audit(
             try:
                 entity_id_val = int(digits_match.group(0))
                 clauses.append(Activity.entity_id == entity_id_val)
+                # Also catch rows still attached to the bug via bug_id.
+                clauses.append(Activity.bug_id == entity_id_val)
             except ValueError:
                 pass
             # Substring match on the entity_id column as text — lets the

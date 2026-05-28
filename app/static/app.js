@@ -1261,8 +1261,72 @@ function openBugForm(bug = null) {
     }
   }
 
+  // Apply per-role read-only mode: regular users can edit Bugs but not
+  // Tasks / Requirements (the backend enforces this too with a 403; the
+  // frontend disable mirrors the rule so the form makes the constraint
+  // obvious instead of letting the user type and then erroring out).
+  applyBugFormReadOnly(form, bug, isEdit);
+
   openModal("modalBug");
-  setTimeout(() => form.elements.title.focus(), 50);
+  if (!form.dataset.readOnly) {
+    setTimeout(() => form.elements.title.focus(), 50);
+  }
+}
+
+// Mirror the backend can_edit_bug rule on the frontend. Regular users
+// can edit Bugs (legacy behavior); Tasks and Requirements require an
+// admin or manager role.
+function canEditItem(item) {
+  const role = STATE.currentUser?.role || "";
+  if (role === "admin" || role === "manager") return true;
+  const t = (item && item.item_type) || "Bug";
+  return t === "Bug";
+}
+
+function applyBugFormReadOnly(form, bug, isEdit) {
+  // Create mode is never read-only — anyone can file an item. Only an
+  // existing record can be locked down.
+  const readOnly = isEdit && !canEditItem(bug);
+  form.dataset.readOnly = readOnly ? "1" : "";
+  const fields = form.querySelectorAll("input, select, textarea");
+  fields.forEach(el => {
+    if (el.name === "id") return;
+    // The reporter select is already disabled by design; leave it.
+    if (el.classList.contains("reporter-select")) return;
+    el.disabled = readOnly ? true : (el.dataset.persistDisabled === "1" ? true : el.disabled);
+    if (!readOnly) {
+      // If we previously set readonly, only clear what WE set — never
+      // un-disable the always-disabled reporter.
+      if (el.dataset.roSetByUs === "1") {
+        el.disabled = false;
+        el.dataset.roSetByUs = "";
+      }
+    } else {
+      el.dataset.roSetByUs = "1";
+    }
+  });
+  // Chip pickers (assignees, event managers) — block clicks via CSS class.
+  const picker = $("#assigneePicker");
+  if (picker) picker.classList.toggle("locked", readOnly);
+  // Submit / Delete buttons + comment composer + create-mode attach uploader.
+  const submit = $("#bugSubmitBtn");
+  if (submit) submit.hidden = readOnly;
+  const delBtn = $("#bugDeleteBtn");
+  if (delBtn && readOnly) delBtn.hidden = true;
+  const composer = $("#commentForm");
+  if (composer) composer.hidden = readOnly;
+  // Add / remove a read-only banner so the user understands what they're
+  // seeing instead of wondering why nothing accepts input.
+  let banner = form.querySelector(".bug-readonly-banner");
+  if (readOnly && !banner) {
+    banner = document.createElement("div");
+    banner.className = "bug-readonly-banner";
+    const itype = (bug?.item_type || "item").toLowerCase();
+    banner.textContent = `Read-only — only admins and managers can edit ${itype}s.`;
+    form.insertBefore(banner, form.firstChild);
+  } else if (!readOnly && banner) {
+    banner.remove();
+  }
 }
 
 // Inline render of comments + attachments + activity inside the bug

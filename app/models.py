@@ -244,8 +244,14 @@ class Bug(Base):
     # insert-consistent order. Without the id tiebreaker the relationship
     # ordering disagreed with the dedicated /activity endpoint, which had
     # this same tuple already.
+    # Note: we deliberately do NOT cascade-delete activity rows when a bug
+    # is deleted. The audit trail must outlive the bugs it describes so an
+    # admin can still find "who deleted bug #42 and when". On delete the
+    # route handler detaches the rows (bug_id → NULL); the entity_id stays
+    # set to the original bug id and the detail string preserves the title,
+    # so the global audit screen still shows the full history.
     activities: Mapped[list["Activity"]] = relationship(
-        "Activity", back_populates="bug", cascade="all, delete-orphan",
+        "Activity", back_populates="bug",
         order_by="(Activity.created_at.desc(), Activity.id.desc())",
     )
     attachments: Mapped[list["Attachment"]] = relationship(
@@ -360,8 +366,12 @@ class Activity(Base):
     __tablename__ = "activity_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # bug_id is SET NULL on delete (not CASCADE) so audit history survives
+    # when a bug is deleted. The row keeps its entity_type / entity_id
+    # pointing at the (now gone) bug, and the detail string preserves the
+    # title — so searching the audit trail for that bug still works.
     bug_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("bugs.id", ondelete="CASCADE"), nullable=True
+        Integer, ForeignKey("bugs.id", ondelete="SET NULL"), nullable=True
     )
     # entity_type + entity_id let us reference any object: "user", "project",
     # "bug", "comment", "attachment". Lightweight — no FK, just metadata.

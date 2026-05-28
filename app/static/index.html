@@ -27,7 +27,8 @@
       </div>
 
       <nav class="nav">
-        <button class="nav-btn active" data-view="list"><span class="nav-icon">📋</span><span>Bugs</span></button>
+        <button class="nav-btn active" data-view="list"><span class="nav-icon">📋</span><span>Work Items</span></button>
+        <button class="nav-btn" data-view="events"><span class="nav-icon">📅</span><span>Events</span></button>
         <button class="nav-btn" data-view="analytics"><span class="nav-icon">📊</span><span>Analytics</span></button>
         <button class="nav-btn" data-view="audit" data-needs-role="manager"><span class="nav-icon">🛡</span><span>Audit Trail</span></button>
         <button class="nav-btn" data-view="sessions" data-needs-role="admin"><span class="nav-icon">🔐</span><span>Sessions</span></button>
@@ -74,12 +75,49 @@
     <main class="main">
       <header class="topbar">
         <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu">☰</button>
-        <h1 class="page-title" id="pageTitle">All Bugs</h1>
+        <h1 class="page-title" id="pageTitle">All Work Items</h1>
         <div class="search-wrap">
-          <input id="search" type="search" placeholder="Search bugs…" autocomplete="off" />
+          <input id="search" type="search" placeholder="Search…" autocomplete="off" />
         </div>
-        <button class="btn primary" id="newBugBtn">+ New Bug</button>
+        <!-- Single split button: clicking the main label creates the default
+             type (Bug); the caret opens a menu for Requirement / Task. -->
+        <div class="new-item-wrap">
+          <button class="btn primary" id="newBugBtn" type="button">+ New Bug</button>
+          <button class="btn primary new-item-caret" id="newItemCaretBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Choose item type">▾</button>
+          <div class="new-item-menu" id="newItemMenu" hidden role="menu">
+            <button type="button" role="menuitem" data-new-type="Bug">🐞 New Bug</button>
+            <button type="button" role="menuitem" data-new-type="Requirement">📐 New Requirement</button>
+            <button type="button" role="menuitem" data-new-type="Task">✅ New Task</button>
+          </div>
+        </div>
       </header>
+
+      <!-- Type-breakdown pills: one chip per work-item flavor + a shortcut
+           to the Events view. Counts come from /api/stats (by_type plus a
+           live event count). Clicking a type chip filters the list to that
+           type; clicking the Events chip jumps to the events view. -->
+      <section class="kpi-types" id="kpiTypes" aria-label="Type breakdown">
+        <button type="button" class="kpi-type-pill" data-type="Bug" aria-label="Filter to Bugs">
+          <span class="kpi-type-icon">🐞</span>
+          <span class="kpi-type-count" id="kpiTypeBug">0</span>
+          <span class="kpi-type-label">Bugs</span>
+        </button>
+        <button type="button" class="kpi-type-pill" data-type="Requirement" aria-label="Filter to Requirements">
+          <span class="kpi-type-icon">📐</span>
+          <span class="kpi-type-count" id="kpiTypeRequirement">0</span>
+          <span class="kpi-type-label">Requirements</span>
+        </button>
+        <button type="button" class="kpi-type-pill" data-type="Task" aria-label="Filter to Tasks">
+          <span class="kpi-type-icon">✅</span>
+          <span class="kpi-type-count" id="kpiTypeTask">0</span>
+          <span class="kpi-type-label">Tasks</span>
+        </button>
+        <button type="button" class="kpi-type-pill" data-type="Event" aria-label="Open Events view">
+          <span class="kpi-type-icon">📅</span>
+          <span class="kpi-type-count" id="kpiTypeEvent">0</span>
+          <span class="kpi-type-label">Events</span>
+        </button>
+      </section>
 
       <!-- KPI strip: Total | Open | Resolved | Closed | Resolve Later
            Each tile is a clickable filter that drives the status multi-select.
@@ -107,6 +145,12 @@
         <div class="ms-wrap" data-filter="project_id">
           <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
             <span class="ms-btn-label">All Projects</span><span class="ms-caret">▾</span>
+          </button>
+          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+        </div>
+        <div class="ms-wrap" data-filter="item_type">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+            <span class="ms-btn-label">All Types</span><span class="ms-caret">▾</span>
           </button>
           <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
         </div>
@@ -222,6 +266,54 @@
         <div class="audit-list" id="auditList"></div>
       </section>
 
+      <!-- VIEW: Events
+           Container for groups of work items — typically a standup or sprint
+           meeting. The list view shows a card grid (one card per event).
+           Clicking a card drills into a detail panel that lists the event's
+           items with a "← Back" control. Items can be opened from the detail
+           panel via the standard bug modal. Tasks (and any item type) can be
+           moved in or out of events via the Event select inside the bug
+           modal.
+      -->
+      <section class="view" id="viewEvents" hidden>
+        <!-- list mode: card grid of all events -->
+        <div class="events-list-mode" id="eventsListMode">
+          <div class="page-intro events-intro">
+            <div class="page-intro-icon" aria-hidden="true">📅</div>
+            <div class="page-intro-text">
+              <h2>Events</h2>
+              <p>Group of work items — like a daily standup or sprint meeting. Open an event to see the tasks assigned for it</p>
+            </div>
+          </div>
+          <div class="events-controls">
+            <button class="btn primary" id="newEventBtn">+ New Event</button>
+            <button class="btn ghost" id="eventsRefreshBtn">Refresh</button>
+            <span class="events-summary" id="eventsSummary"></span>
+          </div>
+          <div class="events-grid" id="eventsGrid"></div>
+          <div class="events-empty" id="eventsEmpty" hidden>
+            <p>No events yet. Click <strong>+ New Event</strong> to create one — a standup, a sprint meeting, whatever you want to track</p>
+          </div>
+        </div>
+
+        <!-- detail mode: a single event + its items -->
+        <div class="events-detail-mode" id="eventsDetailMode" hidden>
+          <div class="events-detail-head">
+            <button class="btn ghost" id="eventBackBtn" aria-label="Back to events">← Back</button>
+            <h2 id="eventDetailName">Event</h2>
+            <div class="events-detail-actions">
+              <button class="btn ghost" id="editEventBtn" data-needs-role="manager">✎ Edit</button>
+              <button class="btn danger" id="deleteEventBtn" data-needs-role="manager">🗑 Delete</button>
+            </div>
+          </div>
+          <div class="events-detail-meta" id="eventDetailMeta"></div>
+          <div class="events-detail-controls">
+            <button class="btn primary" id="addItemToEventBtn">+ Add Task</button>
+          </div>
+          <div class="events-detail-items" id="eventDetailItems"></div>
+        </div>
+      </section>
+
       <!-- VIEW: Sessions (admin-only) -->
       <section class="view" id="viewSessions" hidden>
         <div class="page-intro sessions-intro">
@@ -269,7 +361,7 @@
     <div class="modal-card xxl">
       <div class="modal-head">
         <div class="bug-modal-head-left">
-          <h2 id="modalBugTitle">New Bug</h2>
+          <h2 id="modalBugTitle">New Item</h2>
           <span class="bug-modal-subtitle muted small" id="modalBugSubtitle"></span>
         </div>
         <div class="bug-modal-head-actions">
@@ -283,7 +375,7 @@
         <!-- Title — full width at the top, like Jira's headline -->
         <label class="field f-grow bug-title-field">
           <span>Title <em>*</em></span>
-          <input name="title" required minlength="3" maxlength="200" placeholder="Short summary of the bug…" />
+          <input name="title" required minlength="3" maxlength="200" placeholder="Short summary…" />
         </label>
 
         <div class="bug-modal-grid">
@@ -292,7 +384,7 @@
             <label class="field">
               <span>Description</span>
               <textarea name="description" rows="6" maxlength="10000"
-                placeholder="What's happening, expected vs actual, repro steps…"></textarea>
+                placeholder="Context, acceptance criteria, repro steps — whatever's useful…"></textarea>
             </label>
 
             <!-- Create-mode attachment uploader.
@@ -323,7 +415,7 @@
                  the bug's own files are visually grouped with the bug
                  metadata rather than buried in the discussion thread. -->
             <section class="bug-section" id="bugAttachmentsSection" hidden>
-              <h3>Bug attachments <span class="muted small" id="attachmentsCount"></span></h3>
+              <h3>Attachments <span class="muted small" id="attachmentsCount"></span></h3>
               <div class="attachment-grid" id="bugAttachmentsGrid"></div>
             </section>
 
@@ -367,8 +459,12 @@
             </section>
           </div>
 
-          <!-- Side column: metadata — status / priority / env / project / reporter / assignees / due date -->
+          <!-- Side column: metadata — type / status / priority / env / project / reporter / assignees / due date -->
           <aside class="bug-modal-side">
+            <label class="field">
+              <span>Type <em>*</em></span>
+              <select name="item_type" required></select>
+            </label>
             <label class="field">
               <span>Project <em>*</em></span>
               <select name="project_id" required></select>
@@ -400,6 +496,12 @@
             <label class="field">
               <span>Assignees</span>
               <div class="chip-picker" id="assigneePicker"></div>
+            </label>
+            <label class="field">
+              <span>Event</span>
+              <select name="event_id">
+                <option value="">— No event —</option>
+              </select>
             </label>
             <label class="field">
               <span>Due date</span>
@@ -544,6 +646,37 @@
         <button class="btn ghost" id="confirmCancel">Cancel</button>
         <button class="btn danger" id="confirmOk">Delete</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Event create / edit -->
+  <div class="modal" id="modalEvent" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="modalEventTitle">New Event</h2>
+        <button class="icon-btn modal-close" data-close-modal aria-label="Close">✕</button>
+      </div>
+      <form id="formEvent" class="modal-body" novalidate>
+        <input type="hidden" name="id" />
+        <label class="field">
+          <span>Name <em>*</em></span>
+          <input name="name" required minlength="2" maxlength="200"
+                 placeholder="Morning standup · 2026-05-28" />
+        </label>
+        <label class="field">
+          <span>Scheduled for</span>
+          <input name="scheduled_for" type="date" />
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <textarea name="description" rows="3" maxlength="10000"
+            placeholder="Agenda, attendees, notes — whatever's useful"></textarea>
+        </label>
+        <div class="modal-foot">
+          <button type="button" class="btn ghost" data-close-modal>Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
     </div>
   </div>
 

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import Bug, Project, User, bug_assignees
+from app.models import Bug, Event, Project, User, bug_assignees
 from app.schemas import EXCLUDED_FROM_TOTAL_STATUSES, StatsOut
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -66,6 +66,14 @@ def stats(
     by_environment = dict(db.execute(
         select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment)
     ).all())
+    by_type = dict(db.execute(
+        select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type)
+    ).all())
+    # Events aren't a row in the bugs table — they live in their own
+    # `events` table. We surface their count under the same `by_type` map
+    # so the SPA can render a unified type-breakdown pill row.
+    events_count = db.scalar(select(func.count(Event.id))) or 0
+    by_type["Event"] = int(events_count)
 
     by_project_rows = db.execute(
         select(Project.id, Project.name, Project.color, func.count(Bug.id))
@@ -110,6 +118,7 @@ def stats(
         by_status=by_status,
         by_priority=by_priority,
         by_environment=by_environment,
+        by_type=by_type,
         by_project=[{"id": pid, "name": name, "color": color, "count": int(cnt)}
                     for pid, name, color, cnt in by_project_rows],
         by_assignee=[{"id": uid, "name": name, "email": email, "count": int(cnt)}

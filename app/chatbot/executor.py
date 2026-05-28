@@ -129,6 +129,7 @@ def _eager_bug_query():
         selectinload(Bug.project),
         selectinload(Bug.reporter),
         selectinload(Bug.assignees),
+        selectinload(Bug.event),
     )
 
 
@@ -450,11 +451,20 @@ def _handle_bug_detail(db: Session, pq: ParsedQuery) -> Response:
     ) or 0
     descr = (bug.description or "").strip()
     short_descr = (descr[:600] + "…") if len(descr) > 600 else descr
+    # Surface the work-item TYPE and EVENT in Sleuth's reply so users
+    # asking "show me #42" don't lose context. Falls back to "Bug" when
+    # the column is missing (legacy rows pre-2.3).
+    itype = getattr(bug, "item_type", None) or "Bug"
+    event_name = bug.event.name if getattr(bug, "event", None) else None
     body = (
-        f"**Bug #{bug.id} — {bug.title}**\n\n"
-        f"**Status:** {bug.status} · **Priority:** {bug.priority} · "
+        f"**{itype} #{bug.id} — {bug.title}**\n\n"
+        f"**Type:** {itype} · **Status:** {bug.status} · **Priority:** {bug.priority} · "
         f"**Environment:** {bug.environment}\n"
         f"**Project:** {bug.project.name if bug.project else '—'}\n"
+    )
+    if event_name:
+        body += f"**Event:** {event_name}\n"
+    body += (
         f"**Reporter:** {bug.reporter.name if bug.reporter else '—'}\n"
         f"**Assignees:** "
         f"{', '.join(a.name for a in bug.assignees) or '—'}\n"

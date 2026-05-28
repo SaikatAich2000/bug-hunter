@@ -503,7 +503,7 @@ class TestBugs:
         assert r.status_code == 200
         text = r.text
         assert "csv-test" in text
-        assert text.startswith("id,project,title")
+        assert text.startswith("id,type,project,title")
 
 
 # ===========================================================================

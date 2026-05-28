@@ -135,7 +135,49 @@ class Project(Base):
 
 
 # ---------------------------------------------------------------------------
-# Bug
+# Event
+#
+# Container for a group of work items, typically a standup / sprint meeting.
+# Items (Bug / Requirement / Task) point at an event via the optional
+# `event_id` FK on the bugs table. An item can exist standalone (event_id
+# NULL) or be added to an event later by setting the FK.
+#
+# Deleting an event sets all linked items' event_id to NULL — the items
+# themselves are preserved so the audit trail and assignee work isn't lost.
+# ---------------------------------------------------------------------------
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # YYYY-MM-DD; matches the date-only format used for Bug.due_date so
+    # filtering by date is consistent across the app.
+    scheduled_for: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+    items: Mapped[list["Bug"]] = relationship(
+        "Bug", back_populates="event",
+        # Don't cascade-delete items when an event goes away — see module
+        # docstring above. We null out the FK in app code on event delete
+        # so the items survive.
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("idx_events_scheduled_for", "scheduled_for"),
+        Index("idx_events_created_by", "created_by_user_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug (= work item — Bug / Requirement / Task)
 # ---------------------------------------------------------------------------
 class Bug(Base):
     __tablename__ = "bugs"
@@ -147,8 +189,21 @@ class Bug(Base):
     reporter_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # Optional link to an event (standup / sprint meeting). Nullable so a
+    # work item can exist independently. Delete behaviour: when the event
+    # row is deleted, the FK is NULLed via SQL (SET NULL), preserving the
+    # work item itself.
+    event_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("events.id", ondelete="SET NULL"), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Work-item type. The table is still called "bugs" for backwards
+    # compatibility (and to keep the production database safe on upgrade),
+    # but each row can now be a Bug, a Requirement (Jira-style story / spec)
+    # or a Task (daily standup work item). Default "Bug" so any pre-existing
+    # row created before this column existed is interpreted correctly.
+    item_type: Mapped[str] = mapped_column(String(20), nullable=False, default="Bug")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="New")
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="Medium")
     # environment is now restricted to DEV / UAT / PROD (enforced in schemas)
@@ -161,6 +216,7 @@ class Bug(Base):
 
     project: Mapped[Project] = relationship("Project", back_populates="bugs")
     reporter: Mapped["User | None"] = relationship("User", foreign_keys=[reporter_id])
+    event: Mapped["Event | None"] = relationship("Event", back_populates="items")
     assignees: Mapped[list["User"]] = relationship(
         "User", secondary=bug_assignees, lazy="selectin"
     )
@@ -189,6 +245,9 @@ class Bug(Base):
         Index("idx_bugs_status", "status"),
         Index("idx_bugs_priority", "priority"),
         Index("idx_bugs_environment", "environment"),
+        Index("idx_bugs_item_type", "item_type"),
+        Index("idx_bugs_item_type_status", "item_type", "status"),
+        Index("idx_bugs_event_id", "event_id"),
         # v3.2 additive composite indexes — speed up the common dashboard
         # queries which filter on multiple columns at once. Single-column
         # indexes above still serve queries that filter on just one field.

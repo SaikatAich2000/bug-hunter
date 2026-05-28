@@ -23,6 +23,13 @@ ALLOWED_STATUSES = [
 EXCLUDED_FROM_TOTAL_STATUSES = ["Not a Bug"]
 ALLOWED_PRIORITIES = ["Low", "Medium", "High", "Critical"]
 ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
+# Work-item types. The "bugs" table now holds three flavors of work:
+#   Bug          - defects (the original use case)
+#   Requirement  - feature / spec / story (Jira-style)
+#   Task         - daily standup todo, usually assigned per team-member-per-day
+# Environment / priority / status fields apply across all three; the type
+# is purely a classifier that drives filtering, badges and the standup view.
+ALLOWED_ITEM_TYPES = ["Bug", "Requirement", "Task"]
 ALLOWED_ROLES = ["admin", "manager", "user"]
 MIN_PASSWORD_LENGTH = 8
 MIN_TITLE_LENGTH = 3
@@ -295,10 +302,13 @@ class BugCreate(BaseModel):
     description: str = Field(default="", max_length=10000)
     reporter_id: Optional[int] = None
     assignee_ids: list[int] = Field(default_factory=list)
+    item_type: str = Field(default="Bug")
     status: str = Field(default="New")
     priority: str = Field(default="Medium")
     environment: str = Field(default="DEV")
     due_date: Optional[str] = None
+    # Optional: file the item directly under an event (e.g. today's standup).
+    event_id: Optional[int] = None
 
     @field_validator("title")
     @classmethod
@@ -309,6 +319,11 @@ class BugCreate(BaseModel):
     @classmethod
     def _strip_desc(cls, v: str) -> str:
         return v.strip() if isinstance(v, str) else v
+
+    @field_validator("item_type")
+    @classmethod
+    def _check_item_type(cls, v: str) -> str:
+        return _normalize_choice(v, ALLOWED_ITEM_TYPES, "item_type")
 
     @field_validator("status")
     @classmethod
@@ -350,10 +365,15 @@ class BugUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=10000)
     reporter_id: Optional[int] = None
     assignee_ids: Optional[list[int]] = None
+    item_type: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
     environment: Optional[str] = None
     due_date: Optional[str] = None
+    # event_id can be set to an int to link this item to an event, or to
+    # null/0 to unlink it. Pydantic's exclude_unset is what distinguishes
+    # "not changing" from "explicitly clearing".
+    event_id: Optional[int] = None
 
     @field_validator("title")
     @classmethod
@@ -365,6 +385,11 @@ class BugUpdate(BaseModel):
     @classmethod
     def _strip_desc(cls, v: Optional[str]) -> Optional[str]:
         return v.strip() if isinstance(v, str) else v
+
+    @field_validator("item_type")
+    @classmethod
+    def _check_item_type(cls, v: Optional[str]) -> Optional[str]:
+        return None if v is None else _normalize_choice(v, ALLOWED_ITEM_TYPES, "item_type")
 
     @field_validator("status")
     @classmethod
@@ -422,10 +447,15 @@ class BugOut(BaseModel):
     description: str
     reporter: Optional[UserBrief] = None
     assignees: list[UserBrief] = Field(default_factory=list)
+    item_type: str = "Bug"
     status: str
     priority: str
     environment: str
     due_date: Optional[str]
+    # Optional event link. Both fields nullable so standalone items
+    # (no event) keep their existing shape.
+    event_id: Optional[int] = None
+    event_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     attachment_count: int = 0
@@ -525,6 +555,82 @@ class StatsOut(BaseModel):
     by_status: dict[str, int]
     by_priority: dict[str, int]
     by_environment: dict[str, int]
+    by_type: dict[str, int] = Field(default_factory=dict)
     by_project: list[dict[str, Any]]
     by_assignee: list[dict[str, Any]]
     timeline: list[dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Events — container for a group of work items (standup / sprint meeting).
+# ---------------------------------------------------------------------------
+class EventCreate(BaseModel):
+    name: str = Field(max_length=200)
+    description: str = Field(default="", max_length=10000)
+    scheduled_for: Optional[str] = None  # YYYY-MM-DD
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        return _strip_and_check_min_length(v, 2, "Event name")
+
+    @field_validator("description")
+    @classmethod
+    def _strip_desc(cls, v: str) -> str:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+        if v in (None, ""): return None
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("scheduled_for must be YYYY-MM-DD") from exc
+        return v
+
+
+class EventUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=10000)
+    scheduled_for: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None: return None
+        return _strip_and_check_min_length(v, 2, "Event name")
+
+    @field_validator("description")
+    @classmethod
+    def _strip_desc(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+        if v in (None, ""): return None
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("scheduled_for must be YYYY-MM-DD") from exc
+        return v
+
+
+class EventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    description: str
+    scheduled_for: Optional[str] = None
+    created_by_user_id: Optional[int] = None
+    created_by_name: Optional[str] = None
+    item_count: int = 0
+    assignee_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class EventDetail(EventOut):
+    """Event with its full item list — what /api/events/{id} returns."""
+    items: list[BugOut] = Field(default_factory=list)

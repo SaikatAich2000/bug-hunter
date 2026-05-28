@@ -8,7 +8,7 @@
 // State
 // ---------------------------------------------------------------------------
 const STATE = {
-  meta:     { statuses: [], priorities: [], environments: [] },
+  meta:     { statuses: [], priorities: [], environments: [], item_types: ["Bug", "Requirement", "Task"] },
   users:    [],
   projects: [],
   stats:    null,
@@ -21,9 +21,19 @@ const STATE = {
   // text search `q` and the legacy single-value `reporter_id` stay scalar.
   filters: {
     project_id: [], status: [], priority: [],
-    environment: [], assignee_id: [],
+    environment: [], assignee_id: [], item_type: [],
     reporter_id: "", q: "",
   },
+  // The "+ New" split button remembers what kind of item to default to.
+  // Persisted to localStorage so reopening the app keeps the last choice.
+  defaultNewType: (() => {
+    try { return localStorage.getItem("defaultNewType") || "Bug"; }
+    catch { return "Bug"; }
+  })(),
+  // Events list + drill-in state.
+  events: [],
+  currentEventId: null,    // null = list mode; id = detail mode
+  currentEvent: null,      // populated when in detail mode
   view: "list",
   currentBugId: null,
   // Detail tabs are gone in v3.1 — bug detail is now a single inline
@@ -420,7 +430,49 @@ async function refreshStats() {
   $("#kpiResolved").textContent = s.resolved ?? 0;
   $("#kpiClosed").textContent = s.closed ?? (s.by_status?.Closed ?? 0);
   $("#kpiResolveLater").textContent = s.resolve_later ?? (s.by_status?.["Resolve Later"] ?? 0);
+  // Type-breakdown pills. by_type comes from /api/stats; the "Event" key
+  // there is the count of rows in the events table (added server-side so
+  // the frontend doesn't need a second round-trip).
+  const byType = s.by_type || {};
+  const bugEl = $("#kpiTypeBug");        if (bugEl) bugEl.textContent = byType.Bug ?? 0;
+  const reqEl = $("#kpiTypeRequirement"); if (reqEl) reqEl.textContent = byType.Requirement ?? 0;
+  const taskEl = $("#kpiTypeTask");      if (taskEl) taskEl.textContent = byType.Task ?? 0;
+  const evEl  = $("#kpiTypeEvent");      if (evEl) evEl.textContent  = byType.Event ?? 0;
+  refreshKpiActiveState();
+  refreshTypePillActiveState();
   if (STATE.view === "analytics") renderCharts();
+}
+
+// Highlight the type pill that matches the current item_type filter
+// (or none if the filter is empty / multi-valued).
+function refreshTypePillActiveState() {
+  const cur = STATE.filters.item_type || [];
+  $$(".kpi-type-pill[data-type]").forEach(btn => {
+    const t = btn.dataset.type;
+    if (t === "Event") {
+      // Events pill is just a shortcut, never "active" as a filter.
+      btn.classList.remove("active");
+      return;
+    }
+    btn.classList.toggle("active", cur.length === 1 && cur[0] === t);
+  });
+}
+
+// Click handler for a type pill: Bug/Requirement/Task → toggle list filter;
+// Event → jump to the Events view.
+function handleTypePillClick(type) {
+  if (type === "Event") {
+    setView("events");
+    return;
+  }
+  const cur = STATE.filters.item_type || [];
+  const isAlreadyOnlyThis = cur.length === 1 && cur[0] === type;
+  STATE.filters.item_type = isAlreadyOnlyThis ? [] : [type];
+  STATE.page = 1;
+  if (STATE.view !== "list") setView("list");
+  refreshMultiSelects();
+  refreshTypePillActiveState();
+  refreshBugs();
 }
 
 // ---------------------------------------------------------------------------
@@ -474,12 +526,13 @@ function renderBugTable() {
     // Title cell carries the bug's `updated_at` as a small timestamp under
     // the title, so we can drop the dedicated "Updated" column without
     // losing the freshness signal entirely.
+    const itype = bug.item_type || "Bug";
     tr.innerHTML = `
       <td class="col-id">#${bug.id}</td>
       <td class="col-title">
         <div class="title-cell">
-          <strong class="title-text" title="${escapeHtml(bug.title)}">${escapeHtml(bug.title)}</strong>
-          <span class="title-meta">Updated ${formatDate(bug.updated_at)}</span>
+          <strong class="title-text" title="${escapeHtml(bug.title)}"><span class="inline-type" data-type="${escapeHtml(itype)}" title="${escapeHtml(itype)}">${itemTypeEmoji(itype)}</span> ${escapeHtml(bug.title)}</strong>
+          <span class="title-meta">${escapeHtml(itype)} · Updated ${formatDate(bug.updated_at)}</span>
         </div>
       </td>
       <td class="col-project">${escapeHtml(bug.project_name || "")}</td>
@@ -605,13 +658,15 @@ function fillAuditActorSelect() {
 // ---------------------------------------------------------------------------
 const MS_LABELS = {
   project_id:  "All Projects",
+  item_type:   "All Types",
   status:      "All Statuses",
   priority:    "All Priorities",
   environment: "All Envs",
   assignee_id: "All Assignees",
 };
 const MS_NOUNS = {
-  project_id: "Projects", status: "Statuses", priority: "Priorities",
+  project_id: "Projects", item_type: "Types",
+  status: "Statuses", priority: "Priorities",
   environment: "Envs",    assignee_id: "Assignees",
 };
 
@@ -627,8 +682,13 @@ function _msOptions(key) {
   if (key === "status")      return (STATE.meta.statuses     || []).map(s => [s, s]);
   if (key === "priority")    return (STATE.meta.priorities   || []).map(s => [s, s]);
   if (key === "environment") return (STATE.meta.environments || ["DEV","UAT","PROD"]).map(s => [s, s]);
+  if (key === "item_type")   return (STATE.meta.item_types   || ["Bug","Requirement","Task"]).map(t => [t, t]);
   return [];
 }
+
+// Per-type emoji marker. Used everywhere we render an item-type badge.
+const ITEM_TYPE_EMOJI = { Bug: "🐞", Requirement: "📐", Task: "✅" };
+function itemTypeEmoji(t) { return ITEM_TYPE_EMOJI[t] || "📝"; }
 
 function initMultiSelects() {
   $$(".ms-wrap").forEach(wrap => {
@@ -713,28 +773,52 @@ function setView(view) {
   STATE.view = view;
   $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   $("#viewList").hidden = view !== "list";
+  $("#viewEvents").hidden = view !== "events";
   $("#viewAnalytics").hidden = view !== "analytics";
   $("#viewAudit").hidden = view !== "audit";
   $("#viewSessions").hidden = view !== "sessions";
   $("#filterBar").hidden = view !== "list";
-  // Search input is the BUG search — only show it on the list view.
-  // KPI strip is bug-only too; keep it on analytics so the snapshot is
+  // Search input is the work-item search — only show it on the list view.
+  // KPI strip is item-only too; keep it on analytics so the snapshot is
   // visible alongside the charts, but hide it on audit & sessions where
-  // it's noise. The "+ New Bug" CTA only makes sense on the bug list,
+  // it's noise. The "+ New" CTA only makes sense on the work-item list,
   // so we hide it on every other view too.
   const searchWrap = document.querySelector(".search-wrap");
   if (searchWrap) searchWrap.style.display = view === "list" ? "" : "none";
   const kpiStrip = $("#kpiStrip");
   if (kpiStrip) kpiStrip.style.display = (view === "list" || view === "analytics") ? "" : "none";
-  const newBugBtn = $("#newBugBtn");
-  if (newBugBtn) newBugBtn.style.display = view === "list" ? "" : "none";
+  const kpiTypes = $("#kpiTypes");
+  // Type pills make sense on the list and events views (where they double
+  // as nav shortcuts). They're noise on audit / sessions.
+  if (kpiTypes) kpiTypes.style.display = (view === "list" || view === "analytics" || view === "events") ? "" : "none";
+  const newItemWrap = document.querySelector(".new-item-wrap");
+  if (newItemWrap) newItemWrap.style.display = view === "list" ? "" : "none";
   $("#pageTitle").textContent = ({
-    list: "All Bugs", analytics: "Analytics",
+    list: "All Work Items", events: "Events", analytics: "Analytics",
     audit: "Audit Trail", sessions: "Active Sessions",
   }[view] || "Bug Hunter");
-  if (view === "analytics") renderCharts();
+  // Re-fetch on entry. Without this, anything created from another view —
+  // a task added inside an event, a stat changed by Sleuth, etc. — would
+  // require a manual page reload to show up. The fetches are cheap and the
+  // user expects the data to be current the moment a view opens.
+  if (view === "list") {
+    // refreshAll = bugs + stats (used by the KPI strip + type pills).
+    refreshAll();
+  }
+  if (view === "analytics") {
+    // refreshStats already updates STATE.stats; renderCharts reads it. We
+    // refresh first so a stale dataset doesn't get drawn for a frame.
+    refreshStats().then(renderCharts);
+  }
   if (view === "audit") refreshAudit();
   if (view === "sessions") refreshSessions();
+  if (view === "events") {
+    // Default to list mode whenever the nav button is clicked.
+    STATE.currentEventId = null;
+    STATE.currentEvent = null;
+    showEventsListMode();
+    refreshEvents();
+  }
 }
 
 // KPI → status filter mapping. "total" clears the filter, the others
@@ -902,19 +986,23 @@ function drawAssigneeBars(sel, rows) {
 // ---------------------------------------------------------------------------
 function openBugForm(bug = null) {
   const form = $("#formBug");
-  const isEdit = !!bug;
-  STATE.currentBugId = bug ? bug.id : null;
+  // Edit mode requires a real bug id — a bare `{ _defaultType: "Task" }`
+  // hint object from the "+ New" menu is NOT an edit.
+  const isEdit = !!(bug && bug.id);
+  STATE.currentBugId = isEdit ? bug.id : null;
   form.reset();
 
   // Header: short numeric label + the saved title as a faded subtitle so
   // the user can see what they originally filed without it getting
   // muddled with the editable input below.
   if (isEdit) {
-    $("#modalBugTitle").textContent = `Bug #${bug.id}`;
+    const t = bug.item_type || "Bug";
+    $("#modalBugTitle").textContent = `${itemTypeEmoji(t)} ${t} #${bug.id}`;
     $("#modalBugSubtitle").textContent = bug.title || "";
     $("#bugSubmitBtn").textContent = "Save changes";
   } else {
-    $("#modalBugTitle").textContent = "New Bug";
+    const t = bug?._defaultType || STATE.defaultNewType || "Bug";
+    $("#modalBugTitle").textContent = `${itemTypeEmoji(t)} New ${t}`;
     $("#modalBugSubtitle").textContent = "";
     $("#bugSubmitBtn").textContent = "Create";
   }
@@ -953,6 +1041,52 @@ function openBugForm(bug = null) {
                  isEdit ? bug.priority : "Medium");
   // Environment - already DEV/UAT/PROD options in the HTML, just set value
   form.elements.environment.value = isEdit ? bug.environment : "DEV";
+  // Item-type selector. In edit mode we use whatever the row already had
+  // (default "Bug" if the column is older than this feature). In create
+  // mode we use bug._defaultType if openBugForm was called from the
+  // "+ New <Type>" menu, otherwise the user's last-chosen default.
+  const presetType = isEdit
+    ? (bug.item_type || "Bug")
+    : (bug?._defaultType || STATE.defaultNewType || "Bug");
+  fillFormSelect(form.elements.item_type,
+                 (STATE.meta.item_types || ["Bug","Requirement","Task"]).map(t => [t, t]),
+                 presetType);
+
+  // Event selector. Empty-value option means "no event"; on create the
+  // selection defaults to whatever _defaultEventId was passed in (used by
+  // the "+ Add Task" button inside an event-detail view). On edit it
+  // picks up the bug's current event_id.
+  if (form.elements.event_id) {
+    const presetEventId = isEdit
+      ? (bug.event_id || "")
+      : (bug?._defaultEventId || "");
+    // Lightweight pre-render with a placeholder option, then fill async.
+    form.elements.event_id.innerHTML =
+      `<option value="">— No event —</option>`;
+    if (isEdit && bug.event_id && bug.event_name) {
+      // Seed the option immediately so the user sees the current event
+      // even if the events list hasn't loaded yet.
+      const opt = document.createElement("option");
+      opt.value = String(bug.event_id);
+      opt.textContent = bug.event_name;
+      opt.selected = true;
+      form.elements.event_id.appendChild(opt);
+    }
+    // Fetch a fresh list (cheap GET) so the dropdown is current.
+    api("/events").then((events) => {
+      if (!form.elements.event_id) return;
+      const sel = form.elements.event_id;
+      const current = String(sel.value || presetEventId || "");
+      sel.innerHTML = `<option value="">— No event —</option>` +
+        (events || []).map(ev => {
+          const label = ev.scheduled_for
+            ? `${ev.name} · ${ev.scheduled_for}`
+            : ev.name;
+          return `<option value="${ev.id}">${escapeHtml(label)}</option>`;
+        }).join("");
+      if (current) sel.value = current;
+    }).catch(() => { /* leave the placeholder if /events fails */ });
+  }
 
   const assignedIds = new Set(isEdit && bug.assignees ? bug.assignees.map(a => a.id) : []);
   renderChips("#assigneePicker",
@@ -1131,40 +1265,59 @@ async function submitBugForm(e) {
   const reporterFromMe = STATE.currentUser?.id || null;
   // For NEW bugs use the current user; for EDIT use whatever the form
   // already has (which is the bug's existing reporter).
+  const rawEvent = form.elements.event_id ? form.elements.event_id.value : "";
   const payload = {
     project_id: parseInt(form.elements.project_id.value, 10),
     title: form.elements.title.value.trim(),
     description: form.elements.description.value,
     reporter_id: id ? (reporterFromForm || reporterFromMe) : reporterFromMe,
+    item_type: form.elements.item_type ? form.elements.item_type.value || "Bug" : "Bug",
     status: form.elements.status.value,
     priority: form.elements.priority.value,
     environment: form.elements.environment.value,
     due_date: form.elements.due_date.value || null,
+    // event_id: "" or "0" means "no event" — send null so the server
+    // treats it as an explicit unlink in the EDIT path.
+    event_id: rawEvent && rawEvent !== "0" ? parseInt(rawEvent, 10) : null,
     assignee_ids: readChips("#assigneePicker"),
   };
+  // Remember the chosen type on create so the next "+ New" defaults to it.
+  if (!id) {
+    STATE.defaultNewType = payload.item_type;
+    try { localStorage.setItem("defaultNewType", payload.item_type); } catch {}
+  }
   if (!payload.project_id) { toast("Please pick a project", "error"); return; }
   if (!payload.title) { toast("Title is required", "error"); return; }
   if (!payload.reporter_id) { toast("Reporter is required", "error"); return; }
 
   try {
     if (id) {
-      // EDIT — save, then close the modal and return to the Bugs list.
+      // EDIT — save, then close the modal and return to the list.
       // (Earlier v3.1 builds kept the modal open Jira-style; reverted
       // here because users prefer the explicit close-and-return flow.)
-      await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-      toast(`Bug #${id} updated`, "success");
+      const updated = await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      const utype = updated?.item_type || payload.item_type || "Bug";
+      toast(`${utype} #${id} updated`, "success");
       closeModal("modalBug");
-      setView("list");
-      await refreshAll();
+      // Stay in the event-detail view if that's where we came from —
+      // otherwise the user gets bounced back to the list, which is
+      // jarring when they were drilling through a standup.
+      if (STATE.view === "events" && STATE.currentEventId) {
+        await openEventDetail(STATE.currentEventId);
+      } else {
+        setView("list");
+        await refreshAll();
+      }
     } else {
-      // CREATE — POST the bug, then upload any files selected in the
+      // CREATE — POST the item, then upload any files selected in the
       // create-mode attachment picker before closing the modal. We do the
-      // upload here (not on the server side of POST /bugs) so the bug-
+      // upload here (not on the server side of POST /bugs) so the
       // create payload stays JSON and we can keep the existing
       // /bugs/{id}/attachments endpoint as the single attachment-upload
       // path. Failures on individual files are toasted but don't abort
-      // the create flow — the bug itself is already saved.
+      // the create flow — the item itself is already saved.
       const created = await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
+      const ctype = created?.item_type || payload.item_type || "Bug";
       const filesEl = $("#createBugFiles");
       const files = filesEl?.files;
       if (files && files.length && created && created.id) {
@@ -1183,11 +1336,11 @@ async function submitBugForm(e) {
             toast(`Attachment ${f.name}: ${err.message}`, "error");
           }
         }
-        if (done) toast(`Bug #${created.id} created · ${done} file(s) attached`, "success");
-        else if (failed) toast(`Bug #${created.id} created (no attachments saved)`, "info");
-        else toast("Bug created", "success");
+        if (done) toast(`${ctype} #${created.id} created · ${done} file(s) attached`, "success");
+        else if (failed) toast(`${ctype} #${created.id} created (no attachments saved)`, "info");
+        else toast(`${ctype} created`, "success");
       } else {
-        toast("Bug created", "success");
+        toast(`${ctype} created`, "success");
       }
       // Clear the file picker so reopening the create modal starts clean.
       if (filesEl) filesEl.value = "";
@@ -1195,8 +1348,12 @@ async function submitBugForm(e) {
       const cl = $("#createFileLabel"); if (cl) cl.textContent = "Attach files";
 
       closeModal("modalBug");
-      setView("list");
-      await refreshAll();
+      if (STATE.view === "events" && STATE.currentEventId) {
+        await openEventDetail(STATE.currentEventId);
+      } else {
+        setView("list");
+        await refreshAll();
+      }
     }
   } catch (err) {
     toastError(err);
@@ -1369,6 +1526,77 @@ async function submitProjectForm(e) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Event form (create / edit) + delete
+// ---------------------------------------------------------------------------
+function openEventForm(event = null) {
+  const form = $("#formEvent");
+  form.reset();
+  const isEdit = !!(event && event.id);
+  $("#modalEventTitle").textContent = isEdit ? `Edit "${event.name}"` : "New Event";
+  form.elements.id.value = isEdit ? event.id : "";
+  if (isEdit) {
+    form.elements.name.value = event.name || "";
+    form.elements.description.value = event.description || "";
+    form.elements.scheduled_for.value = event.scheduled_for || "";
+  } else {
+    // Default scheduled date to today so the morning-standup case is one click.
+    form.elements.scheduled_for.value = new Date().toISOString().slice(0, 10);
+  }
+  openModal("modalEvent");
+  setTimeout(() => form.elements.name.focus(), 50);
+}
+
+async function submitEventForm(e) {
+  e.preventDefault();
+  const form = e.target;
+  const id = form.elements.id.value;
+  const payload = {
+    name: form.elements.name.value.trim(),
+    description: form.elements.description.value,
+    scheduled_for: form.elements.scheduled_for.value || null,
+  };
+  if (!payload.name) { toast("Event name is required", "error"); return; }
+  try {
+    let saved;
+    if (id) {
+      saved = await api(`/events/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      toast("Event updated", "success");
+    } else {
+      saved = await api("/events", { method: "POST", body: JSON.stringify(payload) });
+      toast("Event created", "success");
+    }
+    closeModal("modalEvent");
+    await refreshEvents();
+    // If we created from inside detail mode, refresh the detail view.
+    if (id && STATE.currentEventId === parseInt(id, 10)) {
+      openEventDetail(parseInt(id, 10));
+    }
+    // If we just created a brand-new event, jump straight into its detail
+    // view so the user can start adding tasks to it.
+    if (!id && saved && saved.id) {
+      openEventDetail(saved.id);
+    }
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+async function handleDeleteEvent(event) {
+  const ok = await confirmDialog(
+    `Delete event "${event.name}"? Its tasks will be kept but unlinked from this event. Cannot be undone`,
+  );
+  if (!ok) return;
+  try {
+    await api(`/events/${event.id}`, { method: "DELETE" });
+    toast(`Event "${event.name}" deleted`, "success");
+    showEventsListMode();
+    await refreshEvents();
+  } catch (err) {
+    toastError(err);
+  }
+}
+
 function openUserForm(user = null) {
   const form = $("#formUser");
   form.reset();
@@ -1449,11 +1677,19 @@ async function handleEditBug(bugId) {
 }
 
 async function handleDeleteBug(bugId) {
-  const ok = await confirmDialog(`Delete bug #${bugId}? This will also delete its comments and attachments. Cannot be undone`);
+  // Look up the row from cached state so the confirm prompt + success toast
+  // use the right noun ("task" / "requirement" / "bug"). Falls back to "Bug"
+  // if we can't find the row (e.g. it was paginated out).
+  const cached = (STATE.bugs || []).find(b => b.id === bugId);
+  const itype = cached?.item_type || "Bug";
+  const noun = itype.toLowerCase();
+  const ok = await confirmDialog(
+    `Delete ${noun} #${bugId}? This will also delete its comments and attachments. Cannot be undone`
+  );
   if (!ok) return;
   try {
     await api(`/bugs/${bugId}`, { method: "DELETE" });
-    toast(`Bug #${bugId} deleted`, "success");
+    toast(`${itype} #${bugId} deleted`, "success");
     closeModal("modalBug");
     await refreshAll();
   } catch (err) { toastError(err); }
@@ -1602,6 +1838,156 @@ function shortenUserAgent(ua) {
   return os ? `${browser} on ${os}` : browser;
 }
 
+// ---------------------------------------------------------------------------
+// Events view
+//
+// Two modes:
+//   • list   — card grid of every event
+//   • detail — one event open: header, items list, back button
+//
+// Items can be opened from the detail panel via the standard bug modal.
+// Items can be moved in/out of an event via the Event select in that modal.
+// ---------------------------------------------------------------------------
+function showEventsListMode() {
+  $("#eventsListMode").hidden = false;
+  $("#eventsDetailMode").hidden = true;
+  STATE.currentEventId = null;
+  STATE.currentEvent = null;
+}
+
+function showEventsDetailMode() {
+  $("#eventsListMode").hidden = true;
+  $("#eventsDetailMode").hidden = false;
+}
+
+async function refreshEvents() {
+  const grid = $("#eventsGrid");
+  const empty = $("#eventsEmpty");
+  if (!grid) return;
+  grid.innerHTML = `<div class="events-loading muted">Loading events…</div>`;
+  if (empty) empty.hidden = true;
+  try {
+    STATE.events = await api("/events");
+    renderEvents();
+  } catch (err) {
+    grid.innerHTML = "";
+    toastError(err);
+  }
+}
+
+function renderEvents() {
+  const grid = $("#eventsGrid");
+  const empty = $("#eventsEmpty");
+  if (!grid) return;
+  const rows = STATE.events || [];
+  // Roll-up KPIs for the page header. We can't safely sum assignee_counts
+  // across events to get a unique-people count (the same person can be
+  // double-counted across events), so report a "people involved" range:
+  // exact for 0–1 events, otherwise an approximate sum prefixed with "~".
+  const totalItems = rows.reduce((n, ev) => n + (ev.item_count || 0), 0);
+  const totalPeople = rows.reduce((n, ev) => n + (ev.assignee_count || 0), 0);
+  const summaryEl = $("#eventsSummary");
+  if (summaryEl) {
+    if (rows.length === 0) {
+      summaryEl.textContent = "";
+    } else {
+      const peopleLabel = rows.length === 1 ? `${totalPeople}` : `~${totalPeople}`;
+      summaryEl.textContent =
+        `${rows.length} event${rows.length === 1 ? "" : "s"} · ` +
+        `${totalItems} item${totalItems === 1 ? "" : "s"} · ` +
+        `${peopleLabel} ${totalPeople === 1 ? "person" : "people"}`;
+    }
+  }
+  if (rows.length === 0) {
+    grid.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  grid.innerHTML = rows.map(ev => {
+    const sched = ev.scheduled_for
+      ? `<span class="event-card-sched">📅 ${escapeHtml(ev.scheduled_for)}</span>`
+      : `<span class="event-card-sched muted small">No date</span>`;
+    const created = ev.created_by_name
+      ? `<span class="muted small">by ${escapeHtml(ev.created_by_name)}</span>`
+      : "";
+    return `
+      <section class="event-card" data-event-id="${ev.id}" tabindex="0" role="button" aria-label="Open event ${escapeHtml(ev.name)}">
+        <div class="event-card-head">
+          <h3 class="event-card-name">${escapeHtml(ev.name)}</h3>
+          ${sched}
+        </div>
+        ${ev.description ? `<p class="event-card-desc">${escapeHtml(ev.description)}</p>` : ""}
+        <div class="event-card-foot">
+          <span class="event-card-count">${ev.item_count} item${ev.item_count === 1 ? "" : "s"}</span>
+          <span class="event-card-people">👥 ${ev.assignee_count}</span>
+          ${created}
+        </div>
+      </section>`;
+  }).join("");
+}
+
+async function openEventDetail(eventId) {
+  STATE.currentEventId = eventId;
+  showEventsDetailMode();
+  $("#eventDetailItems").innerHTML = `<div class="muted">Loading…</div>`;
+  $("#eventDetailName").textContent = "Event";
+  $("#eventDetailMeta").innerHTML = "";
+  try {
+    const ev = await api(`/events/${eventId}`);
+    STATE.currentEvent = ev;
+    renderEventDetail(ev);
+  } catch (err) {
+    toastError(err);
+    showEventsListMode();
+  }
+}
+
+function renderEventDetail(ev) {
+  $("#eventDetailName").textContent = ev.name;
+  const metaBits = [];
+  if (ev.scheduled_for) metaBits.push(`📅 ${escapeHtml(ev.scheduled_for)}`);
+  if (ev.created_by_name) metaBits.push(`by ${escapeHtml(ev.created_by_name)}`);
+  metaBits.push(`${ev.item_count} item${ev.item_count === 1 ? "" : "s"}`);
+  metaBits.push(`${ev.assignee_count} people`);
+  const desc = ev.description
+    ? `<p class="event-detail-desc">${escapeHtml(ev.description)}</p>`
+    : "";
+  $("#eventDetailMeta").innerHTML =
+    `<div class="event-detail-bits">${metaBits.join(" · ")}</div>${desc}`;
+
+  const items = ev.items || [];
+  const list = $("#eventDetailItems");
+  if (items.length === 0) {
+    list.innerHTML = `
+      <div class="event-detail-empty muted">
+        <p>No items yet. Click <strong>+ Add Task</strong> to create one inside this event, or open any existing work item and assign it to this event from its Event field</p>
+      </div>`;
+    return;
+  }
+  list.innerHTML = `
+    <ul class="event-item-list">
+      ${items.map(renderEventItemRow).join("")}
+    </ul>`;
+}
+
+function renderEventItemRow(it) {
+  const itype = it.item_type || "Bug";
+  const isDone = it.status === "Resolved" || it.status === "Closed";
+  const assignees = (it.assignees || []).length
+    ? it.assignees.map(a => `<span class="event-item-assignee" title="${escapeHtml(a.email)}">${initials(a.name)} ${escapeHtml(a.name)}</span>`).join("")
+    : `<span class="muted small">unassigned</span>`;
+  return `
+    <li class="event-item${isDone ? " done" : ""}" data-bug-id="${it.id}" tabindex="0" role="button">
+      <span class="event-item-type inline-type" data-type="${escapeHtml(itype)}" title="${escapeHtml(itype)}">${itemTypeEmoji(itype)}</span>
+      <span class="event-item-id">#${it.id}</span>
+      <span class="event-item-title" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</span>
+      <span class="event-item-status badge" data-status="${escapeHtml(it.status)}">${escapeHtml(it.status)}</span>
+      <span class="event-item-priority badge" data-priority="${escapeHtml(it.priority)}">${escapeHtml(it.priority)}</span>
+      <span class="event-item-assignees">${assignees}</span>
+    </li>`;
+}
+
 async function refreshSessions() {
   try {
     STATE.sessions = await api("/sessions");
@@ -1713,11 +2099,101 @@ async function refreshAudit() {
 // Global listeners (event delegation)
 // ---------------------------------------------------------------------------
 function bindGlobalListeners() {
-  // Top-bar buttons
-  $("#newBugBtn").addEventListener("click", () => openBugForm());
+  // Top-bar buttons. The "+ New" button is a split button: clicking the
+  // main label opens the form preset to the user's last-chosen default
+  // (Bug / Requirement / Task), and the caret opens a menu to pick a
+  // different type explicitly.
+  const setNewBtnLabel = () => {
+    const t = STATE.defaultNewType || "Bug";
+    const el = $("#newBugBtn");
+    if (el) el.textContent = `+ New ${t}`;
+  };
+  setNewBtnLabel();
+  $("#newBugBtn").addEventListener("click", () => {
+    openBugForm({ _defaultType: STATE.defaultNewType || "Bug" });
+  });
+  $("#newItemCaretBtn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const menu = $("#newItemMenu");
+    if (!menu) return;
+    const willOpen = menu.hidden;
+    menu.hidden = !willOpen;
+    e.currentTarget.setAttribute("aria-expanded", String(willOpen));
+  });
+  $("#newItemMenu")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-new-type]");
+    if (!btn) return;
+    e.stopPropagation();
+    const t = btn.dataset.newType;
+    STATE.defaultNewType = t;
+    try { localStorage.setItem("defaultNewType", t); } catch {}
+    setNewBtnLabel();
+    $("#newItemMenu").hidden = true;
+    $("#newItemCaretBtn")?.setAttribute("aria-expanded", "false");
+    openBugForm({ _defaultType: t });
+  });
+  // Close the new-item menu when clicking outside it.
+  document.addEventListener("click", (e) => {
+    const menu = $("#newItemMenu");
+    if (!menu || menu.hidden) return;
+    if (e.target.closest("#newItemMenu") || e.target.closest("#newItemCaretBtn")) return;
+    menu.hidden = true;
+    $("#newItemCaretBtn")?.setAttribute("aria-expanded", "false");
+  });
   $("#newProjectBtn").addEventListener("click", () => openProjectForm());
   $("#newUserBtn").addEventListener("click", () => openUserForm());
   $("#exportCsvBtn").addEventListener("click", () => { window.location.href = "/api/bugs/export.csv"; });
+
+  // ----- Events view -----
+  $("#eventsRefreshBtn")?.addEventListener("click", refreshEvents);
+  $("#newEventBtn")?.addEventListener("click", () => openEventForm());
+  $("#eventBackBtn")?.addEventListener("click", () => {
+    showEventsListMode();
+    refreshEvents();
+  });
+  $("#editEventBtn")?.addEventListener("click", () => {
+    if (STATE.currentEvent) openEventForm(STATE.currentEvent);
+  });
+  $("#deleteEventBtn")?.addEventListener("click", () => {
+    if (STATE.currentEvent) handleDeleteEvent(STATE.currentEvent);
+  });
+  // Drill in by clicking a card (or pressing Enter while focused).
+  $("#eventsGrid")?.addEventListener("click", (e) => {
+    const card = e.target.closest("[data-event-id]");
+    if (!card) return;
+    openEventDetail(parseInt(card.dataset.eventId, 10));
+  });
+  $("#eventsGrid")?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest("[data-event-id]");
+    if (!card) return;
+    e.preventDefault();
+    openEventDetail(parseInt(card.dataset.eventId, 10));
+  });
+  // Click an item row inside the detail panel — opens the work-item modal.
+  $("#eventDetailItems")?.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-bug-id]");
+    if (!row) return;
+    openBugDetail(parseInt(row.dataset.bugId, 10));
+  });
+  $("#eventDetailItems")?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest("[data-bug-id]");
+    if (!row) return;
+    e.preventDefault();
+    openBugDetail(parseInt(row.dataset.bugId, 10));
+  });
+  // "+ Add Task" inside an event: open the bug modal pre-set to Task type
+  // and the current event.
+  $("#addItemToEventBtn")?.addEventListener("click", () => {
+    if (!STATE.currentEventId) return;
+    openBugForm({
+      _defaultType: "Task",
+      _defaultEventId: STATE.currentEventId,
+    });
+  });
+  // Event create / edit modal submit.
+  $("#formEvent")?.addEventListener("submit", submitEventForm);
   $("#themeBtn").addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     const nxt = cur === "dark" ? "light" : "dark";
@@ -1799,7 +2275,7 @@ function bindGlobalListeners() {
   $("#clearFiltersBtn").addEventListener("click", () => {
     STATE.filters = {
       project_id: [], status: [], priority: [],
-      environment: [], assignee_id: [],
+      environment: [], assignee_id: [], item_type: [],
       reporter_id: "", q: "",
     };
     $("#search").value = "";
@@ -1831,6 +2307,12 @@ function bindGlobalListeners() {
     const btn = e.target.closest(".kpi[data-kpi]");
     if (!btn) return;
     handleKpiClick(btn.dataset.kpi);
+  });
+  // Type pills: filter the list by item_type, or jump to Events view.
+  $("#kpiTypes")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".kpi-type-pill[data-type]");
+    if (!btn) return;
+    handleTypePillClick(btn.dataset.type);
   });
 
   // Bug table — row click opens the unified modal in edit/view mode;

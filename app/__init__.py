@@ -1,3 +1,3 @@
 """Bug Hunter — internal-use bug tracking service."""
 
-__version__ = "2.2"
+__version__ = "2.3"

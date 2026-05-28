@@ -24,9 +24,10 @@ from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.models import Project, Session as SessionRow, User
 from app.chatbot.router import router as chatbot_router
-from app.routes import audit, auth, bugs, projects, sessions, stats, users
+from app.routes import audit, auth, bugs, events, projects, sessions, stats, users
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
+    ALLOWED_ITEM_TYPES,
     ALLOWED_PRIORITIES,
     ALLOWED_STATUSES,
 )
@@ -576,6 +577,7 @@ def meta() -> dict[str, list[str]]:
         "statuses": ALLOWED_STATUSES,
         "priorities": ALLOWED_PRIORITIES,
         "environments": ALLOWED_ENVIRONMENTS,
+        "item_types": ALLOWED_ITEM_TYPES,
     }
 
 
@@ -583,6 +585,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(projects.router)
 app.include_router(bugs.router)
+app.include_router(events.router)
 app.include_router(stats.router)
 app.include_router(audit.router)
 app.include_router(sessions.router)

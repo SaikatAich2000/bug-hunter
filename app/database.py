@@ -89,8 +89,48 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
 
-    # Second pass: add any indexes the model declares but the DB is missing.
+    # Second pass: add any NEW columns the model declares but an existing
+    # database is missing. SQLAlchemy's create_all() never alters an
+    # existing table, so a column added in a later release would never
+    # appear on a production database — every existing row would still
+    # be missing the column at the DB level even though the ORM expects
+    # it. This pass closes that gap with ALTER TABLE ADD COLUMN. It is
+    # strictly ADDITIVE — nothing is dropped, altered, or renamed.
+    #
+    # All new columns must be safe to add to a populated table:
+    #   - either NULLABLE (so existing rows get NULL)
+    #   - or NOT NULL with a server-side DEFAULT (so existing rows get
+    #     the default value at the DB level, not just in the ORM).
+    #
+    # IMPORTANT: this pass runs BEFORE the index pass below, because
+    # newly-added composite indexes may reference these new columns.
+    #
+    # Both SQLite and Postgres support ALTER TABLE ADD COLUMN with a
+    # column-level DEFAULT, which is what we use for `item_type`.
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        from sqlalchemy import text
+        try:
+            existing_cols = {c["name"] for c in inspector.get_columns("bugs")}
+        except Exception:
+            existing_cols = set()
+        if existing_cols and "item_type" not in existing_cols:
+            conn.execute(text(
+                "ALTER TABLE bugs ADD COLUMN item_type VARCHAR(20) "
+                "NOT NULL DEFAULT 'Bug'"
+            ))
+        if existing_cols and "event_id" not in existing_cols:
+            # Nullable + no FK constraint at the ALTER level — SQLite can't
+            # add FKs to existing tables with ALTER TABLE anyway, and on
+            # Postgres a missing FK constraint is still preferable to a
+            # blocking migration. SQLAlchemy's session-level relationship
+            # is what enforces referential integrity in app code.
+            conn.execute(text("ALTER TABLE bugs ADD COLUMN event_id INTEGER"))
+
+    # Third pass: add any indexes the model declares but the DB is missing.
     # This is what makes new composite indexes show up on an upgraded DB.
+    # Re-introspect because the previous pass may have added columns those
+    # indexes depend on.
     inspector = inspect(engine)
     with engine.begin() as conn:
         for table in Base.metadata.sorted_tables:

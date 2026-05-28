@@ -24,11 +24,12 @@ from app.email_service import (
     BugSnapshot, UserSnapshot,
     notify_assignment, notify_bug_created, notify_bug_updated, notify_comment_added,
 )
-from app.models import Activity, Attachment, Bug, Comment, Project, User
+from app.models import Activity, Attachment, Bug, Comment, Event, Project, User
 from app.schemas import (
-    ALLOWED_ENVIRONMENTS, ALLOWED_PRIORITIES, ALLOWED_STATUSES,
-    ActivityOut, AttachmentBrief, BugCreate, BugDetail, BugListResponse,
-    BugOut, BugUpdate, CommentIn, CommentOut, normalize_choice,
+    ALLOWED_ENVIRONMENTS, ALLOWED_ITEM_TYPES, ALLOWED_PRIORITIES,
+    ALLOWED_STATUSES, ActivityOut, AttachmentBrief, BugCreate, BugDetail,
+    BugListResponse, BugOut, BugUpdate, CommentIn, CommentOut,
+    normalize_choice,
 )
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
@@ -142,10 +143,13 @@ def _bug_to_out_dict(bug: Bug, attachment_count: int = 0, can_edit: bool = False
         "description": bug.description,
         "reporter": _user_brief(bug.reporter) if bug.reporter else None,
         "assignees": [_user_brief(a) for a in bug.assignees],
+        "item_type": getattr(bug, "item_type", None) or "Bug",
         "status": bug.status,
         "priority": bug.priority,
         "environment": bug.environment,
         "due_date": bug.due_date,
+        "event_id": getattr(bug, "event_id", None),
+        "event_name": bug.event.name if getattr(bug, "event", None) else None,
         "created_at": bug.created_at,
         "updated_at": bug.updated_at,
         "attachment_count": attachment_count,
@@ -162,6 +166,10 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
         reporter=(UserSnapshot(id=bug.reporter.id, name=bug.reporter.name, email=bug.reporter.email)
                   if bug.reporter else None),
         assignees=tuple(UserSnapshot(id=a.id, name=a.name, email=a.email) for a in bug.assignees),
+        # Default "Bug" lets legacy bugs (predating the column) still
+        # render correct-flavored emails without raising AttributeError.
+        item_type=getattr(bug, "item_type", None) or "Bug",
+        event_name=bug.event.name if getattr(bug, "event", None) else None,
     )
 
 
@@ -203,6 +211,7 @@ def _eager_bug(db: Session) -> "select":
         selectinload(Bug.project),
         selectinload(Bug.reporter),
         selectinload(Bug.assignees),
+        selectinload(Bug.event),
     )
 
 
@@ -235,13 +244,14 @@ def export_bugs_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "id", "project", "title", "status", "priority", "environment",
+        "id", "type", "project", "title", "status", "priority", "environment",
         "reporter_name", "reporter_email", "assignees", "due_date",
         "created_at", "updated_at", "description",
     ])
     for b in rows:
         writer.writerow([
             b.id,
+            getattr(b, "item_type", None) or "Bug",
             b.project.name if b.project else "",
             b.title, b.status, b.priority, b.environment,
             b.reporter.name if b.reporter else "",
@@ -268,8 +278,11 @@ def list_bugs(
     status_filter: Optional[list[str]] = Query(default=None, alias="status"),
     priority: Optional[list[str]] = Query(default=None),
     environment: Optional[list[str]] = Query(default=None),
+    item_type: Optional[list[str]] = Query(default=None),
     reporter_id: Optional[int] = None,
     assignee_id: Optional[list[int]] = Query(default=None),
+    event_id: Optional[int] = None,
+    due_date: Optional[str] = None,
     q: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
@@ -304,6 +317,7 @@ def list_bugs(
     statuses = _normalize_list(status_filter, ALLOWED_STATUSES, "status")
     priorities = _normalize_list(priority, ALLOWED_PRIORITIES, "priority")
     environments = _normalize_list(environment, ALLOWED_ENVIRONMENTS, "environment")
+    item_types = _normalize_list(item_type, ALLOWED_ITEM_TYPES, "item_type")
 
     # Strip None / 0 from the int lists so callers can send blanks safely.
     project_ids = [p for p in (project_id or []) if p]
@@ -323,6 +337,8 @@ def list_bugs(
         stmt, count_stmt = apply((stmt, count_stmt), Bug.priority.in_(priorities))
     if environments:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.environment.in_(environments))
+    if item_types:
+        stmt, count_stmt = apply((stmt, count_stmt), Bug.item_type.in_(item_types))
     if reporter_id is not None:
         stmt, count_stmt = apply((stmt, count_stmt), Bug.reporter_id == reporter_id)
     if assignee_ids:
@@ -330,6 +346,16 @@ def list_bugs(
             (stmt, count_stmt),
             Bug.assignees.any(User.id.in_(assignee_ids)),
         )
+    if due_date:
+        # Exact-day match. Format is YYYY-MM-DD; we don't validate it
+        # strictly here — a malformed value just won't match.
+        stmt, count_stmt = apply((stmt, count_stmt), Bug.due_date == due_date)
+    if event_id is not None:
+        # event_id=0 means "not in any event" — distinct from "any event".
+        if event_id == 0:
+            stmt, count_stmt = apply((stmt, count_stmt), Bug.event_id.is_(None))
+        else:
+            stmt, count_stmt = apply((stmt, count_stmt), Bug.event_id == event_id)
     if q:
         q_clean = q.strip().lstrip("#")
         if q_clean.isdigit():
@@ -453,27 +479,40 @@ def create_bug(
     # Otherwise reporter = the current user.
     if payload.reporter_id is not None and payload.reporter_id != actor.id:
         if actor.role not in ("admin", "manager"):
-            raise HTTPException(status_code=403, detail="You can only file bugs as yourself")
+            raise HTTPException(
+                status_code=403,
+                detail="You can only file items as yourself",
+            )
         reporter = _resolve_user(db, payload.reporter_id)
     else:
         reporter = actor
 
     assignees = _resolve_users(db, payload.assignee_ids)
 
+    # Validate optional event link.
+    if payload.event_id is not None:
+        if db.get(Event, payload.event_id) is None:
+            raise HTTPException(status_code=400, detail="Event does not exist")
+
     bug = Bug(
         project_id=payload.project_id,
         title=payload.title,
         description=payload.description,
         reporter_id=reporter.id,
+        item_type=payload.item_type,
         status=payload.status,
         priority=payload.priority,
         environment=payload.environment,
         due_date=payload.due_date,
+        event_id=payload.event_id,
     )
     bug.assignees = list(assignees)
     db.add(bug)
     db.flush()
-    _log(db, bug.id, actor, "bug_created", f"Bug created with status '{bug.status}'.")
+    _log(
+        db, bug.id, actor, "bug_created",
+        f"{bug.item_type} created with status '{bug.status}'.",
+    )
     if assignees:
         names = ", ".join(a.name for a in assignees)
         _log(db, bug.id, actor, "assignees_added", f"Assigned to: {names}")
@@ -517,7 +556,7 @@ def update_bug(
         # can_edit_bug doesn't have to re-add the role check here.
         raise HTTPException(
             status_code=403,
-            detail="You don't have permission to edit this bug.",
+            detail="You don't have permission to edit this item.",
         )
 
     fields = payload.model_dump(exclude_unset=True)
@@ -526,6 +565,15 @@ def update_bug(
     if "project_id" in fields and fields["project_id"] is not None:
         if db.get(Project, fields["project_id"]) is None:
             raise HTTPException(status_code=400, detail="Project does not exist")
+
+    # event_id: validate when setting to a real ID; explicit null/0 unlinks.
+    if "event_id" in fields and fields["event_id"]:
+        if db.get(Event, fields["event_id"]) is None:
+            raise HTTPException(status_code=400, detail="Event does not exist")
+    if "event_id" in fields and fields["event_id"] == 0:
+        # Treat 0 as a synonym for "unlink" for clients that can't easily
+        # send a JSON null (FormData, querystring, etc.).
+        fields["event_id"] = None
 
     assignee_ids = fields.pop("assignee_ids", None)
     has_reporter_in_payload = "reporter_id" in fields
@@ -549,8 +597,8 @@ def update_bug(
     # Now includes `description` so a description-only edit no longer falls
     # through to the rollback branch (BUG-5 fix). All editable fields that
     # the API accepts are listed here.
-    tracked = ["status", "priority", "environment", "project_id",
-               "due_date", "title", "description"]
+    tracked = ["item_type", "status", "priority", "environment", "project_id",
+               "due_date", "title", "description", "event_id"]
     changes: list[tuple[str, str, str]] = []
     for f in tracked:
         if f in fields and getattr(bug, f) != fields[f]:
@@ -639,21 +687,21 @@ def delete_bug(
     if not can_delete_bug(actor):
         raise HTTPException(
             status_code=403,
-            detail="Only admins can delete bugs.",
+            detail="Only admins can delete items.",
         )
     title = bug.title
+    itype = getattr(bug, "item_type", None) or "Bug"
     db.delete(bug)
-    # Bug delete cascades comments/attachments/assignees, but the activity_log
-    # is FK'd back to bug and would be deleted too. Log a non-bug audit row
-    # so the global trail keeps a record.
+    # Cascade also clears the activity_log rows FK'd to this bug. Add one
+    # detached audit row so the global trail keeps a record of the delete.
     db.add(Activity(
         bug_id=None, entity_type="bug", entity_id=bug_id,
         actor_user_id=actor.id, actor_name=actor.name,
         action="bug_deleted",
-        detail=f"Deleted bug #{bug_id}: {title}",
+        detail=f"Deleted {itype.lower()} #{bug_id}: {title}",
     ))
     db.commit()
-    return {"message": "Bug deleted"}
+    return {"message": f"{itype} deleted"}
 
 
 # ---------------------------------------------------------------------------

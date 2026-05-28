@@ -40,6 +40,15 @@ class UserSnapshot:
 
 @dataclass(frozen=True)
 class BugSnapshot:
+    """Snapshot of a single work-item row passed to the email layer.
+
+    `item_type` is the work-item flavor — "Bug" / "Requirement" / "Task".
+    `event_name` is set when the item belongs to an event; rendered as a
+    standalone metadata line so the recipient can see at a glance that
+    this is part of, say, today's standup. Existing rows created before
+    these columns existed default to "Bug" / None, so older callers that
+    don't set the fields still produce correct emails.
+    """
     id: int
     title: str
     project_name: str
@@ -49,6 +58,8 @@ class BugSnapshot:
     description: str
     reporter: UserSnapshot | None
     assignees: tuple[UserSnapshot, ...]
+    item_type: str = "Bug"
+    event_name: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -154,9 +165,21 @@ def _bug_link(bug_id: int) -> str:
     return f"{base}/#bug={bug_id}"
 
 
+def _item_label(bug: BugSnapshot) -> str:
+    """The grammatical noun for the item — 'bug' / 'requirement' / 'task'."""
+    return (bug.item_type or "Bug").lower()
+
+
 def _bug_meta_lines(bug: BugSnapshot) -> list[str]:
-    return [
-        f"Bug #{bug.id}: {bug.title}",
+    """Plain-text metadata block reused across every notification email."""
+    label_cap = (bug.item_type or "Bug").capitalize()
+    lines = [
+        f"{label_cap} #{bug.id}: {bug.title}",
+        f"Type:        {bug.item_type or 'Bug'}",
+    ]
+    if bug.event_name:
+        lines.append(f"Event:       {bug.event_name}")
+    lines += [
         f"Project:     {bug.project_name}",
         f"Status:      {bug.status}",
         f"Priority:    {bug.priority}",
@@ -166,14 +189,16 @@ def _bug_meta_lines(bug: BugSnapshot) -> list[str]:
             ", ".join(a.display for a in bug.assignees) if bug.assignees else "—"
         ),
     ]
+    return lines
 
 
 def notify_bug_created(bug: BugSnapshot, actor_user_id: int | None) -> None:
     to = _recipients(bug, exclude_user_id=actor_user_id)
     if not to:
         return
-    subject = f"[Bug Hunter] New bug #{bug.id}: {bug.title}"
-    lines = ["A new bug has been reported.", ""]
+    label = _item_label(bug)
+    subject = f"[Bug Hunter] New {label} #{bug.id}: {bug.title}"
+    lines = [f"A new {label} has been created.", ""]
     lines += _bug_meta_lines(bug)
     if bug.description:
         lines += ["", "Description:", bug.description]
@@ -192,8 +217,10 @@ def notify_bug_updated(
     to = _recipients(bug, exclude_user_id=actor_user_id)
     if not to:
         return
-    subject = f"[Bug Hunter] Bug #{bug.id} updated: {bug.title}"
-    lines = [f"{actor_name} updated bug #{bug.id}.", "", "Changes:"]
+    label = _item_label(bug)
+    label_cap = (bug.item_type or "Bug").capitalize()
+    subject = f"[Bug Hunter] {label_cap} #{bug.id} updated: {bug.title}"
+    lines = [f"{actor_name} updated {label} #{bug.id}.", "", "Changes:"]
     for field, old, new in changes:
         lines.append(f"  • {field}: {old or '(empty)'} → {new or '(empty)'}")
     lines += [""] + _bug_meta_lines(bug)
@@ -207,14 +234,15 @@ def notify_assignment(
     actor_name: str,
 ) -> None:
     """Send a personalized 'you've been assigned' email to each new assignee."""
+    label = _item_label(bug)
     for user in newly_assigned:
         if not user.email:
             continue
-        subject = f"[Bug Hunter] You've been assigned to bug #{bug.id}: {bug.title}"
+        subject = f"[Bug Hunter] You've been assigned to {label} #{bug.id}: {bug.title}"
         lines = [
             f"Hi {user.name},",
             "",
-            f"{actor_name} assigned you to a bug.",
+            f"{actor_name} assigned you to a {label}.",
             "",
         ]
         lines += _bug_meta_lines(bug)
@@ -233,9 +261,10 @@ def notify_comment_added(
     to = _recipients(bug, exclude_user_id=comment_author_id)
     if not to:
         return
-    subject = f"[Bug Hunter] New comment on bug #{bug.id}: {bug.title}"
+    label = _item_label(bug)
+    subject = f"[Bug Hunter] New comment on {label} #{bug.id}: {bug.title}"
     lines = [
-        f"{comment_author_name} commented on bug #{bug.id}:",
+        f"{comment_author_name} commented on {label} #{bug.id}:",
         "",
         comment_body,
         "",

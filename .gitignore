@@ -48,6 +48,12 @@ models/*.safetensors
 *.swo
 *.iml
 
+# --- AI assistant / agent scratch ---
+.claude/
+.aider*
+.cursor/
+.continue/
+
 # --- OS noise ---
 .DS_Store
 Thumbs.db
@@ -55,3 +61,9 @@ Thumbs.db
 # --- Node (in case anyone runs frontend tooling) ---
 node_modules/
 npm-debug.log*
+
+# --- Playwright session artefacts (recordings, traces, MCP scratchpad) ---
+.playwright-mcp/
+playwright-report/
+test-results/
+*.har

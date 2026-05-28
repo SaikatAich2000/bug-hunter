@@ -394,7 +394,8 @@ def list_bugs(
         items.append(_bug_to_out_dict(
             b,
             int(att_counts.get(b.id, 0)),
-            can_edit_bug(_user, b.reporter_id, [a.id for a in b.assignees]),
+            can_edit_bug(_user, b.reporter_id, [a.id for a in b.assignees],
+                         item_type=getattr(b, "item_type", None) or "Bug"),
         ))
 
     return BugListResponse.model_validate({
@@ -439,7 +440,8 @@ def get_bug(
     payload = _bug_to_out_dict(
         bug,
         len(all_atts),
-        can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees]),
+        can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees],
+                     item_type=getattr(bug, "item_type", None) or "Bug"),
     )
     payload["attachments"] = [_attachment_brief(a) for a in bug_level]
     payload["comments"] = []
@@ -531,7 +533,8 @@ def create_bug(
 
     return BugOut.model_validate(_bug_to_out_dict(
         fresh, 0,
-        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees]),
+        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees],
+                     item_type=fresh.item_type),
     ))
 
 
@@ -550,13 +553,14 @@ def update_bug(
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
 
-    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees]):
-        # Defensive: under v3.1 every authenticated user can edit any bug,
-        # so this branch is unreachable. Kept so a future tightening of
-        # can_edit_bug doesn't have to re-add the role check here.
+    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
+                        item_type=getattr(bug, "item_type", None) or "Bug"):
+        # Tightened in v2.3: regular users can no longer edit Tasks or
+        # Requirements. The error message uses the item's noun so the
+        # toast makes sense to the user.
         raise HTTPException(
             status_code=403,
-            detail="You don't have permission to edit this item.",
+            detail=f"You don't have permission to edit this {(getattr(bug, 'item_type', None) or 'Bug').lower()}.",
         )
 
     fields = payload.model_dump(exclude_unset=True)
@@ -666,7 +670,8 @@ def update_bug(
 
     return BugOut.model_validate(_bug_to_out_dict(
         fresh, _attachment_count(db, bug_id),
-        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees]),
+        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees],
+                     item_type=fresh.item_type),
     ))
 
 
@@ -682,9 +687,9 @@ def delete_bug(
     bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found")
-    # v3.1 spec: bug deletion is admin-only. Managers used to be able to
-    # delete; no longer. Reporters and assignees never could.
-    if not can_delete_bug(actor):
+    # v3.1 spec: item deletion is admin-only across every type — managers
+    # can edit, never delete. Reporters and assignees never could.
+    if not can_delete_bug(actor, item_type=getattr(bug, "item_type", None) or "Bug"):
         raise HTTPException(
             status_code=403,
             detail="Only admins can delete items.",
@@ -903,7 +908,10 @@ def delete_attachment(
     can_delete = (
         actor.role in ("admin", "manager")
         or a.uploader_user_id == actor.id
-        or (bug is not None and can_edit_bug(actor, bug.reporter_id, [u.id for u in bug.assignees]))
+        or (bug is not None and can_edit_bug(
+            actor, bug.reporter_id, [u.id for u in bug.assignees],
+            item_type=getattr(bug, "item_type", None) or "Bug",
+        ))
     )
     if not can_delete:
         raise HTTPException(status_code=403, detail="You can't delete this attachment")

@@ -275,6 +275,110 @@ def notify_comment_added(
     deliver(subject, to, "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# Event notifications (separate channel from per-item assignment emails)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class EventSnapshot:
+    """Snapshot of an event for emails. Decoupled from the ORM so the
+    BackgroundTask thread can use it after the request session closes.
+    """
+    id: int
+    name: str
+    description: str
+    scheduled_for: str | None
+    managers: tuple[UserSnapshot, ...]
+
+
+def _event_recipients(ev: EventSnapshot, exclude_user_id: int | None) -> list[str]:
+    """Recipients of an event email — every manager except the actor."""
+    out: list[str] = []
+    seen: dict[str, None] = {}
+    for u in ev.managers:
+        if exclude_user_id is not None and u.id == exclude_user_id:
+            continue
+        if not u.email:
+            continue
+        key = u.email.lower()
+        if key in seen:
+            continue
+        seen[key] = None
+        out.append(u.email)
+    return out
+
+
+def _event_meta_lines(ev: EventSnapshot) -> list[str]:
+    return [
+        f"Event #{ev.id}: {ev.name}",
+        f"Scheduled: {ev.scheduled_for or '—'}",
+        f"Managers:  " + (
+            ", ".join(m.display for m in ev.managers) if ev.managers else "—"
+        ),
+    ]
+
+
+def _event_link(event_id: int) -> str:
+    base = get_settings().APP_BASE_URL.rstrip("/")
+    return f"{base}/#event={event_id}"
+
+
+def notify_event_created(
+    ev: EventSnapshot,
+    actor_name: str,
+    actor_user_id: int | None,
+) -> None:
+    to = _event_recipients(ev, exclude_user_id=actor_user_id)
+    if not to:
+        return
+    subject = f"[Bug Hunter] New event #{ev.id}: {ev.name}"
+    lines = [
+        f"{actor_name} created a new event you're managing.",
+        "",
+    ]
+    lines += _event_meta_lines(ev)
+    if ev.description:
+        lines += ["", "Description:", ev.description]
+    lines += ["", f"View: {_event_link(ev.id)}"]
+    deliver(subject, to, "\n".join(lines))
+
+
+def notify_event_updated(
+    ev: EventSnapshot,
+    changes: list[tuple[str, str, str]],
+    actor_name: str,
+    actor_user_id: int | None,
+) -> None:
+    if not changes:
+        return
+    to = _event_recipients(ev, exclude_user_id=actor_user_id)
+    if not to:
+        return
+    subject = f"[Bug Hunter] Event #{ev.id} updated: {ev.name}"
+    lines = [f"{actor_name} updated event #{ev.id}.", "", "Changes:"]
+    for field, old, new in changes:
+        lines.append(f"  • {field}: {old or '(empty)'} → {new or '(empty)'}")
+    lines += [""] + _event_meta_lines(ev)
+    lines += ["", f"View: {_event_link(ev.id)}"]
+    deliver(subject, to, "\n".join(lines))
+
+
+def notify_event_deleted(
+    ev: EventSnapshot,
+    actor_name: str,
+    actor_user_id: int | None,
+) -> None:
+    to = _event_recipients(ev, exclude_user_id=actor_user_id)
+    if not to:
+        return
+    subject = f"[Bug Hunter] Event #{ev.id} deleted: {ev.name}"
+    lines = [
+        f"{actor_name} deleted event #{ev.id}: {ev.name}.",
+        "",
+        "Any items that belonged to this event are preserved as standalone work items.",
+    ]
+    deliver(subject, to, "\n".join(lines))
+
+
 def notify_password_reset(email: str, name: str, reset_url: str) -> None:
     """Send the user a password-reset link."""
     if not email:

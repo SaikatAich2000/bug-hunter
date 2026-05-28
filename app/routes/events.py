@@ -13,18 +13,36 @@ SQL ``ondelete="SET NULL"`` on the model column. The audit trail records
 every create/update/delete on the event itself plus, separately, every
 item-side change of event_id (which routes/bugs.py picks up as a normal
 field change).
+
+Permissions (v2.3):
+  - create / edit: admin or manager
+  - delete:        admin only
+  - regular user:  read-only
+
+Managers (event_managers M2M): admin/manager-role users who own the
+event. They receive event-level notification emails (create / update /
+delete). Per-task assignment emails fan out only to that task's
+assignees — they do NOT cc event managers, so adding someone as a
+manager doesn't subscribe them to every task inside.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user
+from app.auth import can_delete_event, can_edit_event, get_current_user
 from app.database import get_db
-from app.models import Activity, Bug, Event, User, bug_assignees
+from app.email_service import (
+    EventSnapshot, UserSnapshot,
+    notify_event_created, notify_event_deleted, notify_event_updated,
+)
+from app.models import (
+    ROLE_ADMIN, ROLE_MANAGER,
+    Activity, Attachment, Bug, Event, User, bug_assignees,
+)
 from app.schemas import (
     BugOut, EventCreate, EventDetail, EventOut, EventUpdate,
 )
@@ -39,12 +57,6 @@ def _log(
     db: Session, event_id: int | None, actor: User | None,
     action: str, detail: str,
 ) -> None:
-    """Append an audit row for an event-level action.
-
-    Audit rows for events use entity_type='event'; routes/bugs.py keeps
-    entity_type='bug' for its own actions. Together they show up in the
-    global audit feed under their respective filters.
-    """
     db.add(Activity(
         bug_id=None,
         entity_type="event",
@@ -56,13 +68,14 @@ def _log(
     ))
 
 
+def _user_brief(u: User) -> dict:
+    return {"id": u.id, "name": u.name, "email": u.email, "role": u.role}
+
+
 def _event_brief(db: Session, ev: Event) -> dict:
-    """Brief used for list-endpoint rows."""
     item_count = db.scalar(
         select(func.count(Bug.id)).where(Bug.event_id == ev.id)
     ) or 0
-    # Count distinct assignees across all items in the event — handy
-    # signal on the card ("3 people involved").
     assignee_count = db.scalar(
         select(func.count(func.distinct(bug_assignees.c.user_id)))
         .select_from(bug_assignees)
@@ -82,28 +95,21 @@ def _event_brief(db: Session, ev: Event) -> dict:
         "created_by_name": creator_name,
         "item_count": int(item_count),
         "assignee_count": int(assignee_count),
+        "managers": [_user_brief(m) for m in (ev.managers or [])],
         "created_at": ev.created_at,
         "updated_at": ev.updated_at,
     }
 
 
-def _bug_to_brief(bug: Bug) -> dict:
-    """Same shape routes/bugs.py uses, but kept self-contained here so we
-    don't have a circular import."""
+def _bug_to_brief(bug: Bug, attachment_count: int = 0) -> dict:
     return {
         "id": bug.id,
         "project_id": bug.project_id,
         "project_name": bug.project.name if bug.project else None,
         "title": bug.title,
         "description": bug.description,
-        "reporter": {
-            "id": bug.reporter.id, "name": bug.reporter.name,
-            "email": bug.reporter.email, "role": bug.reporter.role,
-        } if bug.reporter else None,
-        "assignees": [
-            {"id": a.id, "name": a.name, "email": a.email, "role": a.role}
-            for a in bug.assignees
-        ],
+        "reporter": _user_brief(bug.reporter) if bug.reporter else None,
+        "assignees": [_user_brief(a) for a in bug.assignees],
         "item_type": getattr(bug, "item_type", None) or "Bug",
         "status": bug.status,
         "priority": bug.priority,
@@ -113,9 +119,53 @@ def _bug_to_brief(bug: Bug) -> dict:
         "event_name": bug.event.name if bug.event else None,
         "created_at": bug.created_at,
         "updated_at": bug.updated_at,
-        "attachment_count": 0,
+        "attachment_count": attachment_count,
         "can_edit": True,
     }
+
+
+def _resolve_managers(db: Session, ids: list[int]) -> list[User]:
+    """Validate and return the User rows that match `ids`. Every id must
+    point at an existing user whose role is admin or manager — regular
+    users can't be set as event managers because the permission model
+    means they couldn't act on the event anyway.
+    """
+    if not ids:
+        return []
+    rows = db.scalars(select(User).where(User.id.in_(ids))).all()
+    found = {u.id: u for u in rows}
+    missing = set(ids) - set(found)
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown user ids: {sorted(missing)}")
+    bad_roles = [u for u in rows if u.role not in (ROLE_ADMIN, ROLE_MANAGER)]
+    if bad_roles:
+        names = ", ".join(u.name for u in bad_roles)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only admin or manager users can be event managers ({names} is not)",
+        )
+    return [found[i] for i in ids if i in found]
+
+
+def _event_snapshot(ev: Event) -> EventSnapshot:
+    return EventSnapshot(
+        id=ev.id,
+        name=ev.name,
+        description=ev.description,
+        scheduled_for=ev.scheduled_for,
+        managers=tuple(
+            UserSnapshot(id=m.id, name=m.name, email=m.email)
+            for m in (ev.managers or [])
+        ),
+    )
+
+
+def _require_edit(actor: User) -> None:
+    if not can_edit_event(actor):
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins and managers can manage events.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +177,9 @@ def list_events(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
-    stmt = select(Event).order_by(
+    stmt = select(Event).options(
+        selectinload(Event.managers),
+    ).order_by(
         Event.scheduled_for.desc().nullslast() if hasattr(Event.scheduled_for.desc(), "nullslast")
         else Event.scheduled_for.desc(),
         Event.id.desc(),
@@ -147,7 +199,9 @@ def get_event(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> dict:
-    ev = db.get(Event, event_id)
+    ev = db.scalar(
+        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+    )
     if ev is None:
         raise HTTPException(status_code=404, detail="Event not found")
     items_stmt = select(Bug).options(
@@ -157,8 +211,19 @@ def get_event(
         selectinload(Bug.event),
     ).where(Bug.event_id == event_id).order_by(Bug.id.asc())
     items = list(db.scalars(items_stmt).all())
+    # One aggregate query for attachment counts across every item — avoids
+    # an N+1 round-trip when the event has many tasks.
+    bug_ids = [b.id for b in items]
+    if bug_ids:
+        att_counts = dict(db.execute(
+            select(Attachment.bug_id, func.count(Attachment.id))
+            .where(Attachment.bug_id.in_(bug_ids))
+            .group_by(Attachment.bug_id)
+        ).all())
+    else:
+        att_counts = {}
     payload = _event_brief(db, ev)
-    payload["items"] = [_bug_to_brief(b) for b in items]
+    payload["items"] = [_bug_to_brief(b, int(att_counts.get(b.id, 0))) for b in items]
     return payload
 
 
@@ -168,15 +233,20 @@ def get_event(
 @router.post("", response_model=EventOut, status_code=status.HTTP_201_CREATED)
 def create_event(
     payload: EventCreate,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:
+    _require_edit(actor)
+    managers = _resolve_managers(db, payload.manager_ids or [])
     ev = Event(
         name=payload.name,
         description=payload.description,
         scheduled_for=payload.scheduled_for,
         created_by_user_id=actor.id,
     )
+    if managers:
+        ev.managers = managers
     db.add(ev)
     db.flush()
     _log(db, ev.id, actor, "event_created",
@@ -184,6 +254,10 @@ def create_event(
          + (f" (scheduled for {ev.scheduled_for})" if ev.scheduled_for else ""))
     db.commit()
     db.refresh(ev)
+
+    if managers:
+        snap = _event_snapshot(ev)
+        background.add_task(notify_event_created, snap, actor.name, actor.id)
     return _event_brief(db, ev)
 
 
@@ -194,20 +268,41 @@ def create_event(
 def update_event(
     event_id: int,
     payload: EventUpdate,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:
-    ev = db.get(Event, event_id)
+    _require_edit(actor)
+    ev = db.scalar(
+        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+    )
     if ev is None:
         raise HTTPException(status_code=404, detail="Event not found")
+
     fields = payload.model_dump(exclude_unset=True)
     tracked = ["name", "description", "scheduled_for"]
     changes: list[tuple[str, str, str]] = []
     for f in tracked:
         if f in fields and getattr(ev, f) != fields[f]:
             changes.append((f, str(getattr(ev, f) or ""), str(fields[f] or "")))
+    new_manager_ids = fields.pop("manager_ids", None)
     for k, v in fields.items():
         setattr(ev, k, v)
+    # Manager diff. The set comparison ignores order so re-sending the
+    # same list isn't recorded as a change.
+    if new_manager_ids is not None:
+        old_ids = sorted({m.id for m in (ev.managers or [])})
+        new_ids = sorted(set(new_manager_ids))
+        if old_ids != new_ids:
+            new_managers = _resolve_managers(db, new_manager_ids)
+            old_names = sorted(m.name for m in (ev.managers or []))
+            new_names = sorted(m.name for m in new_managers)
+            changes.append((
+                "managers",
+                ", ".join(old_names) or "(none)",
+                ", ".join(new_names) or "(none)",
+            ))
+            ev.managers = new_managers
     if changes:
         for field, old, new in changes:
             _log(db, ev.id, actor, f"event_{field}_changed",
@@ -215,7 +310,16 @@ def update_event(
         db.commit()
     else:
         db.rollback()
-    db.refresh(ev)
+    # Re-fetch with managers fresh.
+    ev = db.scalar(
+        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+    )
+
+    if changes and ev.managers:
+        snap = _event_snapshot(ev)
+        background.add_task(
+            notify_event_updated, snap, list(changes), actor.name, actor.id,
+        )
     return _event_brief(db, ev)
 
 
@@ -225,18 +329,22 @@ def update_event(
 @router.delete("/{event_id}")
 def delete_event(
     event_id: int,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    ev = db.get(Event, event_id)
+    ev = db.scalar(
+        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+    )
     if ev is None:
         raise HTTPException(status_code=404, detail="Event not found")
-    if actor.role not in ("admin", "manager"):
+    if not can_delete_event(actor):
         raise HTTPException(
             status_code=403,
-            detail="Only admins and managers can delete events.",
+            detail="Only admins can delete events.",
         )
     name = ev.name
+    snap = _event_snapshot(ev) if ev.managers else None
     # Items keep existing — the FK is declared with ondelete='SET NULL' but
     # we also explicitly null them here so SQLite (which doesn't always
     # honour the FK ondelete with declarative-style attached relationships
@@ -248,4 +356,7 @@ def delete_event(
     _log(db, None, actor, "event_deleted",
          f"Deleted event #{event_id}: {name}")
     db.commit()
+
+    if snap is not None:
+        background.add_task(notify_event_deleted, snap, actor.name, actor.id)
     return {"message": "Event deleted"}

@@ -30,6 +30,13 @@ const STATE = {
     try { return localStorage.getItem("defaultNewType") || "Bug"; }
     catch { return "Bug"; }
   })(),
+  // Active work-items tab: "all" / "Bug" / "Requirement" / "Task".
+  // Drives which columns render in the table and what implicit
+  // item_type filter is applied to /api/bugs requests.
+  activeTab: (() => {
+    try { return localStorage.getItem("activeTab") || "all"; }
+    catch { return "all"; }
+  })(),
   // Events list + drill-in state.
   events: [],
   currentEventId: null,    // null = list mode; id = detail mode
@@ -420,7 +427,15 @@ async function refreshAll() {
 // Stats / KPIs
 // ---------------------------------------------------------------------------
 async function refreshStats() {
-  STATE.stats = await api("/stats");
+  // KPI strip is scoped by the active tab. The server filters every
+  // aggregation (status / priority / env / project / assignee / timeline)
+  // when item_type is supplied, but always returns by_type unfiltered so
+  // the four tab badges (All / Bug / Requirement / Task) keep showing the
+  // global counts.
+  const path = (STATE.activeTab && STATE.activeTab !== "all")
+    ? `/stats?item_type=${encodeURIComponent(STATE.activeTab)}`
+    : "/stats";
+  STATE.stats = await api(path);
   // KPI strip: Total | Open | Resolved | Closed | Resolve Later. We
   // defensively coalesce missing fields to 0 so an older server that
   // hasn't shipped the new schema yet doesn't render `undefined`.
@@ -430,49 +445,17 @@ async function refreshStats() {
   $("#kpiResolved").textContent = s.resolved ?? 0;
   $("#kpiClosed").textContent = s.closed ?? (s.by_status?.Closed ?? 0);
   $("#kpiResolveLater").textContent = s.resolve_later ?? (s.by_status?.["Resolve Later"] ?? 0);
-  // Type-breakdown pills. by_type comes from /api/stats; the "Event" key
-  // there is the count of rows in the events table (added server-side so
-  // the frontend doesn't need a second round-trip).
+  // by_type (always global) → tab-count badges. "All" sums every
+  // non-event type.
   const byType = s.by_type || {};
-  const bugEl = $("#kpiTypeBug");        if (bugEl) bugEl.textContent = byType.Bug ?? 0;
-  const reqEl = $("#kpiTypeRequirement"); if (reqEl) reqEl.textContent = byType.Requirement ?? 0;
-  const taskEl = $("#kpiTypeTask");      if (taskEl) taskEl.textContent = byType.Task ?? 0;
-  const evEl  = $("#kpiTypeEvent");      if (evEl) evEl.textContent  = byType.Event ?? 0;
+  const tabAll = (byType.Bug ?? 0) + (byType.Requirement ?? 0) + (byType.Task ?? 0);
+  const elAll = $("#typeTabCountAll");          if (elAll) elAll.textContent = tabAll;
+  const elBug = $("#typeTabCountBug");          if (elBug) elBug.textContent = byType.Bug ?? 0;
+  const elReq = $("#typeTabCountRequirement");  if (elReq) elReq.textContent = byType.Requirement ?? 0;
+  const elTsk = $("#typeTabCountTask");         if (elTsk) elTsk.textContent = byType.Task ?? 0;
   refreshKpiActiveState();
-  refreshTypePillActiveState();
+  refreshTypeTabActiveState();
   if (STATE.view === "analytics") renderCharts();
-}
-
-// Highlight the type pill that matches the current item_type filter
-// (or none if the filter is empty / multi-valued).
-function refreshTypePillActiveState() {
-  const cur = STATE.filters.item_type || [];
-  $$(".kpi-type-pill[data-type]").forEach(btn => {
-    const t = btn.dataset.type;
-    if (t === "Event") {
-      // Events pill is just a shortcut, never "active" as a filter.
-      btn.classList.remove("active");
-      return;
-    }
-    btn.classList.toggle("active", cur.length === 1 && cur[0] === t);
-  });
-}
-
-// Click handler for a type pill: Bug/Requirement/Task → toggle list filter;
-// Event → jump to the Events view.
-function handleTypePillClick(type) {
-  if (type === "Event") {
-    setView("events");
-    return;
-  }
-  const cur = STATE.filters.item_type || [];
-  const isAlreadyOnlyThis = cur.length === 1 && cur[0] === type;
-  STATE.filters.item_type = isAlreadyOnlyThis ? [] : [type];
-  STATE.page = 1;
-  if (STATE.view !== "list") setView("list");
-  refreshMultiSelects();
-  refreshTypePillActiveState();
-  refreshBugs();
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +466,7 @@ async function refreshBugs() {
   // bug refresh so any filter change (multi-select, KPI click, Clear,
   // sidebar project click) keeps the KPI active state in sync.
   refreshKpiActiveState();
+  refreshTypeTabActiveState();
   const params = new URLSearchParams();
   params.set("page", String(STATE.page));
   params.set("page_size", String(STATE.pageSize));
@@ -498,6 +482,17 @@ async function refreshBugs() {
       params.set(k, String(v));
     }
   }
+  // Implicit tab filter: if the user is on the Bugs / Requirements / Tasks
+  // tab, layer that on top of whatever's in STATE.filters.item_type. This
+  // lets the user still multi-select extra types from the dropdown if
+  // they want, but the tab provides the default narrowing.
+  if (STATE.activeTab && STATE.activeTab !== "all") {
+    const explicit = STATE.filters.item_type || [];
+    if (!explicit.includes(STATE.activeTab)) {
+      // Don't mutate STATE.filters — the tab is implicit, not a sticky filter.
+      params.append("item_type", STATE.activeTab);
+    }
+  }
   const data = await api("/bugs?" + params.toString());
   STATE.bugs = data.items;
   STATE.total = data.total;
@@ -506,46 +501,156 @@ async function refreshBugs() {
   renderPagination();
 }
 
+function refreshTypeTabActiveState() {
+  $$(".type-tab[data-tab]").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === STATE.activeTab);
+    b.setAttribute("aria-selected", b.dataset.tab === STATE.activeTab ? "true" : "false");
+  });
+}
+
+// Switch tabs. Doesn't write item_type into STATE.filters (the implicit
+// filter applies at request time in refreshBugs). Persists to
+// localStorage so a reload lands you back on the same tab.
+function setActiveTab(tab) {
+  STATE.activeTab = tab;
+  try { localStorage.setItem("activeTab", tab); } catch {}
+  STATE.page = 1;
+  refreshTypeTabActiveState();
+  // Filter bar reacts to the tab (Env hides on Req/Task, Type hides on
+  // any non-All tab). The function is a no-op until #filterBar is in
+  // the DOM, so it's safe to call early.
+  refreshFilterBarVisibility();
+  // Notify the "+ New" button (and anything else interested) so its label
+  // can flip to match the new tab.
+  document.dispatchEvent(new CustomEvent("bh:tab-change", { detail: { tab } }));
+  // Both the work-items table AND the KPI strip / analytics charts are
+  // tab-scoped, so we always refresh stats too. refreshBugs reloads the
+  // table; refreshStats reloads the KPI tiles and (if visible) charts.
+  refreshBugs();
+  refreshStats();
+}
+
+// Hide filters that don't apply on the current tab:
+//   - "All Types": redundant when a specific tab is active
+//   - "All Envs":  Requirements / Tasks don't have an environment
+function refreshFilterBarVisibility() {
+  const tab = STATE.activeTab || "all";
+  const typeFilter = document.querySelector('.ms-wrap[data-filter="item_type"]');
+  if (typeFilter) typeFilter.style.display = tab === "all" ? "" : "none";
+  const envFilter = document.querySelector('.ms-wrap[data-filter="environment"]');
+  if (envFilter) envFilter.style.display = (tab === "Requirement" || tab === "Task") ? "none" : "";
+}
+
+// Column sets per tab. Each entry is one column descriptor used to
+// build both the <th> row in <thead> and the matching <td> in each row.
+// Keeping these as a data structure rather than inline JSX makes adding
+// a future tab (Epic? Sub-task?) a one-liner.
+const TAB_COLUMNS = {
+  all: [
+    "id", "title-with-type", "project", "status", "priority", "env", "assignees", "att", "actions",
+  ],
+  Bug: [
+    "id", "title", "project", "status", "priority", "env", "assignees", "att", "actions",
+  ],
+  Requirement: [
+    "id", "title", "project", "status", "priority", "assignees", "att", "actions",
+  ],
+  Task: [
+    "id", "title", "project", "status", "priority", "due", "event", "assignees", "actions",
+  ],
+};
+
+const COL_HEAD_LABEL = {
+  id: "#",
+  title: "Title",
+  "title-with-type": "Title",
+  project: "Project",
+  status: "Status",
+  priority: "Priority",
+  env: "Env",
+  due: "Due",
+  event: "Event",
+  assignees: "Assignees",
+  att: "📎",
+  actions: "Actions",
+};
+
+function _renderCell(col, bug) {
+  switch (col) {
+    case "id":
+      return `<td class="col-id">#${bug.id}</td>`;
+    case "title": {
+      // For per-type tabs the type prefix is redundant — the tab IS the type.
+      return `
+        <td class="col-title">
+          <div class="title-cell">
+            <strong class="title-text" title="${escapeHtml(bug.title)}">${escapeHtml(bug.title)}</strong>
+            <span class="title-meta">Updated ${formatDate(bug.updated_at)}</span>
+          </div>
+        </td>`;
+    }
+    case "title-with-type": {
+      const itype = bug.item_type || "Bug";
+      return `
+        <td class="col-title">
+          <div class="title-cell">
+            <strong class="title-text" title="${escapeHtml(bug.title)}"><span class="inline-type" data-type="${escapeHtml(itype)}" title="${escapeHtml(itype)}">${itemTypeEmoji(itype)}</span> ${escapeHtml(bug.title)}</strong>
+            <span class="title-meta">${escapeHtml(itype)} · Updated ${formatDate(bug.updated_at)}</span>
+          </div>
+        </td>`;
+    }
+    case "project":
+      return `<td class="col-project">${escapeHtml(bug.project_name || "")}</td>`;
+    case "status":
+      return `<td class="col-status"><span class="badge" data-status="${escapeHtml(bug.status)}">${escapeHtml(bug.status)}</span></td>`;
+    case "priority":
+      return `<td class="col-priority"><span class="badge" data-priority="${escapeHtml(bug.priority)}">${escapeHtml(bug.priority)}</span></td>`;
+    case "env":
+      return `<td class="col-env"><span class="badge" data-env="${escapeHtml(bug.environment)}">${escapeHtml(bug.environment)}</span></td>`;
+    case "due":
+      return `<td class="col-due">${bug.due_date ? escapeHtml(bug.due_date) : '<span class="muted">—</span>'}</td>`;
+    case "event":
+      return `<td class="col-event">${bug.event_name ? `<span class="event-pill" title="${escapeHtml(bug.event_name)}">📅 ${escapeHtml(bug.event_name)}</span>` : '<span class="muted">—</span>'}</td>`;
+    case "assignees": {
+      const html = bug.assignees.length
+        ? bug.assignees.map(a => `<span class="assignee-chip" title="${escapeHtml(a.email)}"><span class="avatar">${initials(a.name)}</span>${escapeHtml(a.name)}</span>`).join("")
+        : `<span class="muted">—</span>`;
+      return `<td class="col-assignees"><div class="assignee-stack">${html}</div></td>`;
+    }
+    case "att":
+      return `<td class="col-att">${bug.attachment_count > 0 ? `<span class="att-count">📎 ${bug.attachment_count}</span>` : '<span class="muted">—</span>'}</td>`;
+    case "actions": {
+      const isAdmin = STATE.currentUser?.role === "admin";
+      return `
+        <td class="col-actions">
+          <div class="row-actions">
+            ${isAdmin ? `<button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>` : ""}
+          </div>
+        </td>`;
+    }
+    default:
+      return "<td></td>";
+  }
+}
+
+function _renderTableHead(cols) {
+  return "<tr>" + cols.map(c => `<th class="col-${c.replace('title-with-type','title')}">${COL_HEAD_LABEL[c] ?? ""}</th>`).join("") + "</tr>";
+}
+
 function renderBugTable() {
+  const thead = $("#bugTableHead");
   const tbody = $("#bugTableBody");
+  if (!tbody) return;
+  const cols = TAB_COLUMNS[STATE.activeTab] || TAB_COLUMNS.all;
+  thead.innerHTML = _renderTableHead(cols);
   tbody.innerHTML = "";
   $("#emptyState").hidden = STATE.bugs.length > 0;
 
   const frag = document.createDocumentFragment();
-  // v3.1: row-level pencil button is gone. Clicking the row opens the
-  // unified bug modal (which is editable inline, Jira-style). The only
-  // row-level action is delete, and that's admin-only per the new
-  // permission policy.
-  const isAdmin = STATE.currentUser?.role === "admin";
   for (const bug of STATE.bugs) {
     const tr = document.createElement("tr");
     tr.dataset.bugId = String(bug.id);
-    const assigneesHtml = bug.assignees.length
-      ? bug.assignees.map(a => `<span class="assignee-chip" title="${escapeHtml(a.email)}"><span class="avatar">${initials(a.name)}</span>${escapeHtml(a.name)}</span>`).join("")
-      : `<span class="muted">—</span>`;
-    // Title cell carries the bug's `updated_at` as a small timestamp under
-    // the title, so we can drop the dedicated "Updated" column without
-    // losing the freshness signal entirely.
-    const itype = bug.item_type || "Bug";
-    tr.innerHTML = `
-      <td class="col-id">#${bug.id}</td>
-      <td class="col-title">
-        <div class="title-cell">
-          <strong class="title-text" title="${escapeHtml(bug.title)}"><span class="inline-type" data-type="${escapeHtml(itype)}" title="${escapeHtml(itype)}">${itemTypeEmoji(itype)}</span> ${escapeHtml(bug.title)}</strong>
-          <span class="title-meta">${escapeHtml(itype)} · Updated ${formatDate(bug.updated_at)}</span>
-        </div>
-      </td>
-      <td class="col-project">${escapeHtml(bug.project_name || "")}</td>
-      <td class="col-status"><span class="badge" data-status="${escapeHtml(bug.status)}">${escapeHtml(bug.status)}</span></td>
-      <td class="col-priority"><span class="badge" data-priority="${escapeHtml(bug.priority)}">${escapeHtml(bug.priority)}</span></td>
-      <td class="col-env"><span class="badge" data-env="${escapeHtml(bug.environment)}">${escapeHtml(bug.environment)}</span></td>
-      <td class="col-assignees"><div class="assignee-stack">${assigneesHtml}</div></td>
-      <td class="col-att">${bug.attachment_count > 0 ? `<span class="att-count">📎 ${bug.attachment_count}</span>` : '<span class="muted">—</span>'}</td>
-      <td class="col-actions">
-        <div class="row-actions">
-          ${isAdmin ? `<button class="icon-btn danger" data-act="delete" data-id="${bug.id}" title="Delete">🗑</button>` : ""}
-        </div>
-      </td>`;
+    tr.innerHTML = cols.map(c => _renderCell(c, bug)).join("");
     frag.appendChild(tr);
   }
   tbody.appendChild(frag);
@@ -727,6 +832,9 @@ function initMultiSelects() {
     $$(".ms-btn").forEach(b => b.setAttribute("aria-expanded", "false"));
   });
   refreshMultiSelects();
+  // Apply tab-aware visibility on first paint — without this, Env / Type
+  // filters stay visible until the user clicks a tab.
+  refreshFilterBarVisibility();
 }
 
 function refreshMultiSelects() {
@@ -787,10 +895,11 @@ function setView(view) {
   if (searchWrap) searchWrap.style.display = view === "list" ? "" : "none";
   const kpiStrip = $("#kpiStrip");
   if (kpiStrip) kpiStrip.style.display = (view === "list" || view === "analytics") ? "" : "none";
-  const kpiTypes = $("#kpiTypes");
-  // Type pills make sense on the list and events views (where they double
-  // as nav shortcuts). They're noise on audit / sessions.
-  if (kpiTypes) kpiTypes.style.display = (view === "list" || view === "analytics" || view === "events") ? "" : "none";
+  // Type tabs are the global type-context switch — they scope both the
+  // list KPIs/table AND the analytics charts. Hidden on audit / sessions
+  // / events (those views aren't item-typed).
+  const typeTabs = $("#typeTabs");
+  if (typeTabs) typeTabs.style.display = (view === "list" || view === "analytics") ? "" : "none";
   const newItemWrap = document.querySelector(".new-item-wrap");
   if (newItemWrap) newItemWrap.style.display = view === "list" ? "" : "none";
   $("#pageTitle").textContent = ({
@@ -873,9 +982,29 @@ function handleKpiClick(key) {
 // ---------------------------------------------------------------------------
 // Charts
 // ---------------------------------------------------------------------------
+const _TAB_NOUNS = {
+  all: "Items",
+  Bug: "Bugs",
+  Requirement: "Requirements",
+  Task: "Tasks",
+};
+
 function renderCharts() {
   if (!STATE.stats) return;
   const s = STATE.stats;
+  const tab = STATE.activeTab || "all";
+  const noun = _TAB_NOUNS[tab] || "Items";
+  // Update chart titles per tab so "By Status" reads as "By Status (Bugs)".
+  const setTitle = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  setTitle("#chartTimelineTitle",    `${noun} over the last 14 days`);
+  setTitle("#chartStatusTitle",      `By Status (${noun})`);
+  setTitle("#chartPriorityTitle",    `By Priority (${noun})`);
+  setTitle("#chartEnvironmentTitle", `By Environment (${noun})`);
+  setTitle("#chartProjectTitle",     `By Project (${noun})`);
+  setTitle("#chartAssigneeTitle",    `Top Assignees (${noun})`);
+  // Environment doesn't apply to Requirements / Tasks — hide the card.
+  const envCard = $("#chartEnvironmentCard");
+  if (envCard) envCard.hidden = (tab === "Requirement" || tab === "Task");
   drawTimeline("#chartTimeline", s.timeline);
   drawBars("#chartStatus", s.by_status, "status");
   drawBars("#chartPriority", s.by_priority, "priority");
@@ -1107,13 +1236,12 @@ function openBugForm(bug = null) {
     const createAttach = $("#bugCreateAttachSection");
     if (createAttach) {
       createAttach.hidden = true;
-      const cf = $("#createBugFiles");
-      if (cf) cf.value = "";
-      const cp = $("#createFilePreview");
-      if (cp) cp.innerHTML = "";
-      const cl = $("#createFileLabel");
-      if (cl) cl.textContent = "Attach files";
+      clearStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
+      const cf = $("#createBugFiles"); if (cf) cf.value = "";
     }
+    // Reset the COMMENT staged bucket too — opening a different bug
+    // shouldn't carry over half-typed attachments from a previous one.
+    clearStagedFiles("comment", "#filePreview", "#fileLabel");
     // Render the inline detail sections (comments, attachments, activity).
     renderBugInlineSections(bug);
   } else {
@@ -1128,12 +1256,8 @@ function openBugForm(bug = null) {
     const createAttach = $("#bugCreateAttachSection");
     if (createAttach) {
       createAttach.hidden = false;
-      const cf = $("#createBugFiles");
-      if (cf) cf.value = "";
-      const cp = $("#createFilePreview");
-      if (cp) cp.innerHTML = "";
-      const cl = $("#createFileLabel");
-      if (cl) cl.textContent = "Attach files";
+      clearStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
+      const cf = $("#createBugFiles"); if (cf) cf.value = "";
     }
   }
 
@@ -1318,9 +1442,10 @@ async function submitBugForm(e) {
       // the create flow — the item itself is already saved.
       const created = await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
       const ctype = created?.item_type || payload.item_type || "Bug";
-      const filesEl = $("#createBugFiles");
-      const files = filesEl?.files;
-      if (files && files.length && created && created.id) {
+      // Files come from the staged array (the user may have pulled some
+      // out via the X button before submitting).
+      const files = STATE.stagedFiles.createBug || [];
+      if (files.length && created && created.id) {
         let done = 0;
         let failed = 0;
         for (const f of files) {
@@ -1342,10 +1467,9 @@ async function submitBugForm(e) {
       } else {
         toast(`${ctype} created`, "success");
       }
-      // Clear the file picker so reopening the create modal starts clean.
-      if (filesEl) filesEl.value = "";
-      const cp = $("#createFilePreview"); if (cp) cp.innerHTML = "";
-      const cl = $("#createFileLabel"); if (cl) cl.textContent = "Attach files";
+      // Clear the staged array + free blob URLs so reopening starts clean.
+      clearStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
+      const fEl = $("#createBugFiles"); if (fEl) fEl.value = "";
 
       closeModal("modalBug");
       if (STATE.view === "events" && STATE.currentEventId) {
@@ -1440,21 +1564,111 @@ function activityIcon(action) {
   return "📝";
 }
 
-function updateFilePreview(input, previewSel, labelSel) {
+// ---------------------------------------------------------------------------
+// Attachment staging
+//
+// `input.files` is a FileList — read-only and not removable. To let the
+// user pull a file out of a pending upload (the "X on hover" UX) we copy
+// the selection into a plain Array stored on a sentinel STATE key, then
+// drive both the preview render and the eventual upload off that array.
+// One array per logical attachment slot:
+//   STATE.stagedFiles.createBug    — "+ New X" modal's bug-level attach
+//   STATE.stagedFiles.comment      — comment composer's attach
+// ---------------------------------------------------------------------------
+STATE.stagedFiles = { createBug: [], comment: [] };
+
+function _stagedBucketForInput(inputId) {
+  if (inputId === "createBugFiles") return "createBug";
+  if (inputId === "commentFiles")   return "comment";
+  return null;
+}
+
+function _renderStagedFiles(bucket, previewSel, labelSel) {
   const preview = $(previewSel);
   const label = $(labelSel);
+  const files = STATE.stagedFiles[bucket] || [];
   preview.innerHTML = "";
-  if (!input.files || !input.files.length) {
+  if (!files.length) {
     label.textContent = "Attach files";
     return;
   }
-  label.textContent = `${input.files.length} file${input.files.length > 1 ? "s" : ""}`;
-  for (const f of input.files) {
-    const div = document.createElement("span");
-    div.className = "attach-staged";
-    div.innerHTML = `${fileIcon(f.type, f.name)} ${escapeHtml(f.name)} <span class="muted small">(${formatBytes(f.size)})</span>`;
-    preview.appendChild(div);
+  label.textContent = `${files.length} file${files.length > 1 ? "s" : ""}`;
+  files.forEach((f, idx) => {
+    const isImage = (f.type || "").startsWith("image/");
+    const url = URL.createObjectURL(f);
+    const wrap = document.createElement("span");
+    wrap.className = "attach-staged";
+    wrap.dataset.bucket = bucket;
+    wrap.dataset.idx = String(idx);
+    wrap.dataset.objUrl = url;
+    // Image gets a thumbnail; other types get the generic icon. Either
+    // way the inner element is clickable to preview, and the ✕ removes
+    // the file from the staged array.
+    const previewInner = isImage
+      ? `<a class="attach-staged-link" href="${url}" target="_blank" rel="noopener"><img class="attach-staged-thumb" src="${url}" alt="${escapeHtml(f.name)}" /></a>`
+      : `<a class="attach-staged-link" href="${url}" target="_blank" rel="noopener" title="Open ${escapeHtml(f.name)}">${fileIcon(f.type, f.name)}</a>`;
+    wrap.innerHTML = `
+      ${previewInner}
+      <span class="attach-staged-meta">
+        <span class="attach-staged-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+        <span class="attach-staged-size muted small">${formatBytes(f.size)}</span>
+      </span>
+      <button type="button" class="attach-staged-remove" aria-label="Remove ${escapeHtml(f.name)}" title="Remove (not yet uploaded)">✕</button>`;
+    preview.appendChild(wrap);
+  });
+}
+
+function clearStagedFiles(bucket, previewSel, labelSel) {
+  // Free the blob URLs we created — otherwise they stay alive for the
+  // life of the page. Then drop the array reference itself.
+  const preview = $(previewSel);
+  if (preview) {
+    preview.querySelectorAll(".attach-staged[data-obj-url]").forEach(el => {
+      try { URL.revokeObjectURL(el.dataset.objUrl); } catch {}
+    });
   }
+  STATE.stagedFiles[bucket] = [];
+  if (preview) preview.innerHTML = "";
+  if (labelSel) {
+    const label = $(labelSel);
+    if (label) label.textContent = "Attach files";
+  }
+}
+
+function handleStagedInputChange(inputEl, previewSel, labelSel) {
+  const bucket = _stagedBucketForInput(inputEl.id);
+  if (!bucket) return;
+  // ADD to (not replace) the bucket so a user can pick files in two
+  // batches. The FileList we just got is consumed by reading once.
+  const arr = STATE.stagedFiles[bucket] || [];
+  for (const f of inputEl.files || []) arr.push(f);
+  STATE.stagedFiles[bucket] = arr;
+  // Reset the input so re-selecting the same file fires another change.
+  inputEl.value = "";
+  _renderStagedFiles(bucket, previewSel, labelSel);
+}
+
+function handleStagedListClick(e, previewSel, labelSel) {
+  const removeBtn = e.target.closest(".attach-staged-remove");
+  if (!removeBtn) return;
+  // Don't navigate via the wrapping link.
+  e.preventDefault();
+  const card = removeBtn.closest(".attach-staged");
+  if (!card) return;
+  const bucket = card.dataset.bucket;
+  const idx = parseInt(card.dataset.idx, 10);
+  const objUrl = card.dataset.objUrl;
+  if (objUrl) { try { URL.revokeObjectURL(objUrl); } catch {} }
+  if (bucket && !Number.isNaN(idx)) {
+    STATE.stagedFiles[bucket].splice(idx, 1);
+    _renderStagedFiles(bucket, previewSel, labelSel);
+  }
+}
+
+// Kept as a thin alias so callers that still pass the input element
+// (the old API) keep working without churn.
+function updateFilePreview(input, previewSel, labelSel) {
+  handleStagedInputChange(input, previewSel, labelSel);
 }
 
 async function uploadFiles(files, commentId) {
@@ -1543,6 +1757,19 @@ function openEventForm(event = null) {
     // Default scheduled date to today so the morning-standup case is one click.
     form.elements.scheduled_for.value = new Date().toISOString().slice(0, 10);
   }
+  // Manager picker: filter to admin/manager users only (the backend
+  // rejects regular users in that slot, so don't even show them as
+  // options to avoid a confusing 400 response).
+  const eligibleManagers = (STATE.users || []).filter(
+    u => u.is_active && (u.role === "admin" || u.role === "manager")
+  );
+  const selectedManagerIds = new Set(
+    (event && event.managers ? event.managers : []).map(m => m.id)
+  );
+  renderChips("#eventManagerPicker", eligibleManagers,
+    (u) => ({ id: u.id, label: u.name, sub: u.role }),
+    selectedManagerIds);
+
   openModal("modalEvent");
   setTimeout(() => form.elements.name.focus(), 50);
 }
@@ -1555,6 +1782,7 @@ async function submitEventForm(e) {
     name: form.elements.name.value.trim(),
     description: form.elements.description.value,
     scheduled_for: form.elements.scheduled_for.value || null,
+    manager_ids: readChips("#eventManagerPicker"),
   };
   if (!payload.name) { toast("Event name is required", "error"); return; }
   try {
@@ -1757,9 +1985,10 @@ async function postComment() {
   // attached they upload as bug-level attachments (no comment record) so
   // the user isn't forced to type a meaningless body just to share a file.
   const bodyEl = $("#commentBody");
-  const filesEl = $("#commentFiles");
   const body = (bodyEl?.value || "").trim();
-  const files = Array.from(filesEl?.files || []);
+  // Files come from the staged array (the user may have removed a few
+  // via the X button), NOT from the input element's read-only FileList.
+  const files = STATE.stagedFiles.comment || [];
   if (!body && files.length === 0) {
     toast("Add a comment or attach a file", "error");
     bodyEl?.focus();
@@ -1796,9 +2025,7 @@ async function postComment() {
 
     // Clear the inputs so the next post starts fresh.
     if (bodyEl) bodyEl.value = "";
-    if (filesEl) filesEl.value = "";
-    $("#filePreview").innerHTML = "";
-    $("#fileLabel").textContent = "Attach files";
+    clearStagedFiles("comment", "#filePreview", "#fileLabel");
 
     const bug = await api(`/bugs/${STATE.currentBugId}`);
     renderBugInlineSections(bug);
@@ -1953,8 +2180,13 @@ function renderEventDetail(ev) {
   const desc = ev.description
     ? `<p class="event-detail-desc">${escapeHtml(ev.description)}</p>`
     : "";
+  const managersHtml = (ev.managers || []).length
+    ? `<div class="event-detail-managers"><span class="muted small">Managers:</span> ${
+        ev.managers.map(m => `<span class="assignee-chip" title="${escapeHtml(m.email)}"><span class="avatar">${initials(m.name)}</span>${escapeHtml(m.name)}</span>`).join("")
+      }</div>`
+    : "";
   $("#eventDetailMeta").innerHTML =
-    `<div class="event-detail-bits">${metaBits.join(" · ")}</div>${desc}`;
+    `<div class="event-detail-bits">${metaBits.join(" · ")}</div>${desc}${managersHtml}`;
 
   const items = ev.items || [];
   const list = $("#eventDetailItems");
@@ -1965,27 +2197,20 @@ function renderEventDetail(ev) {
       </div>`;
     return;
   }
+  // Render the items as a full table — same look as the main work-items
+  // list (item #5 of the v2.3 wish list). We use the per-type "All"
+  // column set so every flavor shows its type prefix in the title cell.
+  // Drop the "actions" column (deletion happens from the bug modal).
+  const cols = ["id", "title-with-type", "project", "status", "priority", "due", "assignees", "att"];
+  const head = "<tr>" + cols.map(c => `<th class="col-${c.replace('title-with-type','title')}">${COL_HEAD_LABEL[c] ?? ""}</th>`).join("") + "</tr>";
+  const rows = items.map(b => {
+    const tds = cols.map(c => _renderCell(c, b)).join("");
+    return `<tr data-bug-id="${b.id}" tabindex="0">${tds}</tr>`;
+  }).join("");
   list.innerHTML = `
-    <ul class="event-item-list">
-      ${items.map(renderEventItemRow).join("")}
-    </ul>`;
-}
-
-function renderEventItemRow(it) {
-  const itype = it.item_type || "Bug";
-  const isDone = it.status === "Resolved" || it.status === "Closed";
-  const assignees = (it.assignees || []).length
-    ? it.assignees.map(a => `<span class="event-item-assignee" title="${escapeHtml(a.email)}">${initials(a.name)} ${escapeHtml(a.name)}</span>`).join("")
-    : `<span class="muted small">unassigned</span>`;
-  return `
-    <li class="event-item${isDone ? " done" : ""}" data-bug-id="${it.id}" tabindex="0" role="button">
-      <span class="event-item-type inline-type" data-type="${escapeHtml(itype)}" title="${escapeHtml(itype)}">${itemTypeEmoji(itype)}</span>
-      <span class="event-item-id">#${it.id}</span>
-      <span class="event-item-title" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</span>
-      <span class="event-item-status badge" data-status="${escapeHtml(it.status)}">${escapeHtml(it.status)}</span>
-      <span class="event-item-priority badge" data-priority="${escapeHtml(it.priority)}">${escapeHtml(it.priority)}</span>
-      <span class="event-item-assignees">${assignees}</span>
-    </li>`;
+    <div class="table-scroll">
+      <table class="bug-table"><thead>${head}</thead><tbody>${rows}</tbody></table>
+    </div>`;
 }
 
 async function refreshSessions() {
@@ -2103,14 +2328,24 @@ function bindGlobalListeners() {
   // main label opens the form preset to the user's last-chosen default
   // (Bug / Requirement / Task), and the caret opens a menu to pick a
   // different type explicitly.
+  // Resolve the right default type for the "+ New" button. On the All
+  // tab we honour the user's last-chosen type; on a per-type tab we
+  // default to that tab so "+ New" on the Tasks tab files a Task.
+  const resolveNewType = () => (
+    STATE.activeTab && STATE.activeTab !== "all"
+      ? STATE.activeTab
+      : (STATE.defaultNewType || "Bug")
+  );
   const setNewBtnLabel = () => {
-    const t = STATE.defaultNewType || "Bug";
+    const t = resolveNewType();
     const el = $("#newBugBtn");
     if (el) el.textContent = `+ New ${t}`;
   };
   setNewBtnLabel();
+  // Refresh the label whenever the user changes tab.
+  document.addEventListener("bh:tab-change", setNewBtnLabel);
   $("#newBugBtn").addEventListener("click", () => {
-    openBugForm({ _defaultType: STATE.defaultNewType || "Bug" });
+    openBugForm({ _defaultType: resolveNewType() });
   });
   $("#newItemCaretBtn")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2308,11 +2543,11 @@ function bindGlobalListeners() {
     if (!btn) return;
     handleKpiClick(btn.dataset.kpi);
   });
-  // Type pills: filter the list by item_type, or jump to Events view.
-  $("#kpiTypes")?.addEventListener("click", (e) => {
-    const btn = e.target.closest(".kpi-type-pill[data-type]");
+  // Tabs: All / Bugs / Requirements / Tasks at the top of the page.
+  $("#typeTabs")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".type-tab[data-tab]");
     if (!btn) return;
-    handleTypePillClick(btn.dataset.type);
+    setActiveTab(btn.dataset.tab);
   });
 
   // Bug table — row click opens the unified modal in edit/view mode;
@@ -2394,15 +2629,22 @@ function bindGlobalListeners() {
     }
   });
   $("#commentFiles")?.addEventListener("change", (e) => {
-    updateFilePreview(e.target, "#filePreview", "#fileLabel");
+    handleStagedInputChange(e.target, "#filePreview", "#fileLabel");
+  });
+  $("#filePreview")?.addEventListener("click", (e) => {
+    handleStagedListClick(e, "#filePreview", "#fileLabel");
   });
 
-  // Create-mode bug attachment picker — same preview helper used for
+  // Create-mode bug attachment picker — same staging machinery used for
   // comment uploads, just pointed at the create-mode targets. The
-  // submitBugForm() handler reads input.files at submit time and uploads
-  // each one after the bug row is created.
+  // submitBugForm() handler reads STATE.stagedFiles.createBug at submit
+  // time and uploads each one after the bug row is created. Files can
+  // be removed via the X button rendered next to each preview tile.
   $("#createBugFiles")?.addEventListener("change", (e) => {
-    updateFilePreview(e.target, "#createFilePreview", "#createFileLabel");
+    handleStagedInputChange(e.target, "#createFilePreview", "#createFileLabel");
+  });
+  $("#createFilePreview")?.addEventListener("click", (e) => {
+    handleStagedListClick(e, "#createFilePreview", "#createFileLabel");
   });
 
   // Bug-level upload handlers used to live here (drag-drop zone + file

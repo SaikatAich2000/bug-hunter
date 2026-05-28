@@ -43,12 +43,24 @@ def _utcnow() -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# Junction
+# Junctions
 # ---------------------------------------------------------------------------
 bug_assignees = Table(
     "bug_assignees",
     Base.metadata,
     Column("bug_id", Integer, ForeignKey("bugs.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+)
+
+# event_managers: many-to-many between events and the (admin/manager) users
+# who own that event. Notifications about the event (create / edit /
+# delete) fan out to this list. Tasks created INSIDE the event email
+# their own assignees as normal — they do NOT cc the event managers, so
+# adding someone here doesn't sign them up for every task email.
+event_managers = Table(
+    "event_managers",
+    Base.metadata,
+    Column("event_id", Integer, ForeignKey("events.id", ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
 )
 
@@ -168,6 +180,9 @@ class Event(Base):
         # docstring above. We null out the FK in app code on event delete
         # so the items survive.
         passive_deletes=True,
+    )
+    managers: Mapped[list["User"]] = relationship(
+        "User", secondary=event_managers, lazy="selectin",
     )
 
     __table_args__ = (

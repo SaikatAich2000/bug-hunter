@@ -568,6 +568,12 @@ class EventCreate(BaseModel):
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=10000)
     scheduled_for: Optional[str] = None  # YYYY-MM-DD
+    # User IDs (admin or manager role) to set as event managers. These
+    # users receive notifications when the event is created / updated /
+    # deleted — but NOT when individual tasks inside the event are
+    # filed. Empty list = no managers (the event has no notification
+    # recipients beyond the creator).
+    manager_ids: list[int] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -589,11 +595,20 @@ class EventCreate(BaseModel):
             raise ValueError("scheduled_for must be YYYY-MM-DD") from exc
         return v
 
+    @field_validator("manager_ids")
+    @classmethod
+    def _dedup(cls, v: list[int]) -> list[int]:
+        seen: list[int] = []
+        for x in v or []:
+            if x not in seen: seen.append(x)
+        return seen
+
 
 class EventUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, max_length=10000)
     scheduled_for: Optional[str] = None
+    manager_ids: Optional[list[int]] = None
 
     @field_validator("name")
     @classmethod
@@ -616,6 +631,15 @@ class EventUpdate(BaseModel):
             raise ValueError("scheduled_for must be YYYY-MM-DD") from exc
         return v
 
+    @field_validator("manager_ids")
+    @classmethod
+    def _dedup(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+        if v is None: return None
+        seen: list[int] = []
+        for x in v:
+            if x not in seen: seen.append(x)
+        return seen
+
 
 class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -627,6 +651,9 @@ class EventOut(BaseModel):
     created_by_name: Optional[str] = None
     item_count: int = 0
     assignee_count: int = 0
+    # Managers are returned as full briefs so the UI can render avatars
+    # and emails without a second round-trip.
+    managers: list[UserBrief] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

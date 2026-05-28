@@ -92,32 +92,26 @@
         </div>
       </header>
 
-      <!-- Type-breakdown pills: one chip per work-item flavor + a shortcut
-           to the Events view. Counts come from /api/stats (by_type plus a
-           live event count). Clicking a type chip filters the list to that
-           type; clicking the Events chip jumps to the events view. -->
-      <section class="kpi-types" id="kpiTypes" aria-label="Type breakdown">
-        <button type="button" class="kpi-type-pill" data-type="Bug" aria-label="Filter to Bugs">
-          <span class="kpi-type-icon">🐞</span>
-          <span class="kpi-type-count" id="kpiTypeBug">0</span>
-          <span class="kpi-type-label">Bugs</span>
+      <!-- Type tabs: All / Bugs / Requirements / Tasks. Moved up out of
+           the list view so they're a global "context switch" that drives
+           both the work-items table AND the analytics charts below. The
+           tab selection scopes KPIs, filters and charts to one item type
+           so a team drowning in 15-20 daily tasks can stay in their lane.
+           Hidden on audit / sessions / events views via setView(). -->
+      <nav class="type-tabs" id="typeTabs" role="tablist" aria-label="Work item type">
+        <button type="button" class="type-tab active" data-tab="all" role="tab" aria-selected="true">
+          <span>All</span><span class="type-tab-count" id="typeTabCountAll">0</span>
         </button>
-        <button type="button" class="kpi-type-pill" data-type="Requirement" aria-label="Filter to Requirements">
-          <span class="kpi-type-icon">📐</span>
-          <span class="kpi-type-count" id="kpiTypeRequirement">0</span>
-          <span class="kpi-type-label">Requirements</span>
+        <button type="button" class="type-tab" data-tab="Bug" role="tab" aria-selected="false">
+          <span>🐞 Bugs</span><span class="type-tab-count" id="typeTabCountBug">0</span>
         </button>
-        <button type="button" class="kpi-type-pill" data-type="Task" aria-label="Filter to Tasks">
-          <span class="kpi-type-icon">✅</span>
-          <span class="kpi-type-count" id="kpiTypeTask">0</span>
-          <span class="kpi-type-label">Tasks</span>
+        <button type="button" class="type-tab" data-tab="Requirement" role="tab" aria-selected="false">
+          <span>📐 Requirements</span><span class="type-tab-count" id="typeTabCountRequirement">0</span>
         </button>
-        <button type="button" class="kpi-type-pill" data-type="Event" aria-label="Open Events view">
-          <span class="kpi-type-icon">📅</span>
-          <span class="kpi-type-count" id="kpiTypeEvent">0</span>
-          <span class="kpi-type-label">Events</span>
+        <button type="button" class="type-tab" data-tab="Task" role="tab" aria-selected="false">
+          <span>✅ Tasks</span><span class="type-tab-count" id="typeTabCountTask">0</span>
         </button>
-      </section>
+      </nav>
 
       <!-- KPI strip: Total | Open | Resolved | Closed | Resolve Later
            Each tile is a clickable filter that drives the status multi-select.
@@ -181,57 +175,61 @@
         <button class="btn ghost" id="clearFiltersBtn">Clear</button>
       </section>
 
-      <!-- VIEW: List -->
+      <!-- VIEW: List
+           The top-level tabs above (All / Bugs / Requirements / Tasks)
+           scope every section that follows: KPI strip, filter bar, table
+           columns and the analytics charts. The table's <thead> rebuilds
+           per tab so each type shows only the columns that matter:
+             Bugs:         id, title, project, status, priority, env, assignees, 📎
+             Requirements: id, title, project, status, priority, assignees, 📎
+             Tasks:        id, title, project, status, priority, due, event, assignees
+             All:          id, type, title, project, status, priority, env, assignees, 📎
+           Numbering stays global — IDs come from the bugs sequence; the
+           tabs are pure UI filtering.
+      -->
       <section class="view" id="viewList">
         <div class="table-scroll">
-          <table class="bug-table">
-            <thead>
-              <tr>
-                <th class="col-id">#</th>
-                <th class="col-title">Title</th>
-                <th class="col-project">Project</th>
-                <th class="col-status">Status</th>
-                <th class="col-priority">Priority</th>
-                <th class="col-env">Env</th>
-                <th class="col-assignees">Assignees</th>
-                <th class="col-att">📎</th>
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
+          <table class="bug-table" id="bugTable">
+            <thead id="bugTableHead"></thead>
             <tbody id="bugTableBody"></tbody>
           </table>
         </div>
         <div id="emptyState" class="empty-state" hidden>
-          <p>No bugs match your filters</p>
+          <p>No items match your filters</p>
         </div>
         <div class="pagination" id="paginationBar"></div>
       </section>
 
-      <!-- VIEW: Analytics -->
+      <!-- VIEW: Analytics
+           Charts are scoped by the global type-tabs above — the same
+           tab that controls the work-items list also drives the
+           analytics. Titles update per tab so it's clear what's being
+           plotted. The Environment chart hides itself when the active
+           tab is Requirements / Tasks (environment doesn't apply). -->
       <section class="view" id="viewAnalytics" hidden>
         <div class="charts-grid">
           <div class="chart-card">
-            <h3>Bugs over the last 14 days</h3>
+            <h3 id="chartTimelineTitle">Items over the last 14 days</h3>
             <div id="chartTimeline" class="chart-host"></div>
           </div>
           <div class="chart-card">
-            <h3>By Status</h3>
+            <h3 id="chartStatusTitle">By Status</h3>
             <div id="chartStatus" class="chart-host"></div>
           </div>
           <div class="chart-card">
-            <h3>By Priority</h3>
+            <h3 id="chartPriorityTitle">By Priority</h3>
             <div id="chartPriority" class="chart-host"></div>
           </div>
-          <div class="chart-card">
-            <h3>By Environment</h3>
+          <div class="chart-card" id="chartEnvironmentCard">
+            <h3 id="chartEnvironmentTitle">By Environment</h3>
             <div id="chartEnvironment" class="chart-host"></div>
           </div>
           <div class="chart-card">
-            <h3>By Project</h3>
+            <h3 id="chartProjectTitle">By Project</h3>
             <div id="chartProject" class="chart-host"></div>
           </div>
           <div class="chart-card">
-            <h3>Top Assignees</h3>
+            <h3 id="chartAssigneeTitle">Top Assignees</h3>
             <div id="chartAssignee" class="chart-host"></div>
           </div>
         </div>
@@ -286,7 +284,7 @@
             </div>
           </div>
           <div class="events-controls">
-            <button class="btn primary" id="newEventBtn">+ New Event</button>
+            <button class="btn primary" id="newEventBtn" data-needs-role="manager">+ New Event</button>
             <button class="btn ghost" id="eventsRefreshBtn">Refresh</button>
             <span class="events-summary" id="eventsSummary"></span>
           </div>
@@ -303,12 +301,12 @@
             <h2 id="eventDetailName">Event</h2>
             <div class="events-detail-actions">
               <button class="btn ghost" id="editEventBtn" data-needs-role="manager">✎ Edit</button>
-              <button class="btn danger" id="deleteEventBtn" data-needs-role="manager">🗑 Delete</button>
+              <button class="btn danger" id="deleteEventBtn" data-needs-role="admin">🗑 Delete</button>
             </div>
           </div>
           <div class="events-detail-meta" id="eventDetailMeta"></div>
           <div class="events-detail-controls">
-            <button class="btn primary" id="addItemToEventBtn">+ Add Task</button>
+            <button class="btn primary" id="addItemToEventBtn" data-needs-role="manager">+ Add Task</button>
           </div>
           <div class="events-detail-items" id="eventDetailItems"></div>
         </div>
@@ -666,6 +664,11 @@
         <label class="field">
           <span>Scheduled for</span>
           <input name="scheduled_for" type="date" />
+        </label>
+        <label class="field">
+          <span>Managers</span>
+          <div class="chip-picker" id="eventManagerPicker"></div>
+          <small class="hint">Managers get notified when the event is created, edited or deleted — but not for individual tasks inside it. Only admin/manager users can be event managers</small>
         </label>
         <label class="field">
           <span>Description</span>

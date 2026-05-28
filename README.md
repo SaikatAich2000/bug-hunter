@@ -10,19 +10,45 @@ external file storage — attachments live in the database itself.
 - **Per-session tracking & admin revocation** (Keycloak-style) — admins can
   see every active session across the system and log a specific device out
   without affecting any other session for the same user
-- **Bug tracking** with status, priority, environment (DEV / UAT / PROD)
-- **Multi-assignee** support — many users per bug
-- **Single-screen Jira-style bug detail** — title, description, metadata,
+- **Three item types in one numbering system** — Bugs 🐞, Requirements 📐 and
+  Tasks ✅ all live in the same table and share the same `#N` counter, so a
+  bug `#123` is followed by a task `#124` is followed by a requirement
+  `#125`. The top-of-page tab strip (All / Bugs / Requirements / Tasks) is a
+  pure UI filter — it scopes KPIs, the filter bar, the table columns and the
+  analytics charts to the active type so a team filing 15–20 tasks per day
+  doesn't drown the bug view.
+- **Events** 📅 — containers for groups of work items (a daily standup, a
+  sprint meeting, an incident debrief). An event can be assigned to one or
+  more **managers** who get emailed when the event is created, edited or
+  deleted. Tasks created *inside* an event are notified to the task's own
+  assignees only — adding someone as event manager doesn't subscribe them
+  to every task in the event. Items can be moved in and out of events
+  freely; deleting an event preserves the items.
+- **Status / priority / environment** — DEV / UAT / PROD; environment only
+  applies to Bugs (hidden on Requirements / Tasks)
+- **Per-tab KPIs and analytics** — the Total / Open / Resolved / Closed /
+  Resolve-Later strip and the charts (timeline, status, priority, environment,
+  project, top assignees) all rescope themselves to whichever tab is active
+- **Multi-assignee** support — many users per item
+- **Single-screen Jira-style item detail** — title, description, metadata,
   comments and attachments are all on one wide screen; no separate edit modal,
   no pencil button to chase
 - **Comments and attachments** (PDF, image, video) stored as BLOBs in Postgres
-- **Email notifications** on bug create / update / assignment / new comment
-  (Gmail / Outlook / SMTP)
+  with an in-modal staging area: while filing a new item or composing a
+  comment you can hover an attachment to remove it (✕ on hover) or click it
+  to preview the file before saving — nothing uploads until you submit
+- **Email notifications** on item create / update / assignment / new comment
+  *and* event create / edit / delete (Gmail / Outlook / SMTP). Type-aware
+  subjects — a new task says "task", a new requirement says "requirement",
+  never "bug"
+- **Type-aware role enforcement** — admins do everything; managers can edit
+  any item *and* events but can never delete; regular users can edit and
+  create bugs only (tasks, requirements and events are read-only for them)
 - **Forgot-password** flow via email reset link
 - **Full audit trail** — every create / update / delete / login logged and
   viewable by admins and managers
 - **Light / dark themes**, fully responsive (mobile, tablet, desktop)
-- **CSV export** of all bugs
+- **CSV export** of all items
 - **Sleuth — built-in AI assistant** 🔍 that answers natural-language questions
   about your bugs and *executes* tasks on demand (assign, close, comment,
   create). 100 % self-hosted: rules + a small statistical classifier handle
@@ -64,18 +90,23 @@ Log in, then **immediately** change the password from the Account panel in the
 sidebar. After that, admins (and managers, with limits) can create new
 accounts. Roles:
 
-| Role    | Bugs                                          | Projects                  | Users                                                              | Audit | Sessions        |
-|---------|-----------------------------------------------|---------------------------|--------------------------------------------------------------------|-------|-----------------|
-| admin   | Create, edit any, **delete any**, reassign    | Create, edit, **delete**  | Create, edit, **delete**                                           | ✓     | ✓ list + revoke |
-| manager | Create, edit any, reassign (no delete)        | Create, edit (no delete)  | Create, edit non-admins (no delete, no admin role grant)           | ✓     | —               |
-| user    | Create, edit any, reassign (no delete)        | View only                 | View only                                                          | —     | —               |
+| Role    | Bugs                            | Tasks & Requirements            | Events                              | Projects                 | Users                                                    | Audit | Sessions        |
+|---------|---------------------------------|---------------------------------|-------------------------------------|--------------------------|----------------------------------------------------------|-------|-----------------|
+| admin   | Create, edit any, **delete any**| Create, edit any, **delete any**| Create, edit, **delete**, manage    | Create, edit, **delete** | Create, edit, **delete**                                 | ✓     | ✓ list + revoke |
+| manager | Create, edit any (no delete)    | Create, edit any (no delete)    | Create, edit, **assign managers**, no delete | Create, edit (no delete) | Create, edit non-admins (no delete, no admin role grant) | ✓     | —               |
+| user    | Create, edit any (no delete)    | **View only**                   | **View only**                       | View only                | View only                                                | —     | —               |
 
-Notes on the v3.1 policy:
+Notes on the policy:
 
-- **Bug deletion is admin-only.** Even the user who reported a bug can't
-  delete it; only admins can. Managers used to be allowed but no longer.
-- **Project / user deletion is admin-only.** Managers create and edit, but
-  delete is reserved.
+- **Item deletion is admin-only**, for every type (Bug / Requirement / Task).
+  Even the user who reported it can't delete; only admins can.
+- **Tasks and Requirements are read-only for regular users.** They can still
+  see them and use them — they just can't edit or delete. Managers and
+  admins do day-to-day task management.
+- **Event managers must be admin or manager.** Trying to assign a regular
+  user as an event manager returns an explanatory 400. The picker in the
+  Event modal pre-filters to eligible users so this can't be hit by accident.
+- **Event delete is admin-only**; managers can edit events but not delete.
 - **Managers can't grant the admin role**, can't edit existing admins, and
   can't deactivate them.
 - **Audit Trail is hidden from regular users** — they don't see who did what
@@ -135,10 +166,17 @@ The only ways to lose data are:
 - `docker compose down -v` — manual destructive call
 - Manually deleting the named volume
 
-Schema changes in v3.1 are **purely additive**:
+Schema changes are **purely additive** — every release upgrade is
+idempotent and re-running `./deploy.sh` against an existing database is
+safe by design:
 
-- A new `sessions` table is created on first start (idempotent, only if
-  it doesn't already exist). No existing table's columns or indexes change.
+- `sessions` (v3.1) — created on first start if missing.
+- `bugs.item_type` (v2.3) — added via `ALTER TABLE ... ADD COLUMN` with
+  a `Bug` default; existing rows backfill cleanly.
+- `events` + `bugs.event_id` (v2.3) — new table and new nullable FK
+  (`ON DELETE SET NULL`, so removing an event preserves its items).
+- `event_managers` (v2.3) — many-to-many association between events and
+  the admin/manager users notified for that event.
 - Cookies issued by older builds (which don't carry a `jti`) are still
   accepted and treated as legacy sessions, so a redeploy doesn't kick
   every user out at once.
@@ -299,9 +337,11 @@ panel. `Esc` closes it.
 │   ├── database.py        # SQLAlchemy setup
 │   ├── email_service.py   # SMTP / console email backends
 │   ├── main.py            # FastAPI entry point
-│   ├── models.py          # User, Project, Bug, Comment, Attachment,
+│   ├── models.py          # User, Project, Bug (Bug/Requirement/Task),
+│   │                      # Event, event_managers, Comment, Attachment,
 │   │                      # Activity, PasswordResetToken, Session
-│   ├── routes/            # auth, users, projects, bugs, stats, audit, sessions
+│   ├── routes/            # auth, users, projects, bugs, events, stats,
+│   │                      # audit, sessions
 │   ├── schemas.py         # Pydantic DTOs
 │   ├── chatbot/           # Sleuth — the in-app AI assistant
 │   │   ├── nlu.py         #   Layer 1: rule-based parser

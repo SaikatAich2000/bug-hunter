@@ -12,8 +12,9 @@ them from the headline total.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,11 +25,22 @@ from app.schemas import EXCLUDED_FROM_TOTAL_STATUSES, StatsOut
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
+_VALID_TYPES = {"Bug", "Requirement", "Task"}
+
 
 @router.get("", response_model=StatsOut)
 def stats(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
+    item_type: Optional[str] = Query(
+        default=None,
+        description=(
+            "Scope every aggregation (KPIs, status/priority/env/project/"
+            "assignee breakdowns and the 14-day timeline) to a single item "
+            "type. Omit to get global stats. by_type and the event count "
+            "stay global so the tab-count badges always match reality."
+        ),
+    ),
 ) -> StatsOut:
     # Perf v3.2.1: this endpoint used to fire 11 separate count queries
     # (one per status KPI, one per dimension breakdown, plus projects /
@@ -37,9 +49,23 @@ def stats(
     # of five — and reuse those counts for the by_status breakdown so
     # we save another query there too. Net: 11 queries → 6.
 
+    if item_type is not None and item_type not in _VALID_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"item_type must be one of {sorted(_VALID_TYPES)}",
+        )
+
+    # Type-tab scoping: when item_type is set, every Bug-table aggregation
+    # filters on Bug.item_type. by_type and the Event count are always
+    # global — the tab badges rely on the unfiltered totals.
+    def _scoped(stmt):
+        if item_type is not None:
+            return stmt.where(Bug.item_type == item_type)
+        return stmt
+
     by_status: dict[str, int] = {}
     for status_name, cnt in db.execute(
-        select(Bug.status, func.count(Bug.id)).group_by(Bug.status)
+        _scoped(select(Bug.status, func.count(Bug.id)).group_by(Bug.status))
     ).all():
         by_status[status_name] = int(cnt)
 
@@ -61,41 +87,66 @@ def stats(
     user_count = db.scalar(select(func.count(User.id))) or 0
 
     by_priority = dict(db.execute(
-        select(Bug.priority, func.count(Bug.id)).group_by(Bug.priority)
+        _scoped(select(Bug.priority, func.count(Bug.id)).group_by(Bug.priority))
     ).all())
     by_environment = dict(db.execute(
-        select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment)
+        _scoped(select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment))
     ).all())
+    # by_type stays global so the tab-count badges stay correct regardless
+    # of which tab is active.
     by_type = dict(db.execute(
         select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type)
     ).all())
-    # Events aren't a row in the bugs table — they live in their own
-    # `events` table. We surface their count under the same `by_type` map
-    # so the SPA can render a unified type-breakdown pill row.
     events_count = db.scalar(select(func.count(Event.id))) or 0
     by_type["Event"] = int(events_count)
 
-    by_project_rows = db.execute(
+    by_project_stmt = (
         select(Project.id, Project.name, Project.color, func.count(Bug.id))
         .outerjoin(Bug, Bug.project_id == Project.id)
         .group_by(Project.id, Project.name, Project.color)
         .order_by(func.count(Bug.id).desc())
-    ).all()
+    )
+    if item_type is not None:
+        # For an outer join we filter the JOINed side, not the WHERE, so
+        # projects with zero items in this tab still show up with count 0.
+        by_project_stmt = (
+            select(Project.id, Project.name, Project.color, func.count(Bug.id))
+            .outerjoin(
+                Bug,
+                (Bug.project_id == Project.id) & (Bug.item_type == item_type),
+            )
+            .group_by(Project.id, Project.name, Project.color)
+            .order_by(func.count(Bug.id).desc())
+        )
+    by_project_rows = db.execute(by_project_stmt).all()
 
-    by_assignee_rows = db.execute(
+    by_assignee_stmt = (
         select(User.id, User.name, User.email, func.count(bug_assignees.c.bug_id))
         .join(bug_assignees, bug_assignees.c.user_id == User.id)
         .group_by(User.id, User.name, User.email)
         .order_by(func.count(bug_assignees.c.bug_id).desc())
         .limit(10)
-    ).all()
+    )
+    if item_type is not None:
+        by_assignee_stmt = (
+            select(User.id, User.name, User.email, func.count(bug_assignees.c.bug_id))
+            .join(bug_assignees, bug_assignees.c.user_id == User.id)
+            .join(Bug, Bug.id == bug_assignees.c.bug_id)
+            .where(Bug.item_type == item_type)
+            .group_by(User.id, User.name, User.email)
+            .order_by(func.count(bug_assignees.c.bug_id).desc())
+            .limit(10)
+        )
+    by_assignee_rows = db.execute(by_assignee_stmt).all()
 
     today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=13)
     timeline_rows = db.execute(
-        select(func.date(Bug.created_at), func.count(Bug.id))
-        .where(func.date(Bug.created_at) >= start)
-        .group_by(func.date(Bug.created_at))
+        _scoped(
+            select(func.date(Bug.created_at), func.count(Bug.id))
+            .where(func.date(Bug.created_at) >= start)
+            .group_by(func.date(Bug.created_at))
+        )
     ).all()
     counts_by_day: dict[str, int] = {}
     for raw_day, count in timeline_rows:

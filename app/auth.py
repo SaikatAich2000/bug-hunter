@@ -300,22 +300,47 @@ def require_manager_or_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
-def can_edit_bug(user: User, bug_reporter_id: Optional[int], assignee_ids: list[int]) -> bool:
-    """Centralised rule: every authenticated, active user can edit any bug.
+def can_edit_bug(
+    user: User,
+    bug_reporter_id: Optional[int],
+    assignee_ids: list[int],
+    item_type: str = "Bug",
+) -> bool:
+    """Whether `user` may edit a work item.
 
-    This was tightened to "reporter / assignee / manager / admin" in earlier
-    builds, but the v3.1 product spec relaxed it: a regular user can now
-    edit any bug and reassign it to anyone. Deletion is the only bug
-    operation still restricted (admin-only — see can_delete_bug)."""
+    Per-type rules (v2.3 tightening):
+      - Bug:         every authenticated user can edit (legacy behaviour).
+      - Requirement: only admin or manager. Users are read-only here.
+      - Task:        only admin or manager. Users are read-only here.
+
+    Tasks and requirements are workflow items, not bug reports — letting
+    a random user re-write what their manager assigned them in a standup
+    leaks responsibility, so we lock that down.
+    """
+    if item_type in ("Task", "Requirement"):
+        return user.role in (ROLE_ADMIN, ROLE_MANAGER)
+    # item_type == "Bug" (the default for legacy / unknown rows)
     return True
 
 
-def can_delete_bug(user: User) -> bool:
-    """Bug deletion is admin-only across all roles. The original code
-    allowed managers too; the v3.1 spec moved this to admin-only so a
-    bug — once filed — can't be erased by anyone except the very top of
-    the hierarchy. Reporters / assignees / managers all still have full
-    edit rights, just not delete."""
+def can_delete_bug(user: User, item_type: str = "Bug") -> bool:
+    """Deletion is admin-only across every work-item type. Managers can
+    edit, never delete — this matches the v2.3 spec ("managers does not
+    have permission to delete anything as well"). The item_type
+    parameter exists for symmetry with can_edit_bug — the rule is the
+    same regardless of type, but having the signature accept it lets
+    callers be self-documenting.
+    """
+    return user.role == ROLE_ADMIN
+
+
+def can_edit_event(user: User) -> bool:
+    """Events are admin/manager only — users have no edit rights."""
+    return user.role in (ROLE_ADMIN, ROLE_MANAGER)
+
+
+def can_delete_event(user: User) -> bool:
+    """Event delete is admin-only (managers can edit but not delete)."""
     return user.role == ROLE_ADMIN
 
 

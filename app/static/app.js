@@ -680,7 +680,7 @@ function _renderCell(col, bug) {
       return `<td class="col-event">${bug.event_name ? `<span class="event-pill" title="${escapeHtml(bug.event_name)}">📅 ${escapeHtml(bug.event_name)}</span>` : '<span class="muted">—</span>'}</td>`;
     case "assignees": {
       const html = bug.assignees.length
-        ? bug.assignees.map(a => `<span class="assignee-chip" title="${escapeHtml(a.email)}"><span class="avatar">${initials(a.name)}</span>${escapeHtml(a.name)}</span>`).join("")
+        ? bug.assignees.map(a => `<span class="assignee-chip" title="${escapeHtml(a.email)}"><span class="avatar">${initials(a.name)}</span><span class="assignee-chip-name">${escapeHtml(a.name)}</span></span>`).join("")
         : `<span class="muted">—</span>`;
       return `<td class="col-assignees"><div class="assignee-stack">${html}</div></td>`;
     }
@@ -2499,7 +2499,7 @@ function renderEventDetail(ev) {
     : "";
   const managersHtml = (ev.managers || []).length
     ? `<div class="event-detail-managers"><span class="muted small">Managers:</span> ${
-        ev.managers.map(m => `<span class="assignee-chip" title="${escapeHtml(m.email)}"><span class="avatar">${initials(m.name)}</span>${escapeHtml(m.name)}</span>`).join("")
+        ev.managers.map(m => `<span class="assignee-chip" title="${escapeHtml(m.email)}"><span class="avatar">${initials(m.name)}</span><span class="assignee-chip-name">${escapeHtml(m.name)}</span></span>`).join("")
       }</div>`
     : "";
   $("#eventDetailMeta").innerHTML =

@@ -8,7 +8,18 @@
 // State
 // ---------------------------------------------------------------------------
 const STATE = {
-  meta:     { statuses: [], priorities: [], environments: [], item_types: ["Bug", "Requirement", "Task"] },
+  // v2.5: statuses_by_type maps each item_type to its valid status set.
+  // We default to a sensible Bug-only fallback so legacy clients without
+  // a fresh /api/meta call still render something meaningful.
+  meta:     {
+    statuses: [], priorities: [], environments: [],
+    item_types: ["Bug", "Requirement", "Task"],
+    statuses_by_type: {
+      Bug: ["New", "In Progress", "Resolved", "Closed", "Reopened", "Not a Bug", "Resolve Later"],
+      Requirement: ["New", "In Review", "Approved", "Implemented", "Rejected", "Deferred"],
+      Task: ["New", "In Progress", "Done", "Blocked", "Cancelled"],
+    },
+  },
   users:    [],
   projects: [],
   stats:    null,
@@ -151,6 +162,45 @@ async function api(path, opts = {}) {
   if (res.status === 204) return null;
   const ct = res.headers.get("content-type") || "";
   return ct.includes("application/json") ? res.json() : res.text();
+}
+
+// ---------------------------------------------------------------------------
+// Global blocking loader (v2.5)
+//
+// Any action button that triggers a server round-trip should run inside
+// withLoader() so the user sees an "in flight" overlay and can't
+// double-submit by mashing buttons or clicking somewhere else mid-call.
+// The counter pattern handles concurrent actions: the overlay only
+// disappears when EVERY in-flight op has finished.
+// ---------------------------------------------------------------------------
+let _loaderPending = 0;
+function _refreshLoader() {
+  const el = document.getElementById("globalLoader");
+  if (!el) return;
+  const shouldShow = _loaderPending > 0;
+  el.hidden = !shouldShow;
+  el.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+  // Reflect on <body> so CSS can ::disable interactions on background
+  // tooltips / focus rings without us having to bind listeners.
+  document.body.classList.toggle("is-loading", shouldShow);
+}
+function showLoader(message) {
+  _loaderPending++;
+  const txt = document.getElementById("globalLoaderText");
+  if (txt && message) txt.textContent = message;
+  _refreshLoader();
+}
+function hideLoader() {
+  _loaderPending = Math.max(0, _loaderPending - 1);
+  _refreshLoader();
+}
+async function withLoader(thunk, message) {
+  showLoader(message || "Working…");
+  try {
+    return await thunk();
+  } finally {
+    hideLoader();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -401,9 +451,26 @@ function scheduleSessionPoll() {
 }
 
 async function loadMeta() {
-  STATE.meta = await api("/meta");
+  const remote = await api("/meta");
+  // Keep the v2.5 statuses_by_type fallback if an older server doesn't
+  // ship the field. Without this, a stale build would render an empty
+  // status dropdown (the select would only contain the "— select —"
+  // placeholder and silently break form submission).
+  const fallback = STATE.meta.statuses_by_type || {};
+  STATE.meta = {
+    ...remote,
+    statuses_by_type: remote.statuses_by_type || fallback,
+  };
   // Multi-select panels are repopulated by refreshMultiSelects(); the legacy
   // <select> filters were removed in favour of the new dropdowns.
+}
+
+// Returns the valid statuses for a given item_type, falling back to the
+// global union if the server didn't ship the per-type map (very old
+// build) or the type isn't recognized.
+function statusesForType(itype) {
+  const byType = (STATE.meta && STATE.meta.statuses_by_type) || {};
+  return byType[itype || "Bug"] || (STATE.meta && STATE.meta.statuses) || [];
 }
 
 async function loadUsers() {
@@ -1164,8 +1231,17 @@ function openBugForm(bug = null) {
   }
   fillFormSelect(form.elements.reporter_id, reporterOptions,
                  isEdit && bug.reporter ? bug.reporter.id : (me ? me.id : ""));
-  fillFormSelect(form.elements.status, STATE.meta.statuses.map(s => [s, s]),
-                 isEdit ? bug.status : "New");
+  // Status options come from the per-type set so e.g. "Not a Bug" is
+  // never offered for a Task or Requirement. The chosen-type at this
+  // point is from bug.item_type (edit) or the default-new-type (create)
+  // computed below; we re-populate the dropdown whenever the type
+  // changes (see the change-listener wired in bindGlobalListeners).
+  // If the row was carrying a status that's no longer valid for its
+  // type (e.g. a Task that historically held "Resolved"), we keep the
+  // current value as a one-off option so the user can SEE it and SWITCH
+  // it without the form blowing up.
+  const initialStatusType = isEdit ? (bug.item_type || "Bug") : (bug?._defaultType || STATE.defaultNewType || "Bug");
+  _renderStatusSelect(form.elements.status, initialStatusType, isEdit ? bug.status : "New");
   fillFormSelect(form.elements.priority, STATE.meta.priorities.map(s => [s, s]),
                  isEdit ? bug.priority : "Medium");
   // Environment - already DEV/UAT/PROD options in the HTML, just set value
@@ -1329,6 +1405,22 @@ function applyBugFormReadOnly(form, bug, isEdit) {
   }
 }
 
+// Populate the status <select> with the options valid for `itype`.
+// Preserves the current selection if it still fits; otherwise keeps it
+// as a "legacy" option marked with a † suffix so the user can see and
+// change it without seeing an "empty" dropdown.
+function _renderStatusSelect(selEl, itype, current) {
+  const opts = statusesForType(itype);
+  const includesCurrent = current && opts.includes(current);
+  const items = opts.map(s => [s, s]);
+  if (current && !includesCurrent) {
+    // Carry-forward case: a row stored a status no longer valid for its
+    // type. Pin it as an explicit option so the dropdown isn't blank.
+    items.push([current, `${current} (legacy)`]);
+  }
+  fillFormSelect(selEl, items, current || (opts[0] || "New"));
+}
+
 // Inline render of comments + attachments + activity inside the bug
 // modal. Replaces the old separate "detail modal with tabs" — everything
 // lives in one screen now.
@@ -1346,20 +1438,32 @@ function renderBugInlineSections(bug) {
   const commentsList = $("#bugCommentsList");
   if (bug.comments.length) {
     commentsList.innerHTML = bug.comments.map(c => {
-      const atts = (c.attachments || []).map(a => renderAttachmentCard(a, false)).join("");
+      // v2.5: comment attachments are also admin-only deletable. The
+      // role gate is the same as for bug-level attachments.
+      const atts = (c.attachments || []).map(a => renderAttachmentCard(a, isAdmin)).join("");
       // Comment body may be empty if the user chose to share files only
       // — render the body block only when there's text to show.
       const bodyHtml = (c.body || "").trim()
-        ? `<div class="comment-body">${escapeHtml(c.body)}</div>`
+        ? `<div class="comment-body" data-comment-body="${c.id}">${escapeHtml(c.body)}</div>`
         : "";
+      // Admin-only ✎ / 🗑 actions on the right of the head row. Hidden
+      // entirely for everyone else so the head stays clean.
+      const adminActions = isAdmin ? `
+        <span class="comment-admin-actions">
+          ${(c.body || "").trim() ? `<button type="button" class="icon-btn" data-act="edit-comment" data-id="${c.id}" title="Edit comment">✎</button>` : ""}
+          <button type="button" class="icon-btn danger" data-act="delete-comment" data-id="${c.id}" title="Delete comment">🗑</button>
+        </span>` : "";
       return `
-        <div class="comment">
+        <div class="comment" data-comment-id="${c.id}">
           <div class="comment-head">
             <div class="comment-head-left">
               <span class="avatar">${initials(c.author_name)}</span>
               <span class="comment-author">${escapeHtml(c.author_name)}</span>
             </div>
-            <span class="comment-time">${formatDate(c.created_at)}</span>
+            <span class="comment-head-right">
+              <span class="comment-time">${formatDate(c.created_at)}</span>
+              ${adminActions}
+            </span>
           </div>
           ${bodyHtml}
           ${atts ? `<div class="comment-attachments"><div class="attachment-grid">${atts}</div></div>` : ""}
@@ -1380,19 +1484,36 @@ function renderBugInlineSections(bug) {
   $("#filePreview").innerHTML = "";
   $("#fileLabel").textContent = "Attach files";
 
-  // ----- Attachments (legacy bug-level only) -----
-  // The separate bug-level upload was removed in v3.2 — new files now
-  // attach to comments via the comment composer. We still RENDER any
-  // bug-level attachments uploaded before that change so legacy data
-  // stays visible; the section is hidden entirely when there are none.
+  // ----- Attachments (bug-level) -----
+  // v2.5: section is ALWAYS visible in edit mode so users can see
+  // existing files AND upload new ones via the section-head uploader.
+  // Deletion stays admin-only; uploads are open to anyone who can
+  // edit this item type (managers/admins for Task/Requirement, any
+  // user for Bug).
+  const itypeForAtt = (bug && bug.item_type) || "Bug";
+  $("#bugAttachmentsSection").hidden = false;
+  $("#attachmentsCount").textContent = bug.attachments.length
+    ? `(${bug.attachments.length})`
+    : "";
   if (bug.attachments.length) {
-    $("#bugAttachmentsSection").hidden = false;
-    $("#attachmentsCount").textContent = `(${bug.attachments.length})`;
     $("#bugAttachmentsGrid").innerHTML =
-      bug.attachments.map(a => renderAttachmentCard(a, true)).join("");
+      bug.attachments.map(a => renderAttachmentCard(a, isAdmin)).join("");
+    $("#bugAttachEmpty").hidden = true;
   } else {
-    $("#bugAttachmentsSection").hidden = true;
+    $("#bugAttachmentsGrid").innerHTML = "";
+    // The empty placeholder is only useful when the user CAN add (it
+    // prompts them to use the uploader above). Otherwise it would be
+    // misleading.
+    $("#bugAttachEmpty").hidden = !canEditItem(bug);
   }
+  // Show / hide the post-creation uploader based on edit perms.
+  const addLabel = $("#bugAttachAddLabel");
+  if (addLabel) addLabel.hidden = !canEditItem(bug);
+  // Reset any half-staged files from a previous open so attaching to
+  // bug A then opening bug B doesn't carry the leftovers.
+  clearStagedFiles("bugAttach", "#bugAttachAddPreview", "#bugAttachAddText");
+  const ai = $("#bugAttachAddInput");
+  if (ai) ai.value = "";
 
   // ----- Activity (collapsible <details>) -----
   $("#bugActivitySection").hidden = false;
@@ -1483,19 +1604,19 @@ async function submitBugForm(e) {
       // EDIT — save, then close the modal and return to the list.
       // (Earlier v3.1 builds kept the modal open Jira-style; reverted
       // here because users prefer the explicit close-and-return flow.)
-      const updated = await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-      const utype = updated?.item_type || payload.item_type || "Bug";
+      const result = await withLoader(async () => {
+        const updated = await api(`/bugs/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+        closeModal("modalBug");
+        if (STATE.view === "events" && STATE.currentEventId) {
+          await openEventDetail(STATE.currentEventId);
+        } else {
+          setView("list");
+          await refreshAll();
+        }
+        return updated;
+      }, "Saving changes…");
+      const utype = result?.item_type || payload.item_type || "Bug";
       toast(`${utype} #${id} updated`, "success");
-      closeModal("modalBug");
-      // Stay in the event-detail view if that's where we came from —
-      // otherwise the user gets bounced back to the list, which is
-      // jarring when they were drilling through a standup.
-      if (STATE.view === "events" && STATE.currentEventId) {
-        await openEventDetail(STATE.currentEventId);
-      } else {
-        setView("list");
-        await refreshAll();
-      }
     } else {
       // CREATE — POST the item, then upload any files selected in the
       // create-mode attachment picker before closing the modal. We do the
@@ -1504,44 +1625,46 @@ async function submitBugForm(e) {
       // /bugs/{id}/attachments endpoint as the single attachment-upload
       // path. Failures on individual files are toasted but don't abort
       // the create flow — the item itself is already saved.
-      const created = await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
-      const ctype = created?.item_type || payload.item_type || "Bug";
-      // Files come from the staged array (the user may have pulled some
-      // out via the X button before submitting).
-      const files = STATE.stagedFiles.createBug || [];
-      if (files.length && created && created.id) {
-        let done = 0;
-        let failed = 0;
-        for (const f of files) {
-          const fd = new FormData();
-          fd.append("file", f);
-          try {
-            await api(`/bugs/${created.id}/attachments`, { method: "POST", body: fd });
-            done++;
-          } catch (err) {
-            failed++;
-            // Show per-file errors so the user knows which one didn't
-            // make it (e.g. a 50 MB cap hit on one big file).
-            toast(`Attachment ${f.name}: ${err.message}`, "error");
+      await withLoader(async () => {
+        const created = await api("/bugs", { method: "POST", body: JSON.stringify(payload) });
+        const ctype = created?.item_type || payload.item_type || "Bug";
+        // Files come from the staged array (the user may have pulled some
+        // out via the X button before submitting).
+        const files = STATE.stagedFiles.createBug || [];
+        if (files.length && created && created.id) {
+          let done = 0;
+          let failed = 0;
+          for (const f of files) {
+            const fd = new FormData();
+            fd.append("file", f);
+            try {
+              await api(`/bugs/${created.id}/attachments`, { method: "POST", body: fd });
+              done++;
+            } catch (err) {
+              failed++;
+              // Show per-file errors so the user knows which one didn't
+              // make it (e.g. a 50 MB cap hit on one big file).
+              toast(`Attachment ${f.name}: ${err.message}`, "error");
+            }
           }
+          if (done) toast(`${ctype} #${created.id} created · ${done} file(s) attached`, "success");
+          else if (failed) toast(`${ctype} #${created.id} created (no attachments saved)`, "info");
+          else toast(`${ctype} created`, "success");
+        } else {
+          toast(`${ctype} created`, "success");
         }
-        if (done) toast(`${ctype} #${created.id} created · ${done} file(s) attached`, "success");
-        else if (failed) toast(`${ctype} #${created.id} created (no attachments saved)`, "info");
-        else toast(`${ctype} created`, "success");
-      } else {
-        toast(`${ctype} created`, "success");
-      }
-      // Clear the staged array + free blob URLs so reopening starts clean.
-      clearStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
-      const fEl = $("#createBugFiles"); if (fEl) fEl.value = "";
+        // Clear the staged array + free blob URLs so reopening starts clean.
+        clearStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
+        const fEl = $("#createBugFiles"); if (fEl) fEl.value = "";
 
-      closeModal("modalBug");
-      if (STATE.view === "events" && STATE.currentEventId) {
-        await openEventDetail(STATE.currentEventId);
-      } else {
-        setView("list");
-        await refreshAll();
-      }
+        closeModal("modalBug");
+        if (STATE.view === "events" && STATE.currentEventId) {
+          await openEventDetail(STATE.currentEventId);
+        } else {
+          setView("list");
+          await refreshAll();
+        }
+      }, "Creating item…");
     }
   } catch (err) {
     toastError(err);
@@ -1639,11 +1762,12 @@ function activityIcon(action) {
 //   STATE.stagedFiles.createBug    — "+ New X" modal's bug-level attach
 //   STATE.stagedFiles.comment      — comment composer's attach
 // ---------------------------------------------------------------------------
-STATE.stagedFiles = { createBug: [], comment: [] };
+STATE.stagedFiles = { createBug: [], comment: [], bugAttach: [] };
 
 function _stagedBucketForInput(inputId) {
-  if (inputId === "createBugFiles") return "createBug";
-  if (inputId === "commentFiles")   return "comment";
+  if (inputId === "createBugFiles")  return "createBug";
+  if (inputId === "commentFiles")    return "comment";
+  if (inputId === "bugAttachAddInput") return "bugAttach";
   return null;
 }
 
@@ -1652,11 +1776,18 @@ function _renderStagedFiles(bucket, previewSel, labelSel) {
   const label = $(labelSel);
   const files = STATE.stagedFiles[bucket] || [];
   preview.innerHTML = "";
+  // Notify listeners after the render so the "Upload N" button on the
+  // post-creation attach uploader can be added/removed.
+  const notify = () => document.dispatchEvent(new CustomEvent("bh:staged-changed", { detail: { bucket } }));
   if (!files.length) {
-    label.textContent = "Attach files";
+    if (label) {
+      const isAddBtn = labelSel === "#bugAttachAddText";
+      label.textContent = isAddBtn ? "Add attachment" : "Attach files";
+    }
+    notify();
     return;
   }
-  label.textContent = `${files.length} file${files.length > 1 ? "s" : ""}`;
+  if (label) label.textContent = `${files.length} file${files.length > 1 ? "s" : ""}`;
   files.forEach((f, idx) => {
     const isImage = (f.type || "").startsWith("image/");
     const url = URL.createObjectURL(f);
@@ -1680,6 +1811,9 @@ function _renderStagedFiles(bucket, previewSel, labelSel) {
       <button type="button" class="attach-staged-remove" aria-label="Remove ${escapeHtml(f.name)}" title="Remove (not yet uploaded)">✕</button>`;
     preview.appendChild(wrap);
   });
+  // Fire the "stage changed" event so a section-head Upload button can
+  // appear (post-creation attach uploader).
+  notify();
 }
 
 function clearStagedFiles(bucket, previewSel, labelSel) {
@@ -1695,8 +1829,12 @@ function clearStagedFiles(bucket, previewSel, labelSel) {
   if (preview) preview.innerHTML = "";
   if (labelSel) {
     const label = $(labelSel);
-    if (label) label.textContent = "Attach files";
+    if (label) {
+      // The bug-attach button's idle label differs from the others.
+      label.textContent = labelSel === "#bugAttachAddText" ? "Add attachment" : "Attach files";
+    }
   }
+  document.dispatchEvent(new CustomEvent("bh:staged-changed", { detail: { bucket } }));
 }
 
 function handleStagedInputChange(inputEl, previewSel, labelSel) {
@@ -1733,6 +1871,37 @@ function handleStagedListClick(e, previewSel, labelSel) {
 // (the old API) keep working without churn.
 function updateFilePreview(input, previewSel, labelSel) {
   handleStagedInputChange(input, previewSel, labelSel);
+}
+
+// v2.5 — flush the bug-level attachment staging bucket (post-creation
+// upload). Runs whenever the user picks files in the bug modal's
+// section-head 📎 button. Files were added to the bucket by the
+// handleStagedInputChange call wired in bindGlobalListeners; this
+// function POSTs each one and refreshes the inline sections. Wrapped
+// in withLoader at the call site so the user can't double-submit.
+async function flushBugAttachStaging() {
+  const files = STATE.stagedFiles.bugAttach || [];
+  if (!files.length || !STATE.currentBugId) return;
+  let done = 0, failed = 0;
+  for (const f of files) {
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
+      done++;
+    } catch (err) {
+      failed++;
+      toast(`Attachment ${f.name}: ${err.message}`, "error");
+    }
+  }
+  clearStagedFiles("bugAttach", "#bugAttachAddPreview", "#bugAttachAddText");
+  const ai = $("#bugAttachAddInput"); if (ai) ai.value = "";
+  if (done) toast(`${done} file${done > 1 ? "s" : ""} attached`, "success");
+  // Refresh inline sections + table cell so the new attachment_count
+  // shows up immediately without a manual reload.
+  const bug = await api(`/bugs/${STATE.currentBugId}`);
+  renderBugInlineSections(bug);
+  await refreshBugs();
 }
 
 async function uploadFiles(files, commentId) {
@@ -1788,17 +1957,18 @@ async function submitProjectForm(e) {
     description: form.elements.description.value,
   };
   try {
-    if (id) {
-      await api(`/projects/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-      toast("Project updated", "success");
-    } else {
-      await api("/projects", { method: "POST", body: JSON.stringify(payload) });
-      toast("Project created", "success");
-    }
-    closeModal("modalProject");
-    setView("list");
-    await loadProjects();
-    await refreshAll();
+    await withLoader(async () => {
+      if (id) {
+        await api(`/projects/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/projects", { method: "POST", body: JSON.stringify(payload) });
+      }
+      closeModal("modalProject");
+      setView("list");
+      await loadProjects();
+      await refreshAll();
+    }, id ? "Saving project…" : "Creating project…");
+    toast(id ? "Project updated" : "Project created", "success");
   } catch (err) {
     toastError(err);
   }
@@ -1850,25 +2020,24 @@ async function submitEventForm(e) {
   };
   if (!payload.name) { toast("Event name is required", "error"); return; }
   try {
-    let saved;
-    if (id) {
-      saved = await api(`/events/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-      toast("Event updated", "success");
-    } else {
-      saved = await api("/events", { method: "POST", body: JSON.stringify(payload) });
-      toast("Event created", "success");
-    }
-    closeModal("modalEvent");
-    await refreshEvents();
-    // If we created from inside detail mode, refresh the detail view.
-    if (id && STATE.currentEventId === parseInt(id, 10)) {
-      openEventDetail(parseInt(id, 10));
-    }
-    // If we just created a brand-new event, jump straight into its detail
-    // view so the user can start adding tasks to it.
-    if (!id && saved && saved.id) {
-      openEventDetail(saved.id);
-    }
+    const saved = await withLoader(async () => {
+      let result;
+      if (id) {
+        result = await api(`/events/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        result = await api("/events", { method: "POST", body: JSON.stringify(payload) });
+      }
+      closeModal("modalEvent");
+      await refreshEvents();
+      if (id && STATE.currentEventId === parseInt(id, 10)) {
+        await openEventDetail(parseInt(id, 10));
+      }
+      if (!id && result && result.id) {
+        await openEventDetail(result.id);
+      }
+      return result;
+    }, id ? "Saving event…" : "Creating event…");
+    toast(id ? "Event updated" : "Event created", "success");
   } catch (err) {
     toastError(err);
   }
@@ -1880,10 +2049,12 @@ async function handleDeleteEvent(event) {
   );
   if (!ok) return;
   try {
-    await api(`/events/${event.id}`, { method: "DELETE" });
+    await withLoader(async () => {
+      await api(`/events/${event.id}`, { method: "DELETE" });
+      showEventsListMode();
+      await refreshEvents();
+    }, "Deleting event…");
     toast(`Event "${event.name}" deleted`, "success");
-    showEventsListMode();
-    await refreshEvents();
   } catch (err) {
     toastError(err);
   }
@@ -1943,16 +2114,17 @@ async function submitUserForm(e) {
   }
 
   try {
-    if (id) {
-      await api(`/users/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-      toast("User updated", "success");
-    } else {
-      await api("/users", { method: "POST", body: JSON.stringify(payload) });
-      toast("User created", "success");
-    }
-    closeModal("modalUser");
-    await loadUsers();
-    await refreshAll();
+    await withLoader(async () => {
+      if (id) {
+        await api(`/users/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/users", { method: "POST", body: JSON.stringify(payload) });
+      }
+      closeModal("modalUser");
+      await loadUsers();
+      await refreshAll();
+    }, id ? "Saving user…" : "Creating user…");
+    toast(id ? "User updated" : "User created", "success");
   } catch (err) {
     toastError(err);
   }
@@ -1980,10 +2152,12 @@ async function handleDeleteBug(bugId) {
   );
   if (!ok) return;
   try {
-    await api(`/bugs/${bugId}`, { method: "DELETE" });
+    await withLoader(async () => {
+      await api(`/bugs/${bugId}`, { method: "DELETE" });
+      closeModal("modalBug");
+      await refreshAll();
+    }, `Deleting ${noun}…`);
     toast(`${itype} #${bugId} deleted`, "success");
-    closeModal("modalBug");
-    await refreshAll();
   } catch (err) { toastError(err); }
 }
 
@@ -1993,14 +2167,16 @@ async function handleDeleteProject(id) {
   const ok = await confirmDialog(`Delete project "${name}"?\nThis only works if it has no bugs`);
   if (!ok) return;
   try {
-    await api(`/projects/${id}`, { method: "DELETE" });
+    await withLoader(async () => {
+      await api(`/projects/${id}`, { method: "DELETE" });
+      // Drop the deleted project from the multi-select filter so we don't
+      // keep filtering by a no-longer-existing id.
+      const sid = String(id);
+      STATE.filters.project_id = (STATE.filters.project_id || []).filter(v => v !== sid);
+      await loadProjects();
+      await refreshAll();
+    }, "Deleting project…");
     toast(`Project "${name}" deleted`, "success");
-    // Drop the deleted project from the multi-select filter so we don't
-    // keep filtering by a no-longer-existing id.
-    const sid = String(id);
-    STATE.filters.project_id = (STATE.filters.project_id || []).filter(v => v !== sid);
-    await loadProjects();
-    await refreshAll();
   } catch (err) { toastError(err); }
 }
 
@@ -2017,10 +2193,12 @@ async function handleDeleteUser(id) {
   );
   if (!ok) return;
   try {
-    await api(`/users/${id}`, { method: "DELETE" });
+    await withLoader(async () => {
+      await api(`/users/${id}`, { method: "DELETE" });
+      await loadUsers();
+      await refreshAll();
+    }, "Deleting user…");
     toast(`User "${name}" deleted`, "success");
-    await loadUsers();
-    await refreshAll();
   } catch (err) { toastError(err); }
 }
 
@@ -2033,11 +2211,84 @@ async function handleDeleteAttachment(attId) {
   const ok = await confirmDialog("Delete this attachment?");
   if (!ok) return;
   try {
-    await api(`/bugs/${STATE.currentBugId}/attachments/${attId}`, { method: "DELETE" });
+    await withLoader(async () => {
+      await api(`/bugs/${STATE.currentBugId}/attachments/${attId}`, { method: "DELETE" });
+      const bug = await api(`/bugs/${STATE.currentBugId}`);
+      renderBugInlineSections(bug);
+      await refreshBugs();
+    }, "Deleting attachment…");
     toast("Attachment deleted", "success");
+  } catch (err) { toastError(err); }
+}
+
+// v2.5 — admin-only delete/edit of a comment. Both handlers use the
+// confirm dialog (delete) or an inline prompt (edit) and gate behind
+// the loader so the user can't double-click.
+async function handleDeleteComment(commentId) {
+  const ok = await confirmDialog("Delete this comment? Its attachments will be removed too. Cannot be undone");
+  if (!ok) return;
+  try {
+    await withLoader(async () => {
+      await api(`/bugs/${STATE.currentBugId}/comments/${commentId}`, { method: "DELETE" });
+      const bug = await api(`/bugs/${STATE.currentBugId}`);
+      renderBugInlineSections(bug);
+      await refreshBugs();
+    }, "Deleting comment…");
+    toast("Comment deleted", "success");
+  } catch (err) { toastError(err); }
+}
+
+async function handleEditComment(commentId) {
+  const commentEl = document.querySelector(`.comment[data-comment-id="${commentId}"]`);
+  if (!commentEl) return;
+  const bodyEl = commentEl.querySelector(`[data-comment-body="${commentId}"]`);
+  const current = bodyEl ? bodyEl.textContent : "";
+  // Lightweight inline editor — replace the body div with a textarea +
+  // Save/Cancel row. Keeps the comment thread layout intact so the
+  // admin doesn't lose context while editing.
+  if (!bodyEl) return;
+  const editor = document.createElement("div");
+  editor.className = "comment-edit-row";
+  editor.innerHTML = `
+    <textarea class="comment-edit-input" maxlength="10000" rows="3"></textarea>
+    <div class="comment-edit-actions">
+      <button type="button" class="btn ghost" data-act="cancel-edit-comment" data-id="${commentId}">Cancel</button>
+      <button type="button" class="btn primary" data-act="save-edit-comment" data-id="${commentId}">Save</button>
+    </div>`;
+  bodyEl.replaceWith(editor);
+  const ta = editor.querySelector(".comment-edit-input");
+  if (ta) {
+    ta.value = current;
+    ta.focus();
+  }
+}
+
+async function handleSaveEditComment(commentId) {
+  const editor = document.querySelector(`.comment[data-comment-id="${commentId}"] .comment-edit-row`);
+  if (!editor) return;
+  const ta = editor.querySelector(".comment-edit-input");
+  const body = (ta?.value || "").trim();
+  if (!body) { toast("Comment body can't be empty", "error"); return; }
+  try {
+    await withLoader(async () => {
+      await api(`/bugs/${STATE.currentBugId}/comments/${commentId}`, {
+        method: "PUT",
+        body: JSON.stringify({ body }),
+      });
+      const bug = await api(`/bugs/${STATE.currentBugId}`);
+      renderBugInlineSections(bug);
+    }, "Saving comment…");
+    toast("Comment updated", "success");
+  } catch (err) { toastError(err); }
+}
+
+async function handleCancelEditComment(commentId) {
+  // Re-render the inline sections from the cached bug so the editor goes
+  // away and the original body re-appears in place. Cheaper than fetching
+  // again — the row we cached at openBugDetail still has the old body.
+  try {
     const bug = await api(`/bugs/${STATE.currentBugId}`);
     renderBugInlineSections(bug);
-    await refreshBugs();
   } catch (err) { toastError(err); }
 }
 
@@ -2059,41 +2310,43 @@ async function postComment() {
     return;
   }
   try {
-    let commentId = null;
-    if (body) {
-      const comment = await api(`/bugs/${STATE.currentBugId}/comments`, {
-        method: "POST",
-        body: JSON.stringify({ body }),
-      });
-      commentId = comment.id;
-    }
-
-    // Upload files. With body → attach to that comment; without body →
-    // upload as bug-level so they show in the "Bug attachments" section.
-    let failed = 0;
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
-      if (commentId) fd.append("comment_id", String(commentId));
-      try {
-        await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
-      } catch (err) {
-        failed++;
-        toast(`Attachment ${f.name}: ${err.message}`, "error");
+    await withLoader(async () => {
+      let commentId = null;
+      if (body) {
+        const comment = await api(`/bugs/${STATE.currentBugId}/comments`, {
+          method: "POST",
+          body: JSON.stringify({ body }),
+        });
+        commentId = comment.id;
       }
-    }
 
-    if (body && files.length) toast("Comment posted", "success");
-    else if (body) toast("Comment posted", "success");
-    else if (files.length && !failed) toast(`${files.length} file${files.length > 1 ? "s" : ""} attached`, "success");
+      // Upload files. With body → attach to that comment; without body →
+      // upload as bug-level so they show in the "Bug attachments" section.
+      let failed = 0;
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append("file", f);
+        if (commentId) fd.append("comment_id", String(commentId));
+        try {
+          await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
+        } catch (err) {
+          failed++;
+          toast(`Attachment ${f.name}: ${err.message}`, "error");
+        }
+      }
 
-    // Clear the inputs so the next post starts fresh.
-    if (bodyEl) bodyEl.value = "";
-    clearStagedFiles("comment", "#filePreview", "#fileLabel");
+      if (body && files.length) toast("Comment posted", "success");
+      else if (body) toast("Comment posted", "success");
+      else if (files.length && !failed) toast(`${files.length} file${files.length > 1 ? "s" : ""} attached`, "success");
 
-    const bug = await api(`/bugs/${STATE.currentBugId}`);
-    renderBugInlineSections(bug);
-    await refreshBugs();
+      // Clear the inputs so the next post starts fresh.
+      if (bodyEl) bodyEl.value = "";
+      clearStagedFiles("comment", "#filePreview", "#fileLabel");
+
+      const bug = await api(`/bugs/${STATE.currentBugId}`);
+      renderBugInlineSections(bug);
+      await refreshBugs();
+    }, body && files.length ? "Posting comment and uploading…" : body ? "Posting comment…" : "Uploading file(s)…");
   } catch (err) { toastError(err); }
 }
 
@@ -2342,9 +2595,11 @@ async function handleRevokeSession(sessionId) {
   );
   if (!ok) return;
   try {
-    await api(`/sessions/${sessionId}`, { method: "DELETE" });
+    await withLoader(async () => {
+      await api(`/sessions/${sessionId}`, { method: "DELETE" });
+      await refreshSessions();
+    }, "Revoking session…");
     toast("Session revoked", "success");
-    await refreshSessions();
   } catch (err) {
     toastError(err);
   }
@@ -2532,12 +2787,14 @@ function bindGlobalListeners() {
       return;
     }
     try {
-      await api("/auth/change-password", {
-        method: "POST",
-        body: JSON.stringify({ current_password: cur, new_password: next }),
-      });
+      await withLoader(async () => {
+        await api("/auth/change-password", {
+          method: "POST",
+          body: JSON.stringify({ current_password: cur, new_password: next }),
+        });
+        closeModal("modalChangePassword");
+      }, "Updating password…");
       toast("Password updated", "success");
-      closeModal("modalChangePassword");
     } catch (err) {
       toastError(err);
     }
@@ -2725,10 +2982,90 @@ function bindGlobalListeners() {
       handleDeleteAttachment(parseInt(btn.dataset.id, 10));
     }
   });
+  // v2.5 — comment row actions (admin only). The buttons themselves
+  // are rendered conditionally in renderBugInlineSections; we delegate
+  // here so they pick up automatically on every re-render.
   $("#bugCommentsList")?.addEventListener("click", (e) => {
-    // Comment-level attachment cards are read-only (deletable=false in
-    // renderBugInlineSections) so there's nothing to delegate here yet,
-    // but we bind the listener anyway for forward-compat.
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    e.stopPropagation();
+    const act = btn.dataset.act;
+    const id = parseInt(btn.dataset.id, 10);
+    if (act === "delete-attachment") return handleDeleteAttachment(id);
+    if (act === "delete-comment")    return handleDeleteComment(id);
+    if (act === "edit-comment")      return handleEditComment(id);
+    if (act === "save-edit-comment") return handleSaveEditComment(id);
+    if (act === "cancel-edit-comment") return handleCancelEditComment(id);
+  });
+  // Comment textarea Cmd/Ctrl+Enter inside the inline editor saves.
+  $("#bugCommentsList")?.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      const ta = e.target.closest(".comment-edit-input");
+      if (!ta) return;
+      const saveBtn = ta.parentElement?.querySelector("[data-act='save-edit-comment']");
+      const id = saveBtn ? parseInt(saveBtn.dataset.id, 10) : NaN;
+      if (!Number.isNaN(id)) {
+        e.preventDefault();
+        handleSaveEditComment(id);
+      }
+    }
+  });
+
+  // v2.5 — post-creation attachment uploader inside the bug modal.
+  $("#bugAttachAddInput")?.addEventListener("change", (e) => {
+    handleStagedInputChange(e.target, "#bugAttachAddPreview", "#bugAttachAddText");
+  });
+  $("#bugAttachAddPreview")?.addEventListener("click", async (e) => {
+    // ✕ button removes a staged file; clicking the thumb opens it
+    // (handleStagedListClick handles both).
+    handleStagedListClick(e, "#bugAttachAddPreview", "#bugAttachAddText");
+  });
+  // Flush staged files: clicking the section-head 📎 label re-opens the
+  // file dialog; once the user has files staged we add an inline
+  // "Upload N file(s)" button so the upload doesn't happen on every
+  // file pick — they can stage multiple, review, then confirm.
+  $("#bugAttachAddPreview")?.addEventListener("click", (e) => {
+    const goBtn = e.target.closest(".attach-staged-upload");
+    if (!goBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    withLoader(flushBugAttachStaging, "Uploading attachment(s)…").catch(toastError);
+  });
+  // After every staged-files render, append a "Upload" button if any
+  // files are pending. We use a small wrapper to call _renderStagedFiles
+  // and then add the button — but the simpler approach is to listen for
+  // input changes and append the button when needed.
+  // (Implemented via a MutationObserver-free approach: re-run after
+  // every change event.)
+  const _ensureUploadBtn = () => {
+    const host = $("#bugAttachAddPreview");
+    if (!host) return;
+    const has = STATE.stagedFiles.bugAttach && STATE.stagedFiles.bugAttach.length;
+    const existing = host.querySelector(".attach-staged-upload");
+    if (has && !existing) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn primary attach-staged-upload";
+      btn.textContent = `Upload ${STATE.stagedFiles.bugAttach.length} file${STATE.stagedFiles.bugAttach.length > 1 ? "s" : ""}`;
+      host.appendChild(btn);
+    } else if (has && existing) {
+      existing.textContent = `Upload ${STATE.stagedFiles.bugAttach.length} file${STATE.stagedFiles.bugAttach.length > 1 ? "s" : ""}`;
+    } else if (!has && existing) {
+      existing.remove();
+    }
+  };
+  // Hook after the staged-list render path:
+  document.addEventListener("bh:staged-changed", _ensureUploadBtn);
+
+  // v2.5 — when the user changes item_type inside the bug modal, refresh
+  // the status dropdown so it only shows statuses valid for the new
+  // type. The currently-selected status is preserved if it still fits;
+  // otherwise it carries forward as a "(legacy)" option.
+  $("#formBug")?.elements?.item_type?.addEventListener("change", (e) => {
+    const newType = e.target.value || "Bug";
+    const statusEl = $("#formBug").elements.status;
+    const current = statusEl.value;
+    _renderStatusSelect(statusEl, newType, current);
   });
 
   // ----- Sessions admin view -----

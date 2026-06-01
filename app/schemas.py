@@ -5,22 +5,54 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-# Statuses:
-#   New / In Progress / Reopened  → "open" (active work)
-#   Resolved                      → fixed, awaiting verification
-#   Closed                        → fully closed
-#   Resolve Later                 → triaged but deferred (counted, but parked)
-#   Not a Bug                     → invalid; explicitly EXCLUDED from totals
-ALLOWED_STATUSES = [
-    "New", "In Progress", "Resolved", "Closed", "Reopened",
-    "Not a Bug", "Resolve Later",
-]
-# Statuses that should NOT be counted in the "total bugs" KPI because the
-# user explicitly said "Not a Bug means it isn't really a bug, don't count it".
+# Statuses — v2.5 makes the status set PER-ITEM-TYPE so a workflow term
+# only applies to the work flavor where it makes sense ("Not a Bug" is a
+# Bug-only verdict; "Blocked" / "Done" are Task-only; "Approved" /
+# "Implemented" are Requirement-only). The single shared status — present
+# in every list — is "New", so any pre-v2.5 row in the database (which
+# defaults to "New" on create) stays valid for its item_type without any
+# data fix-up. Existing rows holding a status that's no longer valid for
+# their current item_type aren't rejected on read; they're displayed as-is
+# and can be UPDATED to a valid value — but updates that try to MOVE to an
+# invalid value are rejected by the route layer.
+#
+# ALLOWED_STATUSES is the UNION (kept for backwards compatibility with the
+# filter endpoints and any external client that still POSTs a status
+# without an item_type). The per-type sets below are the source of truth
+# for create/update validation.
+STATUSES_BY_TYPE = {
+    "Bug": [
+        "New", "In Progress", "Resolved", "Closed", "Reopened",
+        "Not a Bug", "Resolve Later",
+    ],
+    "Requirement": [
+        "New", "In Review", "Approved", "Implemented", "Rejected", "Deferred",
+    ],
+    "Task": [
+        "New", "In Progress", "Done", "Blocked", "Cancelled",
+    ],
+}
+# Union of every status anywhere in the system. Used by the list filter
+# endpoint (?status=…) which is type-agnostic, and by the legacy single
+# global status dropdown some external clients still rely on.
+ALLOWED_STATUSES = list(
+    dict.fromkeys(s for sts in STATUSES_BY_TYPE.values() for s in sts)
+)
+# Statuses excluded from the "Total bugs" KPI because the user explicitly
+# said "Not a Bug means it isn't really a bug, don't count it". Only Bugs
+# can carry this status now, so the exclusion still works exactly as
+# before for Bug-tab analytics.
 EXCLUDED_FROM_TOTAL_STATUSES = ["Not a Bug"]
+
+
+def statuses_for_type(item_type: str) -> list[str]:
+    """Return the valid status list for a given item_type, falling back to
+    the Bug list if the type is unknown (preserves legacy behaviour for
+    rows from before this column existed)."""
+    return STATUSES_BY_TYPE.get(item_type or "Bug", STATUSES_BY_TYPE["Bug"])
 ALLOWED_PRIORITIES = ["Low", "Medium", "High", "Critical"]
 ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
 # Work-item types. The "bugs" table now holds three flavors of work:
@@ -328,6 +360,9 @@ class BugCreate(BaseModel):
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: str) -> str:
+        # Type-aware status validation happens in model_validator below
+        # (this field-level check just confirms the value is at least in
+        # the global union).
         return _normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
@@ -357,6 +392,18 @@ class BugCreate(BaseModel):
         for x in v or []:
             if x not in seen: seen.append(x)
         return seen
+
+    @model_validator(mode="after")
+    def _check_status_for_type(self) -> "BugCreate":
+        # The status must belong to the chosen item_type's set. "New" is in
+        # every set so the default value always passes regardless of type.
+        allowed = statuses_for_type(self.item_type)
+        if self.status not in allowed:
+            raise ValueError(
+                f"Status '{self.status}' is not valid for {self.item_type}. "
+                f"Allowed: {', '.join(allowed)}"
+            )
+        return self
 
 
 class BugUpdate(BaseModel):

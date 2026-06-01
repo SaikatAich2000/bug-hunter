@@ -4,7 +4,51 @@ A self-hosted, internal-use issue tracker. Built with FastAPI + PostgreSQL + a
 zero-framework JavaScript SPA. One Docker command to run, no external auth, no
 external file storage — attachments live in the database itself.
 
-Current version: **v2.4**.
+Current version: **v2.5**.
+
+## What's new in v2.5
+
+- **Per-item-type status sets.** Statuses now belong to the work flavor
+  they make sense for: *"Not a Bug"*, *"Resolved"* and *"Resolve Later"*
+  only apply to Bugs; *"Approved"*, *"In Review"*, *"Implemented"* and
+  *"Rejected"* only to Requirements; *"Done"*, *"Blocked"* and *"Cancelled"*
+  only to Tasks. The shared *"New"* status remains available on every
+  type so existing rows (which default to "New") stay valid without any
+  data migration. Pre-v2.5 rows holding a status that no longer fits their
+  type still render and can be updated; the route layer only blocks
+  *moving to* an invalid status.
+- **Comments and attachments are admin-curated.** Editing or deleting any
+  comment, or deleting any attachment (bug-level or comment-level), is
+  now admin-only. The SPA hides the ✎ / 🗑 buttons for non-admin viewers
+  and the API enforces 403 server-side. Creating comments and uploading
+  attachments is still open to anyone with edit permission on the
+  underlying work item — so users can still gather evidence; admins curate.
+- **Post-creation attachment uploader.** The bug/requirement/task detail
+  modal now has a 📎 *Add attachment* button right next to the
+  Attachments heading. Stage one or more files, see thumbnail previews,
+  remove any with the ✕, then click *Upload N file(s)* — useful for
+  evidence you didn't have at filing time. (Comments still take their
+  own attachments via the composer below.)
+- **Global blocking loader.** Every action that hits the server — create,
+  update, delete, upload, password change, session revoke, etc. — runs
+  behind a full-page loader overlay. The overlay blocks all input until
+  the request finishes, so a half-second slow link can no longer be
+  double-submitted by an impatient click.
+- **Layout polish.** The Events / Sessions / Audit views now use a
+  proper card-style controls bar so the top buttons no longer sit
+  flush against the page intro. The bug table switches to
+  percentage-based column widths with min-widths so the table actually
+  uses the horizontal space available at any viewport size.
+- **Fully responsive.** Every new control (loader, comment admin
+  actions, attach uploader) collapses cleanly at narrow widths so the
+  app stays usable down to mobile-portrait sizes.
+
+Schema migrations remain **strictly additive** — existing production
+databases are untouched on deploy. The v2.5 status change is purely
+validation-layer (the `status` column stays the same `String(20)`); the
+admin-only comment / attachment endpoints are new but don't touch any
+existing schema; the per-bug post-creation attachment uploader reuses
+the existing `POST /api/bugs/{id}/attachments` endpoint.
 
 ## What's new in v2.4
 
@@ -60,7 +104,14 @@ still in place, with zero DDL change required.
   assignees only — adding someone as event manager doesn't subscribe them
   to every task in the event. Items can be moved in and out of events
   freely; deleting an event preserves the items.
-- **Status / priority / environment** — DEV / UAT / PROD; environment only
+- **Per-item-type status sets** (v2.5) — each work flavor only sees
+  statuses that make sense for it: Bugs get *New / In Progress / Resolved /
+  Closed / Reopened / Not a Bug / Resolve Later*; Requirements get
+  *New / In Review / Approved / Implemented / Rejected / Deferred*; Tasks
+  get *New / In Progress / Done / Blocked / Cancelled*. *"New"* is shared so
+  every legacy row stays valid without a data migration. Changing the
+  item_type inside the modal re-populates the status dropdown live.
+- **Priority / environment** — DEV / UAT / PROD; environment only
   applies to Bugs (hidden on Requirements / Tasks)
 - **Per-tab KPIs and analytics** — the Total / Open / Resolved / Closed /
   Resolve-Later strip and the charts (timeline, status, priority, environment,
@@ -72,7 +123,18 @@ still in place, with zero DDL change required.
 - **Comments and attachments** (PDF, image, video) stored as BLOBs in Postgres
   with an in-modal staging area: while filing a new item or composing a
   comment you can hover an attachment to remove it (✕ on hover) or click it
-  to preview the file before saving — nothing uploads until you submit
+  to preview the file before saving — nothing uploads until you submit.
+  v2.5 adds a 📎 *Add attachment* button on the item detail modal so you
+  can attach more files after the item is filed (admin-only delete,
+  open upload — anyone with edit perms on the item can contribute).
+- **Admin-curated comments & attachments** (v2.5) — editing or deleting
+  any comment, or deleting any attachment (bug- or comment-level), is
+  admin-only. Comment creation and attachment upload stay open to
+  anyone with edit permission so users can still gather evidence.
+- **Global blocking loader** (v2.5) — every action that hits the server
+  shows a full-page loader overlay that blocks all input until the
+  request finishes, so impatient double-clicks can no longer create
+  duplicate rows or replay deletes.
 - **Email notifications** on item create / update / assignment / new comment
   *and* event create / edit / delete (Gmail / Outlook / SMTP). Type-aware
   subjects — a new task says "task", a new requirement says "requirement",
@@ -138,19 +200,26 @@ Log in, then **immediately** change the password from the Account panel in the
 sidebar. After that, admins (and managers, with limits) can create new
 accounts. Roles:
 
-| Role    | Bugs                            | Tasks & Requirements            | Events                              | Projects                 | Users                                                    | Audit | Sessions        |
-|---------|---------------------------------|---------------------------------|-------------------------------------|--------------------------|----------------------------------------------------------|-------|-----------------|
-| admin   | Create, edit any, **delete any**| Create, edit any, **delete any**| Create, edit, **delete**, manage    | Create, edit, **delete** | Create, edit, **delete**                                 | ✓     | ✓ list + revoke |
-| manager | Create, edit any (no delete)    | Create, edit any (no delete)    | Create, edit, **assign managers**, no delete | Create, edit (no delete) | Create, edit non-admins (no delete, no admin role grant) | ✓     | —               |
-| user    | Create, edit any (no delete)    | **View only**                   | **View only**                       | View only                | View only                                                | —     | —               |
+| Role    | Bugs                            | Tasks & Requirements            | Comments (v2.5)             | Attachments (v2.5)                          | Events                              | Projects                 | Users                                                    | Audit | Sessions        |
+|---------|---------------------------------|---------------------------------|-----------------------------|---------------------------------------------|-------------------------------------|--------------------------|----------------------------------------------------------|-------|-----------------|
+| admin   | Create, edit any, **delete any**| Create, edit any, **delete any**| Post, **edit any, delete any** | Upload, **delete any (bug- or comment-level)** | Create, edit, **delete**, manage    | Create, edit, **delete** | Create, edit, **delete**                                 | ✓     | ✓ list + revoke |
+| manager | Create, edit any (no delete)    | Create, edit any (no delete)    | Post (no edit, no delete)   | Upload (no delete)                          | Create, edit, **assign managers**, no delete | Create, edit (no delete) | Create, edit non-admins (no delete, no admin role grant) | ✓     | —               |
+| user    | Create, edit any (no delete)    | **View only**                   | Post on Bugs (no edit, no delete) | Upload on Bugs (no delete)                  | **View only**                       | View only                | View only                                                | —     | —               |
 
 Notes on the policy:
 
 - **Item deletion is admin-only**, for every type (Bug / Requirement / Task).
   Even the user who reported it can't delete; only admins can.
+- **Comments and attachments are admin-curated** (v2.5). Anyone with
+  edit permission on the underlying item can post a comment or upload an
+  attachment — but only admins can edit a comment, delete a comment, or
+  delete an attachment (bug-level or comment-level). The SPA hides the
+  ✎ / 🗑 buttons for non-admins and the API enforces 403 server-side.
 - **Tasks and Requirements are read-only for regular users.** They can still
   see them and use them — they just can't edit or delete. Managers and
-  admins do day-to-day task management.
+  admins do day-to-day task management. (This means regular users can't
+  post comments or upload attachments on Tasks / Requirements either —
+  comment/attachment creation requires edit permission on the parent item.)
 - **Event managers must be admin or manager.** Trying to assign a regular
   user as an event manager returns an explanatory 400. The picker in the
   Event modal pre-filters to eligible users so this can't be hit by accident.
@@ -232,6 +301,17 @@ safe by design:
   detaches activity rows (`UPDATE activity_log SET bug_id = NULL`) before
   deleting the bug, so the same retention behaviour applies on legacy
   schemas without a DDL change.
+- **v2.5 — no schema changes at all.** The per-item-type status sets are
+  enforced purely in the validation layer (`bugs.status` stays the same
+  `String(20)`). Existing rows whose status no longer fits their type
+  still render and can be updated; only *moving* a row to an invalid
+  status is rejected. Admin-only comment edit/delete and attachment
+  delete are new endpoints but they don't touch any existing schema —
+  the `comments` and `attachments` tables are unchanged. The
+  post-creation attachment uploader reuses the existing
+  `POST /api/bugs/{id}/attachments` endpoint, so no new routes touch
+  storage. **Redeploys of v2.5 against a v2.4 production database are
+  zero-DDL.**
 - Cookies issued by older builds (which don't carry a `jti`) are still
   accepted and treated as legacy sessions, so a redeploy doesn't kick
   every user out at once.

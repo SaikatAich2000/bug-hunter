@@ -29,7 +29,7 @@ from app.schemas import (
     ALLOWED_ENVIRONMENTS, ALLOWED_ITEM_TYPES, ALLOWED_PRIORITIES,
     ALLOWED_STATUSES, ActivityOut, AttachmentBrief, BugCreate, BugDetail,
     BugListResponse, BugOut, BugUpdate, CommentIn, CommentOut,
-    normalize_choice,
+    normalize_choice, statuses_for_type,
 )
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
@@ -583,6 +583,26 @@ def update_bug(
         # send a JSON null (FormData, querystring, etc.).
         fields["event_id"] = None
 
+    # v2.5: per-type status validation. The pydantic field check on
+    # BugUpdate only verifies the value is in the union of every type's
+    # status set; the per-type check needs the (possibly changing)
+    # item_type, which we know here. We allow leaving the status
+    # unchanged even if the stored value isn't valid for the type
+    # (preserves any pre-v2.5 row whose status no longer fits its type)
+    # — but moving TO a status that isn't valid for the bug's resulting
+    # type is rejected with 400.
+    effective_type = fields.get("item_type") or (getattr(bug, "item_type", None) or "Bug")
+    if "status" in fields and fields["status"] is not None:
+        allowed_for_type = statuses_for_type(effective_type)
+        if fields["status"] not in allowed_for_type and fields["status"] != bug.status:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Status '{fields['status']}' is not valid for "
+                    f"{effective_type}. Allowed: {', '.join(allowed_for_type)}"
+                ),
+            )
+
     assignee_ids = fields.pop("assignee_ids", None)
     has_reporter_in_payload = "reporter_id" in fields
     new_reporter_id = fields.pop("reporter_id", None)
@@ -928,18 +948,16 @@ def delete_attachment(
     a = db.get(Attachment, att_id)
     if a is None or a.bug_id != bug_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    # Only admin/manager OR uploader OR person who can edit the bug.
-    bug = db.scalar(_eager_bug(db).where(Bug.id == bug_id))
-    can_delete = (
-        actor.role in ("admin", "manager")
-        or a.uploader_user_id == actor.id
-        or (bug is not None and can_edit_bug(
-            actor, bug.reporter_id, [u.id for u in bug.assignees],
-            item_type=getattr(bug, "item_type", None) or "Bug",
-        ))
-    )
-    if not can_delete:
-        raise HTTPException(status_code=403, detail="You can't delete this attachment")
+    # v2.5: attachment deletion is admin-only across the board (both
+    # bug-level and comment-level). The product spec is "Comments and
+    # Attachments must not be editable or deletable by anyone except the
+    # admin." Uploaders and managers can no longer remove their own files
+    # — admins curate the evidence.
+    if actor.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can delete attachments.",
+        )
     fname = a.filename
     db.delete(a)
     _log(
@@ -949,6 +967,76 @@ def delete_attachment(
     )
     db.commit()
     return {"message": "Attachment deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Comment edit / delete — admin only (v2.5)
+# ---------------------------------------------------------------------------
+@router.put("/{bug_id}/comments/{comment_id}", response_model=CommentOut)
+def update_comment(
+    bug_id: int, comment_id: int,
+    payload: CommentIn,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> dict:
+    """Edit a comment's body. Admin only — see route-module note. The
+    audit trail records who edited and what the new body was so an
+    accidental rewrite is traceable."""
+    if actor.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can edit comments.",
+        )
+    c = db.get(Comment, comment_id)
+    if c is None or c.bug_id != bug_id:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    old_preview = (c.body or "")[:80]
+    c.body = payload.body
+    db.flush()
+    _log(
+        db, bug_id, actor, "comment_edited",
+        f"Comment #{c.id} edited by {actor.name}: {payload.body[:80]}",
+        entity_type="comment", entity_id=c.id,
+    )
+    db.commit()
+    db.refresh(c)
+    atts = list(db.scalars(
+        select(Attachment).where(Attachment.comment_id == c.id)
+    ).all())
+    return {
+        "id": c.id, "bug_id": c.bug_id,
+        "author_user_id": c.author_user_id, "author_name": c.author_name,
+        "body": c.body, "created_at": c.created_at,
+        "attachments": [_attachment_brief(a) for a in atts],
+    }
+
+
+@router.delete("/{bug_id}/comments/{comment_id}")
+def delete_comment(
+    bug_id: int, comment_id: int,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> dict:
+    """Delete a comment AND its attachments (the FK on attachments
+    cascades from comment_id). Admin only. The audit row keeps the
+    deleted body's preview so a moderator review still has context."""
+    if actor.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can delete comments.",
+        )
+    c = db.get(Comment, comment_id)
+    if c is None or c.bug_id != bug_id:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    preview = (c.body or "")[:80]
+    db.delete(c)
+    _log(
+        db, bug_id, actor, "comment_deleted",
+        f"Comment #{comment_id} by {c.author_name} deleted: {preview}",
+        entity_type="comment", entity_id=comment_id,
+    )
+    db.commit()
+    return {"message": "Comment deleted"}
 
 
 # ---------------------------------------------------------------------------

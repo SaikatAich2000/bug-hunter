@@ -582,8 +582,12 @@ class TestCommentsAttachments:
             # Should not crash with 500
             assert d.status_code != 500, "header injection from filename crashed server"
 
-    def test_user_can_delete_their_own_attachment_even_if_cant_edit_bug(self, admin_client):
-        """Uploader rule: if I uploaded it, I can delete it (per code line 638-641)."""
+    def test_uploader_cannot_delete_their_own_attachment_v25(self, admin_client):
+        """v2.5: attachment deletion is admin-only across the board. The
+        previous uploader-keeps-rights rule was removed when the spec
+        moved to "Comments and Attachments must not be editable or
+        deletable by anyone except the admin." Uploads stay open
+        — admins curate."""
         p = _create_project(admin_client, name="C9")
         # Admin creates bug
         bug = _create_bug(admin_client, p["id"])
@@ -595,13 +599,14 @@ class TestCommentsAttachments:
         files = {"file": ("u.txt", io.BytesIO(b"u"), "text/plain")}
         r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
         att_id = r.json()["id"]
-        # Remove user as assignee
+        # The uploader (a regular user, still assigned) can NO LONGER
+        # delete their own attachment — admin-only.
+        d = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
+        assert d.status_code == 403
+        assert "admin" in d.json()["detail"].lower()
+        # Admin CAN delete.
         _logout(admin_client)
         _login_as(admin_client, "admin@test.local", "Admin1234")
-        admin_client.put(f"/api/bugs/{bug['id']}", json={"assignee_ids": []})
-        _logout(admin_client)
-        _login_as(admin_client, "up@x.com", "TestUserPwd9X")
-        # Should still be able to delete own attachment
         d = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
         assert d.status_code == 200
 

@@ -2713,3 +2713,241 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .inline-type[data-type="Bug"]         { background: rgba(239,68,68,0.10);  border-color: rgba(239,68,68,0.35); }
 .inline-type[data-type="Requirement"] { background: rgba(139,92,246,0.10); border-color: rgba(139,92,246,0.35); }
 .inline-type[data-type="Task"]        { background: rgba(16,185,129,0.10); border-color: rgba(16,185,129,0.35); }
+
+/* ============================================================
+ * v2.5 — Global blocking loader
+ *
+ * Full-viewport overlay shown while an action is in flight. The
+ * pointer-events:all on the overlay catches every click so the
+ * user can't double-submit or click somewhere else mid-request.
+ * The spinner is a pure-CSS ring (no asset dep) so it works even
+ * before web fonts / images load.
+ * ============================================================ */
+.global-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 22, 0.42);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: bh-loader-fade 0.18s ease;
+}
+.global-loader-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 30px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  min-width: 180px;
+}
+.global-loader-spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.10);
+  border-top-color: var(--accent);
+  animation: bh-loader-spin 0.9s linear infinite;
+}
+.global-loader-text {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+@keyframes bh-loader-spin { to { transform: rotate(360deg); } }
+@keyframes bh-loader-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* When the loader is up, dim background interactions visually too. */
+body.is-loading { cursor: progress; }
+body.is-loading .topbar,
+body.is-loading .filter-bar,
+body.is-loading .kpi-strip,
+body.is-loading .bug-table,
+body.is-loading .modal-card,
+body.is-loading .events-grid,
+body.is-loading .events-detail-mode {
+  /* The overlay already blocks clicks; this just makes it visually
+     obvious that the page is busy. */
+  filter: saturate(0.85);
+}
+
+@media (max-width: 500px) {
+  .global-loader-card { min-width: 140px; padding: 18px 24px; }
+  .global-loader-spinner { width: 36px; height: 36px; }
+}
+
+/* ============================================================
+ * v2.5 — Comment admin actions (edit / delete)
+ * ============================================================ */
+.comment-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.comment-admin-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.comment-admin-actions .icon-btn {
+  padding: 4px 6px;
+  font-size: 13px;
+  opacity: 0.65;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.comment-admin-actions .icon-btn:hover { opacity: 1; background: var(--bg-elev-2); }
+
+.comment-edit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 2px;
+}
+.comment-edit-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  resize: vertical;
+  min-height: 60px;
+}
+.comment-edit-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.comment-edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.comment-edit-actions .btn { padding: 6px 14px; font-size: 12px; }
+
+/* ============================================================
+ * v2.5 — Bug-level "Add attachment" uploader inside detail modal
+ * ============================================================ */
+.bug-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.bug-section-head h3 {
+  margin: 0;
+}
+.bug-attach-add-btn {
+  /* Same look as the comment composer's attach button — keep the UI
+     consistent so users don't have to learn a new control. */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.bug-attach-add-btn:hover { border-color: var(--accent); background: var(--bg-elev-3); }
+.bug-attach-add-btn input[type="file"] { display: none; }
+.bug-attach-empty {
+  padding: 14px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+/* The "Upload N file(s)" CTA appended after staged thumbs. */
+.attach-staged-upload {
+  margin-left: 6px;
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+/* ============================================================
+ * v2.5 — Top bar / events / column layout polish
+ *
+ * The previous layout had the Events controls bar sit flush against
+ * the page intro card and the bug-table relied on fixed pixel widths
+ * that cramped at midsize viewports. We loosen both: the events
+ * controls now have a generous margin and a clean visual separator,
+ * and the bug table uses min-width based columns with a flexible
+ * Title column so the available horizontal space is always used.
+ * ============================================================ */
+
+/* Topbar: even the gap so the page title / search / "+ New" don't
+   collide on narrower screens, and let the search wrap have a bit
+   more breathing room before tipping into the next breakpoint. */
+.topbar { gap: 16px; }
+.search-wrap { max-width: 540px; }
+
+/* Events list controls — sit further below the intro card, larger
+   gaps so the summary text doesn't snug against the Refresh button. */
+.events-controls {
+  margin: 18px 0 20px;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.events-controls .btn { padding: 9px 14px; }
+.events-summary { font-size: 13px; }
+
+/* Events detail head — better vertical alignment for the back btn /
+   title / action row. */
+.events-detail-head {
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.events-detail-head h2 { font-size: 20px; }
+
+/* Sessions / audit controls — match the same boxed look so the page
+   has a consistent rhythm. */
+.audit-controls,
+.sessions-controls {
+  padding: 14px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  margin: 14px 24px 18px;
+}
+
+/* Bug table — drop the fixed pixel widths in favor of percentage-based
+   columns so the layout adapts to the available width. Status /
+   priority / env get narrower; title takes the slack. Min-widths keep
+   text from collapsing into ellipses too aggressively. */
+.bug-table {
+  min-width: 760px;
+}
+.col-id        { width: 56px; min-width: 48px; }
+.col-title     { width: auto; min-width: 220px; }
+.col-project   { width: 14%; min-width: 110px; max-width: 180px; }
+.col-status    { width: 110px; min-width: 100px; }
+.col-priority  { width: 92px; min-width: 80px; }
+.col-env       { width: 66px; min-width: 60px; }
+.col-assignees { width: 18%; min-width: 160px; max-width: 240px; }
+.col-att       { width: 60px; min-width: 56px; }
+.col-actions   { width: 80px; min-width: 70px; }
+
+/* Comment composer should use the full width of the modal's main
+   column; the file-preview row already wraps. */
+#commentForm textarea { width: 100%; }

@@ -84,9 +84,15 @@ def test_manager_can_edit_task_and_requirement(admin_client):
     req = _make_item(admin_client, p["id"], item_type="Requirement")
     _make_user(admin_client, "Mgr", role="manager")
     _login(admin_client, "mgr@x.test", "User12345Aa")
+    # "In Progress" is a Task-valid status (kept the original test
+    # value here so the Task assertion still exercises the same status
+    # transition pre/post-v2.5).
     r = admin_client.put(f"/api/bugs/{task['id']}", json={"status": "In Progress"})
     assert r.status_code == 200, r.text
-    r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "Resolved"})
+    # v2.5: Requirements no longer share Bug-only statuses. The original
+    # test used "Resolved" which is now Bug-only — switch to "Approved"
+    # which is the Requirement-flavor equivalent.
+    r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "Approved"})
     assert r.status_code == 200, r.text
 
 

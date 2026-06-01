@@ -30,6 +30,7 @@ from app.schemas import (
     ALLOWED_ITEM_TYPES,
     ALLOWED_PRIORITIES,
     ALLOWED_STATUSES,
+    STATUSES_BY_TYPE,
 )
 
 logger = logging.getLogger("bug_hunter")
@@ -572,9 +573,12 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/meta", tags=["meta"])
-def meta() -> dict[str, list[str]]:
+def meta() -> dict[str, object]:
+    """Expose static enums + the v2.5 per-item-type status sets so the
+    frontend can swap the status dropdown when the user changes type."""
     return {
         "statuses": ALLOWED_STATUSES,
+        "statuses_by_type": STATUSES_BY_TYPE,
         "priorities": ALLOWED_PRIORITIES,
         "environments": ALLOWED_ENVIRONMENTS,
         "item_types": ALLOWED_ITEM_TYPES,

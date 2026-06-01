@@ -300,6 +300,14 @@
             <button class="btn ghost" id="eventsRefreshBtn">Refresh</button>
             <span class="events-summary" id="eventsSummary"></span>
           </div>
+          <!-- v2.5: search + filter bar for the events list. Filters apply
+               client-side over STATE.events; the search matches event name
+               and description; the date filter matches scheduled_for. -->
+          <div class="events-filter-bar" id="eventsFilterBar">
+            <input type="search" id="eventsSearch" placeholder="Search events by name or description…" autocomplete="off" />
+            <input type="date" id="eventsDateFilter" aria-label="Filter by scheduled date" />
+            <button class="btn ghost" id="eventsClearFiltersBtn">Clear</button>
+          </div>
           <div class="events-grid" id="eventsGrid"></div>
           <div class="events-empty" id="eventsEmpty" hidden>
             <p>No events yet. Click <strong>+ New Event</strong> to create one — a standup, a sprint meeting, whatever you want to track</p>
@@ -319,6 +327,32 @@
           <div class="events-detail-meta" id="eventDetailMeta"></div>
           <div class="events-detail-controls">
             <button class="btn primary" id="addItemToEventBtn" data-needs-role="manager">+ Add Task</button>
+          </div>
+          <!-- v2.5: search + multi-filter bar for the tasks inside an
+               event. Filters apply client-side over the items returned
+               by /api/events/{id}. Matches the look + behaviour of the
+               main work-items filter bar so the UI is consistent. -->
+          <div class="events-detail-filter-bar" id="eventDetailFilterBar">
+            <input type="search" id="eventDetailSearch" placeholder="Search tasks (title or #id)…" autocomplete="off" />
+            <div class="ms-wrap" data-event-filter="status">
+              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+                <span class="ms-btn-label">All Statuses</span><span class="ms-caret">▾</span>
+              </button>
+              <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+            </div>
+            <div class="ms-wrap" data-event-filter="priority">
+              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+                <span class="ms-btn-label">All Priorities</span><span class="ms-caret">▾</span>
+              </button>
+              <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+            </div>
+            <div class="ms-wrap" data-event-filter="assignee_id">
+              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+                <span class="ms-btn-label">All Assignees</span><span class="ms-caret">▾</span>
+              </button>
+              <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+            </div>
+            <button class="btn ghost" id="eventDetailClearFiltersBtn">Clear</button>
           </div>
           <div class="events-detail-items" id="eventDetailItems"></div>
         </div>

@@ -52,6 +52,11 @@ const STATE = {
   events: [],
   currentEventId: null,    // null = list mode; id = detail mode
   currentEvent: null,      // populated when in detail mode
+  // v2.5: client-side filters for the events list view.
+  eventsFilter: { q: "", date: "" },
+  // v2.5: client-side filters for the items inside an event (detail view).
+  // Mirror the shape of STATE.filters for the main work-items list.
+  eventDetailFilter: { q: "", status: [], priority: [], assignee_id: [] },
   view: "list",
   currentBugId: null,
   // Detail tabs are gone in v3.1 — bug detail is now a single inline
@@ -863,7 +868,12 @@ const ITEM_TYPE_EMOJI = { Bug: "🐞", Requirement: "📐", Task: "✅" };
 function itemTypeEmoji(t) { return ITEM_TYPE_EMOJI[t] || "📝"; }
 
 function initMultiSelects() {
-  $$(".ms-wrap").forEach(wrap => {
+  // Only target the main filter-bar wraps — v2.5 added a second filter
+  // bar inside the Events detail view (#eventDetailFilterBar) with its
+  // own wraps (data-event-filter=...). Those have their own click
+  // delegation in bindGlobalListeners; binding the main handler to them
+  // here would call STATE.filters[undefined] and silently drop the click.
+  $$("#filterBar .ms-wrap").forEach(wrap => {
     const key = wrap.dataset.filter;
     const toggle = wrap.querySelector("[data-ms-toggle]");
     const panel = wrap.querySelector(".ms-panel");
@@ -2423,7 +2433,19 @@ function renderEvents() {
   const grid = $("#eventsGrid");
   const empty = $("#eventsEmpty");
   if (!grid) return;
-  const rows = STATE.events || [];
+  const all = STATE.events || [];
+  // Apply client-side filters BEFORE the summary calc so the header
+  // counts match what the user is actually seeing.
+  const q = (STATE.eventsFilter.q || "").trim().toLowerCase();
+  const date = (STATE.eventsFilter.date || "").trim();
+  const rows = all.filter(ev => {
+    if (date && (ev.scheduled_for || "") !== date) return false;
+    if (q) {
+      const hay = `${ev.name || ""} ${ev.description || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
   // Roll-up KPIs for the page header. We can't safely sum assignee_counts
   // across events to get a unique-people count (the same person can be
   // double-counted across events), so report a "people involved" range:
@@ -2433,18 +2455,25 @@ function renderEvents() {
   const summaryEl = $("#eventsSummary");
   if (summaryEl) {
     if (rows.length === 0) {
-      summaryEl.textContent = "";
+      summaryEl.textContent = (q || date) ? "0 matching events" : "";
     } else {
       const peopleLabel = rows.length === 1 ? `${totalPeople}` : `~${totalPeople}`;
+      const prefix = (q || date) ? "showing " : "";
       summaryEl.textContent =
-        `${rows.length} event${rows.length === 1 ? "" : "s"} · ` +
+        `${prefix}${rows.length} event${rows.length === 1 ? "" : "s"} · ` +
         `${totalItems} item${totalItems === 1 ? "" : "s"} · ` +
         `${peopleLabel} ${totalPeople === 1 ? "person" : "people"}`;
     }
   }
   if (rows.length === 0) {
     grid.innerHTML = "";
-    if (empty) empty.hidden = false;
+    // Distinguish "no events at all" from "no matches": show the empty
+    // placeholder only in the first case, since the second is just the
+    // current filter excluding everything.
+    if (empty) empty.hidden = all.length > 0;
+    if (all.length > 0) {
+      grid.innerHTML = `<div class="events-empty muted"><p>No events match the current filter. Try clearing the search or date</p></div>`;
+    }
     return;
   }
   if (empty) empty.hidden = true;
@@ -2505,12 +2534,26 @@ function renderEventDetail(ev) {
   $("#eventDetailMeta").innerHTML =
     `<div class="event-detail-bits">${metaBits.join(" · ")}</div>${desc}${managersHtml}`;
 
-  const items = ev.items || [];
+  // Re-render the filter bar multi-selects with the current item set as
+  // the data source for the assignee dropdown. The status / priority
+  // options come from STATE.meta so they cover every valid value even
+  // if no item currently uses one of them.
+  refreshEventDetailFilters(ev);
+
+  const allItems = ev.items || [];
+  const filtered = _filterEventItems(allItems);
   const list = $("#eventDetailItems");
-  if (items.length === 0) {
+  if (allItems.length === 0) {
     list.innerHTML = `
       <div class="event-detail-empty muted">
         <p>No items yet. Click <strong>+ Add Task</strong> to create one inside this event, or open any existing work item and assign it to this event from its Event field</p>
+      </div>`;
+    return;
+  }
+  if (filtered.length === 0) {
+    list.innerHTML = `
+      <div class="event-detail-empty muted">
+        <p>No tasks in this event match the current filter. Try clearing the search or filters</p>
       </div>`;
     return;
   }
@@ -2520,7 +2563,7 @@ function renderEventDetail(ev) {
   // Drop the "actions" column (deletion happens from the bug modal).
   const cols = ["id", "title-with-type", "project", "status", "priority", "due", "assignees", "att"];
   const head = "<tr>" + cols.map(c => `<th class="col-${c.replace('title-with-type','title')}">${COL_HEAD_LABEL[c] ?? ""}</th>`).join("") + "</tr>";
-  const rows = items.map(b => {
+  const rows = filtered.map(b => {
     const tds = cols.map(c => _renderCell(c, b)).join("");
     return `<tr data-bug-id="${b.id}" tabindex="0">${tds}</tr>`;
   }).join("");
@@ -2528,6 +2571,99 @@ function renderEventDetail(ev) {
     <div class="table-scroll">
       <table class="bug-table"><thead>${head}</thead><tbody>${rows}</tbody></table>
     </div>`;
+}
+
+// Apply STATE.eventDetailFilter to a list of items. Matches behaviour
+// of the backend list filter: search hits title / description / #id,
+// status/priority are multi-select OR, assignees match if ANY of the
+// selected user ids is in the item's assignee list.
+function _filterEventItems(items) {
+  const f = STATE.eventDetailFilter || {};
+  const q = (f.q || "").trim().toLowerCase().replace(/^#/, "");
+  const statuses = new Set(f.status || []);
+  const priorities = new Set(f.priority || []);
+  const assignees = new Set((f.assignee_id || []).map(String));
+  return items.filter(b => {
+    if (statuses.size && !statuses.has(b.status)) return false;
+    if (priorities.size && !priorities.has(b.priority)) return false;
+    if (assignees.size) {
+      const ids = new Set((b.assignees || []).map(a => String(a.id)));
+      let hit = false;
+      for (const id of assignees) if (ids.has(id)) { hit = true; break; }
+      if (!hit) return false;
+    }
+    if (q) {
+      const isDigits = /^\d+$/.test(q);
+      const idStr = String(b.id);
+      const hay = `${b.title || ""} ${b.description || ""}`.toLowerCase();
+      if (isDigits) {
+        if (idStr !== q && !hay.includes(q)) return false;
+      } else if (!hay.includes(q)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+// Re-populate the event-detail filter-bar multi-selects from STATE.meta
+// + the event's assignee pool. Renders ms-panel rows with the current
+// selection ticked. Called from renderEventDetail.
+function refreshEventDetailFilters(ev) {
+  const wraps = $$('#eventDetailFilterBar .ms-wrap');
+  if (!wraps.length) return;
+  const f = STATE.eventDetailFilter;
+  // Build assignee option pool from the event's items so the dropdown
+  // only shows people actually assigned to something in this event —
+  // matches the user intent of filtering this specific event's roster.
+  const seen = new Map();
+  for (const it of ev.items || []) {
+    for (const a of it.assignees || []) {
+      if (!seen.has(a.id)) seen.set(a.id, a);
+    }
+  }
+  const assigneeOptions = [...seen.values()].map(u => [String(u.id), u.name]);
+
+  for (const wrap of wraps) {
+    const key = wrap.dataset.eventFilter;
+    let opts = [];
+    let label = "";
+    if (key === "status") {
+      opts = (STATE.meta.statuses || []).map(s => [s, s]);
+      label = "All Statuses";
+    } else if (key === "priority") {
+      opts = (STATE.meta.priorities || []).map(s => [s, s]);
+      label = "All Priorities";
+    } else if (key === "assignee_id") {
+      opts = assigneeOptions;
+      label = "All Assignees";
+    }
+    const selected = new Set(f[key] || []);
+    const panel = wrap.querySelector(".ms-panel");
+    const labelEl = wrap.querySelector(".ms-btn-label");
+    const btn = wrap.querySelector(".ms-btn");
+    panel.innerHTML = opts.length
+      ? opts.map(([v, lbl]) => {
+          const isOn = selected.has(v);
+          return `<div class="ms-row${isOn ? " on" : ""}" data-ms-value="${escapeHtml(v)}" role="option" aria-selected="${isOn}">
+            <span class="ms-check">${isOn ? "✓" : ""}</span>
+            <span class="ms-text">${escapeHtml(lbl)}</span>
+          </div>`;
+        }).join("")
+      : `<div class="ms-empty">No options</div>`;
+    if (selected.size === 0) {
+      labelEl.textContent = label;
+      btn.classList.remove("active");
+    } else if (selected.size === 1) {
+      const only = [...selected][0];
+      const match = opts.find(([v]) => v === only);
+      labelEl.textContent = match ? match[1] : only;
+      btn.classList.add("active");
+    } else {
+      labelEl.textContent = `${label.replace(/^All /, '')} (${selected.size})`;
+      btn.classList.add("active");
+    }
+  }
 }
 
 async function refreshSessions() {
@@ -2748,6 +2884,66 @@ function bindGlobalListeners() {
   });
   // Event create / edit modal submit.
   $("#formEvent")?.addEventListener("submit", submitEventForm);
+
+  // ----- v2.5: Events list search + filter bar -----
+  // Search input debounced; date is exact-match. Both re-render the
+  // grid in place without re-fetching (filtering is client-side over
+  // STATE.events).
+  $("#eventsSearch")?.addEventListener("input", debounce((e) => {
+    STATE.eventsFilter.q = e.target.value || "";
+    renderEvents();
+  }, 200));
+  $("#eventsDateFilter")?.addEventListener("change", (e) => {
+    STATE.eventsFilter.date = e.target.value || "";
+    renderEvents();
+  });
+  $("#eventsClearFiltersBtn")?.addEventListener("click", () => {
+    STATE.eventsFilter = { q: "", date: "" };
+    const s = $("#eventsSearch"); if (s) s.value = "";
+    const d = $("#eventsDateFilter"); if (d) d.value = "";
+    renderEvents();
+  });
+
+  // ----- v2.5: Event detail (tasks-inside-event) search + filters -----
+  $("#eventDetailSearch")?.addEventListener("input", debounce((e) => {
+    STATE.eventDetailFilter.q = e.target.value || "";
+    if (STATE.currentEvent) renderEventDetail(STATE.currentEvent);
+  }, 200));
+  $("#eventDetailClearFiltersBtn")?.addEventListener("click", () => {
+    STATE.eventDetailFilter = { q: "", status: [], priority: [], assignee_id: [] };
+    const s = $("#eventDetailSearch"); if (s) s.value = "";
+    if (STATE.currentEvent) renderEventDetail(STATE.currentEvent);
+  });
+  // Multi-select toggle for status / priority / assignee. Same
+  // open/close + outside-click behaviour as the main filter bar — we
+  // delegate from the filter-bar root so panels added by re-renders
+  // are picked up automatically.
+  $("#eventDetailFilterBar")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const toggle = e.target.closest("[data-ms-toggle]");
+    if (toggle) {
+      const wrap = toggle.closest(".ms-wrap");
+      const panel = wrap.querySelector(".ms-panel");
+      // Close any sibling panels first — one open at a time.
+      $$("#eventDetailFilterBar .ms-panel").forEach(p => { if (p !== panel) p.hidden = true; });
+      $$("#eventDetailFilterBar .ms-btn").forEach(b => { if (b !== toggle) b.setAttribute("aria-expanded", "false"); });
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      toggle.setAttribute("aria-expanded", String(willOpen));
+      return;
+    }
+    const row = e.target.closest("[data-ms-value]");
+    if (row) {
+      const wrap = row.closest(".ms-wrap");
+      const key = wrap.dataset.eventFilter;
+      const v = row.dataset.msValue;
+      const cur = STATE.eventDetailFilter[key];
+      const idx = cur.indexOf(v);
+      if (idx >= 0) cur.splice(idx, 1);
+      else cur.push(v);
+      if (STATE.currentEvent) renderEventDetail(STATE.currentEvent);
+    }
+  });
   $("#themeBtn").addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme") || "dark";
     const nxt = cur === "dark" ? "light" : "dark";

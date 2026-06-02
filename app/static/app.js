@@ -563,6 +563,39 @@ function enhanceAllDateInputs(root = document) {
   root.querySelectorAll('input[type="date"]').forEach(enhanceDateInput);
 }
 
+// v2.6 — Unsafe-file paste filter. We block anything whose extension or
+// MIME would let the user trick a colleague into opening a hostile
+// payload from the attachments grid. The list mirrors the Windows
+// "potentially dangerous" set plus the obvious cross-platform binaries.
+const _UNSAFE_EXTS = new Set([
+  "exe", "bat", "cmd", "com", "scr", "pif", "msi", "msp", "msc",
+  "jar", "vbs", "vbe", "js", "jse", "wsf", "wsh",
+  "ps1", "psm1", "psd1", "ps1xml", "psc1",
+  "sh", "bash", "csh", "zsh", "ksh",
+  "app", "deb", "rpm", "dmg", "appimage",
+  "reg", "lnk", "inf", "ins", "isp",
+  "ade", "adp", "cpl", "mde", "shs", "sct", "vb", "cer", "hta",
+]);
+const _UNSAFE_MIMES = new Set([
+  "application/x-msdownload",
+  "application/x-msdos-program",
+  "application/x-msi",
+  "application/vnd.microsoft.portable-executable",
+  "application/x-elf",
+  "application/x-mach-binary",
+  "application/x-sh",
+  "application/x-shellscript",
+]);
+function _bhUnsafeExt(filename) {
+  if (!filename) return false;
+  const m = String(filename).toLowerCase().match(/\.([a-z0-9]+)$/);
+  return !!(m && _UNSAFE_EXTS.has(m[1]));
+}
+function _bhUnsafeMime(mime) {
+  if (!mime) return false;
+  return _UNSAFE_MIMES.has(String(mime).toLowerCase().split(";")[0].trim());
+}
+
 // ---------------------------------------------------------------------------
 // v2.6 — Rich-text editor (B / I / U / list / quote / code / image paste)
 //
@@ -584,6 +617,25 @@ function enhanceRichEditor(textarea, opts = {}) {
   // Hide the textarea — keep it in the DOM so form submission picks
   // up its value via name=.
   textarea.classList.add("bh-rt-native");
+
+  // v2.6 fix: if the textarea is wrapped in a <label> (as the bug
+  // modal's Description is), the label's implicit "focus first form
+  // control descendant" behaviour will keep stealing every click and
+  // routing focus to the hidden textarea instead of the
+  // contenteditable surface. The visible symptom is "I can't type
+  // anything in description". Swapping the parent <label> for a
+  // <div> with the same class/attrs preserves layout/styling while
+  // killing the focus-steal — labels don't have a CSS equivalent we
+  // need to preserve here.
+  const parentLabel = textarea.parentElement;
+  if (parentLabel && parentLabel.tagName === "LABEL") {
+    const div = document.createElement("div");
+    for (const attr of parentLabel.attributes) {
+      div.setAttribute(attr.name, attr.value);
+    }
+    while (parentLabel.firstChild) div.appendChild(parentLabel.firstChild);
+    parentLabel.replaceWith(div);
+  }
 
   const wrap = document.createElement("div");
   wrap.className = "bh-rt-wrap";
@@ -665,34 +717,62 @@ function enhanceRichEditor(textarea, opts = {}) {
     }
   });
 
-  // ----- Image paste -----
+  // ----- File paste (v2.6 / refined v2.6) -----
+  // v2.6 refinement: paste of an image, PDF, or any file (except an
+  // unsafe-extension blocklist) hands off to the context-specific
+  // paste handler the caller has wired via `textarea._bhPasteHandler`.
+  // The handler decides whether to upload immediately (edit-mode
+  // description, inline comment edit) or stage for the parent
+  // form's submit (create-mode description, comment composer). We
+  // never embed the file inline in the editor HTML any more — it
+  // shows up as a real attachment alongside whatever else the user
+  // attached.
   editor.addEventListener("paste", async (e) => {
     const items = e.clipboardData?.items || [];
+    const files = [];
     for (const it of items) {
-      if (it.kind === "file" && (it.type || "").startsWith("image/")) {
-        e.preventDefault();
+      if (it.kind === "file") {
         const f = it.getAsFile();
-        if (!f) return;
+        if (f) files.push(f);
+      }
+    }
+    if (!files.length) return;  // plain-text paste: let the browser handle it.
+    e.preventDefault();
+    const handler = textarea._bhPasteHandler || opts.onPasteFile;
+    for (const f of files) {
+      if (_bhUnsafeExt(f.name) || _bhUnsafeMime(f.type)) {
+        toast(`Blocked unsafe file: ${f.name || f.type}`, "error");
+        continue;
+      }
+      if (!handler) {
+        // Fallback for editors without a handler (shouldn't happen in
+        // v2.6 once openBugForm has wired one) — inline base64 keeps
+        // the editor functional rather than silently dropping the
+        // paste, but warns so we notice.
         try {
           const dataUrl = await new Promise((resolve, reject) => {
             const r = new FileReader();
-            r.onload = () => resolve(r.result);
-            r.onerror = reject;
+            r.onload = () => resolve(r.result); r.onerror = reject;
             r.readAsDataURL(f);
           });
-          const safeName = (f.name || "pasted").replace(/[<>"']/g, "");
-          const html = `<img src="${dataUrl}" alt="${escapeHtml(safeName)}" />`;
-          document.execCommand("insertHTML", false, html);
-          sync();
+          if ((f.type || "").startsWith("image/")) {
+            document.execCommand("insertHTML", false,
+              `<img src="${dataUrl}" alt="${escapeHtml(f.name || 'pasted')}" />`);
+            sync();
+          } else {
+            toast(`No attachment target for ${f.name || 'file'}`, "info");
+          }
         } catch (err) {
-          toast(`Failed to paste image: ${err.message || err}`, "error");
+          toast(`Failed to paste: ${err.message || err}`, "error");
         }
-        return;
+        continue;
+      }
+      try {
+        await handler(f);
+      } catch (err) {
+        toast(`Paste failed for ${f.name || 'file'}: ${err.message || err}`, "error");
       }
     }
-    // Non-image clipboard — let the browser handle it. The backend
-    // sanitizer strips anything dangerous; we don't try to filter the
-    // rich HTML on the way in.
   });
 
   // Expose setter so openBugForm() can push the row's stored
@@ -935,6 +1015,19 @@ async function boot() {
   // custom button + popover. Native selects can't be cross-browser
   // styled past the trigger; this gives us a consistent look.
   enhanceAllCustomSelects();
+  // v2.6: comment-composer paste handler. Same staging system as
+  // the "Attach files" button — postComment() reads the comment
+  // bucket and uploads each file with comment_id linkage after the
+  // comment row is created.
+  const commentBody = $("#commentBody");
+  if (commentBody) {
+    commentBody._bhPasteHandler = async (f) => {
+      STATE.stagedFiles.comment = STATE.stagedFiles.comment || [];
+      STATE.stagedFiles.comment.push(f);
+      _renderStagedFiles("comment", "#filePreview", "#fileLabel");
+      toast(`Staged: ${f.name || "pasted file"}`, "info");
+    };
+  }
   scheduleVersionCheck();
   // Polls /api/auth/me every 15 s so admin session-revocation kicks the
   // user out within seconds, not only when they next click something.
@@ -1930,6 +2023,17 @@ function openBugForm(bug = null) {
     if (form.elements.description._bhRtSet) {
       form.elements.description._bhRtSet(bug.description || "");
     }
+    // v2.6: paste in description while editing uploads immediately
+    // as a bug-level attachment, then refreshes the inline sections
+    // so the user sees the new attachment card right away.
+    form.elements.description._bhPasteHandler = async (f) => {
+      const fd = new FormData();
+      fd.append("file", f);
+      await api(`/bugs/${bug.id}/attachments`, { method: "POST", body: fd });
+      const fresh = await api(`/bugs/${bug.id}`);
+      renderBugInlineSections(fresh);
+      toast(`Attached: ${f.name || "pasted file"}`, "success");
+    };
     form.elements.due_date.value = bug.due_date || "";
     // Re-sync the custom date picker's button label too — same reason.
     form.elements.due_date.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1969,6 +2073,16 @@ function openBugForm(bug = null) {
     if (form.elements.description._bhRtSet) {
       form.elements.description._bhRtSet("");
     }
+    // v2.6: paste in description while CREATING stages files in the
+    // createBug bucket — they upload to the new bug AFTER it's
+    // created (submitBugForm reads STATE.stagedFiles.createBug). The
+    // user sees them appear in the create-mode attach preview row.
+    form.elements.description._bhPasteHandler = async (f) => {
+      STATE.stagedFiles.createBug = STATE.stagedFiles.createBug || [];
+      STATE.stagedFiles.createBug.push(f);
+      _renderStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
+      toast(`Staged: ${f.name || "pasted file"}`, "info");
+    };
   }
 
   // Apply per-role read-only mode: regular users can edit Bugs but not
@@ -2441,7 +2555,7 @@ function _renderStagedFiles(bucket, previewSel, labelSel) {
     // way the inner element is clickable to preview, and the ✕ removes
     // the file from the staged array.
     const previewInner = isImage
-      ? `<a class="attach-staged-link" href="${url}" target="_blank" rel="noopener"><img class="attach-staged-thumb" src="${url}" alt="${escapeHtml(f.name)}" /></a>`
+      ? `<a class="attach-staged-link" href="${url}" target="_blank" rel="noopener"><img class="attach-staged-thumb" src="${url}" alt="${escapeHtml(f.name)}" data-fallback="${escapeHtml(fileIcon(f.type, f.name))}" /></a>`
       : `<a class="attach-staged-link" href="${url}" target="_blank" rel="noopener" title="Open ${escapeHtml(f.name)}">${fileIcon(f.type, f.name)}</a>`;
     wrap.innerHTML = `
       ${previewInner}
@@ -2450,6 +2564,20 @@ function _renderStagedFiles(bucket, previewSel, labelSel) {
         <span class="attach-staged-size muted small">${formatBytes(f.size)}</span>
       </span>
       <button type="button" class="attach-staged-remove" aria-label="Remove ${escapeHtml(f.name)}" title="Remove (not yet uploaded)">✕</button>`;
+    // v2.6 fix: if the blob URL can't render as a real image (corrupt
+    // bytes, unsupported format, etc.) the browser shows its broken-
+    // image marker with the alt text overlaid — looks like the
+    // attachment is broken. Swap to a generic file icon instead so
+    // the row stays readable.
+    const img = wrap.querySelector(".attach-staged-thumb");
+    if (img) {
+      img.addEventListener("error", () => {
+        const link = img.closest(".attach-staged-link");
+        if (!link) return;
+        link.innerHTML = img.dataset.fallback || "📎";
+        link.classList.add("attach-staged-icon-only");
+      }, { once: true });
+    }
     preview.appendChild(wrap);
   });
   // Fire the "stage changed" event so a section-head Upload button can
@@ -2904,6 +3032,15 @@ async function handleEditComment(commentId) {
     enhanceRichEditor(ta, { compact: true });
     // Push the existing HTML into the contenteditable surface.
     if (ta._bhRtSet) ta._bhRtSet(currentHtml);
+    // v2.6: paste here uploads as a bug-level attachment — the
+    // comment's already saved, so we can't easily backfill files
+    // into its comment_id linkage. Bug-level is the safe target.
+    ta._bhPasteHandler = async (f) => {
+      const fd = new FormData();
+      fd.append("file", f);
+      await api(`/bugs/${STATE.currentBugId}/attachments`, { method: "POST", body: fd });
+      toast(`Attached: ${f.name || "pasted file"}`, "success");
+    };
     // Focus the editor's visible surface.
     editor.querySelector('.bh-rt-editor')?.focus();
   }

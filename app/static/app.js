@@ -515,6 +515,13 @@ function enhanceDateInput(input) {
   pop.addEventListener("click", (e) => {
     const navBtn = e.target.closest(".bh-date-nav");
     if (navBtn) {
+      // v2.6 fix: re-rendering pop.innerHTML inside the prev/next
+      // handler means the original click target is no longer a
+      // descendant of pop by the time the event bubbles up. The
+      // document-level outsideClose then treats it as an "outside"
+      // click and shuts the calendar. Stopping propagation here keeps
+      // the calendar open across month navigation.
+      e.stopPropagation();
       if (navBtn.dataset.nav === "prev") {
         viewMonth--;
         if (viewMonth < 0) { viewMonth = 11; viewYear--; }
@@ -526,6 +533,7 @@ function enhanceDateInput(input) {
       return;
     }
     if (e.target.classList.contains("bh-date-today")) {
+      e.stopPropagation();
       const now = new Date();
       input.value = _isoDate(now);
       input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -535,6 +543,7 @@ function enhanceDateInput(input) {
     }
     const cell = e.target.closest(".bh-date-cell");
     if (cell) {
+      e.stopPropagation();
       input.value = cell.dataset.iso;
       input.dispatchEvent(new Event("change", { bubbles: true }));
       updateLabel();
@@ -655,8 +664,7 @@ function enhanceRichEditor(textarea, opts = {}) {
     <button type="button" data-cmd="formatBlock" data-arg="blockquote" title="Quote" aria-label="Quote">"</button>
     <button type="button" data-cmd="formatBlock" data-arg="pre" title="Code block" aria-label="Code block">&lt;/&gt;</button>
     <span class="bh-rt-divider"></span>
-    <button type="button" data-cmd="bh-image" title="Insert image" aria-label="Insert image">🖼</button>
-    <button type="button" data-cmd="removeFormat" title="Clear formatting" aria-label="Clear formatting">⌫</button>`;
+    <button type="button" data-cmd="bh-image" title="Insert image" aria-label="Insert image">🖼</button>`;
 
   const editor = document.createElement("div");
   editor.className = "bh-rt-editor";
@@ -687,33 +695,503 @@ function enhanceRichEditor(textarea, opts = {}) {
   };
   editor.addEventListener("input", sync);
 
+  // Track the last selection that was inside the editor. Toolbar buttons
+  // restore this on click so execCommand has a valid range to operate on
+  // even if focus briefly left the editor for the button.
+  let savedRange = null;
+  const captureSelection = () => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return;
+    const r = s.getRangeAt(0);
+    if (editor.contains(r.commonAncestorContainer)) savedRange = r.cloneRange();
+  };
+  editor.addEventListener("keyup", captureSelection);
+  editor.addEventListener("mouseup", captureSelection);
+  editor.addEventListener("focus", captureSelection);
+  document.addEventListener("selectionchange", () => {
+    if (document.activeElement === editor) captureSelection();
+  });
+
+  const ensureCaret = () => {
+    const s = window.getSelection();
+    // If savedRange points OUTSIDE the editor (stale, e.g. the user
+    // clicked from a different input), discard it and drop a fresh
+    // caret at the end of the editor — otherwise execCommand and
+    // toggleInlineAtCaret act on a range that isn't in our editor and
+    // the user sees "Bold did nothing".
+    if (savedRange && editor.contains(savedRange.commonAncestorContainer)) {
+      s.removeAllRanges();
+      s.addRange(savedRange);
+      return;
+    }
+    savedRange = null;
+    const r = document.createRange();
+    r.selectNodeContents(editor);
+    r.collapse(false);
+    s.removeAllRanges();
+    s.addRange(r);
+    savedRange = r.cloneRange();
+  };
+
+  // True if the current selection is anchored inside <tag> within the editor.
+  const inAncestor = (tagNames) => {
+    const wanted = new Set(tagNames.map(t => t.toUpperCase()));
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return false;
+    let n = s.getRangeAt(0).startContainer;
+    while (n && n !== editor) {
+      if (n.nodeType === 1 && wanted.has(n.tagName)) return true;
+      n = n.parentNode;
+    }
+    return false;
+  };
+
+  // For inline-style commands (bold/italic/underline/strikethrough) on a
+  // COLLAPSED caret, Chrome's typing-state model is fragile: execCommand
+  // sets the state, but the very next keystroke routinely fails to pick
+  // it up (the user sees plain text after clicking Bold + typing). The
+  // reliable cross-browser workaround is to manually toggle a wrapper
+  // element around a zero-width placeholder, then drop the caret inside
+  // it — the next character lands inside the wrapper and inherits its
+  // styling. For an existing selection we still use execCommand, which
+  // wraps/unwraps correctly.
+  const _INLINE_TOGGLE = {
+    bold: "b",
+    italic: "i",
+    underline: "u",
+    strikeThrough: "s",
+  };
+  const ZWSP = "​";
+  const toggleInlineAtCaret = (tag) => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return false;
+    const r = s.getRangeAt(0);
+    if (!editor.contains(r.commonAncestorContainer)) return false;
+    if (!r.collapsed) return false;  // execCommand handles the non-empty case
+    // Look for an existing wrapper of the same tag among the caret's
+    // ancestors. If found, "exit" it. Chrome's contenteditable greedily
+    // extends an adjacent inline element when the caret sits right
+    // after its close tag, so just `setStartAfter(<b>)` isn't enough —
+    // the next keystroke gets glued into the wrapper. We insert a
+    // ZWSP text node AFTER the wrapper and place the caret after that
+    // ZWSP. The ZWSP is unambiguously outside the wrapper, so
+    // subsequent typing lands in unstyled text.
+    let n = r.startContainer;
+    while (n && n !== editor) {
+      if (n.nodeType === 1 && n.tagName.toLowerCase() === tag) {
+        const sep = document.createTextNode(ZWSP);
+        n.parentNode.insertBefore(sep, n.nextSibling);
+        const after = document.createRange();
+        after.setStart(sep, 1);  // after the ZWSP
+        after.collapse(true);
+        s.removeAllRanges(); s.addRange(after);
+        return true;
+      }
+      n = n.parentNode;
+    }
+    // Not in wrapper → insert `<tag>ZWSP</tag>` and put the caret
+    // BETWEEN the ZWSP and the end of the wrapper so the next key
+    // appears inside.
+    const wrap = document.createElement(tag);
+    wrap.appendChild(document.createTextNode(ZWSP));
+    r.insertNode(wrap);
+    const inside = document.createRange();
+    inside.setStart(wrap.firstChild, 1);  // after the ZWSP
+    inside.collapse(true);
+    s.removeAllRanges(); s.addRange(inside);
+    return true;
+  };
+
+  // When the user clicks Bold (or Italic / Underline / Strike) with NO
+  // text selected but with content in the editor, the natural
+  // expectation is "make the word I just typed bold". This auto-selects
+  // the word at the caret so execCommand has something concrete to act
+  // on. Returns true if a selection was made.
+  //
+  // Word characters are letters / digits / underscore / hyphen / apostrophe.
+  // If the caret sits between non-word chars (e.g. after a space), there's
+  // no word to select — return false and let the caller fall back to the
+  // typing-state path.
+  const _WORD = /[A-Za-z0-9_'\-À-ɏͰ-῿一-鿿]/;
+  const selectWordAtCaret = () => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return false;
+    const r = s.getRangeAt(0);
+    if (!r.collapsed) return true;
+    // Normalize: when the caret sits in an ELEMENT (e.g. after a
+    // selectNodeContents+collapse on an <li>), descend into the
+    // adjacent text node child so the word walk can run. Without this,
+    // clicking Bold while focused at the end of a list-item body
+    // silently falls through to the ZWSP-wrapper path instead of
+    // bolding the word the user just typed.
+    let node = r.startContainer;
+    let pos = r.startOffset;
+    if (node.nodeType === 1) {
+      if (pos > 0 && node.childNodes[pos - 1] && node.childNodes[pos - 1].nodeType === 3) {
+        node = node.childNodes[pos - 1];
+        pos = (node.textContent || "").length;
+      } else if (pos < node.childNodes.length && node.childNodes[pos] && node.childNodes[pos].nodeType === 3) {
+        node = node.childNodes[pos];
+        pos = 0;
+      } else {
+        return false;
+      }
+    }
+    if (!node || node.nodeType !== 3) return false;
+    const text = node.textContent || "";
+    const left = pos > 0 ? text.charAt(pos - 1) : "";
+    const right = pos < text.length ? text.charAt(pos) : "";
+    if (!_WORD.test(left) && !_WORD.test(right)) return false;
+    let start = pos;
+    while (start > 0 && _WORD.test(text.charAt(start - 1))) start--;
+    let end = pos;
+    while (end < text.length && _WORD.test(text.charAt(end))) end++;
+    if (start === end) return false;
+    const wordRange = document.createRange();
+    wordRange.setStart(node, start);
+    wordRange.setEnd(node, end);
+    s.removeAllRanges();
+    s.addRange(wordRange);
+    return true;
+  };
+
+  // Manual wrap/unwrap for inline styles — Chrome 148 silently no-ops
+  // document.execCommand("bold") inside certain stacking-context /
+  // overflow ancestors (the bug modal is one such case). We can't rely
+  // on it any more, so toggling Bold/Italic/Underline/Strike is done
+  // entirely in DOM code here.
+  const applyInlineWrap = (tag) => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return false;
+    const r = s.getRangeAt(0);
+    if (r.collapsed) return false;
+    if (!editor.contains(r.commonAncestorContainer)) return false;
+    // If selection sits entirely inside a wrapper of this tag, UNWRAP
+    // by replacing the wrapper with its children. We test by walking
+    // both ends — if they share the same ancestor of this tag, we
+    // consider it "inside".
+    const ancestor = (n) => {
+      while (n && n !== editor) {
+        if (n.nodeType === 1 && n.tagName.toLowerCase() === tag) return n;
+        n = n.parentNode;
+      }
+      return null;
+    };
+    const startAnc = ancestor(r.startContainer);
+    const endAnc = ancestor(r.endContainer);
+    if (startAnc && startAnc === endAnc) {
+      const wrap = startAnc;
+      const parent = wrap.parentNode;
+      // Capture inner text so we can re-select it after unwrap.
+      const txt = wrap.textContent;
+      while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap);
+      parent.removeChild(wrap);
+      // Re-select the unwrapped text so the user can re-toggle without
+      // re-selecting it manually.
+      if (parent.firstChild && parent.firstChild.nodeType === 3 && parent.firstChild.textContent === txt) {
+        const re = document.createRange();
+        re.setStart(parent.firstChild, 0);
+        re.setEnd(parent.firstChild, txt.length);
+        s.removeAllRanges(); s.addRange(re);
+      }
+      return true;
+    }
+    // Wrap the selection. surroundContents is the cleanest path when
+    // the range is well-formed (start + end in the same parent). When
+    // the selection straddles block boundaries we extract + wrap.
+    const wrap = document.createElement(tag);
+    try {
+      r.surroundContents(wrap);
+    } catch {
+      const frag = r.extractContents();
+      wrap.appendChild(frag);
+      r.insertNode(wrap);
+    }
+    // Re-select the now-wrapped content so chained toggles work.
+    const inside = document.createRange();
+    inside.selectNodeContents(wrap);
+    s.removeAllRanges(); s.addRange(inside);
+    return true;
+  };
+
+  // Manual list toggle (ul / ol) — same Chrome 148 issue, same fix.
+  // We treat the LINE containing the caret as the target: if it's
+  // already inside a list of the requested type, unwrap; otherwise
+  // wrap it.
+  const applyList = (listTag) => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return false;
+    const r = s.getRangeAt(0);
+    if (!editor.contains(r.commonAncestorContainer)) return false;
+    // Find the enclosing block (LI, P, DIV, BLOCKQUOTE, PRE, or editor itself).
+    const block = (() => {
+      let n = r.startContainer;
+      while (n && n !== editor) {
+        if (n.nodeType === 1 && /^(LI|P|DIV|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)) return n;
+        n = n.parentNode;
+      }
+      return null;
+    })();
+    // Already in a LI of the same list type → unwrap to a <p>.
+    if (block && block.tagName === "LI") {
+      const list = block.parentNode;
+      if (list && list.tagName === listTag.toUpperCase()) {
+        const p = document.createElement("p");
+        while (block.firstChild) p.appendChild(block.firstChild);
+        list.parentNode.insertBefore(p, list);
+        list.removeChild(block);
+        if (!list.firstChild) list.parentNode.removeChild(list);
+        // Place caret at start of new <p>
+        const re = document.createRange();
+        re.setStart(p, 0);
+        re.collapse(true);
+        s.removeAllRanges(); s.addRange(re);
+        return true;
+      }
+    }
+    // Wrap path. Three shapes:
+    //
+    //   (a) Caret/selection sits inside a P/DIV/BLOCKQUOTE/etc. — replace
+    //       that block with `<ul><li>…</li></ul>` carrying the block's
+    //       contents. Simple, preserves any inline formatting inside it.
+    //
+    //   (b) Selection is non-empty but lives directly at the editor root
+    //       (no <p> wrapper — typical when the user typed in a fresh
+    //       editor; browsers don't auto-create <p>). Extract the
+    //       selection and wrap it in `<ul><li>…</li></ul>` inserted at
+    //       the extracted position. THIS is the fix for the bug where
+    //       the bullet appeared on its own line above the text.
+    //
+    //   (c) Caret is collapsed at the editor root — move every editor
+    //       child into a single `<li>` so the user's typed text becomes
+    //       the list item.
+    const list = document.createElement(listTag);
+    const li = document.createElement("li");
+    if (block && block !== editor) {
+      while (block.firstChild) li.appendChild(block.firstChild);
+      list.appendChild(li);
+      block.parentNode.replaceChild(list, block);
+    } else if (!r.collapsed) {
+      // (b) Extract the selected fragment and put it inside the <li>.
+      const frag = r.extractContents();
+      li.appendChild(frag);
+      list.appendChild(li);
+      r.insertNode(list);
+    } else {
+      // (c) Wrap the whole editor's current content.
+      while (editor.firstChild) li.appendChild(editor.firstChild);
+      list.appendChild(li);
+      editor.appendChild(list);
+    }
+    // An empty <li> renders without a marker in some browsers — drop
+    // a <br> so the list is visible even before the user types.
+    if (!li.firstChild) li.appendChild(document.createElement("br"));
+    const re = document.createRange();
+    re.selectNodeContents(li);
+    re.collapse(false);
+    s.removeAllRanges(); s.addRange(re);
+    return true;
+  };
+
+  // Manual block toggle for blockquote / pre. Wrap the current block,
+  // or unwrap if already wrapped.
+  const applyBlockWrap = (tag) => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return false;
+    const r = s.getRangeAt(0);
+    if (!editor.contains(r.commonAncestorContainer)) return false;
+    // Find the nearest matching wrapper.
+    const existing = (() => {
+      let n = r.startContainer;
+      while (n && n !== editor) {
+        if (n.nodeType === 1 && n.tagName.toLowerCase() === tag) return n;
+        n = n.parentNode;
+      }
+      return null;
+    })();
+    if (existing) {
+      // Unwrap: replace existing with a <p> carrying its children.
+      const p = document.createElement("p");
+      while (existing.firstChild) p.appendChild(existing.firstChild);
+      existing.parentNode.replaceChild(p, existing);
+      const re = document.createRange();
+      re.selectNodeContents(p);
+      re.collapse(false);
+      s.removeAllRanges(); s.addRange(re);
+      return true;
+    }
+    // Wrap the current block (or insert a new block at caret).
+    const block = (() => {
+      let n = r.startContainer;
+      while (n && n !== editor) {
+        if (n.nodeType === 1 && /^(P|DIV|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)) return n;
+        n = n.parentNode;
+      }
+      return null;
+    })();
+    const wrap = document.createElement(tag);
+    if (block && block !== editor) {
+      while (block.firstChild) wrap.appendChild(block.firstChild);
+      block.parentNode.replaceChild(wrap, block);
+    } else {
+      // Empty editor or top-level text — push everything in editor into wrap.
+      while (editor.firstChild) wrap.appendChild(editor.firstChild);
+      editor.appendChild(wrap);
+    }
+    const re = document.createRange();
+    re.selectNodeContents(wrap);
+    re.collapse(false);
+    s.removeAllRanges(); s.addRange(re);
+    return true;
+  };
+
+  // Run a formatting command with a valid selection — restore the last
+  // intra-editor range, run the command, then re-capture so chained
+  // toolbar clicks build on the correct anchor.
+  const runCmd = (cmd, arg = null) => {
+    editor.focus();
+    ensureCaret();
+    if (cmd in _INLINE_TOGGLE) {
+      const tag = _INLINE_TOGGLE[cmd];
+      const s = window.getSelection();
+      if (s && s.rangeCount && s.getRangeAt(0).collapsed) {
+        // Auto-select the word at the caret — this matches "I just
+        // typed a word, click Bold, the word bolds" expectation.
+        if (!selectWordAtCaret()) {
+          // No word at caret → arm typing state via a ZWSP wrapper.
+          if (toggleInlineAtCaret(tag)) {
+            captureSelection(); sync(); return;
+          }
+        }
+      }
+      if (applyInlineWrap(tag)) {
+        captureSelection(); sync(); return;
+      }
+    }
+    if (cmd === "insertUnorderedList") {
+      if (applyList("ul")) { captureSelection(); sync(); return; }
+    }
+    if (cmd === "insertOrderedList") {
+      if (applyList("ol")) { captureSelection(); sync(); return; }
+    }
+    if (cmd === "formatBlock") {
+      // arg looks like "<blockquote>" / "<pre>" / "<p>"
+      const tag = (arg || "").replace(/[<>]/g, "").toLowerCase();
+      if (tag && tag !== "p" && applyBlockWrap(tag)) {
+        captureSelection(); sync(); return;
+      }
+      // Falling back to <p> — unwrap any existing blockquote/pre.
+      if (tag === "p") {
+        for (const t of ["blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6"]) {
+          if (applyBlockWrap(t)) { captureSelection(); sync(); return; }
+        }
+      }
+    }
+    // Last-resort fallback for anything we haven't manually implemented.
+    try { document.execCommand(cmd, false, arg); } catch { /* ignore */ }
+    captureSelection();
+    sync();
+  };
+
   // ----- Toolbar buttons -----
+  //
+  // Critical: BOTH capture-selection AND preventDefault must run on
+  // mousedown. preventDefault stops the browser from shifting focus
+  // away from the contenteditable to the button — without it, the
+  // editor's typing state (the "next typed character is bold"
+  // state set by execCommand) is wiped before the user can type
+  // anything. That was the original "click Bold, nothing happens"
+  // report.
+  //
+  // We then ALSO run the command on mousedown so the user gets
+  // immediate feedback. We swallow the click handler entirely.
+  const handleToolbarCmd = (btn) => {
+    const cmd = btn.dataset.cmd;
+    const arg = btn.dataset.arg || null;
+    if (cmd === "bh-image") {
+      _bhRtPickFileAsAttachment(textarea, opts);
+      return;
+    }
+    if (cmd === "formatBlock") {
+      const tag = (arg || "").toLowerCase();
+      if (tag && inAncestor([tag])) {
+        runCmd("formatBlock", "<p>");
+      } else {
+        runCmd("formatBlock", `<${tag}>`);
+      }
+      updateActiveStates();
+      return;
+    }
+    runCmd(cmd, arg);
+    updateActiveStates();
+  };
+
+  // Reflect the current inline-formatting state on the toolbar buttons
+  // so the user sees that Bold is "on" before they start typing —
+  // otherwise execCommand("bold") with a collapsed caret looks like a
+  // no-op even though it correctly armed the typing state.
+  const updateActiveStates = () => {
+    toolbar.querySelectorAll("button[data-cmd]").forEach(b => {
+      const c = b.dataset.cmd;
+      let active = false;
+      // Inline styles: check DOM ancestor for the tag we toggled in.
+      // queryCommandState is unreliable for the manual-wrapper path.
+      if (c in _INLINE_TOGGLE) {
+        active = inAncestor([_INLINE_TOGGLE[c]]);
+        // Fallback to queryCommandState for the non-wrapped path
+        // (e.g. when execCommand wrapped the selection).
+        if (!active) {
+          try { active = !!document.queryCommandState(c); } catch {}
+        }
+      } else if (c === "insertUnorderedList") {
+        active = inAncestor(["ul"]);
+      } else if (c === "insertOrderedList") {
+        active = inAncestor(["ol"]);
+      } else if (c === "formatBlock") {
+        const arg = (b.dataset.arg || "").toLowerCase();
+        if (arg) active = inAncestor([arg]);
+      }
+      b.classList.toggle("is-active", active);
+    });
+  };
+  editor.addEventListener("keyup", updateActiveStates);
+  editor.addEventListener("mouseup", updateActiveStates);
+  editor.addEventListener("input", updateActiveStates);
+
   toolbar.addEventListener("mousedown", (e) => {
-    // mousedown so the editor's selection isn't lost when the button
-    // takes focus.
+    const btn = e.target.closest("button[data-cmd]");
+    if (!btn) return;
+    // Capture selection FIRST — preventDefault stops the focus shift
+    // but the selection getter still works at this point. Saving the
+    // range lets runCmd restore it on the click for buttons that
+    // open a file dialog (image) which DOES briefly take focus.
+    captureSelection();
+    // KEEP editor focused so the typing state survives across the
+    // button press. Without this the bold-pending state set by
+    // execCommand gets discarded when the editor blurs.
+    e.preventDefault();
+    // Run the command immediately on mousedown so it lands inside
+    // the same focus session as the user's click.
+    handleToolbarCmd(btn);
+  });
+  // Keyboard accessibility — Enter / Space on a focused toolbar button.
+  toolbar.addEventListener("click", (e) => {
+    // Mouse path is already handled by mousedown above; suppress the
+    // duplicate run that would otherwise come from the click event.
+    if (e.detail !== 0) { e.preventDefault(); return; }
     const btn = e.target.closest("button[data-cmd]");
     if (!btn) return;
     e.preventDefault();
-    editor.focus();
-    const cmd = btn.dataset.cmd;
-    if (cmd === "bh-image") {
-      _bhRtPickImage(editor, sync);
-      return;
-    }
-    const arg = btn.dataset.arg || null;
-    try {
-      document.execCommand(cmd, false, arg);
-      sync();
-    } catch { /* ignore */ }
+    handleToolbarCmd(btn);
   });
 
   // ----- Keyboard shortcuts -----
   editor.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       const key = e.key.toLowerCase();
-      if (key === "b") { e.preventDefault(); document.execCommand("bold"); sync(); }
-      else if (key === "i") { e.preventDefault(); document.execCommand("italic"); sync(); }
-      else if (key === "u") { e.preventDefault(); document.execCommand("underline"); sync(); }
+      if (key === "b") { e.preventDefault(); runCmd("bold"); updateActiveStates(); }
+      else if (key === "i") { e.preventDefault(); runCmd("italic"); updateActiveStates(); }
+      else if (key === "u") { e.preventDefault(); runCmd("underline"); updateActiveStates(); }
     }
   });
 
@@ -745,26 +1223,7 @@ function enhanceRichEditor(textarea, opts = {}) {
         continue;
       }
       if (!handler) {
-        // Fallback for editors without a handler (shouldn't happen in
-        // v2.6 once openBugForm has wired one) — inline base64 keeps
-        // the editor functional rather than silently dropping the
-        // paste, but warns so we notice.
-        try {
-          const dataUrl = await new Promise((resolve, reject) => {
-            const r = new FileReader();
-            r.onload = () => resolve(r.result); r.onerror = reject;
-            r.readAsDataURL(f);
-          });
-          if ((f.type || "").startsWith("image/")) {
-            document.execCommand("insertHTML", false,
-              `<img src="${dataUrl}" alt="${escapeHtml(f.name || 'pasted')}" />`);
-            sync();
-          } else {
-            toast(`No attachment target for ${f.name || 'file'}`, "info");
-          }
-        } catch (err) {
-          toast(`Failed to paste: ${err.message || err}`, "error");
-        }
+        toast(`No attachment target for ${f.name || 'file'}`, "info");
         continue;
       }
       try {
@@ -784,33 +1243,36 @@ function enhanceRichEditor(textarea, opts = {}) {
   };
 }
 
-// Open a hidden file picker and insert the chosen image as a base64
-// data: URL at the current selection. Lets users add images even
-// without clipboard pasting.
-function _bhRtPickImage(editor, sync) {
+// Open a hidden file picker and route the chosen file through the
+// editor's wired attachment handler. We DO NOT embed images inline in
+// the contenteditable — the contenteditable surface can't reliably
+// resize <img> elements or position a caret after them, which is why
+// users were getting stuck after inserting an image. By treating the
+// image as just another attachment we keep the editor text-only and
+// surface the file in the parent form's attachment grid where it has
+// proper open/delete/preview affordances.
+function _bhRtPickFileAsAttachment(textarea, opts) {
+  const handler = textarea._bhPasteHandler || opts?.onPasteFile;
+  if (!handler) {
+    toast("Attach files via the attachment area for this form.", "info");
+    return;
+  }
   const f = document.createElement("input");
   f.type = "file";
-  f.accept = "image/*";
+  f.accept = "image/*,application/pdf";
   f.style.display = "none";
   f.addEventListener("change", async () => {
     const file = f.files && f.files[0];
-    if (!file) return;
-    try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(r.result);
-        r.onerror = reject;
-        r.readAsDataURL(file);
-      });
-      editor.focus();
-      document.execCommand("insertHTML", false,
-        `<img src="${dataUrl}" alt="${escapeHtml(file.name || 'image')}" />`);
-      sync();
-    } catch (err) {
-      toast(`Failed to insert image: ${err.message || err}`, "error");
-    } finally {
-      f.remove();
+    if (file) {
+      if (_bhUnsafeExt(file.name) || _bhUnsafeMime(file.type)) {
+        toast(`Blocked unsafe file: ${file.name}`, "error");
+      } else {
+        try { await handler(file); } catch (err) {
+          toast(`Failed to attach: ${err.message || err}`, "error");
+        }
+      }
     }
+    f.remove();
   });
   document.body.appendChild(f);
   f.click();
@@ -860,9 +1322,15 @@ function enhanceCustomSelect(sel) {
     const opt = sel.options[sel.selectedIndex];
     const label = opt ? opt.text : "";
     const isPlaceholder = !sel.value && opt && /^—.*—$/.test(opt.text || "");
+    // v2.6 fix: a disabled select can't actually be opened, so the
+    // little ▾ caret is misleading (the Reporter field is the obvious
+    // case). Render a plain pill — no caret — so the user knows it's
+    // a read-only display value.
+    const caret = sel.disabled
+      ? ""
+      : `<span class="bh-sel-caret" aria-hidden="true">▾</span>`;
     btn.innerHTML = `
-      <span class="bh-sel-label${isPlaceholder ? " bh-sel-placeholder" : ""}">${escapeHtml(label || "—")}</span>
-      <span class="bh-sel-caret" aria-hidden="true">▾</span>`;
+      <span class="bh-sel-label${isPlaceholder ? " bh-sel-placeholder" : ""}">${escapeHtml(label || "—")}</span>${caret}`;
   };
   const renderPanel = () => {
     pop.innerHTML = [...sel.options].map((o, i) => {
@@ -936,10 +1404,12 @@ function enhanceCustomSelect(sel) {
   // (e.g. fillFormSelect on form open).
   sel.addEventListener("change", updateLabel);
   // Reflect disabled state on the trigger button so the same visual
-  // grey-out as the native select applies.
+  // grey-out as the native select applies. Also re-render the label
+  // so the caret hides / re-appears with the disabled change.
   new MutationObserver(() => {
     btn.disabled = sel.disabled;
     btn.classList.toggle("is-disabled", sel.disabled);
+    updateLabel();
   }).observe(sel, { attributes: true, attributeFilter: ["disabled"] });
   // The label has to refresh whenever the options list is rebuilt
   // (e.g. fillFormSelect on modal open), since the SPA sets .value

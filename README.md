@@ -11,33 +11,57 @@ Current version: **v2.6**.
 - **Rich-text editor for descriptions and comments.** The plain
   textareas are gone — the bug/requirement/task description and every
   comment are now edited in a contenteditable surface with a small
-  toolbar: bold, italic, underline, strikethrough, bullet/numbered
-  lists, blockquote, code block, inline image, clear-formatting. The
-  keyboard shortcuts (Ctrl+B / Ctrl+I / Ctrl+U) work too. The backend
+  toolbar: **B**old, *I*talic, *U*nderline, ~~Strike~~,
+  bullet/numbered lists, blockquote, code block, image (uploads as
+  attachment — see below). The keyboard shortcuts (Ctrl+B / Ctrl+I /
+  Ctrl+U) work too. Clicking Bold on a word — without first
+  dragging a selection — bolds that word (the editor auto-selects
+  the word at the caret). All toggles work both ways (Bold-on /
+  Bold-off, blockquote-on / blockquote-off, etc.). The backend
   sanitizes the submitted HTML against a tight allowlist before
   storage (no `<script>`, no `onerror=`, no arbitrary attributes), so
   formatting survives the round-trip without opening up stored-XSS.
-- **Paste images directly into descriptions and comments.** Take a
-  screenshot, hit Ctrl+V (or Cmd+V) in the description / comment
-  editor, and the image inlines as a base64 `data:` URL. There's also
-  a 🖼 button on the toolbar that opens a file picker for the same
-  thing. Inline images survive the sanitizer (they have to — that's
-  what makes the paste-in workflow useful) but every other attribute
-  gets stripped.
+
+  The formatting commands are implemented **directly in DOM code**,
+  not via `document.execCommand`. Chrome 148 silently no-ops
+  `execCommand("bold")` (and italic, underline, lists, formatBlock)
+  inside the bug modal's stacking context — a regression Chrome
+  haven't documented. Rolling our own keeps the editor working on
+  every browser we support, present and future.
+- **Paste-as-attachment.** Take a screenshot, hit Ctrl+V (or Cmd+V) in
+  the description / comment editor, and the image is uploaded as a
+  real attachment (not inlined into the description HTML). PDFs and
+  any other file paste the same way. Unsafe extensions
+  (`.exe`, `.bat`, `.cmd`, `.msi`, `.vbs`, `.ps1`, `.sh`, `.app`,
+  `.dmg`, etc.) and dangerous MIMEs are rejected with a toast before
+  upload. The toolbar's 🖼 button goes through the same flow — it
+  opens a file picker and pushes the chosen file into the attachment
+  list. Inlining was abandoned because contenteditable can't reliably
+  position a caret after or resize an inline `<img>`.
 - **Custom calendar / date picker.** Native `<input type="date">` has
   been replaced everywhere with an in-house popover (month nav,
   Today shortcut, today/selected highlights). Looks the same in
   Chrome, Firefox, Safari, Edge — no more vendor-shipped square boxes
-  drifting between browsers.
+  drifting between browsers. The popover is attached to `document.body`
+  with `position: fixed` so it escapes the modal-foot's stacking
+  context, and the prev/next month buttons stop event propagation so
+  re-rendering the popover doesn't trigger the outside-click handler
+  (the calendar stays open across month navigation).
 - **Custom dropdowns.** Every `<select>` in the bug modal switches to
   a styled button + popover that match the calendar and the
   multi-select filter dropdowns. Hover, focus, and disabled states
-  all match the rest of the v2.6 chrome.
+  all match the rest of the v2.6 chrome. The Reporter field — which
+  is always disabled because the reporter is fixed to whoever is
+  logged in — renders without the ▾ caret so the visual matches the
+  fact that it can't be opened.
 - **Sidebar names are clickable to edit.** Hovering a Project or User
   name showed a pointer cursor but clicking did nothing. Now: click
   the colored swatch (or avatar circle) to toggle the filter; click
   the name to open the edit modal (when you have permission to). The
   ✎ icon still works as before.
+- **Newest first.** New comments, attachments, and (within an event)
+  tasks now sort newest-first by default so the most recent activity
+  is always at the top.
 - **Audit log fully loads.** The previous 300-row cap meant
   long-running deployments couldn't see history older than a few
   weeks. The default page is now 5 000 rows with a *Load older
@@ -179,6 +203,18 @@ still in place, with zero DDL change required.
   any comment, or deleting any attachment (bug- or comment-level), is
   admin-only. Comment creation and attachment upload stay open to
   anyone with edit permission so users can still gather evidence.
+- **Rich-text editor for descriptions and comments** (v2.6) — bold,
+  italic, underline, strike, bullet/numbered lists, blockquote, code
+  block, with Ctrl+B / Ctrl+I / Ctrl+U keyboard shortcuts. Click Bold
+  on a word and the editor auto-selects that word so you don't have
+  to drag-select first. Pasting an image, PDF or any other file in
+  the editor uploads it as a real attachment instead of inlining it,
+  with an unsafe-extension blocklist (`.exe`, `.bat`, `.ps1`, `.msi`,
+  `.vbs`, `.sh`, `.app`, `.dmg`, etc.) that rejects with a toast
+  before upload. Server-side HTML sanitiser allows only the tags the
+  editor emits — no `<script>`, no `onerror=`, no arbitrary
+  attributes — so formatting survives the round-trip without opening
+  a stored-XSS hole.
 - **Global blocking loader** (v2.5) — every action that hits the server
   shows a full-page loader overlay that blocks all input until the
   request finishes, so impatient double-clicks can no longer create
@@ -360,6 +396,16 @@ safe by design:
   `POST /api/bugs/{id}/attachments` endpoint, so no new routes touch
   storage. **Redeploys of v2.5 against a v2.4 production database are
   zero-DDL.**
+- **v2.6 — no schema changes at all.** The rich-text editor stores its
+  HTML in the same `description` and comment `body` columns that
+  always held free text (still `Text`). The Pydantic length caps were
+  raised (1 MB for `description`, 200 KB for comment `body`) but no
+  DDL ran. The audit-log "Load older entries" pagination is a
+  query-side change (`limit` + `offset` query params, default 5 000,
+  cap 10 000). The calendar / custom dropdown / rich editor widgets
+  live entirely in the SPA. Paste-as-attachment reuses the existing
+  `POST /api/bugs/{id}/attachments` endpoint. **Redeploys of v2.6
+  against a v2.5 production database are zero-DDL.**
 - Cookies issued by older builds (which don't carry a `jti`) are still
   accepted and treated as legacy sessions, so a redeploy doesn't kick
   every user out at once.

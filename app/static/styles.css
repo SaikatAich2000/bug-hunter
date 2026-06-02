@@ -3089,6 +3089,11 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .bh-rt-toolbar button:active {
   background: var(--accent-soft);
 }
+.bh-rt-toolbar button.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .bh-rt-divider {
   width: 1px;
   background: var(--border);

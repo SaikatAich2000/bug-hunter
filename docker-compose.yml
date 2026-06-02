@@ -46,7 +46,13 @@ services:
           memory: 64M
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Lets sites behind a proxy / air-gapped network override the
+        # FROM image without editing the Dockerfile. Default mirrors
+        # the Dockerfile's hard-coded fallback.
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
     image: bugtracker_app:2.6
     container_name: bugtracker_app
     restart: unless-stopped

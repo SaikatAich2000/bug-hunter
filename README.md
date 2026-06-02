@@ -272,6 +272,39 @@ That's it. Postgres runs in its own isolated Docker container on port `55432`
 holds your live data and is **never** removed by `./deploy.sh` or by a plain
 `./down.sh` — see "Live-data safety" below.
 
+### Deploying behind a corporate proxy / air-gapped
+
+`./deploy.sh` retries the base-image pull three times before giving up,
+so a flaky link to Docker Hub no longer fails the whole deploy. If your
+host can't reach `docker.io` at all, you have three escape hatches:
+
+1. **Configure a Docker daemon HTTP proxy.** Edit `/etc/docker/daemon.json`:
+   ```json
+   { "proxies": { "http-proxy": "http://proxy:port", "https-proxy": "http://proxy:port" } }
+   ```
+   Then `sudo systemctl restart docker` and re-run `./deploy.sh`.
+2. **Use an internal registry mirror.** Set `BASE_IMAGE` in `.env`
+   (or inline):
+   ```bash
+   BASE_IMAGE=mirror.internal.example.com/python:3.12-slim ./deploy.sh
+   ```
+3. **Pre-load the image from a machine with network access:**
+   ```bash
+   docker save python:3.12-slim | gzip > python-3.12-slim.tgz
+   # copy python-3.12-slim.tgz to the target host
+   zcat python-3.12-slim.tgz | docker load
+   ./deploy.sh
+   ```
+
+To force a full clean rebuild (ignoring the cache):
+`BUILD_CLEAN=1 ./deploy.sh`. By default the build uses Docker's layer
+cache, so a redeploy without code changes finishes in seconds; code
+changes still bust the cache correctly because `COPY` layers detect
+content changes.
+
+**None of these touch the `bugtracker_pgdata` volume.** Your database
+is unaffected by registry / network issues.
+
 ### First login
 
 On first run, Bug Hunter auto-creates an admin user from the `BOOTSTRAP_ADMIN_*`

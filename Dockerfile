@@ -1,5 +1,14 @@
 # --- Bug Hunter — production-style image, intentionally small ---
-FROM python:3.12-slim AS base
+#
+# BASE_IMAGE is overridable so deployments behind a corporate proxy or
+# air-gapped network can point at an internal registry mirror without
+# editing this file:
+#
+#   BASE_IMAGE=mirror.internal/python:3.12-slim ./deploy.sh
+#
+# Default is the public Docker Hub tag.
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE} AS base
 
 # Don't write .pyc files, flush logs immediately, no pip version-check chatter.
 ENV PYTHONDONTWRITEBYTECODE=1 \

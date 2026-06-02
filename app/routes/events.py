@@ -209,7 +209,11 @@ def get_event(
         selectinload(Bug.reporter),
         selectinload(Bug.assignees),
         selectinload(Bug.event),
-    ).where(Bug.event_id == event_id).order_by(Bug.id.asc())
+    # v2.6: newest task at the top so the most recently updated item
+    # is what the user sees first when they open an event.
+    ).where(Bug.event_id == event_id).order_by(
+        Bug.updated_at.desc(), Bug.id.desc(),
+    )
     items = list(db.scalars(items_stmt).all())
     # One aggregate query for attachment counts across every item — avoids
     # an N+1 round-trip when the event has many tasks.

@@ -224,24 +224,34 @@ class TestInputValidation:
         assert r.status_code == 422
 
     def test_bug_create_with_oversized_description(self, admin_client):
+        # v2.6: description is rich HTML now; cap raised to 1 MB so
+        # multiple inline pasted screenshots (base64 data URLs) fit.
+        # Anything past the cap is still 422.
         p = _make_project(admin_client, "IV1")
         r = admin_client.post("/api/bugs", json={
             "project_id": p["id"], "title": "x" * 10,
-            "description": "a" * 10001,
+            "description": "a" * 1_000_001,
             "priority": "Low", "environment": "DEV",
         })
         assert r.status_code == 422
 
     def test_comment_with_oversized_body(self, admin_client):
+        # v2.6: comment body cap raised to 200 KB to accommodate
+        # pasted screenshots. Anything past that is still 422.
         p = _make_project(admin_client, "IV2")
         bug = _make_bug(admin_client, p["id"])
         r = admin_client.post(f"/api/bugs/{bug['id']}/comments",
-                              json={"body": "x" * 10001})
+                              json={"body": "x" * 200_001})
         assert r.status_code == 422
 
-    def test_audit_limit_clamped_at_1000(self, admin_client):
+    def test_audit_limit_clamped_at_10000(self, admin_client):
+        # v2.6: audit limit ceiling raised from 1 000 → 10 000 so
+        # operators can pull the full trail. Anything past 10 000 still
+        # rejects with 422.
+        r = admin_client.get("/api/audit?limit=10001")
+        assert r.status_code == 422
         r = admin_client.get("/api/audit?limit=10000")
-        assert r.status_code == 422  # le=1000 in Query def
+        assert r.status_code == 200
 
     def test_user_role_normalization_upper_to_lower(self, admin_client):
         """Schema lowercases role: 'ADMIN' should become 'admin'."""

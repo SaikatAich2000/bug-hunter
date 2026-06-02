@@ -365,12 +365,24 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   border-radius: 50%;
   flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--bg-elev);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
+.side-item .swatch:hover { transform: scale(1.25); box-shadow: 0 0 0 3px var(--accent-soft); }
 .side-item .label-text {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 4px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.side-item .label-text:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .side-item .row-actions { display: none; gap: 2px; }
 .side-item:hover .row-actions { display: flex; }
@@ -2837,6 +2849,453 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   .events-filter-bar input[type="date"] {
     flex: 1 1 100%;
   }
+}
+
+/* ============================================================
+ * v2.6 — Custom date picker
+ *
+ * The native <input type="date"> is hidden via .bh-date-native and
+ * replaced by a button + popover that match the screenshot. The native
+ * input stays in the DOM so form submission picks up its value.
+ * ============================================================ */
+.bh-date-wrap {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+.bh-date-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
+}
+.bh-date-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02),
+              0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  position: relative;
+}
+.bh-date-btn:hover { border-color: var(--accent); background: var(--bg-elev-3); }
+.bh-date-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); border-color: var(--accent); }
+.bh-date-btn[aria-expanded="true"] { border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.bh-date-icon { font-size: 14px; flex: 0 0 auto; }
+.bh-date-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bh-date-placeholder { color: var(--text-faint); }
+.bh-date-clear {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-elev-3);
+  border: 1px solid transparent;
+}
+.bh-date-clear:hover { color: var(--danger, #ef4444); background: rgba(239, 68, 68, 0.15); }
+
+.bh-date-pop {
+  /* JS sets position:fixed + top/left at open time so the popover
+     escapes any overflow:hidden / transformed ancestor (modal-card,
+     backdrop-filter wrapper, etc.). z-index sits above everything
+     including the bug modal (z 1000-ish) and the global loader
+     overlay base. */
+  position: fixed;
+  z-index: 100000;
+  width: 320px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  padding: 14px;
+  animation: bh-date-pop-in 0.14s ease;
+  user-select: none;
+}
+@keyframes bh-date-pop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.bh-date-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.bh-date-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+.bh-date-nav {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.bh-date-nav:hover { background: var(--bg-elev-2); color: var(--text); border-color: var(--border); }
+.bh-date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.bh-date-dow {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  padding: 6px 0;
+}
+.bh-date-cell {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: center;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.bh-date-cell.muted { color: var(--text-faint); }
+.bh-date-cell:hover { background: var(--bg-elev-2); border-color: var(--border); }
+.bh-date-cell.is-today {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+.bh-date-cell.is-selected {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.bh-date-cell.is-selected:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.bh-date-foot {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.bh-date-today {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.bh-date-today:hover { background: var(--accent-soft); }
+
+@media (max-width: 380px) {
+  .bh-date-pop { width: calc(100vw - 24px); }
+}
+
+/* ============================================================
+ * v2.6 — Rich-text editor
+ *
+ * Wraps a hidden textarea (kept for form submission) with a toolbar
+ * and a contenteditable surface. The toolbar groups B / I / U / S,
+ * lists, quote / code, image / clear-formatting.
+ * ============================================================ */
+.bh-rt-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+}
+.bh-rt-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.bh-rt-native {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
+}
+.bh-rt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev-2);
+}
+.bh-rt-toolbar button {
+  width: 30px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.bh-rt-toolbar button:hover {
+  background: var(--bg-elev-3);
+  border-color: var(--border);
+}
+.bh-rt-toolbar button:active {
+  background: var(--accent-soft);
+}
+.bh-rt-divider {
+  width: 1px;
+  background: var(--border);
+  margin: 2px 4px;
+  align-self: stretch;
+}
+.bh-rt-editor {
+  min-height: 110px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  outline: none;
+}
+.bh-rt-wrap.compact .bh-rt-editor {
+  min-height: 64px;
+}
+.bh-rt-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.bh-rt-editor p { margin: 0 0 8px; }
+.bh-rt-editor p:last-child { margin-bottom: 0; }
+.bh-rt-editor blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 4px 12px;
+  margin: 6px 0;
+  color: var(--text-muted);
+  background: var(--bg-elev-2);
+  border-radius: 0 6px 6px 0;
+}
+.bh-rt-editor pre {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.bh-rt-editor code {
+  background: var(--bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+.bh-rt-editor ul, .bh-rt-editor ol { margin: 4px 0 8px 22px; padding: 0; }
+.bh-rt-editor li { margin-bottom: 2px; }
+.bh-rt-editor img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  display: block;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+}
+
+/* Read-only rich content (rendered HTML in the comments list, etc.) */
+.bh-rich-content p:last-child { margin-bottom: 0; }
+.bh-rich-content blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 4px 12px;
+  margin: 6px 0;
+  color: var(--text-muted);
+  background: var(--bg-elev-2);
+  border-radius: 0 6px 6px 0;
+}
+.bh-rich-content pre {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.bh-rich-content code {
+  background: var(--bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+.bh-rich-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  display: block;
+  margin: 6px 0;
+  border: 1px solid var(--border);
+}
+
+/* ============================================================
+ * v2.6 — Custom single-select dropdown
+ *
+ * The native <select> is hidden via .bh-sel-native; the button + popover
+ * give a consistent cross-browser look that matches the calendar.
+ * ============================================================ */
+.bh-sel-wrap {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+.bh-sel-native {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
+}
+.bh-sel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02),
+              0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.bh-sel-btn:hover:not(.is-disabled) { border-color: var(--accent); background: var(--bg-elev-3); }
+.bh-sel-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); border-color: var(--accent); }
+.bh-sel-btn[aria-expanded="true"] { border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.bh-sel-btn.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.bh-sel-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bh-sel-placeholder { color: var(--text-faint); }
+.bh-sel-caret {
+  flex: 0 0 auto;
+  font-size: 10px;
+  opacity: 0.65;
+  transition: transform 0.15s ease;
+}
+.bh-sel-btn[aria-expanded="true"] .bh-sel-caret { transform: rotate(180deg); }
+
+.bh-sel-pop {
+  /* See .bh-date-pop — placed via JS as position:fixed so the panel
+     doesn't get clipped by the modal-foot or any other scroll/clip
+     ancestor. min-width matches the trigger button (set by JS). */
+  position: fixed;
+  z-index: 100000;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  animation: bh-date-pop-in 0.14s ease;
+}
+.bh-sel-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.bh-sel-row:hover { background: var(--bg-elev-2); }
+.bh-sel-row.is-selected { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* Audit "Load more" footer */
+.audit-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px;
+  text-align: center;
+}
+
+@media (max-width: 500px) {
+  .bh-rt-toolbar button { width: 28px; height: 26px; font-size: 12px; }
+  .bh-rt-editor { min-height: 90px; padding: 8px 10px; }
 }
 
 /* ============================================================

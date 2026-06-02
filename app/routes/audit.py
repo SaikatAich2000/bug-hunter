@@ -35,7 +35,14 @@ def list_audit(
     entity_type: Optional[str] = None,
     actor_user_id: Optional[int] = None,
     q: Optional[str] = None,
-    limit: int = Query(default=200, le=1000),
+    # v2.6: raise the cap so operators reviewing very old activity can
+    # actually see it. 1000 was too aggressive — long-running deployments
+    # have well over that. We bumped the ceiling to 10 000 (still a
+    # firm upper bound to keep the response size sane) and the SPA now
+    # asks for 5000 by default, with a "Load more" affordance for the
+    # rare case the user needs to dig further.
+    limit: int = Query(default=5000, le=10000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: User = Depends(require_manager_or_admin),
 ) -> list[Activity]:
@@ -94,5 +101,9 @@ def list_audit(
             digit_like = f"%{_like_escape(digits_match.group(0))}%"
             clauses.append(cast(Activity.entity_id, String).ilike(digit_like, escape="\\"))
         stmt = stmt.where(or_(*clauses))
-    stmt = stmt.order_by(Activity.created_at.desc(), Activity.id.desc()).limit(limit)
+    stmt = (
+        stmt.order_by(Activity.created_at.desc(), Activity.id.desc())
+            .limit(limit)
+            .offset(offset)
+    )
     return list(db.scalars(stmt).all())

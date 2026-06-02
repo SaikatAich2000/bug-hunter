@@ -237,7 +237,9 @@ class Bug(Base):
     )
     comments: Mapped[list["Comment"]] = relationship(
         "Comment", back_populates="bug", cascade="all, delete-orphan",
-        order_by="Comment.created_at",
+        # v2.6: newest comment at the top by default. The order_by here
+        # drives every access via Bug.comments (get_bug response, etc.).
+        order_by="(Comment.created_at.desc(), Comment.id.desc())",
     )
     # Activities ordered newest-first with an id-DESC tiebreaker so two
     # events recorded in the same second still come back in a stable,

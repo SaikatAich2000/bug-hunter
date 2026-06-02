@@ -427,7 +427,7 @@
           <div class="bug-modal-main">
             <label class="field">
               <span>Description</span>
-              <textarea name="description" rows="6" maxlength="10000"
+              <textarea name="description" rows="6" data-bh-rt
                 placeholder="Context, acceptance criteria, repro steps — whatever's useful…"></textarea>
             </label>
 
@@ -504,7 +504,8 @@
               <h3>Comments <span class="muted small" id="commentsCount"></span></h3>
               <div id="bugCommentsList" class="bug-comments-list"></div>
               <div class="comment-form" id="commentForm">
-                <textarea id="commentBody" placeholder="Add a comment, attach a file, or both (Ctrl/Cmd+Enter to post)"></textarea>
+                <textarea id="commentBody" data-bh-rt
+                  placeholder="Add a comment, attach a file, or both (Ctrl/Cmd+Enter to post)"></textarea>
                 <div class="comment-form-row">
                   <label class="comment-attach-btn" title="Attach files">
                     📎 <span id="fileLabel">Attach files</span>
@@ -528,23 +529,23 @@
           <aside class="bug-modal-side">
             <label class="field">
               <span>Type <em>*</em></span>
-              <select name="item_type" required></select>
+              <select name="item_type" data-bh-select required></select>
             </label>
             <label class="field">
               <span>Project <em>*</em></span>
-              <select name="project_id" required></select>
+              <select name="project_id" data-bh-select required></select>
             </label>
             <label class="field">
               <span>Status</span>
-              <select name="status"></select>
+              <select name="status" data-bh-select></select>
             </label>
             <label class="field">
               <span>Priority</span>
-              <select name="priority"></select>
+              <select name="priority" data-bh-select></select>
             </label>
             <label class="field">
               <span>Environment</span>
-              <select name="environment">
+              <select name="environment" data-bh-select>
                 <option value="DEV">DEV</option>
                 <option value="UAT">UAT</option>
                 <option value="PROD">PROD</option>
@@ -556,7 +557,7 @@
                    the <select> so the user can't pick anyone else; the
                    submit handler reads the value from STATE.currentUser.id
                    so the disabled state doesn't affect the request. -->
-              <select name="reporter_id" disabled class="reporter-select"></select>
+              <select name="reporter_id" data-bh-select disabled class="reporter-select"></select>
             </label>
             <label class="field">
               <span>Assignees</span>
@@ -564,7 +565,7 @@
             </label>
             <label class="field">
               <span>Event</span>
-              <select name="event_id">
+              <select name="event_id" data-bh-select>
                 <option value="">— No event —</option>
               </select>
             </label>

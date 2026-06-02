@@ -283,6 +283,598 @@ function confirmDialog(message, { title = "Confirm", okLabel = "Delete", danger 
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// v2.6 — Custom date picker
+//
+// Native <input type="date"> popups vary wildly across browsers and look
+// dated (heh). We replace every input[type=date] with a custom picker:
+//
+//   ┌──────────────────────────────┐
+//   │  📅 Select date              │
+//   ├──────────────────────────────┤
+//   │  ‹    May 2026    ›         │
+//   │  S  M  T  W  T  F  S         │
+//   │  26 27 28 29 30  1  2        │
+//   │   3  4  5  6  7  8  9        │
+//   │  10 11 [12] 13 14 15 16      │  ← today ringed
+//   │  ...                         │
+//   │                       Today  │
+//   └──────────────────────────────┘
+//
+// The native input is kept in the DOM (hidden) so form submission still
+// finds it. enhanceDateInput() wraps a visible button + popover around
+// it; clicking a day commits the value to the native input and fires a
+// real "change" event so existing listeners keep working.
+// ---------------------------------------------------------------------------
+const _DOW = ["S", "M", "T", "W", "T", "F", "S"];
+const _MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function _isoDate(d) {
+  // Format a JS Date as YYYY-MM-DD in local time (NOT UTC — picking
+  // "today" should give the user's today, not yesterday in their zone).
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+function _parseIso(s) {
+  // Parse YYYY-MM-DD as a local-time Date. Avoids the gotcha where
+  // `new Date("2026-06-01")` is parsed as midnight UTC and may render
+  // as the previous day in negative-offset timezones.
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split("-").map(n => parseInt(n, 10));
+  return new Date(y, m - 1, d);
+}
+function _formatHumanDate(s) {
+  const d = _parseIso(s);
+  if (!d) return "";
+  return `${_MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+function enhanceDateInput(input) {
+  if (!input || input.dataset.bhEnhanced === "1") return;
+  input.dataset.bhEnhanced = "1";
+  // Hide the native input but keep it in the form — submission relies
+  // on its `name` + `value`. We use offscreen instead of display:none
+  // because some browsers won't focus a display:none input.
+  input.classList.add("bh-date-native");
+  // Replace input.type so users don't see the browser-native picker.
+  // Keep it as a "text"-ish input that holds the YYYY-MM-DD value.
+  input.type = "hidden";
+  const wrap = document.createElement("div");
+  wrap.className = "bh-date-wrap";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "bh-date-btn";
+  btn.setAttribute("aria-haspopup", "dialog");
+  btn.setAttribute("aria-expanded", "false");
+  const icon = `<span class="bh-date-icon" aria-hidden="true">📅</span>`;
+  const updateLabel = () => {
+    const v = input.value;
+    btn.innerHTML = `${icon}<span class="bh-date-label${v ? "" : " bh-date-placeholder"}">${v ? escapeHtml(_formatHumanDate(v)) : "Select date"}</span>${v ? '<span class="bh-date-clear" aria-label="Clear" title="Clear">×</span>' : ""}`;
+  };
+  updateLabel();
+  // Insert wrap right after the native input, then move the native
+  // input INSIDE the wrap so labels/refs still point to it correctly.
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  wrap.appendChild(btn);
+
+  const pop = document.createElement("div");
+  pop.className = "bh-date-pop";
+  pop.hidden = true;
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", "Pick a date");
+  // v2.6 fix: attach to body so `position: fixed` is genuinely viewport-
+  // relative. A transformed/translated ancestor (modal-card,
+  // backdrop-filter wrappers, etc.) would otherwise re-anchor a `fixed`
+  // child to itself, which is what made the popover sit on top of the
+  // modal-foot when opened inside the bug detail.
+  document.body.appendChild(pop);
+
+  // The month being VIEWED (independent of selection so the user can
+  // browse without committing). Initialised from current value or today.
+  let viewYear, viewMonth;
+  const initView = () => {
+    const seed = _parseIso(input.value) || new Date();
+    viewYear = seed.getFullYear();
+    viewMonth = seed.getMonth();
+  };
+  initView();
+
+  const render = () => {
+    const first = new Date(viewYear, viewMonth, 1);
+    const startDow = first.getDay(); // 0=Sun
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const daysInPrev = new Date(viewYear, viewMonth, 0).getDate();
+    const today = _isoDate(new Date());
+    const sel = input.value;
+    // 6 rows × 7 cols = 42 cells covers any month with overflow.
+    const cells = [];
+    for (let i = 0; i < 42; i++) {
+      let dayNum, cellMonth, cellYear, muted;
+      const offset = i - startDow;
+      if (offset < 0) {
+        dayNum = daysInPrev + offset + 1;
+        cellMonth = viewMonth - 1;
+        cellYear = viewYear;
+        if (cellMonth < 0) { cellMonth = 11; cellYear--; }
+        muted = true;
+      } else if (offset >= daysInMonth) {
+        dayNum = offset - daysInMonth + 1;
+        cellMonth = viewMonth + 1;
+        cellYear = viewYear;
+        if (cellMonth > 11) { cellMonth = 0; cellYear++; }
+        muted = true;
+      } else {
+        dayNum = offset + 1;
+        cellMonth = viewMonth;
+        cellYear = viewYear;
+        muted = false;
+      }
+      const iso = _isoDate(new Date(cellYear, cellMonth, dayNum));
+      const isToday = iso === today;
+      const isSelected = iso === sel;
+      const cls = [
+        "bh-date-cell",
+        muted ? "muted" : "",
+        isToday ? "is-today" : "",
+        isSelected ? "is-selected" : "",
+      ].filter(Boolean).join(" ");
+      cells.push(`<button type="button" class="${cls}" data-iso="${iso}">${dayNum}</button>`);
+    }
+    pop.innerHTML = `
+      <div class="bh-date-head">
+        <button type="button" class="bh-date-nav" data-nav="prev" aria-label="Previous month">‹</button>
+        <span class="bh-date-title">${_MONTHS[viewMonth]} ${viewYear}</span>
+        <button type="button" class="bh-date-nav" data-nav="next" aria-label="Next month">›</button>
+      </div>
+      <div class="bh-date-grid">
+        ${_DOW.map(d => `<span class="bh-date-dow">${d}</span>`).join("")}
+        ${cells.join("")}
+      </div>
+      <div class="bh-date-foot">
+        <button type="button" class="bh-date-today">Today</button>
+      </div>`;
+  };
+
+  // Smart placement: anchor to the trigger via fixed positioning so
+  // the popover doesn't get clipped by the modal-foot or any other
+  // overflow:hidden ancestor. Open above the trigger when there's
+  // more room above than below.
+  const placePop = () => {
+    const r = btn.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const ph = pop.offsetHeight || 360;
+    const pw = pop.offsetWidth || 320;
+    const spaceBelow = vh - r.bottom;
+    const spaceAbove = r.top;
+    // Default below; flip above when below would clip and above
+    // has more room.
+    const openAbove = spaceBelow < ph + 12 && spaceAbove > spaceBelow;
+    pop.style.position = "fixed";
+    pop.style.top = openAbove
+      ? `${Math.max(8, r.top - ph - 6)}px`
+      : `${Math.min(vh - ph - 8, r.bottom + 6)}px`;
+    // Align right edge of popover to right edge of trigger when the
+    // popover is wider than the trigger and would otherwise overflow
+    // off the right edge of the viewport.
+    let left = r.left;
+    if (left + pw > vw - 8) left = Math.max(8, r.right - pw);
+    pop.style.left = `${left}px`;
+  };
+
+  const open = () => {
+    if (!pop.hidden) return;
+    initView();
+    render();
+    pop.hidden = false;
+    // Render once to get a measurable size, then place.
+    placePop();
+    // Some renders defer painting; re-place on next frame to lock the
+    // final size in case fonts/styles shift the measurement.
+    requestAnimationFrame(placePop);
+    btn.setAttribute("aria-expanded", "true");
+    // Close on outside click — bound once per open so we don't pile up.
+    setTimeout(() => document.addEventListener("click", outsideClose, { once: true }), 0);
+    // Reposition on scroll/resize so the popover follows the trigger
+    // if the modal body scrolls or the window resizes underneath.
+    window.addEventListener("resize", placePop);
+    window.addEventListener("scroll", placePop, true);
+  };
+  const close = () => {
+    pop.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    window.removeEventListener("resize", placePop);
+    window.removeEventListener("scroll", placePop, true);
+  };
+  const outsideClose = (e) => {
+    if (wrap.contains(e.target) || pop.contains(e.target)) {
+      // Still inside — re-bind for the next outside click.
+      setTimeout(() => document.addEventListener("click", outsideClose, { once: true }), 0);
+      return;
+    }
+    close();
+  };
+
+  btn.addEventListener("click", (e) => {
+    // Don't trigger when user clicked the inline clear button.
+    if (e.target.classList.contains("bh-date-clear")) {
+      e.stopPropagation();
+      input.value = "";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      updateLabel();
+      return;
+    }
+    if (pop.hidden) open(); else close();
+  });
+  pop.addEventListener("click", (e) => {
+    const navBtn = e.target.closest(".bh-date-nav");
+    if (navBtn) {
+      if (navBtn.dataset.nav === "prev") {
+        viewMonth--;
+        if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+      } else {
+        viewMonth++;
+        if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+      }
+      render();
+      return;
+    }
+    if (e.target.classList.contains("bh-date-today")) {
+      const now = new Date();
+      input.value = _isoDate(now);
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      updateLabel();
+      close();
+      return;
+    }
+    const cell = e.target.closest(".bh-date-cell");
+    if (cell) {
+      input.value = cell.dataset.iso;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      updateLabel();
+      close();
+      return;
+    }
+  });
+  // Keyboard: Escape closes; Enter on the trigger opens.
+  pop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); close(); }
+  });
+
+  // Re-sync the visible label whenever the value is set programmatically
+  // (e.g. when a form is populated for "edit" mode). The MutationObserver
+  // catches value changes that don't fire input events.
+  const reSync = () => updateLabel();
+  // Watch attribute changes (some clients set value via .setAttribute).
+  new MutationObserver(reSync).observe(input, { attributes: true, attributeFilter: ["value"] });
+  // And listen for "change" events that other code dispatches.
+  input.addEventListener("change", reSync);
+}
+
+// Enhance every date input on the page. Idempotent — re-runs after
+// the bug modal renders to catch newly-rendered date fields.
+function enhanceAllDateInputs(root = document) {
+  root.querySelectorAll('input[type="date"]').forEach(enhanceDateInput);
+}
+
+// ---------------------------------------------------------------------------
+// v2.6 — Rich-text editor (B / I / U / list / quote / code / image paste)
+//
+// Wraps a textarea with a toolbar + contenteditable surface. The
+// underlying textarea is hidden but kept in the form so submission
+// reads the rich HTML from textarea.value. We sync editor → textarea
+// on every input.
+//
+// Why execCommand despite "deprecated"? It's still the most pragmatic
+// way to apply inline formatting inside a contenteditable without a
+// 50 KB dependency, and every browser still implements it. If the
+// browsers ever actually remove it, swap in a richer editor here behind
+// the same enhanceRichEditor() interface.
+// ---------------------------------------------------------------------------
+function enhanceRichEditor(textarea, opts = {}) {
+  if (!textarea || textarea.dataset.bhRtEnhanced === "1") return;
+  textarea.dataset.bhRtEnhanced = "1";
+
+  // Hide the textarea — keep it in the DOM so form submission picks
+  // up its value via name=.
+  textarea.classList.add("bh-rt-native");
+
+  const wrap = document.createElement("div");
+  wrap.className = "bh-rt-wrap";
+  if (opts.compact) wrap.classList.add("compact");
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "bh-rt-toolbar";
+  toolbar.innerHTML = `
+    <button type="button" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold"><b>B</b></button>
+    <button type="button" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic"><i>I</i></button>
+    <button type="button" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline"><u>U</u></button>
+    <button type="button" data-cmd="strikeThrough" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
+    <span class="bh-rt-divider"></span>
+    <button type="button" data-cmd="insertUnorderedList" title="Bulleted list" aria-label="Bulleted list">•</button>
+    <button type="button" data-cmd="insertOrderedList" title="Numbered list" aria-label="Numbered list">1.</button>
+    <span class="bh-rt-divider"></span>
+    <button type="button" data-cmd="formatBlock" data-arg="blockquote" title="Quote" aria-label="Quote">"</button>
+    <button type="button" data-cmd="formatBlock" data-arg="pre" title="Code block" aria-label="Code block">&lt;/&gt;</button>
+    <span class="bh-rt-divider"></span>
+    <button type="button" data-cmd="bh-image" title="Insert image" aria-label="Insert image">🖼</button>
+    <button type="button" data-cmd="removeFormat" title="Clear formatting" aria-label="Clear formatting">⌫</button>`;
+
+  const editor = document.createElement("div");
+  editor.className = "bh-rt-editor";
+  editor.contentEditable = "true";
+  editor.setAttribute("role", "textbox");
+  editor.setAttribute("aria-multiline", "true");
+  if (textarea.placeholder) editor.dataset.placeholder = textarea.placeholder;
+  if (textarea.id) editor.id = `${textarea.id}_editor`;
+  // Seed with whatever the textarea currently has — bug.description
+  // for edit mode, empty for create. The hidden textarea is the source
+  // of truth at submit time, so we keep both in sync below.
+  editor.innerHTML = textarea.value || "";
+
+  // Place wrap right where the textarea was, then move the textarea inside.
+  textarea.parentNode.insertBefore(wrap, textarea);
+  wrap.appendChild(toolbar);
+  wrap.appendChild(editor);
+  wrap.appendChild(textarea);
+
+  const sync = () => {
+    // Empty heuristic: contenteditable inserts a leading <br> or empty
+    // <div> when the user clears all text. Treat "<br>" / "<div><br></div>"
+    // as empty so length-1 validation downstream still rejects them.
+    const html = editor.innerHTML;
+    const stripped = html.replace(/<br\s*\/?>/gi, "").replace(/<\/?(?:div|p)>/gi, "").trim();
+    textarea.value = stripped ? html : "";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  editor.addEventListener("input", sync);
+
+  // ----- Toolbar buttons -----
+  toolbar.addEventListener("mousedown", (e) => {
+    // mousedown so the editor's selection isn't lost when the button
+    // takes focus.
+    const btn = e.target.closest("button[data-cmd]");
+    if (!btn) return;
+    e.preventDefault();
+    editor.focus();
+    const cmd = btn.dataset.cmd;
+    if (cmd === "bh-image") {
+      _bhRtPickImage(editor, sync);
+      return;
+    }
+    const arg = btn.dataset.arg || null;
+    try {
+      document.execCommand(cmd, false, arg);
+      sync();
+    } catch { /* ignore */ }
+  });
+
+  // ----- Keyboard shortcuts -----
+  editor.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      const key = e.key.toLowerCase();
+      if (key === "b") { e.preventDefault(); document.execCommand("bold"); sync(); }
+      else if (key === "i") { e.preventDefault(); document.execCommand("italic"); sync(); }
+      else if (key === "u") { e.preventDefault(); document.execCommand("underline"); sync(); }
+    }
+  });
+
+  // ----- Image paste -----
+  editor.addEventListener("paste", async (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.kind === "file" && (it.type || "").startsWith("image/")) {
+        e.preventDefault();
+        const f = it.getAsFile();
+        if (!f) return;
+        try {
+          const dataUrl = await new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result);
+            r.onerror = reject;
+            r.readAsDataURL(f);
+          });
+          const safeName = (f.name || "pasted").replace(/[<>"']/g, "");
+          const html = `<img src="${dataUrl}" alt="${escapeHtml(safeName)}" />`;
+          document.execCommand("insertHTML", false, html);
+          sync();
+        } catch (err) {
+          toast(`Failed to paste image: ${err.message || err}`, "error");
+        }
+        return;
+      }
+    }
+    // Non-image clipboard — let the browser handle it. The backend
+    // sanitizer strips anything dangerous; we don't try to filter the
+    // rich HTML on the way in.
+  });
+
+  // Expose setter so openBugForm() can push the row's stored
+  // description into the editor on edit-mode open (form.reset() alone
+  // doesn't fire any event on the hidden textarea).
+  textarea._bhRtSet = (html) => {
+    editor.innerHTML = html || "";
+    sync();
+  };
+}
+
+// Open a hidden file picker and insert the chosen image as a base64
+// data: URL at the current selection. Lets users add images even
+// without clipboard pasting.
+function _bhRtPickImage(editor, sync) {
+  const f = document.createElement("input");
+  f.type = "file";
+  f.accept = "image/*";
+  f.style.display = "none";
+  f.addEventListener("change", async () => {
+    const file = f.files && f.files[0];
+    if (!file) return;
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+      editor.focus();
+      document.execCommand("insertHTML", false,
+        `<img src="${dataUrl}" alt="${escapeHtml(file.name || 'image')}" />`);
+      sync();
+    } catch (err) {
+      toast(`Failed to insert image: ${err.message || err}`, "error");
+    } finally {
+      f.remove();
+    }
+  });
+  document.body.appendChild(f);
+  f.click();
+}
+
+function enhanceAllRichEditors(root = document) {
+  // Bug description textarea + comment composer + the inline comment
+  // edit textarea (admin only — when that gets rendered we'll re-call
+  // this to catch it).
+  root.querySelectorAll('textarea[data-bh-rt]').forEach(enhanceRichEditor);
+}
+
+// ---------------------------------------------------------------------------
+// v2.6 — Custom select dropdowns
+//
+// Native <select> can't be fully restyled across browsers (Chrome /
+// Firefox / Safari each ship their own listbox UI), so we wrap each
+// <select data-bh-select> with a button + popover that matches the rest
+// of the v2.6 chrome (calendar, multi-select). The native <select>
+// stays in the DOM so form submission picks up its value via .name.
+// ---------------------------------------------------------------------------
+function enhanceCustomSelect(sel) {
+  if (!sel || sel.dataset.bhSelEnhanced === "1") return;
+  sel.dataset.bhSelEnhanced = "1";
+  sel.classList.add("bh-sel-native");
+
+  const wrap = document.createElement("div");
+  wrap.className = "bh-sel-wrap";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "bh-sel-btn";
+  btn.setAttribute("aria-haspopup", "listbox");
+  btn.setAttribute("aria-expanded", "false");
+  const pop = document.createElement("div");
+  pop.className = "bh-sel-pop";
+  pop.setAttribute("role", "listbox");
+  pop.hidden = true;
+
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(sel);
+  wrap.appendChild(btn);
+  // v2.6 fix: pop sits on document.body so position:fixed escapes the
+  // modal's stacking context — same reason as the calendar popover.
+  document.body.appendChild(pop);
+
+  const updateLabel = () => {
+    const opt = sel.options[sel.selectedIndex];
+    const label = opt ? opt.text : "";
+    const isPlaceholder = !sel.value && opt && /^—.*—$/.test(opt.text || "");
+    btn.innerHTML = `
+      <span class="bh-sel-label${isPlaceholder ? " bh-sel-placeholder" : ""}">${escapeHtml(label || "—")}</span>
+      <span class="bh-sel-caret" aria-hidden="true">▾</span>`;
+  };
+  const renderPanel = () => {
+    pop.innerHTML = [...sel.options].map((o, i) => {
+      const isSel = i === sel.selectedIndex;
+      return `<button type="button" class="bh-sel-row${isSel ? " is-selected" : ""}"
+        role="option" aria-selected="${isSel}" data-bh-sel-i="${i}">${escapeHtml(o.text)}</button>`;
+    }).join("");
+  };
+  updateLabel();
+
+  // Smart placement against the viewport (same approach as the
+  // calendar) so the dropdown panel isn't clipped by the modal-foot
+  // or any other overflow:hidden ancestor.
+  const placePop = () => {
+    const r = btn.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const ph = pop.offsetHeight || 240;
+    const pw = Math.max(pop.offsetWidth || 200, r.width);
+    pop.style.minWidth = `${r.width}px`;
+    const spaceBelow = vh - r.bottom;
+    const spaceAbove = r.top;
+    const openAbove = spaceBelow < ph + 12 && spaceAbove > spaceBelow;
+    pop.style.position = "fixed";
+    pop.style.top = openAbove
+      ? `${Math.max(8, r.top - ph - 6)}px`
+      : `${Math.min(vh - ph - 8, r.bottom + 6)}px`;
+    let left = r.left;
+    if (left + pw > vw - 8) left = Math.max(8, r.right - pw);
+    pop.style.left = `${left}px`;
+  };
+
+  const open = () => {
+    if (sel.disabled) return;
+    renderPanel();
+    pop.hidden = false;
+    placePop();
+    requestAnimationFrame(placePop);
+    btn.setAttribute("aria-expanded", "true");
+    setTimeout(() => document.addEventListener("click", outside, { once: true }), 0);
+    window.addEventListener("resize", placePop);
+    window.addEventListener("scroll", placePop, true);
+  };
+  const close = () => {
+    pop.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    window.removeEventListener("resize", placePop);
+    window.removeEventListener("scroll", placePop, true);
+  };
+  const outside = (e) => {
+    if (wrap.contains(e.target) || pop.contains(e.target)) {
+      setTimeout(() => document.addEventListener("click", outside, { once: true }), 0);
+      return;
+    }
+    close();
+  };
+
+  btn.addEventListener("click", () => {
+    if (pop.hidden) open(); else close();
+  });
+  pop.addEventListener("click", (e) => {
+    const row = e.target.closest(".bh-sel-row");
+    if (!row) return;
+    const i = parseInt(row.dataset.bhSelI, 10);
+    sel.selectedIndex = i;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    updateLabel();
+    close();
+  });
+  // Keep the visible button in sync when external code sets the value
+  // (e.g. fillFormSelect on form open).
+  sel.addEventListener("change", updateLabel);
+  // Reflect disabled state on the trigger button so the same visual
+  // grey-out as the native select applies.
+  new MutationObserver(() => {
+    btn.disabled = sel.disabled;
+    btn.classList.toggle("is-disabled", sel.disabled);
+  }).observe(sel, { attributes: true, attributeFilter: ["disabled"] });
+  // The label has to refresh whenever the options list is rebuilt
+  // (e.g. fillFormSelect on modal open), since the SPA sets .value
+  // synchronously after .innerHTML and doesn't dispatch a change event.
+  // childList watches direct children of the <select>, which is exactly
+  // where <option> elements get added/removed.
+  new MutationObserver(updateLabel).observe(sel, { childList: true });
+  btn.disabled = sel.disabled;
+  btn.classList.toggle("is-disabled", sel.disabled);
+}
+
+function enhanceAllCustomSelects(root = document) {
+  root.querySelectorAll('select[data-bh-select]').forEach(enhanceCustomSelect);
+}
+
 async function boot() {
   const theme = localStorage.getItem("theme") || "dark";
   document.documentElement.setAttribute("data-theme", theme);
@@ -334,6 +926,15 @@ async function boot() {
   initMultiSelects();
   await refreshAll();
   bindGlobalListeners();
+  // v2.6: replace native date inputs with the custom calendar popover.
+  enhanceAllDateInputs();
+  // v2.6: replace plain textareas marked data-bh-rt with the rich-text
+  // editor (description, comment composer).
+  enhanceAllRichEditors();
+  // v2.6: replace selects marked data-bh-select with the styled
+  // custom button + popover. Native selects can't be cross-browser
+  // styled past the trigger; this gives us a consistent look.
+  enhanceAllCustomSelects();
   scheduleVersionCheck();
   // Polls /api/auth/me every 15 s so admin session-revocation kicks the
   // user out within seconds, not only when they next click something.
@@ -764,9 +1365,15 @@ function renderProjectList() {
     li.className = "side-item" + (activeIds.has(String(p.id)) ? " active" : "");
     li.dataset.projectId = String(p.id);
     li.title = p.name;
+    // v2.6: swatch click → toggle filter; name click → open edit
+    // (admin/manager only — users fall through to filter). Both have
+    // explicit data-act so the delegated handler can distinguish.
+    const nameTitle = canManage
+      ? `${escapeHtml(p.name)} — click to edit`
+      : escapeHtml(p.name);
     li.innerHTML = `
-      <span class="swatch" style="background:${escapeHtml(p.color)}"></span>
-      <span class="label-text" data-act="filter">${escapeHtml(p.name)}</span>
+      <span class="swatch" data-act="filter" style="background:${escapeHtml(p.color)}" title="Toggle filter"></span>
+      <span class="label-text" data-act="open-project" title="${nameTitle}">${escapeHtml(p.name)}</span>
       <span class="row-actions">
         ${canManage ? `<button class="icon-btn" data-act="edit-project" data-id="${p.id}" title="Edit">✎</button>` : ""}
         ${canDelete ? `<button class="icon-btn danger" data-act="delete-project" data-id="${p.id}" title="Delete">🗑</button>` : ""}
@@ -799,9 +1406,14 @@ function renderUserList() {
     li.className = "side-item";
     li.dataset.userId = String(u.id);
     li.title = `${u.email}${u.role ? " — " + u.role : ""}`;
+    // v2.6: avatar click → filter by assignee; name click → open edit
+    // (admin/manager only — users fall back to filter).
+    const userNameTitle = canEdit
+      ? `${escapeHtml(u.name)} — click to edit`
+      : escapeHtml(u.name);
     li.innerHTML = `
-      <span class="avatar">${initials(u.name)}</span>
-      <span class="label-text" data-act="filter-user">
+      <span class="avatar" data-act="filter-user" title="Toggle filter">${initials(u.name)}</span>
+      <span class="label-text" data-act="open-user" title="${userNameTitle}">
         ${escapeHtml(u.name)}
         ${u.role ? `<span class="meta"> · ${escapeHtml(u.role)}</span>` : ""}
       </span>
@@ -1312,7 +1924,15 @@ function openBugForm(bug = null) {
   if (isEdit) {
     form.elements.title.value = bug.title || "";
     form.elements.description.value = bug.description || "";
+    // v2.6: push the description HTML into the rich editor too —
+    // form.reset() above cleared the textarea but the contenteditable
+    // surface lives next to it and doesn't react to a textarea reset.
+    if (form.elements.description._bhRtSet) {
+      form.elements.description._bhRtSet(bug.description || "");
+    }
     form.elements.due_date.value = bug.due_date || "";
+    // Re-sync the custom date picker's button label too — same reason.
+    form.elements.due_date.dispatchEvent(new Event("change", { bubbles: true }));
     // Read-only timestamps in the side rail.
     $("#bugSideMeta").hidden = false;
     $("#bugMetaCreated").textContent = formatDate(bug.created_at);
@@ -1344,6 +1964,10 @@ function openBugForm(bug = null) {
       createAttach.hidden = false;
       clearStagedFiles("createBug", "#createFilePreview", "#createFileLabel");
       const cf = $("#createBugFiles"); if (cf) cf.value = "";
+    }
+    // v2.6: clear the rich-description editor so create mode starts blank.
+    if (form.elements.description._bhRtSet) {
+      form.elements.description._bhRtSet("");
     }
   }
 
@@ -1453,8 +2077,12 @@ function renderBugInlineSections(bug) {
       const atts = (c.attachments || []).map(a => renderAttachmentCard(a, isAdmin)).join("");
       // Comment body may be empty if the user chose to share files only
       // — render the body block only when there's text to show.
+      // v2.6: comment body is sanitized HTML from the backend, render
+      // as innerHTML so bold/italic/lists/images survive. We never set
+      // raw user-supplied HTML — sanitize_html() in app/schemas.py
+      // strips every dangerous tag/attr before it ever hits the DB.
       const bodyHtml = (c.body || "").trim()
-        ? `<div class="comment-body" data-comment-body="${c.id}">${escapeHtml(c.body)}</div>`
+        ? `<div class="comment-body bh-rich-content" data-comment-body="${c.id}">${c.body}</div>`
         : "";
       // Admin-only ✎ / 🗑 actions on the right of the head row. Hidden
       // entirely for everyone else so the head stays clean.
@@ -1489,7 +2117,10 @@ function renderBugInlineSections(bug) {
   // leftover input from a previous bug.
   const bodyEl = $("#commentBody");
   const filesEl = $("#commentFiles");
-  if (bodyEl) bodyEl.value = "";
+  if (bodyEl) {
+    bodyEl.value = "";
+    if (bodyEl._bhRtSet) bodyEl._bhRtSet("");
+  }
   if (filesEl) filesEl.value = "";
   $("#filePreview").innerHTML = "";
   $("#fileLabel").textContent = "Attach files";
@@ -2252,15 +2883,16 @@ async function handleEditComment(commentId) {
   const commentEl = document.querySelector(`.comment[data-comment-id="${commentId}"]`);
   if (!commentEl) return;
   const bodyEl = commentEl.querySelector(`[data-comment-body="${commentId}"]`);
-  const current = bodyEl ? bodyEl.textContent : "";
-  // Lightweight inline editor — replace the body div with a textarea +
-  // Save/Cancel row. Keeps the comment thread layout intact so the
-  // admin doesn't lose context while editing.
   if (!bodyEl) return;
+  // v2.6: inline editor uses the same rich-text widget as the composer
+  // so admin gets bold/italic/etc. instead of raw HTML markup in a
+  // plain textarea. innerHTML of the body div is the source — it's
+  // sanitized HTML from the backend already.
+  const currentHtml = bodyEl.innerHTML || "";
   const editor = document.createElement("div");
   editor.className = "comment-edit-row";
   editor.innerHTML = `
-    <textarea class="comment-edit-input" maxlength="10000" rows="3"></textarea>
+    <textarea class="comment-edit-input" data-bh-rt rows="3" placeholder="Edit comment…"></textarea>
     <div class="comment-edit-actions">
       <button type="button" class="btn ghost" data-act="cancel-edit-comment" data-id="${commentId}">Cancel</button>
       <button type="button" class="btn primary" data-act="save-edit-comment" data-id="${commentId}">Save</button>
@@ -2268,8 +2900,12 @@ async function handleEditComment(commentId) {
   bodyEl.replaceWith(editor);
   const ta = editor.querySelector(".comment-edit-input");
   if (ta) {
-    ta.value = current;
-    ta.focus();
+    ta.value = currentHtml;
+    enhanceRichEditor(ta, { compact: true });
+    // Push the existing HTML into the contenteditable surface.
+    if (ta._bhRtSet) ta._bhRtSet(currentHtml);
+    // Focus the editor's visible surface.
+    editor.querySelector('.bh-rt-editor')?.focus();
   }
 }
 
@@ -2350,7 +2986,13 @@ async function postComment() {
       else if (files.length && !failed) toast(`${files.length} file${files.length > 1 ? "s" : ""} attached`, "success");
 
       // Clear the inputs so the next post starts fresh.
-      if (bodyEl) bodyEl.value = "";
+      if (bodyEl) {
+        bodyEl.value = "";
+        // v2.6: also clear the rich-editor surface (the textarea is
+        // hidden; the contenteditable next to it doesn't auto-sync
+        // when we just reset textarea.value).
+        if (bodyEl._bhRtSet) bodyEl._bhRtSet("");
+      }
       clearStagedFiles("comment", "#filePreview", "#fileLabel");
 
       const bug = await api(`/bugs/${STATE.currentBugId}`);
@@ -2744,7 +3386,14 @@ async function handleRevokeSession(sessionId) {
 // ---------------------------------------------------------------------------
 // Audit view
 // ---------------------------------------------------------------------------
-async function refreshAudit() {
+// v2.6: audit fetcher now defaults to the backend's new 5000-row limit
+// and supports a "Load more" affordance for very long histories. Each
+// click adds AUDIT_PAGE_SIZE more rows to the view; the host is reset
+// only when the filter changes (cleanFetch = true).
+const AUDIT_PAGE_SIZE = 5000;
+let _auditLoaded = 0;
+
+async function refreshAudit(cleanFetch = true) {
   const params = new URLSearchParams();
   const ent = $("#auditEntityFilter")?.value;
   const actor = $("#auditActorFilter")?.value;
@@ -2752,12 +3401,18 @@ async function refreshAudit() {
   if (ent) params.set("entity_type", ent);
   if (actor) params.set("actor_user_id", actor);
   if (q) params.set("q", q);
-  params.set("limit", "300");
+  if (cleanFetch) _auditLoaded = 0;
+  params.set("limit", String(AUDIT_PAGE_SIZE));
+  params.set("offset", String(_auditLoaded));
   try {
     const rows = await api("/audit?" + params.toString());
     const host = $("#auditList");
-    if (!rows.length) { host.innerHTML = '<p class="no-content">No audit events match</p>'; return; }
-    host.innerHTML = rows.map(r => `
+    if (cleanFetch) host.innerHTML = "";
+    if (!rows.length && cleanFetch) {
+      host.innerHTML = '<p class="no-content">No audit events match</p>';
+      return;
+    }
+    const html = rows.map(r => `
       <div class="audit-row">
         <span class="audit-icon">${activityIcon(r.action)}</span>
         <div class="audit-text">
@@ -2770,6 +3425,24 @@ async function refreshAudit() {
         </div>
         <span class="audit-time">${formatDate(r.created_at)}</span>
       </div>`).join("");
+    // On append, drop any existing Load-more button first so we can
+    // re-add it (or omit it) based on whether more rows are likely.
+    host.querySelector(".audit-load-more")?.remove();
+    host.insertAdjacentHTML("beforeend", html);
+    _auditLoaded += rows.length;
+    // If the server returned exactly the page size, there might be more
+    // — show the Load-more button. Otherwise we've drained the trail.
+    if (rows.length === AUDIT_PAGE_SIZE) {
+      host.insertAdjacentHTML("beforeend",
+        `<div class="audit-load-more">
+          <button type="button" class="btn ghost" id="auditLoadMoreBtn">Load older entries</button>
+          <span class="muted small">Showing ${_auditLoaded} entries</span>
+        </div>`);
+      $("#auditLoadMoreBtn")?.addEventListener("click", () => refreshAudit(false));
+    } else if (_auditLoaded > 0) {
+      host.insertAdjacentHTML("beforeend",
+        `<div class="audit-load-more muted small">— end of history (${_auditLoaded} entries) —</div>`);
+    }
   } catch (err) {
     toastError(err);
   }
@@ -3081,7 +3754,12 @@ function bindGlobalListeners() {
     if (tr) openBugDetail(parseInt(tr.dataset.bugId, 10));
   });
 
-  // Sidebar projects
+  // Sidebar projects.
+  // v2.6: clicking the project NAME opens the edit modal (when the
+  // user has manage perms). Clicking the colored SWATCH dot toggles
+  // the filter — a small but useful split so the cursor:pointer the
+  // user sees actually does something on click. Users without manage
+  // perms fall back to the filter behaviour on name click too.
   $("#projectList").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-act]");
     if (!btn) return;
@@ -3089,9 +3767,16 @@ function bindGlobalListeners() {
     const id = parseInt(btn.dataset.id, 10);
     if (btn.dataset.act === "edit-project") return handleEditProject(id);
     if (btn.dataset.act === "delete-project") return handleDeleteProject(id);
-    if (btn.dataset.act === "filter") {
+    if (btn.dataset.act === "filter" || btn.dataset.act === "open-project") {
       const li = btn.closest("[data-project-id]");
       const pid = String(li.dataset.projectId);
+      // Name click: prefer opening the edit modal if the user can.
+      // Swatch click always filters.
+      const role = STATE.currentUser?.role || "";
+      const canManage = role === "admin" || role === "manager";
+      if (btn.dataset.act === "open-project" && canManage) {
+        return handleEditProject(parseInt(pid, 10));
+      }
       // Toggle the project in the multi-select array.
       const arr = STATE.filters.project_id;
       const idx = arr.indexOf(pid);
@@ -3103,7 +3788,8 @@ function bindGlobalListeners() {
     }
   });
 
-  // Sidebar users
+  // Sidebar users — same split: name click opens edit (when allowed),
+  // avatar click toggles the assignee filter.
   $("#userList").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-act]");
     if (!btn) return;
@@ -3111,9 +3797,14 @@ function bindGlobalListeners() {
     const id = parseInt(btn.dataset.id, 10);
     if (btn.dataset.act === "edit-user") return handleEditUser(id);
     if (btn.dataset.act === "delete-user") return handleDeleteUser(id);
-    if (btn.dataset.act === "filter-user") {
+    if (btn.dataset.act === "filter-user" || btn.dataset.act === "open-user") {
       const li = btn.closest("[data-user-id]");
       const uid = String(li.dataset.userId);
+      const role = STATE.currentUser?.role || "";
+      const canManage = role === "admin" || role === "manager";
+      if (btn.dataset.act === "open-user" && canManage) {
+        return handleEditUser(parseInt(uid, 10));
+      }
       const arr = STATE.filters.assignee_id;
       const idx = arr.indexOf(uid);
       if (idx >= 0) arr.splice(idx, 1); else arr.push(uid);

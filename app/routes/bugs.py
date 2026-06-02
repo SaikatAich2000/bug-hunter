@@ -425,9 +425,11 @@ def get_bug(
         raise HTTPException(status_code=404, detail="Bug not found")
 
     # Pull all attachments (bug-level + comment-level), grouped per-comment.
+    # v2.6: newest attachment first so the most recent evidence is at
+    # the top of each bucket on the modal.
     all_atts = list(db.scalars(
         select(Attachment).where(Attachment.bug_id == bug_id)
-        .order_by(Attachment.created_at.asc())
+        .order_by(Attachment.created_at.desc(), Attachment.id.desc())
     ).all())
     by_comment: dict[int, list[Attachment]] = {}
     bug_level: list[Attachment] = []
@@ -765,9 +767,11 @@ def list_comments(
 ) -> list[dict]:
     if db.get(Bug, bug_id) is None:
         raise HTTPException(status_code=404, detail="Bug not found")
+    # v2.6: newest comments first (matches Bug.comments relationship
+    # ordering used by the detail endpoint).
     comments = list(db.scalars(
         select(Comment).where(Comment.bug_id == bug_id)
-        .order_by(Comment.created_at.asc(), Comment.id.asc())
+        .order_by(Comment.created_at.desc(), Comment.id.desc())
     ).all())
     atts = list(db.scalars(
         select(Attachment).where(Attachment.bug_id == bug_id, Attachment.comment_id.isnot(None))

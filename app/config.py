@@ -24,7 +24,7 @@ class Settings:
     ]
 
     APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter")
-    APP_VERSION: str = os.getenv("APP_VERSION", "2.5")
+    APP_VERSION: str = os.getenv("APP_VERSION", "2.6")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8765")

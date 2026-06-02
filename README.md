@@ -4,7 +4,55 @@ A self-hosted, internal-use issue tracker. Built with FastAPI + PostgreSQL + a
 zero-framework JavaScript SPA. One Docker command to run, no external auth, no
 external file storage — attachments live in the database itself.
 
-Current version: **v2.5**.
+Current version: **v2.6**.
+
+## What's new in v2.6
+
+- **Rich-text editor for descriptions and comments.** The plain
+  textareas are gone — the bug/requirement/task description and every
+  comment are now edited in a contenteditable surface with a small
+  toolbar: bold, italic, underline, strikethrough, bullet/numbered
+  lists, blockquote, code block, inline image, clear-formatting. The
+  keyboard shortcuts (Ctrl+B / Ctrl+I / Ctrl+U) work too. The backend
+  sanitizes the submitted HTML against a tight allowlist before
+  storage (no `<script>`, no `onerror=`, no arbitrary attributes), so
+  formatting survives the round-trip without opening up stored-XSS.
+- **Paste images directly into descriptions and comments.** Take a
+  screenshot, hit Ctrl+V (or Cmd+V) in the description / comment
+  editor, and the image inlines as a base64 `data:` URL. There's also
+  a 🖼 button on the toolbar that opens a file picker for the same
+  thing. Inline images survive the sanitizer (they have to — that's
+  what makes the paste-in workflow useful) but every other attribute
+  gets stripped.
+- **Custom calendar / date picker.** Native `<input type="date">` has
+  been replaced everywhere with an in-house popover (month nav,
+  Today shortcut, today/selected highlights). Looks the same in
+  Chrome, Firefox, Safari, Edge — no more vendor-shipped square boxes
+  drifting between browsers.
+- **Custom dropdowns.** Every `<select>` in the bug modal switches to
+  a styled button + popover that match the calendar and the
+  multi-select filter dropdowns. Hover, focus, and disabled states
+  all match the rest of the v2.6 chrome.
+- **Sidebar names are clickable to edit.** Hovering a Project or User
+  name showed a pointer cursor but clicking did nothing. Now: click
+  the colored swatch (or avatar circle) to toggle the filter; click
+  the name to open the edit modal (when you have permission to). The
+  ✎ icon still works as before.
+- **Audit log fully loads.** The previous 300-row cap meant
+  long-running deployments couldn't see history older than a few
+  weeks. The default page is now 5 000 rows with a *Load older
+  entries* button at the bottom for digging further (server-side cap:
+  10 000 per request).
+- **Fully responsive.** Every new control (calendar popover, rich
+  editor toolbar, custom dropdown panel, sidebar name pills) collapses
+  cleanly down to mobile-portrait widths.
+
+Schema migrations remain **strictly additive** — existing production
+databases are untouched on deploy. The v2.6 changes are purely
+application-layer: the `description` and comment `body` columns stay
+the same `Text` type and the field caps were raised in Pydantic only
+(no DDL); the audit pagination is a query-side change; the
+rich-editor / calendar / dropdown widgets live entirely in the SPA.
 
 ## What's new in v2.5
 

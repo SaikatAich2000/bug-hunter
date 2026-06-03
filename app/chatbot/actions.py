@@ -31,16 +31,15 @@ Confirmation flow:
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import (
-    can_manage_projects, can_manage_users, can_edit_bug,
+    can_manage_projects, can_edit_bug,
 )
 from app.models import Activity, Bug, Comment, Project, User
 
@@ -56,9 +55,11 @@ class ActionPlan:
     on confirm. Storing IDs (not objects) means we can serialise it into
     memory.store between turns without holding ORM instances across a
     session boundary."""
-    kind: str  # "assign", "unassign", "set_status", "set_priority",
-               # "set_environment", "set_due_date", "add_comment",
-               # "create_bug", "create_project"
+    kind: Literal[
+        "assign", "unassign", "set_status", "set_priority",
+        "set_environment", "set_due_date", "add_comment",
+        "create_bug", "create_project",
+    ]
     actor_user_id: int
     bug_id: Optional[int] = None
     target_user_ids: list[int] = field(default_factory=list)
@@ -426,11 +427,12 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
         if plan.kind == "create_project":
             return _apply_create_project(db, plan, actor)
         return _error_response(f"Unknown action: {plan.kind}")
-    except Exception as exc:   # noqa: BLE001
-        # Roll back so a partial change never sticks.
+    except (SQLAlchemyError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        # Roll back so a partial change never sticks. Rollback itself may
+        # raise if the session is already broken — best-effort either way.
         try:
             db.rollback()
-        except Exception:   # noqa: BLE001
+        except SQLAlchemyError:
             pass
         return _error_response(f"Action failed: {exc}")
 

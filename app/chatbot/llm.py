@@ -46,7 +46,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.models import User
-from app.chatbot.executor import Block, Response
+from app.chatbot.executor import Response
 
 
 logger = logging.getLogger("bug_hunter.sleuth.llm")
@@ -402,7 +402,8 @@ def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     candidate = s[start:end + 1]
     try:
         return json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
+        # json.JSONDecodeError is a ValueError subclass.
         return None
 
 
@@ -453,6 +454,54 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Public entry: try_understand
 # ---------------------------------------------------------------------------
+_LLM_STATUSES = frozenset({
+    "New", "In Progress", "Resolved", "Closed",
+    "Reopened", "Not a Bug", "Resolve Later",
+})
+_LLM_PRIORITIES = frozenset({"Low", "Medium", "High", "Critical"})
+_LLM_ENVIRONMENTS = frozenset({"DEV", "UAT", "PROD"})
+
+
+def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
+    """Translate the LLM's JSON guess into a ParsedQuery the rule-based
+    handlers can consume."""
+    from app.chatbot import nlu as _nlu
+    pq = _nlu.ParsedQuery(raw_message=message)
+    filters = parsed.get("filters") or {}
+    pq.statuses = [s for s in (filters.get("status") or []) if s in _LLM_STATUSES]
+    pq.priorities = [p for p in (filters.get("priority") or []) if p in _LLM_PRIORITIES]
+    pq.environments = [e for e in (filters.get("environment") or []) if e in _LLM_ENVIRONMENTS]
+    bid = parsed.get("bug_id")
+    if isinstance(bid, int) and bid > 0:
+        pq.bug_id = bid
+    return pq
+
+
+def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Optional[Response]:
+    """Route the LLM-predicted intent to its rule-based handler.
+    Read-only — never returns a write path."""
+    from app.chatbot.executor import (
+        _handle_help, _handle_stats, _handle_recent_activity,
+        _handle_list_users, _handle_list_projects, _handle_bug_detail,
+        _handle_list_bugs,
+    )
+    if intent == "help":
+        return _handle_help()
+    if intent == "stats":
+        return _handle_stats(db)
+    if intent == "recent_activity":
+        return _handle_recent_activity(db, pq, actor)
+    if intent == "list_users":
+        return _handle_list_users(db, pq)
+    if intent == "list_projects":
+        return _handle_list_projects(db)
+    if intent == "bug_detail" and pq.bug_id is not None:
+        return _handle_bug_detail(db, pq)
+    if intent == "list_bugs":
+        return _handle_list_bugs(db, pq, ctx)
+    return None
+
+
 def try_understand(message: str, db: Session, actor: User) -> Optional[Response]:
     """Run the LLM, map its intent guess onto the existing read handlers,
     and return a Response. Returns None if the LLM is unavailable, fails,
@@ -471,46 +520,10 @@ def try_understand(message: str, db: Session, actor: User) -> Optional[Response]
     if intent in {"", "unknown"}:
         return None
 
-    # Late imports so this module's top-level stays cheap.
-    from app.chatbot import nlu as _nlu
-    from app.chatbot.executor import (
-        build_context, _handle_help, _handle_stats, _handle_recent_activity,
-        _handle_list_users, _handle_list_projects, _handle_bug_detail,
-        _handle_list_bugs,
-    )
-
-    # Build a synthetic ParsedQuery so existing handlers work unchanged.
+    from app.chatbot.executor import build_context
     ctx = build_context(db)
-    pq = _nlu.ParsedQuery(raw_message=message)
-    filters = parsed.get("filters") or {}
-    pq.statuses = [s for s in (filters.get("status") or [])
-                   if s in {"New", "In Progress", "Resolved", "Closed",
-                            "Reopened", "Not a Bug", "Resolve Later"}]
-    pq.priorities = [p for p in (filters.get("priority") or [])
-                     if p in {"Low", "Medium", "High", "Critical"}]
-    pq.environments = [e for e in (filters.get("environment") or [])
-                       if e in {"DEV", "UAT", "PROD"}]
-    bid = parsed.get("bug_id")
-    if isinstance(bid, int) and bid > 0:
-        pq.bug_id = bid
-
-    if intent == "help":
-        return _handle_help()
-    if intent == "stats":
-        return _handle_stats(db)
-    if intent == "recent_activity":
-        return _handle_recent_activity(db, pq, actor)
-    if intent == "list_users":
-        return _handle_list_users(db, pq)
-    if intent == "list_projects":
-        return _handle_list_projects(db)
-    if intent == "bug_detail" and pq.bug_id is not None:
-        return _handle_bug_detail(db, pq)
-    if intent == "list_bugs":
-        return _handle_list_bugs(db, pq, ctx)
-
-    # If we got an intent we don't recognise, fall back.
-    return None
+    pq = _build_pq_from_llm(message, parsed)
+    return _dispatch_llm_intent(intent, db, pq, ctx, actor)
 
 
 __all__ = [

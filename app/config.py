@@ -19,12 +19,17 @@ class Settings:
         f"sqlite:///{BASE_DIR / 'bug_hunter.db'}",
     )
 
+    # Default: empty (= same-origin only). Cross-origin clients must be
+    # explicitly allow-listed via CORS_ORIGINS to satisfy Sonar's S5122
+    # ("Permissive CORS policy") and to avoid the wildcard+credentials
+    # combo that browsers silently reject. Same-origin SPA usage is
+    # unaffected because the CORS middleware short-circuits for those.
     CORS_ORIGINS: list[str] = [
-        o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()
+        o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()
     ]
 
     APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter")
-    APP_VERSION: str = os.getenv("APP_VERSION", "2.6")
+    APP_VERSION: str = os.getenv("APP_VERSION", "2.7")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8765")

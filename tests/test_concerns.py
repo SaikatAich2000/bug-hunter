@@ -282,16 +282,23 @@ class TestCSRFPosture:
         # ⇒ no CSRF token mechanism. Defence rests entirely on SameSite=Lax.
 
     def test_options_preflight_handled(self, admin_client):
-        """CORS middleware should answer preflight OPTIONS without auth."""
+        """Preflight OPTIONS must return a deterministic response.
+
+        v2.6 hardening: CORS middleware is only registered when
+        CORS_ORIGINS is explicitly configured. With no configured
+        origins (the default), preflight hits the route directly — we
+        accept any non-5xx response, just no surprises like 500s.
+        """
         r = admin_client.options("/api/bugs", headers={
             "Origin": "https://example.com",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "Content-Type",
         })
-        # Per Starlette CORSMiddleware behavior: returns 200 with CORS headers
-        # if origin is allowed, else 400.
-        # With allow_origins=["*"], it should respond.
-        assert r.status_code in (200, 400), f"unexpected: {r.status_code}"
+        # 200/204 = CORS middleware answered; 400 = CORS rejected the
+        # origin; 401/405 = no CORS middleware, route handles it.
+        assert r.status_code in (200, 204, 400, 401, 405), (
+            f"unexpected: {r.status_code}"
+        )
 
 
 # ===========================================================================

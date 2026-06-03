@@ -435,7 +435,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-glass);
@@ -457,7 +457,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   flex: 1;
   display: flex;
   justify-content: center;
-  max-width: 480px;
+  max-width: 540px;
   margin-left: auto;
 }
 .search-wrap input {
@@ -747,6 +747,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 }
 .bug-table {
   width: 100%;
+  min-width: 720px;
   border-collapse: collapse;
   font-size: 13px;
   /* table-layout: auto is the key here. With "fixed" + a mix of pixel
@@ -1321,7 +1322,7 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   font-weight: 700;
 }
 .bug-section + .bug-section { margin-top: 20px; }
-.bug-comments-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.bug-comments-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 0; }
 .bug-activity-list { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
 .bug-activity-section details summary {
   cursor: pointer;
@@ -1361,6 +1362,24 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   margin-bottom: 12px;
   flex: 1;
   min-width: 0;
+}
+/* fieldset.field — neutralize the browser's default border/padding/margin
+   so a <fieldset class="field"> looks identical to <label class="field">.
+   Used for chip-picker groups where <label> can't wrap a non-control. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  margin: 0 0 12px 0;
+  min-inline-size: 0;
+}
+fieldset.field > legend {
+  padding: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 5px;
 }
 .field span {
   font-size: 12px;
@@ -1562,9 +1581,6 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   padding-top: 0;
   border-top: none;
 }
-/* When the comments list IS rendered, keep the small gap tight. */
-.bug-comments-list { margin-bottom: 0; }
-
 /* Comment form */
 .comment-form {
   margin-top: 18px;
@@ -1709,9 +1725,9 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .attach-staged:hover .attach-staged-remove,
 .attach-staged:focus-within .attach-staged-remove { opacity: 1; }
 .attach-staged-remove:hover {
-  background: #ef4444;
-  color: white;
-  border-color: #ef4444;
+  background: #b91c1c;
+  color: #fff;
+  border-color: #b91c1c;
 }
 
 /* Attachments display */
@@ -2534,9 +2550,15 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
-  margin: 12px 0 16px;
+  gap: 14px;
+  margin: 18px 0 20px;
+  padding: 12px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
 }
+.events-controls .btn { padding: 9px 14px; }
 .events-summary {
   color: var(--text-muted);
   font-size: 13px;
@@ -2622,11 +2644,16 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
 }
 .events-detail-head h2 {
   flex: 1;
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.01em;
   min-width: 0;
@@ -3477,39 +3504,16 @@ body.is-loading .events-detail-mode {
  * Title column so the available horizontal space is always used.
  * ============================================================ */
 
-/* Topbar: even the gap so the page title / search / "+ New" don't
-   collide on narrower screens, and let the search wrap have a bit
-   more breathing room before tipping into the next breakpoint. */
-.topbar { gap: 16px; }
-.search-wrap { max-width: 540px; }
+/* v2.5 layout polish properties were merged into the original rule
+   blocks earlier in this file (Sonar css:S4666 - no duplicate
+   selectors). What was once a "polish overrides" section is now
+   inlined at the source so the cascade order can't drift away from
+   the intent if the file is re-organized.
 
-/* Events list controls — sit further below the intro card, larger
-   gaps so the summary text doesn't snug against the Refresh button. */
-.events-controls {
-  margin: 18px 0 20px;
-  gap: 14px;
-  padding: 12px 16px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
-}
-.events-controls .btn { padding: 9px 14px; }
-.events-summary { font-size: 13px; }
+   The standalone rules that remain in this section are the ones
+   without a duplicate elsewhere: audit/sessions controls and the
+   comment composer width. */
 
-/* Events detail head — better vertical alignment for the back btn /
-   title / action row. */
-.events-detail-head {
-  padding: 12px 14px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
-}
-.events-detail-head h2 { font-size: 20px; }
-
-/* Sessions / audit controls — match the same boxed look so the page
-   has a consistent rhythm. */
 .audit-controls,
 .sessions-controls {
   padding: 14px 16px;
@@ -3520,12 +3524,4 @@ body.is-loading .events-detail-mode {
   margin: 14px 24px 18px;
 }
 
-/* Bug table — see the main .bug-table block above for the auto-layout
-   sizing strategy. Below are just the table-level min-width (so a
-   narrow viewport falls back to horizontal scroll via .table-scroll)
-   and the comment composer width. */
-.bug-table { min-width: 720px; }
-
-/* Comment composer should use the full width of the modal's main
-   column; the file-preview row already wraps. */
 #commentForm textarea { width: 100%; }

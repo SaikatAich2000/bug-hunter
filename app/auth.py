@@ -42,8 +42,9 @@ from typing import Optional
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response, status
-from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
+from itsdangerous import BadSignature, TimestampSigner
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -51,11 +52,9 @@ from app.database import get_db
 from app.models import (
     ROLE_ADMIN,
     ROLE_MANAGER,
-    ROLE_USER,
     PasswordResetToken,
     Session as SessionRow,
     User,
-    VALID_ROLES,
 )
 
 logger = logging.getLogger("bug_hunter.auth")
@@ -125,7 +124,7 @@ def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
         return None
     try:
         raw = _signer().unsign(token, max_age=get_settings().SESSION_TTL_SECONDS)
-    except (SignatureExpired, BadSignature):
+    except BadSignature:
         return None
     try:
         text = raw.decode("utf-8")
@@ -210,6 +209,52 @@ def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
 _LAST_SEEN_THROTTLE_SECONDS = 60
 
 
+def _delete_expired_session(db: Session, sess: SessionRow, jti: str) -> None:
+    """Best-effort: drop an expired session row on a request-path read."""
+    try:
+        db.delete(sess)
+        db.commit()
+    except SQLAlchemyError:
+        logger.exception("Failed to delete expired session jti=%s", jti)
+        db.rollback()
+
+
+def _maybe_bump_last_seen(db: Session, sess: SessionRow, now: datetime, jti: str) -> None:
+    """Throttled write of sess.last_seen_at - skipped if recent."""
+    last_seen = sess.last_seen_at
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    if (now - last_seen).total_seconds() < _LAST_SEEN_THROTTLE_SECONDS:
+        return
+    try:
+        sess.last_seen_at = now
+        db.commit()
+    except SQLAlchemyError:
+        logger.exception("Failed to bump last_seen_at for session jti=%s", jti)
+        db.rollback()
+
+
+def _validate_session_row(db: Session, jti: str, user: User) -> bool:
+    """Return True iff the session row for jti is valid for this user.
+
+    Also: deletes expired rows in-line and refreshes last_seen_at when
+    enough time has passed. Returns False to signal the caller to reject
+    the request.
+    """
+    sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
+    if sess is None or sess.user_id != user.id:
+        return False
+    now = datetime.now(timezone.utc)
+    expires = sess.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < now:
+        _delete_expired_session(db, sess, jti)
+        return False
+    _maybe_bump_last_seen(db, sess, now, jti)
+    return True
+
+
 def _user_from_request(request: Request, db: Session) -> Optional[User]:
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
@@ -219,50 +264,14 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         return None
-    # Token's session_version must match the user's current — bump on
+    # Token's session_version must match the user's current - bump on
     # password change / reset / forced logout.
     if (user.session_version or 0) != session_version:
         return None
-
     # Per-session revocation: if the cookie carries a jti, look it up.
-    # Missing or expired row → token rejected. Legacy tokens (no jti)
-    # pre-date the sessions table, so we accept them without a row.
-    if jti is not None:
-        sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
-        if sess is None or sess.user_id != user.id:
-            return None
-        now = datetime.now(timezone.utc)
-        expires = sess.expires_at
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        if expires < now:
-            # Cleanly remove expired rows so the admin list doesn't get
-            # cluttered. A single delete-on-touch is cheaper than a
-            # background sweeper.
-            try:
-                db.delete(sess)
-                db.commit()
-            except Exception:
-                # Best-effort cleanup — losing a race with another
-                # request's delete (or the row already being gone) is
-                # fine. Log so a recurring failure is debuggable.
-                logger.exception("Failed to delete expired session jti=%s", jti)
-                db.rollback()
-            return None
-        # Throttled last_seen update — only writes once per minute per
-        # session, which keeps the request hot path cheap on busy users.
-        last_seen = sess.last_seen_at
-        if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
-        if (now - last_seen).total_seconds() >= _LAST_SEEN_THROTTLE_SECONDS:
-            try:
-                sess.last_seen_at = now
-                db.commit()
-            except Exception:
-                # last_seen is informational only — don't fail the request
-                # if we can't update it. Log for visibility.
-                logger.exception("Failed to bump last_seen_at for session jti=%s", jti)
-                db.rollback()
+    # Legacy tokens (no jti) pre-date the sessions table - accept them.
+    if jti is not None and not _validate_session_row(db, jti, user):
+        return None
     return user
 
 
@@ -312,25 +321,19 @@ def can_edit_bug(
       - Bug:         every authenticated user can edit (legacy behaviour).
       - Requirement: only admin or manager. Users are read-only here.
       - Task:        only admin or manager. Users are read-only here.
-
-    Tasks and requirements are workflow items, not bug reports — letting
-    a random user re-write what their manager assigned them in a standup
-    leaks responsibility, so we lock that down.
     """
+    del bug_reporter_id, assignee_ids
     if item_type in ("Task", "Requirement"):
         return user.role in (ROLE_ADMIN, ROLE_MANAGER)
-    # item_type == "Bug" (the default for legacy / unknown rows)
     return True
 
 
 def can_delete_bug(user: User, item_type: str = "Bug") -> bool:
     """Deletion is admin-only across every work-item type. Managers can
-    edit, never delete — this matches the v2.3 spec ("managers does not
-    have permission to delete anything as well"). The item_type
-    parameter exists for symmetry with can_edit_bug — the rule is the
-    same regardless of type, but having the signature accept it lets
-    callers be self-documenting.
+    edit, never delete — this matches the v2.3 spec. The item_type
+    parameter exists for symmetry with can_edit_bug.
     """
+    del item_type
     return user.role == ROLE_ADMIN
 
 

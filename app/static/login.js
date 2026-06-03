@@ -11,7 +11,7 @@
 
   // Theme persists across pages.
   const stored = localStorage.getItem("theme") || "dark";
-  document.documentElement.setAttribute("data-theme", stored);
+  document.documentElement.dataset.theme = stored;
 
   function showAlert(id, msg, kind = "error") {
     const el = $(id);
@@ -40,9 +40,9 @@
   });
 
   $("#loginThemeBtn").addEventListener("click", () => {
-    const cur = document.documentElement.getAttribute("data-theme");
+    const cur = document.documentElement.dataset.theme;
     const next = cur === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", next);
+    document.documentElement.dataset.theme = next;
     localStorage.setItem("theme", next);
   });
 
@@ -80,6 +80,7 @@
       const next = params.get("next") || "/";
       location.href = next;
     } catch (err) {
+      console.error("Login network error:", err);
       showAlert("#loginAlert", "Network error. Try again");
     } finally {
       btn.disabled = false; btn.textContent = "Sign in";
@@ -117,6 +118,7 @@
         showAlert("#forgotAlert", msg);
       }
     } catch (err) {
+      console.error("Forgot-password network error:", err);
       showAlert("#forgotAlert", "Network error. Try again");
     } finally {
       btn.disabled = false; btn.textContent = "Send reset link";

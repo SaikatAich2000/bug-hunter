@@ -42,14 +42,27 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
+# FK target strings — extracted to module-level constants so Sonar's S1192
+# duplicate-string-literal rule stops flagging each ForeignKey() call.
+_FK_BUGS_ID = "bugs.id"
+_FK_USERS_ID = "users.id"
+_FK_PROJECTS_ID = "projects.id"
+_FK_COMMENTS_ID = "comments.id"
+_FK_EVENTS_ID = "events.id"
+
+# SQLAlchemy relationship cascade and ondelete keywords — same reason.
+_CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
+_ONDELETE_SET_NULL = "SET NULL"
+
+
 # ---------------------------------------------------------------------------
 # Junctions
 # ---------------------------------------------------------------------------
 bug_assignees = Table(
     "bug_assignees",
     Base.metadata,
-    Column("bug_id", Integer, ForeignKey("bugs.id", ondelete="CASCADE"), primary_key=True),
-    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("bug_id", Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
 
 # event_managers: many-to-many between events and the (admin/manager) users
@@ -60,8 +73,8 @@ bug_assignees = Table(
 event_managers = Table(
     "event_managers",
     Base.metadata,
-    Column("event_id", Integer, ForeignKey("events.id", ondelete="CASCADE"), primary_key=True),
-    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("event_id", Integer, ForeignKey(_FK_EVENTS_ID, ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
 
 
@@ -97,7 +110,9 @@ class User(Base):
     # "I changed my password" actually log out other devices.
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
@@ -116,7 +131,7 @@ class PasswordResetToken(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), nullable=False
     )
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -142,7 +157,7 @@ class Project(Base):
     )
 
     bugs: Mapped[list["Bug"]] = relationship(
-        "Bug", back_populates="project", cascade="all, delete-orphan"
+        "Bug", back_populates="project", cascade=_CASCADE_ALL_DELETE_ORPHAN
     )
 
 
@@ -167,7 +182,7 @@ class Event(Base):
     # filtering by date is consistent across the app.
     scheduled_for: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_by_user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -199,17 +214,17 @@ class Bug(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey(_FK_PROJECTS_ID, ondelete="CASCADE"), nullable=False
     )
     reporter_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     # Optional link to an event (standup / sprint meeting). Nullable so a
     # work item can exist independently. Delete behaviour: when the event
     # row is deleted, the FK is NULLed via SQL (SET NULL), preserving the
     # work item itself.
     event_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("events.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_EVENTS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -236,7 +251,7 @@ class Bug(Base):
         "User", secondary=bug_assignees, lazy="selectin"
     )
     comments: Mapped[list["Comment"]] = relationship(
-        "Comment", back_populates="bug", cascade="all, delete-orphan",
+        "Comment", back_populates="bug", cascade=_CASCADE_ALL_DELETE_ORPHAN,
         # v2.6: newest comment at the top by default. The order_by here
         # drives every access via Bug.comments (get_bug response, etc.).
         order_by="(Comment.created_at.desc(), Comment.id.desc())",
@@ -257,7 +272,7 @@ class Bug(Base):
         order_by="(Activity.created_at.desc(), Activity.id.desc())",
     )
     attachments: Mapped[list["Attachment"]] = relationship(
-        "Attachment", back_populates="bug", cascade="all, delete-orphan",
+        "Attachment", back_populates="bug", cascade=_CASCADE_ALL_DELETE_ORPHAN,
         order_by="Attachment.created_at.desc()",
         primaryjoin="Bug.id == Attachment.bug_id",
     )
@@ -289,9 +304,9 @@ class Comment(Base):
     __tablename__ = "comments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    bug_id: Mapped[int] = mapped_column(Integer, ForeignKey("bugs.id", ondelete="CASCADE"), nullable=False)
+    bug_id: Mapped[int] = mapped_column(Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=False)
     author_user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     author_name: Mapped[str] = mapped_column(String(120), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -325,13 +340,13 @@ class Attachment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bug_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("bugs.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=False
     )
     comment_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=True
+        Integer, ForeignKey(_FK_COMMENTS_ID, ondelete="CASCADE"), nullable=True
     )
     uploader_user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     uploader_name: Mapped[str] = mapped_column(String(120), nullable=False, default="anonymous")
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -373,14 +388,14 @@ class Activity(Base):
     # pointing at the (now gone) bug, and the detail string preserves the
     # title — so searching the audit trail for that bug still works.
     bug_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("bugs.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_BUGS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     # entity_type + entity_id let us reference any object: "user", "project",
     # "bug", "comment", "attachment". Lightweight — no FK, just metadata.
     entity_type: Mapped[str] = mapped_column(String(40), nullable=False, default="bug")
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor_user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     actor_name: Mapped[str] = mapped_column(String(120), nullable=False, default="system")
     action: Mapped[str] = mapped_column(String(60), nullable=False)
@@ -419,7 +434,7 @@ class Session(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), nullable=False
     )
     # Random opaque ID baked into the signed cookie. We look up sessions
     # by this on every authenticated request.

@@ -44,11 +44,15 @@ from app.models import (
     Activity, Attachment, Bug, Event, User, bug_assignees,
 )
 from app.schemas import (
-    BugOut, EventCreate, EventDetail, EventOut, EventUpdate,
+    EventCreate, EventDetail, EventOut, EventUpdate,
 )
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
+
+
+# S1192: extract duplicated detail string into a module constant.
+_DETAIL_EVENT_NOT_FOUND = "Event not found"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -203,7 +207,7 @@ def get_event(
         select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
     )
     if ev is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
     items_stmt = select(Bug).options(
         selectinload(Bug.project),
         selectinload(Bug.reporter),
@@ -268,6 +272,48 @@ def create_event(
 # ---------------------------------------------------------------------------
 # Update
 # ---------------------------------------------------------------------------
+_EVENT_TRACKED_FIELDS = ["name", "description", "scheduled_for"]
+
+
+def _compute_event_changes(ev: Event, fields: dict) -> list[tuple[str, str, str]]:
+    changes: list[tuple[str, str, str]] = []
+    for f in _EVENT_TRACKED_FIELDS:
+        if f in fields and getattr(ev, f) != fields[f]:
+            changes.append((f, str(getattr(ev, f) or ""), str(fields[f] or "")))
+    return changes
+
+
+def _apply_event_manager_diff(ev: Event, db: Session, new_manager_ids: Optional[list[int]],
+                              changes: list[tuple[str, str, str]]) -> None:
+    """Set-compare ignores order so re-sending the same list isn't a change."""
+    if new_manager_ids is None:
+        return
+    old_ids = sorted({m.id for m in (ev.managers or [])})
+    new_ids = sorted(set(new_manager_ids))
+    if old_ids == new_ids:
+        return
+    new_managers = _resolve_managers(db, new_manager_ids)
+    old_names = sorted(m.name for m in (ev.managers or []))
+    new_names = sorted(m.name for m in new_managers)
+    changes.append((
+        "managers",
+        ", ".join(old_names) or "(none)",
+        ", ".join(new_names) or "(none)",
+    ))
+    ev.managers = new_managers
+
+
+def _persist_event_update(db: Session, ev: Event, actor: User,
+                          changes: list[tuple[str, str, str]]) -> None:
+    if not changes:
+        db.rollback()
+        return
+    for field, old, new in changes:
+        _log(db, ev.id, actor, f"event_{field}_changed",
+             f"{field}: '{old}' → '{new}'")
+    db.commit()
+
+
 @router.put("/{event_id}", response_model=EventOut)
 def update_event(
     event_id: int,
@@ -281,44 +327,19 @@ def update_event(
         select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
     )
     if ev is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
 
     fields = payload.model_dump(exclude_unset=True)
-    tracked = ["name", "description", "scheduled_for"]
-    changes: list[tuple[str, str, str]] = []
-    for f in tracked:
-        if f in fields and getattr(ev, f) != fields[f]:
-            changes.append((f, str(getattr(ev, f) or ""), str(fields[f] or "")))
+    changes = _compute_event_changes(ev, fields)
     new_manager_ids = fields.pop("manager_ids", None)
     for k, v in fields.items():
         setattr(ev, k, v)
-    # Manager diff. The set comparison ignores order so re-sending the
-    # same list isn't recorded as a change.
-    if new_manager_ids is not None:
-        old_ids = sorted({m.id for m in (ev.managers or [])})
-        new_ids = sorted(set(new_manager_ids))
-        if old_ids != new_ids:
-            new_managers = _resolve_managers(db, new_manager_ids)
-            old_names = sorted(m.name for m in (ev.managers or []))
-            new_names = sorted(m.name for m in new_managers)
-            changes.append((
-                "managers",
-                ", ".join(old_names) or "(none)",
-                ", ".join(new_names) or "(none)",
-            ))
-            ev.managers = new_managers
-    if changes:
-        for field, old, new in changes:
-            _log(db, ev.id, actor, f"event_{field}_changed",
-                 f"{field}: '{old}' → '{new}'")
-        db.commit()
-    else:
-        db.rollback()
-    # Re-fetch with managers fresh.
+    _apply_event_manager_diff(ev, db, new_manager_ids, changes)
+    _persist_event_update(db, ev, actor, changes)
+
     ev = db.scalar(
         select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
     )
-
     if changes and ev.managers:
         snap = _event_snapshot(ev)
         background.add_task(
@@ -341,7 +362,7 @@ def delete_event(
         select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
     )
     if ev is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
     if not can_delete_event(actor):
         raise HTTPException(
             status_code=403,

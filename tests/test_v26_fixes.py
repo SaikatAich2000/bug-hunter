@@ -547,3 +547,94 @@ class TestInitDbIsIdempotent:
         for required in ("users", "projects", "bugs", "comments",
                          "attachments", "activity_log"):
             assert required in names, f"missing canonical table {required!r}"
+
+
+# ===========================================================================
+# Sonar / static-analysis hardening (v2.6 follow-up)
+# ===========================================================================
+class TestSonarHardening:
+    """Regression coverage for the v2.6 SonarQube-driven fixes.
+
+    Each test pins a behavioural property of a fix so an accidental revert
+    breaks CI rather than silently re-introducing the issue.
+    """
+
+    def test_uvicorn_host_defaults_to_loopback(self):
+        """app/main.py's __main__ block must not hard-bind 0.0.0.0."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+        assert 'os.getenv("UVICORN_HOST"' in src, (
+            "Bind host must come from UVICORN_HOST env var, not be hard-coded"
+        )
+        assert '"127.0.0.1"' in src, (
+            "Default UVICORN_HOST should be the loopback address"
+        )
+
+    def test_cors_default_is_empty_not_wildcard(self):
+        """Default CORS_ORIGINS must be empty so the wildcard policy is opt-in."""
+        import importlib, os
+        os.environ.pop("CORS_ORIGINS", None)
+        import app.config as cfg
+        importlib.reload(cfg)
+        assert cfg.Settings().CORS_ORIGINS == [], (
+            f"expected [] default, got {cfg.Settings().CORS_ORIGINS!r}"
+        )
+
+    def test_cors_middleware_not_registered_when_no_origins(self):
+        """No CORS_ORIGINS configured → CORSMiddleware must not be added."""
+        from starlette.middleware.cors import CORSMiddleware
+        # Build a fresh app process-locally via importing main
+        import importlib, os, sys
+        os.environ.pop("CORS_ORIGINS", None)
+        for m in list(sys.modules):
+            if m == "app" or m.startswith("app."):
+                del sys.modules[m]
+        from app.config import get_settings
+        get_settings.cache_clear()  # type: ignore[attr-defined]
+        from app import main as app_main
+        importlib.reload(app_main)
+        cls_names = [
+            m.cls.__name__ for m in app_main.app.user_middleware
+        ]
+        assert CORSMiddleware.__name__ not in cls_names, (
+            f"CORSMiddleware should be skipped when CORS_ORIGINS is empty; "
+            f"got middleware stack: {cls_names}"
+        )
+
+    def test_no_bare_except_exception_in_app_database(self):
+        """app/database.py must use narrowed SQLAlchemyError, not Exception."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "app" / "database.py").read_text(encoding="utf-8")
+        # Allow except in the `# noqa: F401` import-registration comment, but
+        # the actual try/except blocks must catch SQLAlchemyError specifically.
+        # Pylint flagged two `except Exception:` blocks; both must now be SQLAlchemyError.
+        assert "except SQLAlchemyError:" in src
+        assert src.count("except Exception:") == 0
+
+    def test_email_service_uses_narrowed_except(self):
+        """SMTP send-path must not catch bare Exception."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "app" / "email_service.py").read_text(encoding="utf-8")
+        assert "except (smtplib.SMTPException, OSError)" in src
+        # The previous broad form must be gone.
+        assert "except Exception:\n        # Never let mailer failures" not in src
+
+    def test_auth_uses_narrowed_except(self):
+        """session-table best-effort writes must narrow to SQLAlchemyError."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "app" / "auth.py").read_text(encoding="utf-8")
+        assert "from sqlalchemy.exc import SQLAlchemyError" in src
+        assert "except SQLAlchemyError:" in src
+
+    def test_pyproject_toml_has_relative_coverage(self):
+        """pyproject.toml must enable relative_files=True so SonarQube can map
+        coverage paths back to sources from the Linux scanner container."""
+        from pathlib import Path
+        text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+        assert "relative_files = true" in text
+
+    def test_sonar_project_uses_correct_key(self):
+        """sonar-project.properties must use the actual server-side project key."""
+        from pathlib import Path
+        text = (Path(__file__).resolve().parents[1] / "sonar-project.properties").read_text(encoding="utf-8")
+        assert "sonar.projectKey=Bug_Hunter" in text

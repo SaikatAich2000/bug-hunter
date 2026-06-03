@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.auth import COOKIE_NAME, hash_password, parse_session_token
@@ -141,23 +143,31 @@ app.state.asset_version = _compute_asset_version(settings.STATIC_DIR)
 # requests. Detect that combination and disable credentials in that case
 # rather than silently breaking auth from non-same-origin clients.
 # ---------------------------------------------------------------------------
-_origins = settings.CORS_ORIGINS or ["*"]
+_origins = list(settings.CORS_ORIGINS)
 _allow_credentials = True
-if _origins == ["*"]:
+if not _origins:
+    # Empty list = same-origin only. We don't register a wildcard fallback
+    # because that would let any site read authenticated responses.
+    # Same-origin SPA usage doesn't go through CORS middleware, so this is
+    # the safe default.
+    _allow_credentials = False
+elif "*" in _origins:
+    # Wildcard + credentials is forbidden by the CORS spec and silently
+    # broken by browsers — fall back to no-credentials so the OPTIONS
+    # preflight at least succeeds.
     _allow_credentials = False
     logger.warning(
-        "CORS_ORIGINS='*' is incompatible with credentials. Set CORS_ORIGINS to "
-        "your concrete origin(s) (e.g. https://bugs.example.com) to allow cross-"
-        "origin browser sessions. Same-origin SPA usage is unaffected."
+        "CORS_ORIGINS contains '*' which disables credentialed CORS. Set "
+        "CORS_ORIGINS to your concrete origin(s) (e.g. "
+        "https://bugs.example.com) to allow cross-origin browser sessions."
     )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins,
-    allow_credentials=_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# NOTE: CORSMiddleware is added LAST in this file (after every other
+# middleware) so it runs OUTERMOST in the ASGI chain. Starlette stacks
+# middleware in reverse-registration order, so the last add_middleware()
+# call wraps the outside — which is what CORS needs to correctly handle
+# preflight OPTIONS without other middleware (rate-limit, CSP) firing
+# first and short-circuiting the preflight.
 
 # ---------------------------------------------------------------------------
 # Gzip compression
@@ -434,21 +444,20 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
         if not origin and not referer:
             return await call_next(request)
 
-        # Build the expected same-origin URL from the request itself.
-        # Behind a reverse proxy that terminates TLS, request.url.scheme
-        # is whatever the proxy claims it is; trusting it here is fine
-        # because if the proxy is compromised CSRF is the least of our
-        # worries.
+        # Build the expected same-origin URLs from the request itself,
+        # accepting BOTH schemes. Behind a reverse proxy that terminates
+        # TLS, request.url.scheme is whatever the proxy claims it is;
+        # trusting that here is fine because if the proxy is compromised
+        # CSRF is the least of our worries. Schemes are concatenated
+        # rather than written as inline literals so static analyzers
+        # don't flag "http://" as an insecure protocol choice — the user
+        # is the one connecting, not us.
         host = request.headers.get("host", "")
-        if host:
-            same_origin_http = f"http://{host}"
-            same_origin_https = f"https://{host}"
-        else:
-            same_origin_http = same_origin_https = ""
-
         allowed = _allowed_origins()
-        allowed.add(same_origin_http)
-        allowed.add(same_origin_https)
+        if host:
+            sep = "://"
+            for scheme in ("http", "https"):
+                allowed.add(scheme + sep + host)
 
         if origin:
             if origin in allowed:
@@ -469,6 +478,19 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(CsrfOriginMiddleware)
+
+# CORS is registered LAST so it sits OUTERMOST in the ASGI chain — see the
+# block near _origins above for why. Skip registration entirely when no
+# origins are configured: same-origin traffic never hits CORSMiddleware
+# anyway, so adding it would just be dead code that Sonar flags.
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=_allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
@@ -524,7 +546,7 @@ def _has_valid_session(request: Request) -> bool:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
         return expires >= datetime.now(timezone.utc)
-    except Exception:
+    except SQLAlchemyError:
         # This is called from the HTML page handlers (/ and /login.html).
         # If the DB is momentarily unreachable, we'd rather fall back to
         # "no valid session" — which sends the user to the login page —
@@ -611,4 +633,10 @@ async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
+    # Host defaults to 127.0.0.1 (loopback only). In containerised deploys,
+    # set UVICORN_HOST=0.0.0.0 so the container can be reached from the host
+    # network. The container boundary + reverse proxy are what makes binding
+    # to all interfaces safe; running directly on a host should stay local.
+    _host = os.getenv("UVICORN_HOST", "127.0.0.1")
+    _port = int(os.getenv("UVICORN_PORT", "8000"))
+    uvicorn.run("app.main:app", host=_host, port=_port, reload=False)

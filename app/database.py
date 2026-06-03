@@ -9,6 +9,7 @@ from collections.abc import Generator
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -112,7 +113,7 @@ def init_db() -> None:
         from sqlalchemy import text
         try:
             existing_cols = {c["name"] for c in inspector.get_columns("bugs")}
-        except Exception:
+        except SQLAlchemyError:
             existing_cols = set()
         if existing_cols and "item_type" not in existing_cols:
             conn.execute(text(
@@ -136,7 +137,7 @@ def init_db() -> None:
         for table in Base.metadata.sorted_tables:
             try:
                 existing = {idx["name"] for idx in inspector.get_indexes(table.name)}
-            except Exception:
+            except SQLAlchemyError:
                 # If the table doesn't exist for any reason, create_all
                 # would have made it on the line above; either way, nothing
                 # to compare against. Skip cleanly.

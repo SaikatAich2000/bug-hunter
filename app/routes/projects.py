@@ -22,6 +22,10 @@ from app.schemas import ProjectIn, ProjectOut
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+
+# S1192: extract duplicated detail string into a module constant.
+_DETAIL_PROJECT_NOT_FOUND = "Project not found"
+
 def _audit(db: Session, actor: User, action: str, entity_id: int, detail: str) -> None:
     db.add(Activity(
         bug_id=None, entity_type="project", entity_id=entity_id,
@@ -65,7 +69,7 @@ def get_project(
 ) -> Project:
     p = db.get(Project, project_id)
     if p is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     return p
 
 
@@ -78,7 +82,7 @@ def update_project(
 ) -> Project:
     p = db.get(Project, project_id)
     if p is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     fields = payload.model_dump()
     changes = []
     for key, value in fields.items():
@@ -107,7 +111,7 @@ def delete_project(
 ) -> dict[str, str]:
     p = db.get(Project, project_id)
     if p is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
 
     bug_count = db.scalar(
         select(func.count(Bug.id)).where(Bug.project_id == project_id)

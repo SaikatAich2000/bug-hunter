@@ -25,7 +25,7 @@
 
   <div class="app">
     <!-- ============================== SIDEBAR ============================== -->
-    <aside class="sidebar" id="sidebar">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
       <div class="brand">
         <div class="brand-logo">
           <img src="/static/icon.png?v=__ASSET_VERSION__" alt="Bug Hunter" />
@@ -38,7 +38,7 @@
                 title="Collapse sidebar" aria-label="Collapse sidebar">«</button>
       </div>
 
-      <nav class="nav">
+      <nav class="nav" aria-label="Main sections">
         <button class="nav-btn active" data-view="list"><span class="nav-icon">📋</span><span>Work Items</span></button>
         <button class="nav-btn" data-view="events"><span class="nav-icon">📅</span><span>Events</span></button>
         <button class="nav-btn" data-view="analytics"><span class="nav-icon">📊</span><span>Analytics</span></button>
@@ -110,7 +110,7 @@
            tab selection scopes KPIs, filters and charts to one item type
            so a team drowning in 15-20 daily tasks can stay in their lane.
            Hidden on audit / sessions / events views via setView(). -->
-      <nav class="type-tabs" id="typeTabs" role="tablist" aria-label="Work item type">
+      <div class="type-tabs" id="typeTabs" role="tablist" aria-label="Work item type">
         <button type="button" class="type-tab active" data-tab="all" role="tab" aria-selected="true">
           <span>All</span><span class="type-tab-count" id="typeTabCountAll">0</span>
         </button>
@@ -123,7 +123,7 @@
         <button type="button" class="type-tab" data-tab="Task" role="tab" aria-selected="false">
           <span>✅ Tasks</span><span class="type-tab-count" id="typeTabCountTask">0</span>
         </button>
-      </nav>
+      </div>
 
       <!-- KPI strip: Total | Open | Resolved | Closed | Resolve Later
            Each tile is a clickable filter that drives the status multi-select.
@@ -149,40 +149,40 @@
       <!-- Filter bar (visible only on list view). Multi-select dropdowns. -->
       <section class="filter-bar" id="filterBar">
         <div class="ms-wrap" data-filter="project_id">
-          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
             <span class="ms-btn-label">All Projects</span><span class="ms-caret">▾</span>
           </button>
-          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+          <div class="ms-panel" hidden role="menu"></div>
         </div>
         <div class="ms-wrap" data-filter="item_type">
-          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
             <span class="ms-btn-label">All Types</span><span class="ms-caret">▾</span>
           </button>
-          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+          <div class="ms-panel" hidden role="menu"></div>
         </div>
         <div class="ms-wrap" data-filter="status">
-          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
             <span class="ms-btn-label">All Statuses</span><span class="ms-caret">▾</span>
           </button>
-          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+          <div class="ms-panel" hidden role="menu"></div>
         </div>
         <div class="ms-wrap" data-filter="priority">
-          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
             <span class="ms-btn-label">All Priorities</span><span class="ms-caret">▾</span>
           </button>
-          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+          <div class="ms-panel" hidden role="menu"></div>
         </div>
         <div class="ms-wrap" data-filter="environment">
-          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
             <span class="ms-btn-label">All Envs</span><span class="ms-caret">▾</span>
           </button>
-          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+          <div class="ms-panel" hidden role="menu"></div>
         </div>
         <div class="ms-wrap" data-filter="assignee_id">
-          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+          <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
             <span class="ms-btn-label">All Assignees</span><span class="ms-caret">▾</span>
           </button>
-          <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+          <div class="ms-panel" hidden role="menu"></div>
         </div>
         <button class="btn ghost" id="clearFiltersBtn">Clear</button>
       </section>
@@ -201,8 +201,13 @@
       -->
       <section class="view" id="viewList">
         <div class="table-scroll">
-          <table class="bug-table" id="bugTable">
-            <thead id="bugTableHead"></thead>
+          <table class="bug-table" id="bugTable" aria-label="Work items">
+            <thead id="bugTableHead">
+              <!-- Static placeholder row — JS replaces this on render. The
+                   placeholder exists so accessibility scanners (and the
+                   Sonar Web:S5256 rule) see a <th> on the initial DOM. -->
+              <tr><th scope="col">Loading…</th></tr>
+            </thead>
             <tbody id="bugTableBody"></tbody>
           </table>
         </div>
@@ -317,7 +322,7 @@
         <!-- detail mode: a single event + its items -->
         <div class="events-detail-mode" id="eventsDetailMode" hidden>
           <div class="events-detail-head">
-            <button class="btn ghost" id="eventBackBtn" aria-label="Back to events">← Back</button>
+            <button class="btn ghost" id="eventBackBtn"><span aria-hidden="true">←</span> Back</button>
             <h2 id="eventDetailName">Event</h2>
             <div class="events-detail-actions">
               <button class="btn ghost" id="editEventBtn" data-needs-role="manager">✎ Edit</button>
@@ -335,22 +340,22 @@
           <div class="events-detail-filter-bar" id="eventDetailFilterBar">
             <input type="search" id="eventDetailSearch" placeholder="Search tasks (title or #id)…" autocomplete="off" />
             <div class="ms-wrap" data-event-filter="status">
-              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
                 <span class="ms-btn-label">All Statuses</span><span class="ms-caret">▾</span>
               </button>
-              <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+              <div class="ms-panel" hidden role="menu"></div>
             </div>
             <div class="ms-wrap" data-event-filter="priority">
-              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
                 <span class="ms-btn-label">All Priorities</span><span class="ms-caret">▾</span>
               </button>
-              <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+              <div class="ms-panel" hidden role="menu"></div>
             </div>
             <div class="ms-wrap" data-event-filter="assignee_id">
-              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="listbox" aria-expanded="false">
+              <button type="button" class="ms-btn" data-ms-toggle aria-haspopup="menu" aria-expanded="false">
                 <span class="ms-btn-label">All Assignees</span><span class="ms-caret">▾</span>
               </button>
-              <div class="ms-panel" hidden role="listbox" aria-multiselectable="true"></div>
+              <div class="ms-panel" hidden role="menu"></div>
             </div>
             <button class="btn ghost" id="eventDetailClearFiltersBtn">Clear</button>
           </div>
@@ -526,7 +531,7 @@
           </div>
 
           <!-- Side column: metadata — type / status / priority / env / project / reporter / assignees / due date -->
-          <aside class="bug-modal-side">
+          <aside class="bug-modal-side" aria-label="Work item metadata">
             <label class="field">
               <span>Type <em>*</em></span>
               <select name="item_type" data-bh-select required></select>
@@ -559,10 +564,10 @@
                    so the disabled state doesn't affect the request. -->
               <select name="reporter_id" data-bh-select disabled class="reporter-select"></select>
             </label>
-            <label class="field">
-              <span>Assignees</span>
+            <fieldset class="field">
+              <legend>Assignees</legend>
               <div class="chip-picker" id="assigneePicker"></div>
-            </label>
+            </fieldset>
             <label class="field">
               <span>Event</span>
               <select name="event_id" data-bh-select>
@@ -733,11 +738,11 @@
           <span>Scheduled for</span>
           <input name="scheduled_for" type="date" />
         </label>
-        <label class="field">
-          <span>Managers</span>
+        <fieldset class="field">
+          <legend>Managers</legend>
           <div class="chip-picker" id="eventManagerPicker"></div>
           <small class="hint">Managers get notified when the event is created, edited or deleted — but not for individual tasks inside it. Only admin/manager users can be event managers</small>
-        </label>
+        </fieldset>
         <label class="field">
           <span>Description</span>
           <textarea name="description" rows="3" maxlength="10000"

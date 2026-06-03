@@ -37,6 +37,10 @@ logger = logging.getLogger("bug_hunter.auth")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+
+# S1192: extract duplicated detail string into a module constant.
+_DETAIL_INVALID_RESET_TOKEN = "Invalid or expired reset token"
+
 def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id: int | None = None) -> None:
     db.add(Activity(
         bug_id=None, entity_type="auth", entity_id=entity_id,
@@ -133,7 +137,6 @@ def me(user: User = Depends(get_current_user)) -> User:
 def change_password(
     payload: ChangePasswordIn,
     request: Request,
-    response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Response:
@@ -188,7 +191,6 @@ def change_password(
 def forgot_password(
     payload: ForgotPasswordIn,
     background: BackgroundTasks,
-    request: Request,
     db: Session = Depends(get_db),
 ) -> Response:
     """Issue a password-reset email.
@@ -247,17 +249,17 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> R
     h = hash_reset_token(payload.token)
     prt = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == h))
     if prt is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
     now = datetime.now(timezone.utc)
     expires = prt.expires_at
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     if prt.used_at is not None or expires < now:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
 
     user = db.get(User, prt.user_id)
     if user is None or not user.is_active:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
 
     user.password_hash = hash_password(payload.new_password)
     user.session_version = (user.session_version or 0) + 1

@@ -49,7 +49,7 @@ def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
         return data
 
     try:
-        from PIL import Image, UnidentifiedImageError
+        from PIL import Image
     except ImportError:
         # Pillow isn't installed — operator opted out by pinning a
         # build without it. Return original.
@@ -75,9 +75,11 @@ def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
             else:
                 img.save(out, format=fmt)
             return out.getvalue()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         # Corrupt image, format Pillow can't decode, decompression-bomb
-        # trip — leave the file alone. Logged at info level (not warn)
+        # trip — leave the file alone. Sonar S5713: PIL.UnidentifiedImageError
+        # is a subclass of OSError, so catching OSError covers it too;
+        # listing both would be redundant. Logged at info level (not warn)
         # because it's an expected outcome for exotic uploads.
         logger.info("EXIF strip skipped (%s): %s", ct, exc)
         return data

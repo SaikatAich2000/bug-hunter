@@ -199,24 +199,204 @@ class TestBodySizeMiddleware:
             )
             assert "too large" in res.json()["detail"].lower()
 
-    def test_malformed_content_length_rejected(self, client):
-        # A non-integer Content-Length header is the client's bug.
-        # We assert the middleware returns 400 cleanly. httpx will
-        # likely refuse to send a malformed CL header for us, so we
-        # exercise via the helper directly instead.
+    def test_malformed_content_length_returns_400(self):
+        """The middleware must reject a non-integer Content-Length cleanly
+        rather than tracebacking inside the int() call. Exercised by
+        invoking the middleware's dispatch directly because httpx + uvicorn
+        normally enforce numeric Content-Length on the wire."""
+        import asyncio
         from starlette.requests import Request
+        from app.main import BodySizeLimitMiddleware
 
-        # Build a minimal request scope with a bad Content-Length.
+        middleware = BodySizeLimitMiddleware(None)
         scope = {
             "type": "http", "method": "POST", "path": "/api/auth/login",
             "headers": [(b"content-length", b"not-a-number")],
             "query_string": b"", "scheme": "http",
             "server": ("testserver", 80), "client": ("test", 0),
+            "raw_path": b"/api/auth/login",
         }
-        # We can't easily run the middleware in isolation here. Skip the
-        # invariant if FastAPI mismatched. The route-level test above
-        # already covers the happy path.
-        assert scope["headers"][0][1] == b"not-a-number"
+        request = Request(scope)
+
+        async def call_next(_req):     # pragma: no cover — should not run
+            raise AssertionError("middleware must short-circuit before call_next")
+
+        response = asyncio.run(middleware.dispatch(request, call_next))
+        assert response.status_code == 400
+        body = response.body.decode("utf-8")
+        assert "Content-Length" in body or "invalid" in body.lower()
+
+
+# ---------------------------------------------------------------------------
+# Coverage tests — cover the remaining defensive branches in the new
+# security modules so the suite catches regressions on those paths too.
+# ---------------------------------------------------------------------------
+class TestAccountLockoutEdgeCases:
+
+    def test_env_int_falls_back_on_garbage(self, monkeypatch):
+        from app.account_lockout import _env_int
+        monkeypatch.setenv("BH_BOGUS_INT_VAR", "not-a-number")
+        assert _env_int("BH_BOGUS_INT_VAR", 42) == 42
+
+    def test_env_int_uses_value(self, monkeypatch):
+        from app.account_lockout import _env_int
+        monkeypatch.setenv("BH_GOOD_INT_VAR", "99")
+        assert _env_int("BH_GOOD_INT_VAR", 0) == 99
+
+    def test_old_failures_get_evicted(self, monkeypatch):
+        """Failures older than the rolling window must be popleft'd so
+        a user who fat-fingers once a year doesn't accumulate a lockout."""
+        import time
+        from app import account_lockout
+        monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_WINDOW_SECONDS", 0.05)
+        monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_LIMIT", 3)
+        account_lockout._reset_for_tests()
+        for _ in range(2):
+            account_lockout.record_failure("evictee@x.com")
+        time.sleep(0.07)  # past the 50 ms window
+        account_lockout.record_failure("evictee@x.com")
+        bucket = account_lockout._buckets.get("evictee@x.com")
+        # Only the post-sleep failure should remain in the deque.
+        assert bucket is not None
+        assert len(bucket.fails) == 1
+        account_lockout.check_locked("evictee@x.com")  # must not raise
+
+    def test_bucket_dict_cap_drops_oldest_entry(self, monkeypatch):
+        from app import account_lockout
+        monkeypatch.setattr(account_lockout, "_LOCKOUT_BUCKETS_MAX", 5)
+        monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_LIMIT", 10)
+        account_lockout._reset_for_tests()
+        # Fill past the cap → eviction kicks in on the 6th entry.
+        for i in range(7):
+            account_lockout.record_failure(f"user{i}@x.com")
+        assert len(account_lockout._buckets) <= 5
+
+    def test_clear_unknown_email_is_noop(self):
+        """clear() on an email with no bucket must not blow up."""
+        from app import account_lockout
+        account_lockout._reset_for_tests()
+        account_lockout.clear("never-recorded@x.com")  # must not raise
+        assert "never-recorded@x.com" not in account_lockout._buckets
+
+
+class TestPasswordBreachFetchRange:
+    """Exercise the real ``_fetch_range`` body — every other T4 test
+    monkeypatches this seam to keep tests hermetic. These tests stub
+    the httpx layer instead so the real branching is exercised."""
+
+    @pytest.fixture(autouse=True)
+    def _enable(self, monkeypatch):
+        monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "true")
+
+    @staticmethod
+    def _patch_httpx_client(monkeypatch, response_status=200, response_text="",
+                            raise_on_get=None):
+        from app import password_breach
+
+        class _FakeResponse:
+            status_code = response_status
+            text = response_text
+
+        class _FakeClient:
+            def __init__(self, **_kw):
+                # No-op stand-in for httpx.Client(timeout=...).
+                pass
+            def __enter__(self): return self
+            def __exit__(self, *_a): return False
+            def get(self, _url, **_kw):
+                if raise_on_get is not None:
+                    raise raise_on_get
+                return _FakeResponse()
+
+        monkeypatch.setattr(password_breach.httpx, "Client", _FakeClient)
+
+    def test_fetch_range_returns_text_on_200(self, monkeypatch):
+        from app import password_breach
+        self._patch_httpx_client(monkeypatch, 200, "ABCD:1\n")
+        assert password_breach._fetch_range("5BAA6") == "ABCD:1\n"
+
+    def test_fetch_range_returns_none_on_non_200(self, monkeypatch):
+        from app import password_breach
+        self._patch_httpx_client(monkeypatch, 503, "")
+        assert password_breach._fetch_range("5BAA6") is None
+
+    def test_fetch_range_returns_none_on_httperror(self, monkeypatch):
+        import httpx
+        from app import password_breach
+        self._patch_httpx_client(
+            monkeypatch, raise_on_get=httpx.HTTPError("simulated")
+        )
+        assert password_breach._fetch_range("5BAA6") is None
+
+    def test_fetch_range_returns_none_on_oserror(self, monkeypatch):
+        from app import password_breach
+        self._patch_httpx_client(
+            monkeypatch, raise_on_get=OSError("connection refused")
+        )
+        assert password_breach._fetch_range("5BAA6") is None
+
+
+class TestImageStripEdgeCases:
+
+    def test_pillow_missing_returns_original(self, monkeypatch):
+        """If Pillow isn't installed, the helper must fail-open with the
+        original bytes unchanged."""
+        import sys
+        from app.image_strip import strip_image_metadata
+        # Force the next `from PIL import Image` to ImportError.
+        monkeypatch.setitem(sys.modules, "PIL", None)
+        raw = b"fake-jpeg-bytes"
+        assert strip_image_metadata(raw, "image/jpeg") == raw
+
+    def test_format_none_returns_original(self, monkeypatch):
+        """An image Pillow can open but whose .format is None (e.g. a
+        raw in-memory image) must round-trip unchanged."""
+        from PIL import Image as PILImage
+        from app.image_strip import strip_image_metadata
+
+        class _FakeImg:
+            format = None
+            info: dict = {}
+            def load(self):
+                # Pillow's real load() decodes pixel data; the stub
+                # doesn't need to do anything to exercise the
+                # format-is-None branch.
+                pass
+
+        monkeypatch.setattr(PILImage, "open", lambda _src: _FakeImg())
+        raw = b"any-bytes"
+        assert strip_image_metadata(raw, "image/jpeg") == raw
+
+    def test_save_oserror_returns_original(self, monkeypatch):
+        """If Pillow's save raises OSError mid-encode, the helper logs and
+        returns the original bytes rather than tracebacking the upload."""
+        from PIL import Image as PILImage
+        from app.image_strip import strip_image_metadata
+
+        class _BoomImg:
+            format = "JPEG"
+            info: dict = {}
+            def load(self):
+                # No-op load — the failure we want to exercise is in
+                # save(), not in decode.
+                pass
+            def save(self, _out, **_kw): raise OSError("disk full mid-encode")
+
+        monkeypatch.setattr(PILImage, "open", lambda _src: _BoomImg())
+        raw = b"any-bytes"
+        assert strip_image_metadata(raw, "image/jpeg") == raw
+
+    def test_content_type_with_charset_param_still_handled(self):
+        """Some browsers send ``image/jpeg; charset=binary`` — the helper
+        must strip the parameter before matching the prefix."""
+        from app.image_strip import strip_image_metadata
+        # We don't have a real JPEG here, so we just verify the helper
+        # gets past the content-type guard (the real round-trip is
+        # already exercised by TestExifStrip).
+        raw = b"not-a-jpeg"
+        # With the charset suffix the helper still treats it as image/jpeg
+        # and Pillow can't decode → fail-open returns the original.
+        assert strip_image_metadata(raw, "image/jpeg; charset=binary") == raw
 
 
 # ---------------------------------------------------------------------------

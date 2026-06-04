@@ -634,7 +634,9 @@ class TestSonarHardening:
         assert "relative_files = true" in text
 
     def test_sonar_project_uses_correct_key(self):
-        """sonar-project.properties must use the actual server-side project key."""
+        """sonar-project.properties must use the actual server-side project key.
+        The Sonar instance uses the hyphenated form (Bug-Hunter); an
+        underscore here would create a separate project on the server."""
         from pathlib import Path
         text = (Path(__file__).resolve().parents[1] / "sonar-project.properties").read_text(encoding="utf-8")
-        assert "sonar.projectKey=Bug_Hunter" in text
+        assert "sonar.projectKey=Bug-Hunter" in text

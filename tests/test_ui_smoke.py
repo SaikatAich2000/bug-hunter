@@ -44,6 +44,12 @@ def live_server():
     os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@ui.test"
     os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminUI1234"
     os.environ["BOOTSTRAP_ADMIN_NAME"] = "UI Admin"
+    # v2.7-security T4: disable the HIBP outbound call. Unlike the
+    # TestClient fixtures in conftest.py, this live_server starts a real
+    # uvicorn thread BEFORE any function-scoped monkeypatch is applied,
+    # so it would inherit the unset (= default-enabled) value otherwise
+    # and create-user would block on a live network round-trip.
+    os.environ["PASSWORD_BREACH_CHECK_ENABLED"] = "false"
     # Force a fresh import after env is set.
     for m in list(sys.modules):
         if m == "app" or m.startswith("app."):

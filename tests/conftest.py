@@ -34,6 +34,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", BOOTSTRAP_EMAIL)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "Test Admin")
+    # T4 (v2.7-security): disable the HaveIBeenPwned API call in tests
+    # by default so the suite stays hermetic. The test_security.py cases
+    # that exercise the breach path monkeypatch app.password_breach
+    # directly instead of relying on real network calls.
+    monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
 
     # Force re-import so the engine picks up the env-var override.
     for mod in list(sys.modules):

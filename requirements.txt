@@ -9,6 +9,11 @@ python-multipart==0.0.20
 bcrypt==4.2.1
 itsdangerous==2.2.0
 
+# T6: EXIF / metadata stripper for uploaded images. Pillow is lazily
+# imported by app/image_strip.py so deploys that skip it (or fail to
+# install it) still serve uploads — they just keep the source metadata.
+Pillow==12.2.0
+
 # --- Sleuth: Excel export ---
 # openpyxl is pure-Python and lightweight (~3 MB), suitable for the
 # 1-vCPU / 2 GB target box. It powers the "export to excel" replies.

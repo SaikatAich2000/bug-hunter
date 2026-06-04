@@ -28,7 +28,20 @@ from app.auth import (
 )
 from app.database import get_db
 from app.models import Activity, User
+from app.password_breach import is_password_breached
 from app.schemas import UserIn, UserOut, UserUpdate
+
+
+def _reject_if_breached(plain: str) -> None:
+    """T4: refuse any password that appears in the HIBP corpus. Mirrors
+    the same helper in routes/auth.py — kept here to avoid a circular
+    import between the auth route module and the users route module."""
+    if is_password_breached(plain):
+        raise HTTPException(
+            status_code=400,
+            detail="This password appears in a known breach corpus. "
+                   "Please choose a different one.",
+        )
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -90,6 +103,8 @@ def create_user(
             status_code=403,
             detail="Only admins can create admin users.",
         )
+    # T4: reject if the chosen initial password is in HIBP.
+    _reject_if_breached(payload.password)
     user = User(
         name=payload.name,
         email=payload.email,
@@ -177,6 +192,9 @@ def _apply_admin_password_reset(user: User, db: Session, new_password: str,
                                 changes: list[str]) -> None:
     """An admin password-reset is a security event — kick existing sessions
     and revoke any outstanding reset tokens."""
+    # T4: HIBP check before we commit. Admin-driven resets are not exempt
+    # from breach checking — the user might keep the assigned password.
+    _reject_if_breached(new_password)
     user.password_hash = hash_password(new_password)
     user.session_version = (user.session_version or 0) + 1
     invalidate_outstanding_reset_tokens(db, user.id)

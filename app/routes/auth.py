@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import account_lockout
 from app.auth import (
     PASSWORD_RESET_TTL,
     clear_session_cookie,
@@ -20,6 +21,16 @@ from app.auth import (
     set_session_cookie,
     verify_password,
 )
+from app.password_breach import is_password_breached
+# Precomputed dummy bcrypt hash used by the login path when no user matches
+# the supplied email. Without this, the code path skips the bcrypt verify
+# entirely on unknown-email and returns ~50ms faster than the wrong-password
+# path — an attacker can enumerate accounts by timing the login response.
+# Calling verify_password against the dummy in the no-user branch equalises
+# the work done, closing the timing oracle. The value is a bcrypt hash of a
+# random string the server never accepts; even if it leaked, nobody could
+# log in with it.
+_DUMMY_PASSWORD_HASH = hash_password("dummy-not-a-real-credential")
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import notify_password_reset
@@ -50,19 +61,59 @@ def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id:
     ))
 
 
+def _reject_if_breached(plain: str) -> None:
+    """T4: refuse to accept a password that appears in the HIBP corpus.
+
+    Called from every code path that sets a password (login flow excluded
+    — the user can't change their existing creds at login time). Fail-open
+    on network errors so an HIBP outage doesn't block legitimate password
+    changes; see app/password_breach.py.
+    """
+    if is_password_breached(plain):
+        raise HTTPException(
+            status_code=400,
+            detail="This password appears in a known breach corpus. "
+                   "Please choose a different one.",
+        )
+
+
+def _mask_email(email: str) -> str:
+    """Mask the local part of an email for safe inclusion in logs.
+
+    G5: log lines feed centralised log stores (Loki / CloudWatch / etc.)
+    whose access controls are usually broader than the app DB's. Writing
+    raw emails there is unnecessary PII leakage when a one-character +
+    asterisks form keeps the line just as useful for diagnosing the
+    event. ``alice@example.com`` -> ``a***@example.com``.
+    """
+    if not email or "@" not in email:
+        return "***"
+    local, _, domain = email.partition("@")
+    if not local:
+        return "@" + domain
+    head = local[0]
+    return f"{head}***@{domain}"
+
+
 def _client_ip(request: Request) -> str:
-    """Best-effort client IP for the session log. Honors X-Forwarded-For
-    when running behind a reverse proxy, falls back to the socket addr.
-    Capped at 64 chars to fit the column."""
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        # X-F-F is a comma-separated chain; the leftmost is the original client.
-        ip = fwd.split(",")[0].strip()
-    elif request.client and request.client.host:
-        ip = request.client.host
-    else:
-        ip = ""
-    return ip[:64]
+    """Best-effort client IP for the session log + audit trail.
+
+    G4: only honour X-Forwarded-For when the deploy explicitly opted in
+    via TRUST_PROXY_FORWARDED_FOR. Without this gate, a client behind a
+    non-proxied deploy can set X-Forwarded-For to anything and spoof the
+    IP recorded in their session row and audit entries — making it look
+    like the login came from a different machine. This matches the
+    rate-limit middleware's ``_client_ip`` in app/main.py.
+    """
+    if get_settings().TRUST_PROXY_FORWARDED_FOR:
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            # X-F-F is a comma-separated chain; the leftmost is the original client.
+            ip = fwd.split(",")[0].strip()
+            return ip[:64]
+    if request.client and request.client.host:
+        return request.client.host[:64]
+    return ""
 
 
 @router.post("/login", response_model=MeOut)
@@ -70,19 +121,47 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     """Verify credentials, create a server-side session row, and set the
     signed cookie. The cookie carries a `jti` that maps back to the row,
     which is what makes per-session admin revocation possible."""
+    # T3: short-circuit if this email is currently locked out. Raised BEFORE
+    # the bcrypt verify so a flood of bad logins doesn't amplify into a
+    # flood of bcrypt rounds — keeping the lockout cheap to enforce.
+    account_lockout.check_locked(payload.email)
+
     # LoginIn already lowercases the email — no need to .lower() again here.
     user = db.scalar(select(User).where(User.email == payload.email))
+    # G1: equalise the timing of unknown-email vs wrong-password. If we
+    # skipped verify_password when user is None, an attacker could enumerate
+    # accounts by measuring response latency (bcrypt costs ~50 ms; the
+    # no-user branch returns in <1 ms). Always run the bcrypt verify, against
+    # the real hash when we have a user and against a server-side dummy
+    # otherwise. password_ok stays False for the no-user case because the
+    # dummy hash will never match the supplied password.
+    if user is None:
+        verify_password(payload.password, _DUMMY_PASSWORD_HASH)
+        password_ok = False
+    else:
+        password_ok = verify_password(payload.password, user.password_hash)
     # Unified error message for all failure modes — never leak whether the
     # email exists OR whether an existing account is disabled. Previously
     # we returned 401 for bad creds but 403 for disabled accounts, which
     # let an attacker who knew a valid password distinguish "this account
     # exists but is disabled" from "wrong password". Both now return the
     # same 401. Audit log still records the distinction server-side.
-    if user is None or not verify_password(payload.password, user.password_hash):
+    if user is None or not password_ok:
+        # T3: tick the lockout counter for every failed attempt, including
+        # ones against unknown emails. Ticking only known emails would let
+        # an attacker enumerate accounts by which addresses ever lock.
+        account_lockout.record_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
-        logger.info("Login refused: inactive account %s", user.email)
+        # G5: don't put the raw email in INFO logs — masked form keeps the
+        # event diagnosable without writing PII to centralised log stores.
+        logger.info("Login refused: inactive account %s", _mask_email(user.email))
+        # T3: still tick the counter — an inactive account is a failed login.
+        account_lockout.record_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # T3: success — clear the bucket so transient typos don't carry forward.
+    account_lockout.clear(payload.email)
 
     settings = get_settings()
     jti = new_jti()
@@ -154,6 +233,9 @@ def change_password(
     """
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    # T4: HIBP check on the new password — fail before we touch the DB.
+    _reject_if_breached(payload.new_password)
 
     user.password_hash = hash_password(payload.new_password)
     user.session_version = (user.session_version or 0) + 1
@@ -260,6 +342,11 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> R
     user = db.get(User, prt.user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
+
+    # T4: HIBP check before we accept the reset. Done AFTER the token is
+    # validated so we don't leak the breach signal back to a holder of an
+    # invalid token.
+    _reject_if_breached(payload.new_password)
 
     user.password_hash = hash_password(payload.new_password)
     user.session_version = (user.session_version or 0) + 1

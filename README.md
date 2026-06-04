@@ -4,7 +4,8 @@ A self-hosted, internal-use issue tracker. FastAPI + PostgreSQL + a
 zero-framework JavaScript SPA. One Docker command to run, no external
 auth, no external file storage — attachments live in the database.
 
-**Current version: v2.7** — a quality, security, and stability release.
+**Current version: v2.8** — security hardening release after an OWASP-style
+audit. Eight items shipped; details in *Release notes* below.
 **Zero schema changes** since v2.4; production databases are byte-for-byte
 untouched on every upgrade. See *[Live-data safety](#live-data-safety)*.
 
@@ -176,33 +177,16 @@ API uses.
 
 ## Release notes
 
-- **v2.7** — Quality, security, stability. SonarQube quality gate green
-  (0 issues, 0 unreviewed hotspots, ~84% backend coverage). Cognitive
-  complexity refactored across 14 large functions (11 Python, 3 JS).
-  10 security hotspots remediated in code rather than via UI review.
-  Mechanical SPA modernization (`Number.parseInt`, optional chaining,
-  `replaceAll`, `dataset`, `globalThis`). +66 new unit tests (471
-  total). Accessibility polish (8 `aria-label` / role fixes). CSS
-  contrast and deduplication. Zero schema changes; production DBs
-  byte-for-byte safe.
-- **v2.6** — Rich-text editor for descriptions and comments (B / I / U
-  / lists / blockquote / code / image paste-as-attachment), with
-  Chrome-148 workaround that hand-rolls inline formatting in DOM
-  code instead of `execCommand`. Custom calendar / date-picker and
-  custom dropdowns replace browser-native widgets. Sidebar names are
-  clickable to edit. Newest-first comments / attachments / tasks. Audit
-  log loads up to 5 000 rows with *Load older entries* button.
-- **v2.5** — Per-item-type status sets. Admin-curated comments and
-  attachments. Post-creation 📎 *Add attachment* button on the item
-  detail. Global blocking loader on every server action. Card-style
-  controls bar on Events / Sessions / Audit views.
-- **v2.4** — Audit history survives bug deletion (`activity_log.bug_id`
-  becomes `ON DELETE SET NULL` for fresh installs). Audit search
-  LEFT-JOINs the bugs table so live titles and types are searchable.
-  Frontend-level read-only mode for restricted users with a clear
-  banner.
+Full history lives in [CHANGELOG.md](CHANGELOG.md). Latest: **v2.8** —
+security hardening (OWASP audit remediation; 8 additive items, no DB
+schema change).
 
-Older releases: see git history.
+## Contributing & security
+
+- Bug reports / feature ideas — GitHub Issues.
+- Code contributions — see [CONTRIBUTING.md](CONTRIBUTING.md).
+- Vulnerabilities — **don't open a public issue**; see
+  [SECURITY.md](SECURITY.md) for the private disclosure path.
 
 ---
 

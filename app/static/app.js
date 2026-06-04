@@ -2532,6 +2532,16 @@ function _seedBugFormCreateMode(form) {
   if (form.elements.description._bhRtSet) {
     form.elements.description._bhRtSet("");
   }
+  // Default Due Date to TODAY on create. form.reset() above blanked the
+  // native input, but the v2.6 custom-calendar button label doesn't
+  // refresh on reset() (reset doesn't dispatch change; the MutationObserver
+  // only watches setAttribute). Dispatching change after setting value
+  // makes the widget redraw "Select date" → today's date.
+  const dueEl = form.elements.due_date;
+  if (dueEl) {
+    dueEl.value = _isoDate(new Date());
+    dueEl.dispatchEvent(new Event("change", { bubbles: true }));
+  }
   // v2.6: paste in description while CREATING stages files in the
   // createBug bucket — they upload AFTER the bug is created.
   form.elements.description._bhPasteHandler = async (f) => {

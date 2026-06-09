@@ -49,6 +49,7 @@ logging.basicConfig(level=get_settings().LOG_LEVEL)
 # stale cached copy.
 # ---------------------------------------------------------------------------
 ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
+APP_VERSION_PLACEHOLDER = "__APP_VERSION__"
 
 
 def _compute_asset_version(static_dir: Path) -> str:
@@ -540,11 +541,20 @@ app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
 def _serve_html(filename: str) -> HTMLResponse:
-    """Read an HTML file and replace the asset-version placeholder with
-    the current build's hash. Querying the file system on every request
-    is fine — these files are tiny and we don't care about a few µs."""
+    """Read an HTML file and replace the asset-version + app-version
+    placeholders with their live values. Querying the file system on
+    every request is fine — these files are tiny and we don't care
+    about a few µs.
+
+    __ASSET_VERSION__ → 12-char hash of the static bundle (used for
+                       cache-busting).
+    __APP_VERSION__   → settings.APP_VERSION (e.g. "2.9"). Lets the
+                       login page show the running version without an
+                       extra round trip to /api/health.
+    """
     body = (settings.STATIC_DIR / filename).read_text(encoding="utf-8")
     body = body.replace(ASSET_VERSION_PLACEHOLDER, app.state.asset_version)
+    body = body.replace(APP_VERSION_PLACEHOLDER, settings.APP_VERSION)
     return HTMLResponse(body)
 
 

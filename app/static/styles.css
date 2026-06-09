@@ -2086,6 +2086,13 @@ fieldset.field > legend {
   position: relative;
   z-index: 1;
 }
+.auth-version {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.4px;
+  user-select: none;
+}
 .auth-card {
   width: 100%;
   background: var(--bg-elev);

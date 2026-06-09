@@ -169,6 +169,20 @@ def test_health_endpoint_reports_v29(client):
     assert r.json()["version"] == "2.9"
 
 
+def test_login_page_shows_version_2_9(client):
+    """The login page renders "Version 2.9" below the sign-in card so a
+    user looking at the landing page knows which release they're on
+    without having to log in first."""
+    r = client.get("/login.html")
+    assert r.status_code == 200
+    body = r.text
+    # Server-side placeholder substitution must have replaced the token.
+    assert "__APP_VERSION__" not in body
+    assert "Version 2.9" in body
+    # And the styling hook must be there.
+    assert 'class="auth-version"' in body
+
+
 # ---------------------------------------------------------------------------
 # Rich-text editor undo/redo: snapshot-based history so Ctrl+Z works
 # across both typed characters AND toolbar formatting commands. The old

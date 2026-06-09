@@ -381,69 +381,78 @@
         </div>
         <div class="reports-shell">
           <aside class="reports-side" aria-label="Report configuration">
-            <div class="reports-side-section">
-              <label class="field">
-                <span>Report type</span>
-                <select id="reportTypeSelect" data-bh-select aria-label="Report type"></select>
-              </label>
-              <p class="reports-help" id="reportTypeHelp"></p>
+            <div class="reports-side-scroll">
+              <div class="reports-side-section">
+                <label class="field">
+                  <span>Report type</span>
+                  <select id="reportTypeSelect" data-bh-select aria-label="Report type"></select>
+                </label>
+                <p class="reports-help" id="reportTypeHelp"></p>
+              </div>
+              <div class="reports-side-section">
+                <h3>Filters</h3>
+                <div class="reports-side-row">
+                  <label class="field">
+                    <span>Date from</span>
+                    <input id="reportDateFrom" type="date" />
+                  </label>
+                  <label class="field">
+                    <span>Date to</span>
+                    <input id="reportDateTo" type="date" />
+                  </label>
+                </div>
+                <div class="reports-side-row reports-side-row-presets">
+                  <button class="btn ghost btn-sm" id="reportPresetThisWeekBtn" type="button" title="Set date range to the last 7 days">Last 7 days</button>
+                  <button class="btn ghost btn-sm" id="reportPresetThisMonthBtn" type="button" title="Set date range to the last 30 days">Last 30 days</button>
+                </div>
+                <fieldset class="field">
+                  <legend>Item types</legend>
+                  <div class="reports-chips" id="reportItemTypes"></div>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Statuses</legend>
+                  <div class="reports-chips" id="reportStatuses"></div>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Priorities</legend>
+                  <div class="reports-chips" id="reportPriorities"></div>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Environments</legend>
+                  <div class="reports-chips" id="reportEnvironments"></div>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Projects</legend>
+                  <div class="reports-chips reports-chips-scroll" id="reportProjects"></div>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Assignees</legend>
+                  <div class="reports-chips reports-chips-scroll" id="reportAssignees"></div>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Reporters</legend>
+                  <div class="reports-chips reports-chips-scroll" id="reportReporters"></div>
+                </fieldset>
+                <label class="field">
+                  <span>Title / description contains</span>
+                  <input id="reportTextSearch" type="search" maxlength="400" placeholder="Free-text match…" autocomplete="off" />
+                </label>
+                <label class="field check-row">
+                  <input type="checkbox" id="reportIncludeNotABug" />
+                  <span>Include “Not a Bug” items</span>
+                </label>
+                <label class="field">
+                  <span>Run label (optional)</span>
+                  <input id="reportRunLabel" type="text" maxlength="120" placeholder="e.g. Q2 review pull" autocomplete="off" />
+                </label>
+              </div>
             </div>
-            <div class="reports-side-section">
-              <h3>Filters</h3>
-              <label class="field">
-                <span>Date from</span>
-                <input id="reportDateFrom" type="date" />
-              </label>
-              <label class="field">
-                <span>Date to</span>
-                <input id="reportDateTo" type="date" />
-              </label>
-              <fieldset class="field">
-                <legend>Item types</legend>
-                <div class="reports-chips" id="reportItemTypes"></div>
-              </fieldset>
-              <fieldset class="field">
-                <legend>Statuses</legend>
-                <div class="reports-chips" id="reportStatuses"></div>
-              </fieldset>
-              <fieldset class="field">
-                <legend>Priorities</legend>
-                <div class="reports-chips" id="reportPriorities"></div>
-              </fieldset>
-              <fieldset class="field">
-                <legend>Environments</legend>
-                <div class="reports-chips" id="reportEnvironments"></div>
-              </fieldset>
-              <fieldset class="field">
-                <legend>Projects</legend>
-                <div class="reports-chips reports-chips-scroll" id="reportProjects"></div>
-              </fieldset>
-              <fieldset class="field">
-                <legend>Assignees</legend>
-                <div class="reports-chips reports-chips-scroll" id="reportAssignees"></div>
-              </fieldset>
-              <fieldset class="field">
-                <legend>Reporters</legend>
-                <div class="reports-chips reports-chips-scroll" id="reportReporters"></div>
-              </fieldset>
-              <label class="field">
-                <span>Title / description contains</span>
-                <input id="reportTextSearch" type="search" maxlength="400" placeholder="Free-text match…" autocomplete="off" />
-              </label>
-              <label class="field check-row">
-                <input type="checkbox" id="reportIncludeNotABug" />
-                <span>Include “Not a Bug” items</span>
-              </label>
-              <label class="field">
-                <span>Run label (optional)</span>
-                <input id="reportRunLabel" type="text" maxlength="120" placeholder="e.g. Q2 review pull" autocomplete="off" />
-              </label>
-            </div>
+            <!-- Pinned action footer — stays visible regardless of how
+                 far you scroll inside the filter list, so Run report is
+                 always one click away. -->
             <div class="reports-side-actions">
-              <button class="btn primary" id="reportRunBtn" type="button">Run report</button>
-              <button class="btn ghost" id="reportClearBtn" type="button">Reset</button>
-              <button class="btn ghost" id="reportPresetThisWeekBtn" type="button" title="Set date range to the last 7 days">Last 7 days</button>
-              <button class="btn ghost" id="reportPresetThisMonthBtn" type="button" title="Set date range to the last 30 days">Last 30 days</button>
+              <button class="btn primary" id="reportRunBtn" type="button">▶ Run report</button>
+              <button class="btn ghost" id="reportClearBtn" type="button">Reset filters</button>
             </div>
           </aside>
           <section class="reports-main" aria-label="Report results">

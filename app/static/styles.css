@@ -3535,39 +3535,79 @@ body.is-loading .events-detail-mode {
 
 /* ===========================================================================
    REPORTS view
-   Sidebar filter panel + main table + Download. The panel scrolls
-   independently of the table so a heavily-filtered run still keeps the
-   data readable. Uses the app's theme tokens so it matches the rest of
-   the SPA in both dark and light modes — no hard-coded white panels.
+   Sidebar filter panel + main table + Download.
+
+   Layout invariants:
+   - Both grid columns get min-width: 0 so a wide table can never push
+     the main panel past the viewport edge — CSS grid items default to
+     min-width: auto, which is the cell's intrinsic min-content width,
+     and that's the exact thing that was leaking out to the right.
+   - The filter panel splits into a SCROLLABLE inner area and a PINNED
+     action footer (Run report + Reset). The Run button stays visible
+     no matter how far down the filter list you scroll.
+   - The result table scrolls horizontally INSIDE its container; the
+     container itself never exceeds 100% of the right column's width.
+   - Three responsive breakpoints (1200 / 1000 / 720 px) so the panel
+     resizes / stacks cleanly on smaller screens.
+
+   Uses the app's theme tokens so the panel matches both themes — no
+   hard-coded white panels.
 =========================================================================== */
 .reports-intro { padding: 18px 24px 8px; }
 
 .reports-shell {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   gap: 18px;
   padding: 6px 24px 24px;
   align-items: start;
   min-height: 0;
 }
-@media (max-width: 900px) {
+.reports-shell > * { min-width: 0; }   /* prevent intrinsic content size from blowing the grid out */
+
+@media (max-width: 1200px) {
+  .reports-shell { grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); gap: 14px; padding: 6px 18px 18px; }
+}
+@media (max-width: 1000px) {
   .reports-shell { grid-template-columns: 1fr; }
+  .reports-side { max-height: none !important; position: static !important; }
+}
+@media (max-width: 720px) {
+  .reports-intro { padding: 14px 14px 6px; }
+  .reports-shell { padding: 6px 12px 14px; gap: 10px; }
+  .reports-side, .reports-main { padding: 12px; border-radius: 10px; }
 }
 
 .reports-side {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 180px);
+  max-height: calc(100vh - 180px);
+  position: sticky;
+  top: 18px;
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  overflow: hidden;   /* the INNER scroll container handles overflow */
+  min-width: 0;
+}
+.reports-side-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 16px 8px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: calc(100vh - 220px);
-  overflow-y: auto;
-  box-shadow: var(--shadow-sm);
-  color: var(--text);
+  min-height: 0;
 }
 .reports-side-section { display: flex; flex-direction: column; gap: 8px; }
+.reports-side-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.reports-side-row-presets { grid-template-columns: 1fr 1fr; }
+.reports-side-row-presets .btn { width: 100%; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
 .reports-side-section h3 {
   margin: 4px 0 0;
   font-size: 11px;
@@ -3619,15 +3659,21 @@ body.is-loading .events-detail-mode {
   filter: invert(0.9) hue-rotate(180deg);
   cursor: pointer;
 }
+/* Pinned action footer — flex-shrink: 0 so it stays at the bottom of
+   the side panel while the filter list scrolls. Background-blocked
+   from the scroll content above with a contrasting bg + border so the
+   user understands the buttons are anchored. */
 .reports-side-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  border-top: 1px solid var(--border-soft);
-  padding-top: 14px;
-  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  background: var(--bg-elev-2);
+  flex-shrink: 0;
 }
-.reports-side-actions .btn { flex: 1 1 auto; min-width: 110px; }
+.reports-side-actions .btn { width: 100%; min-width: 0; }
+.reports-side-actions .btn.primary { font-weight: 700; }
 
 /* Chip group — each chip is a pill that hides its native checkbox.
    Click the pill to toggle. Selected state uses the accent gradient
@@ -3743,6 +3789,12 @@ body.is-loading .events-detail-mode {
   box-shadow: var(--shadow-sm);
   min-height: 320px;
   color: var(--text);
+  /* Critical: lets the table-scroll inside size to OUR width, not its
+     own intrinsic content width. Without this the table pushes the
+     panel beyond the viewport. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 .reports-result-head {
   display: flex;
@@ -3752,18 +3804,21 @@ body.is-loading .events-detail-mode {
   flex-wrap: wrap;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-soft);
+  min-width: 0;
 }
+.reports-result-head > div:first-child { min-width: 0; flex: 1 1 auto; }
 .reports-result-head h3 {
   margin: 0 0 4px;
   color: var(--text);
   font-size: 16px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
-.reports-result-head p { color: var(--text-muted); }
+.reports-result-head p { color: var(--text-muted); overflow-wrap: anywhere; }
 
 .reports-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
 }
 .reports-summary-card {
@@ -3771,6 +3826,7 @@ body.is-loading .events-detail-mode {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 14px;
+  min-width: 0;
 }
 .reports-summary-label {
   font-size: 10px;
@@ -3778,6 +3834,7 @@ body.is-loading .events-detail-mode {
   letter-spacing: 0.6px;
   color: var(--text-muted);
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 .reports-summary-value {
   font-size: 20px;
@@ -3788,21 +3845,44 @@ body.is-loading .events-detail-mode {
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  overflow-wrap: anywhere;
 }
 
 .reports-table-scroll {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   max-height: calc(100vh - 420px);
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-elev-2);
+  /* The wrapper itself MUST clip to the parent's width — otherwise the
+     wide table inside extends the wrapper, the wrapper extends the
+     panel, and the panel pushes out of the viewport. */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
-.reports-table { width: 100%; border-collapse: collapse; font-size: 13px; color: var(--text); }
+@media (max-width: 1000px) {
+  .reports-table-scroll { max-height: 60vh; }
+}
+.reports-table {
+  width: max-content;        /* table sizes to its content; the scroll wrapper handles overflow */
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text);
+}
 .reports-table th, .reports-table td {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-soft);
   vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
+/* Common column hints — narrow ones stay tight; wide text columns
+   get a sensible max so a 4000-char description doesn't make one
+   row twenty lines tall. */
+.reports-table td { max-width: 360px; }
 .reports-table thead th {
   position: sticky;
   top: 0;
@@ -3813,6 +3893,7 @@ body.is-loading .events-detail-mode {
   text-transform: uppercase;
   font-size: 11px;
   letter-spacing: 0.6px;
+  white-space: nowrap;
 }
 .reports-table tbody tr:hover { background: var(--accent-soft); }
 .reports-empty, .reports-truncated {

@@ -4,6 +4,39 @@ All notable changes to Bug Hunter. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/). The project predates
 this file; releases older than v2.4 live in git history only.
 
+## [2.9] — 2026-06-09
+
+**Reports view + Sleuth report intent.** No DB schema change — the
+"who resolved this item and when" attribution is derived from the
+existing `activity_log` table, so the production database is
+byte-for-byte untouched on upgrade.
+
+- *Reports sidebar view* — Jira-style report builder behind a manager /
+  admin role gate (`data-needs-role="manager"`). Nine report types:
+  Item Detail Export, Resolution Throughput, Pending Items Snapshot,
+  Status Distribution, Priority Distribution, Project Breakdown,
+  Aging, Created-vs-Resolved Timeline, Time to Resolution. Universal
+  filter set (date range, item types, statuses, priorities,
+  environments, projects, assignees, reporters, free text).
+- *Excel export* — multi-sheet XLSX with the aggregated view, a
+  drill-down "Items" sheet (raw rows for the manager who wants
+  everything), and an audit "Filters Applied" sheet. CSV-injection
+  defense (G2) migrated from the CSV export to the XLSX writer.
+- *Sleuth report intent* — natural-language report queries reuse the
+  same engine. *"report of who solved how many bugs last week"*,
+  *"pending bugs report"*, *"throughput last 7 days"* etc. produce an
+  inline preview plus a downloadable spreadsheet.
+- *Legacy CSV export retired* — `/api/bugs/export.csv` removed; the
+  sidebar "Export CSV" button replaced by the Reports entry. Tests
+  that exercised the CSV path moved to the XLSX path with the same
+  invariants.
+- *Comment composer keeps attachments separate* — files attached via
+  the comment composer always become comment attachments, never bug-
+  level. Bug-level attachments still have their own 📎 uploader.
+- *Delete-attachment button no longer submits the bug form* — added
+  the missing `type="button"` so a comment-attachment delete clicks
+  cleanly without saving the bug or closing the modal.
+
 ## [2.8] — 2026-06-04
 
 **Security hardening** — OWASP audit + remediation. Eight items, all

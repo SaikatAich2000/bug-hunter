@@ -1,7 +1,6 @@
 """Bugs API + comments + attachments + activity (per-bug)."""
 from __future__ import annotations
 
-import csv
 import io
 import re
 import threading
@@ -12,7 +11,7 @@ from urllib.parse import quote
 
 from fastapi import (
     APIRouter, BackgroundTasks, Depends, File, Form, HTTPException,
-    Query, Response, UploadFile, status,
+    Query, UploadFile, status,
 )
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select, update
@@ -40,23 +39,6 @@ router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 # consistent across endpoints.
 _DETAIL_BUG_NOT_FOUND = "Bug not found"
 _DEFAULT_MIME = "application/octet-stream"
-
-# G2: characters that Excel/Numbers/LibreOffice interpret as a formula
-# when they appear at the start of a CSV cell. A bug title like
-# `=cmd|'/c calc.exe'!A1` would execute the formula when the exported
-# CSV is opened. We neutralise by prefixing such cells with a single
-# quote — the de-facto OWASP-recommended approach. The leading quote
-# isn't displayed by the spreadsheet, only the text after it.
-_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_safe(value) -> str:
-    """Defang CSV injection. Always returns a string; non-strings are
-    coerced via ``str()`` first."""
-    s = "" if value is None else str(value)
-    if s and s[0] in _CSV_FORMULA_TRIGGERS:
-        return "'" + s
-    return s
 
 # Soft cap on individual attachment size — protects the DB from a 4 GB video
 # upload. Configurable via env if the team needs bigger files later.
@@ -253,49 +235,6 @@ def _like_escape(needle: str) -> str:
         needle.replace("\\", "\\\\")
               .replace("%", "\\%")
               .replace("_", "\\_")
-    )
-
-
-# ---------------------------------------------------------------------------
-# CSV export — must come before /{bug_id}
-# ---------------------------------------------------------------------------
-@router.get("/export.csv")
-def export_bugs_csv(
-    db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
-) -> Response:
-    rows = db.scalars(_eager_bug().order_by(Bug.id.asc())).all()
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "id", "type", "project", "title", "status", "priority", "environment",
-        "reporter_name", "reporter_email", "assignees", "due_date",
-        "created_at", "updated_at", "description",
-    ])
-    for b in rows:
-        # G2: every cell goes through _csv_safe so a bug title that
-        # starts with `=` / `+` / `-` / `@` can't execute as a formula
-        # when the export is opened in Excel.
-        writer.writerow([
-            _csv_safe(b.id),
-            _csv_safe(getattr(b, "item_type", None) or "Bug"),
-            _csv_safe(b.project.name if b.project else ""),
-            _csv_safe(b.title),
-            _csv_safe(b.status),
-            _csv_safe(b.priority),
-            _csv_safe(b.environment),
-            _csv_safe(b.reporter.name if b.reporter else ""),
-            _csv_safe(b.reporter.email if b.reporter else ""),
-            _csv_safe("; ".join(f"{a.name} <{a.email}>" for a in b.assignees)),
-            _csv_safe(b.due_date or ""),
-            _csv_safe(b.created_at.isoformat()),
-            _csv_safe(b.updated_at.isoformat()),
-            _csv_safe(b.description.replace("\n", " ").replace("\r", " ")),
-        ])
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="bugs.csv"'},
     )
 
 

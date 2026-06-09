@@ -169,15 +169,23 @@ class TestRichTextFixMarkers:
         focus moves from the contenteditable to the button — the
         typing state set by execCommand then disappears before the
         user can type. This is the original "click Bold, nothing
-        happens" regression."""
+        happens" regression.
+
+        v2.9 wrapped handleToolbarCmd() in _runToolbarCmd() so the
+        undo-history can snapshot before / after the mutation; the
+        invariant tested here is the preventDefault stays in place,
+        regardless of whether the runner is the raw helper or the
+        snapshot wrapper."""
         js = _read_static("app.js")
         # The mousedown handler MUST call preventDefault before running
-        # the toolbar command.
+        # the toolbar command. Accept either the raw handler or the
+        # snapshot wrapper as the post-preventDefault call.
         m = re.search(
-            r'toolbar\.addEventListener\("mousedown".*?e\.preventDefault\(\).*?handleToolbarCmd',
+            r'toolbar\.addEventListener\("mousedown".*?e\.preventDefault\(\).*?'
+            r'(?:_runToolbarCmd|handleToolbarCmd)',
             js, re.S,
         )
-        assert m, "mousedown must preventDefault before handleToolbarCmd"
+        assert m, "mousedown must preventDefault before running the toolbar command"
 
     def test_app_js_has_manual_formatting_implementations(self):
         """Chrome 148 silently no-ops document.execCommand("bold") inside

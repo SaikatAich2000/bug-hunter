@@ -496,14 +496,23 @@ class TestBugs:
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
         assert r.status_code == 200
 
-    def test_csv_export_works(self, admin_client):
+    def test_xlsx_export_works(self, admin_client):
+        """Smoke test the replacement for the legacy /export.csv path:
+        the Reports XLSX export round-trips a freshly-created bug."""
+        import io
+        from openpyxl import load_workbook
         p = _create_project(admin_client, name="N18")
         _create_bug(admin_client, p["id"], title="csv-test")
-        r = admin_client.get("/api/bugs/export.csv")
+        r = admin_client.post("/api/reports/export.xlsx", json={
+            "report_key": "item_detail", "filters": {},
+        })
         assert r.status_code == 200
-        text = r.text
+        wb = load_workbook(io.BytesIO(r.content), read_only=True)
+        text = " ".join(
+            str(v) for row in wb[wb.sheetnames[0]].iter_rows(values_only=True)
+            for v in row if v is not None
+        )
         assert "csv-test" in text
-        assert text.startswith("id,type,project,title")
 
 
 # ===========================================================================
@@ -767,8 +776,12 @@ class TestSecurity:
         assert r1.status_code == 401 and r2.status_code == 401
         assert r1.json()["detail"] == r2.json()["detail"]
 
-    def test_unauth_csv_export_blocked(self, client):
-        r = client.get("/api/bugs/export.csv")
+    def test_unauth_xlsx_export_blocked(self, client):
+        """The Reports XLSX export replaces the legacy /api/bugs/export.csv
+        path. Unauthenticated callers must be rejected with 401."""
+        r = client.post("/api/reports/export.xlsx", json={
+            "report_key": "item_detail", "filters": {},
+        })
         assert r.status_code == 401
 
     def test_attachment_download_requires_auth(self, admin_client):

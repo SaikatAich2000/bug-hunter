@@ -26,7 +26,7 @@ from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.models import Project, Session as SessionRow, User
 from app.chatbot.router import router as chatbot_router
-from app.routes import audit, auth, bugs, events, projects, sessions, stats, users
+from app.routes import audit, auth, bugs, events, projects, reports, sessions, stats, users
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
     ALLOWED_ITEM_TYPES,
@@ -656,6 +656,7 @@ app.include_router(projects.router)
 app.include_router(bugs.router)
 app.include_router(events.router)
 app.include_router(stats.router)
+app.include_router(reports.router)
 app.include_router(audit.router)
 app.include_router(sessions.router)
 app.include_router(chatbot_router)

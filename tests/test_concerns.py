@@ -193,9 +193,13 @@ class TestFrontendContract:
         # But attachment_count should reflect TOTAL
         assert d["attachment_count"] == 2
 
-    def test_csv_export_quotes_embedded_commas_and_newlines(self, admin_client):
-        """CSV: a description with commas/newlines must remain a single
-        record. Standard csv.writer should handle this — verify no row split."""
+    def test_xlsx_export_preserves_commas_and_newlines_in_description(self, admin_client):
+        """XLSX: a description with commas/newlines must survive the round
+        trip through openpyxl as a single cell, not get split into rows.
+        Same invariant the old CSV export was tested for, now on the
+        Reports XLSX path that replaced it."""
+        import io
+        from openpyxl import load_workbook
         p = _make_project(admin_client, "FE2")
         admin_client.post("/api/bugs", json={
             "project_id": p["id"],
@@ -203,12 +207,20 @@ class TestFrontendContract:
             "description": "line1\nline2,still line2",
             "priority": "Low", "environment": "DEV",
         })
-        r = admin_client.get("/api/bugs/export.csv")
-        text = r.text
-        # Header row + 1 data row + trailing newline → expect 2 newlines
-        # (depends on writer dialect, but newlines inside fields must be preserved or escaped).
-        # Verify both pieces of the description survived.
+        r = admin_client.post("/api/reports/export.xlsx", json={
+            "report_key": "item_detail", "filters": {},
+        })
+        assert r.status_code == 200, r.text
+        wb = load_workbook(io.BytesIO(r.content), read_only=True)
+        # Flatten every string cell in the main sheet.
+        text = " ".join(
+            str(v) for row in wb[wb.sheetnames[0]].iter_rows(values_only=True)
+            for v in row if v is not None
+        )
+        # Both halves of the description survived the export.
         assert "line1" in text and "still line2" in text
+        # And the comma-laden title is in the workbook.
+        assert "row, has, commas" in text
 
 
 # ===========================================================================

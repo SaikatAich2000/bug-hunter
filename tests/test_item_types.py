@@ -150,18 +150,27 @@ def test_stats_includes_by_type(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# CSV export
+# XLSX export — the Reports view replaced the legacy CSV path. The same
+# "the type column is present and a Task row carries Task" invariant is
+# now verified against the Item Detail report.
 # ---------------------------------------------------------------------------
-def test_csv_export_includes_type_column(admin_client):
+def test_xlsx_export_includes_type_column(admin_client):
+    import io
+    from openpyxl import load_workbook
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Task")
-    r = admin_client.get("/api/bugs/export.csv")
+    r = admin_client.post("/api/reports/export.xlsx", json={
+        "report_key": "item_detail", "filters": {},
+    })
     assert r.status_code == 200
-    text = r.text
-    header = text.splitlines()[0]
-    assert "type" in header.lower().split(",")
+    wb = load_workbook(io.BytesIO(r.content), read_only=True)
+    rows = list(wb[wb.sheetnames[0]].iter_rows(values_only=True))
+    # Row 1 is the banner; row 2 is the column-header row.
+    header_row = [str(v).lower() if v is not None else "" for v in rows[1]]
+    assert "type" in header_row
     # The Task value appears somewhere in the body.
-    assert "Task" in text
+    body_text = " ".join(str(v) for r in rows[2:] for v in r if v is not None)
+    assert "Task" in body_text
 
 
 # ---------------------------------------------------------------------------

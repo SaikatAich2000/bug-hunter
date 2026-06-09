@@ -105,42 +105,57 @@ class TestLoginTimingEquality:
 
 
 # ---------------------------------------------------------------------------
-# G2 — CSV formula injection
+# G2 — Spreadsheet formula injection (XLSX)
+#
+# The legacy CSV export was retired when the Reports view shipped. The
+# same attack surface (a bug title like `=cmd|'/c calc.exe'!A1` becoming
+# an Excel formula when the workbook is opened) applies to XLSX, because
+# openpyxl auto-treats cell values starting with `=`/`+`/`-`/`@`/`\t`/`\r`
+# as formulas. We defang at the same boundary in
+# app/reports/xlsx.py::_defang_formula_text. This test class moved with
+# the feature — same invariants, new path.
 # ---------------------------------------------------------------------------
-class TestCsvInjectionGuard:
+class TestXlsxFormulaInjectionGuard:
 
     @pytest.mark.parametrize("trigger", ["=", "+", "-", "@", "\t", "\r"])
-    def test_safe_helper_neutralises_formula_triggers(self, trigger):
-        from app.routes.bugs import _csv_safe
-        assert _csv_safe(trigger + "cmd|calc!A1").startswith("'" + trigger)
+    def test_defang_helper_neutralises_formula_triggers(self, trigger):
+        from app.reports.xlsx import _defang_formula_text
+        assert _defang_formula_text(trigger + "cmd|calc!A1").startswith("'" + trigger)
 
-    def test_safe_helper_passes_through_normal_text(self):
-        from app.routes.bugs import _csv_safe
-        assert _csv_safe("Login button broken") == "Login button broken"
+    def test_defang_helper_passes_through_normal_text(self):
+        from app.reports.xlsx import _defang_formula_text
+        assert _defang_formula_text("Login button broken") == "Login button broken"
 
-    def test_safe_helper_handles_none_and_non_string(self):
-        from app.routes.bugs import _csv_safe
-        assert _csv_safe(None) == ""
-        assert _csv_safe(42) == "42"
-        assert _csv_safe("") == ""
+    def test_defang_helper_handles_empty_string(self):
+        from app.reports.xlsx import _defang_formula_text
+        assert _defang_formula_text("") == ""
 
-    def test_export_csv_prefixes_malicious_title(self, admin_client):
+    def test_export_xlsx_prefixes_malicious_title(self, admin_client):
+        """End-to-end: a bug filed with a formula-shaped title must come
+        back through the XLSX with a leading single-quote so spreadsheet
+        apps render it as text rather than executing it."""
+        import io
+        from openpyxl import load_workbook
         bug_id = _make_bug(admin_client, "=cmd|'calc.exe'!A1")
         assert bug_id  # sanity
-        res = admin_client.get("/api/bugs/export.csv")
+        res = admin_client.post("/api/reports/export.xlsx", json={
+            "report_key": "item_detail", "filters": {},
+        })
         assert res.status_code == 200
-        # The malicious title must appear in the CSV with a leading
-        # quote so Excel treats it as text.
-        body = res.text
-        assert "'=cmd|" in body
-        # And the un-quoted form must NOT appear standalone in any cell.
-        # (Substring check: "=cmd|" only ever appears immediately after a
-        # single-quote prefix.)
-        for line in body.splitlines()[1:]:
-            for cell in line.split(","):
-                cell = cell.strip().strip('"')
-                if cell.startswith("=cmd|"):
-                    pytest.fail(f"Un-neutralised formula in CSV cell: {cell!r}")
+        wb = load_workbook(io.BytesIO(res.content), read_only=True)
+        # Walk the cells in the main sheet looking for the title column.
+        found_defanged = False
+        for row in wb[wb.sheetnames[0]].iter_rows(values_only=True):
+            for cell in row:
+                if not isinstance(cell, str):
+                    continue
+                if "cmd|" in cell:
+                    # Must be prefixed with a single quote (defanged).
+                    assert cell.startswith("'="), (
+                        f"Un-neutralised formula in XLSX cell: {cell!r}"
+                    )
+                    found_defanged = True
+        assert found_defanged, "expected the malicious title to appear (defanged) somewhere"
 
 
 # ---------------------------------------------------------------------------

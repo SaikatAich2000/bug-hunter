@@ -43,6 +43,7 @@ from .nlu import (
     OPEN_STATUSES,
     describe_filters,
     parse,
+    pick_report_key,
 )
 
 
@@ -252,6 +253,16 @@ def _handle_help() -> Response:
         "**Export**\n"
         "- Add *to excel* / *as xlsx* / *download* to any list query and "
         "I'll generate a spreadsheet you can save.\n\n"
+        "**Reports** *(managers / admins)*\n"
+        "- *report of who solved how many bugs last week*\n"
+        "- *pending bugs report*\n"
+        "- *throughput last 7 days by user*\n"
+        "- *time to resolution this month*\n"
+        "- *aging report* / *project breakdown*\n"
+        "- *report of all critical bugs in PROD assigned to alice*\n"
+        "Every report comes back as an inline preview plus an Excel "
+        "download with the full data, drill-down items, and the filters "
+        "that produced it.\n\n"
         "**Take actions** *(I'll always ask before changing anything)*\n"
         "- *close bug 5* / *reopen #12* / *mark bug 7 as resolved*\n"
         "- *assign bug 3 to Alice* / *unassign Bob from #5*\n"
@@ -862,6 +873,229 @@ def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: in
 
 
 # ---------------------------------------------------------------------------
+# Reports — delegates to app.reports.engine. This is what makes "give me a
+# report of who solved how many bugs last week" return the same numbers as
+# the Reports view in the SPA.
+# ---------------------------------------------------------------------------
+_REPORTS_ROLE_ALLOWED = frozenset({"admin", "manager"})
+
+
+def _filters_from_parsed(pq: ParsedQuery) -> "Any":
+    """Translate a Sleuth ParsedQuery into a reports-engine Filters."""
+    from app.reports import Filters
+    date_from = None
+    date_to = None
+    if pq.time_window:
+        if pq.time_window.start:
+            date_from = pq.time_window.start.date()
+        if pq.time_window.end:
+            date_to = pq.time_window.end.date()
+    item_types: list[str] = []
+    # If the user mentioned a specific item type (bug / requirement /
+    # task / defect), scope to it; else leave empty so the report covers
+    # all three.
+    msg_l = (pq.raw_message or "").lower()
+    type_keywords = (
+        ("Bug",         ("bug", "defect")),
+        ("Requirement", ("requirement",)),
+        ("Task",        ("task",)),
+    )
+    for canonical, needles in type_keywords:
+        if any(n in msg_l for n in needles):
+            item_types.append(canonical)
+    return Filters(
+        date_from=date_from,
+        date_to=date_to,
+        item_types=item_types,
+        statuses=list(pq.statuses),
+        priorities=list(pq.priorities),
+        environments=list(pq.environments),
+        project_ids=list(pq.project_ids),
+        assignee_ids=list(pq.assignee_ids),
+        reporter_ids=list(pq.reporter_ids),
+        text_search=pq.text_search,
+        label=f"Sleuth: {pq.raw_message[:80]}" if pq.raw_message else "",
+    )
+
+
+def _report_row_to_table_row(row: dict, columns) -> list[str]:
+    out: list[str] = []
+    for col in columns:
+        v = row.get(col.key, "")
+        if v is None:
+            out.append("")
+        elif isinstance(v, (int, float)):
+            out.append(str(v))
+        else:
+            s = str(v)
+            out.append(s if len(s) <= 80 else s[:77] + "…")
+    return out
+
+
+def _stage_report_xlsx(result, report_key: str) -> tuple[str, int, str]:
+    """Build the XLSX and stage it under a fresh download token. Returns
+    (token, byte_size, filename)."""
+    from app.chatbot import excel as _excel
+    from app.reports import build_workbook_bytes
+    from app.reports.xlsx import XlsxBuildError
+    try:
+        payload = build_workbook_bytes(result)
+    except XlsxBuildError as exc:
+        raise _excel.ExcelGenerationError(str(exc)) from exc
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"report-{report_key}-{stamp}.xlsx"
+    token, size = _excel.stage_bytes(payload, filename)
+    return token, size, filename
+
+
+def _report_forbidden_response() -> Response:
+    return Response(
+        blocks=[Block("text", {"text":
+            "Reports are limited to managers and admins. Ask one of "
+            "them to run this for you, or use **list bugs** / "
+            "**show stats** for the lighter views available to you"})],
+        summary="Reports forbidden",
+        intent="report_forbidden",
+    )
+
+
+def _report_empty_response(result) -> Response:
+    return Response(
+        blocks=[Block("text", {"text":
+            f"**{result.report_label}** — no rows matched your "
+            f"filters. Try widening the date range or removing a "
+            f"filter and ask again"})],
+        summary=f"0 rows · {result.report_label}",
+        intent="report",
+    )
+
+
+def _format_summary_extras(s: dict) -> str:
+    """Render the inline summary lines for the chat preview. Pulled out
+    of _handle_report to keep its complexity within the Sonar limit."""
+    if not s:
+        return ""
+    parts: list[str] = []
+    # total_resolved (Throughput)
+    if "total_resolved" in s:
+        parts.append(
+            f"**Total resolved**: {s['total_resolved']} "
+            f"across {s.get('user_count', 0)} user(s)"
+        )
+    # total_items (Item Detail / Pending / Distribution)
+    if "total_items" in s:
+        parts.append(f"**Total items**: {s['total_items']}")
+    # Timeline pair: only valid when both keys present AND not already
+    # represented by total_resolved (avoid duplication on throughput).
+    if "total_created" in s and "total_resolved" in s and "user_count" not in s:
+        parts.append(
+            f"**Created**: {s['total_created']} · "
+            f"**Resolved**: {s['total_resolved']} · "
+            f"**Net**: {s.get('net', 0)}"
+        )
+    # Time-to-resolution
+    if "average_hours" in s:
+        parts.append(
+            f"**Average**: {s['average_hours']}h · "
+            f"**Median**: {s.get('median_hours', 0)}h · "
+            f"**P95**: {s.get('p95_hours', 0)}h"
+        )
+    return "\n\n".join(parts)
+
+
+def _build_report_preview_text(result, filters, preview_rows_count: int) -> str:
+    text = (
+        f"**{result.report_label}** — {result.total} row"
+        f"{'' if result.total == 1 else 's'}"
+    )
+    if filters.date_from or filters.date_to:
+        text += (
+            f" · {filters.date_from or 'earliest'} → "
+            f"{filters.date_to or 'now'}"
+        )
+    extras = _format_summary_extras(result.summary)
+    if extras:
+        text += "\n\n" + extras
+    if result.total > preview_rows_count:
+        text += (
+            f"\n\nPreview shows the first {preview_rows_count} row"
+            f"{'' if preview_rows_count == 1 else 's'} — "
+            f"download the spreadsheet for the full set"
+        )
+    return text
+
+
+def _try_stage_file_block(result, report_key: str) -> Optional[Block]:
+    """Best-effort: build + stage the XLSX. Returns the file Block on
+    success, None if the export step failed. Logs the exception on
+    failure; never raises (chat must always reply)."""
+    try:
+        token, size, filename = _stage_report_xlsx(result, report_key)
+    except Exception as exc:   # noqa: BLE001 — file build must never crash chat
+        import logging
+        logging.getLogger("bug_hunter.sleuth").exception(
+            "Sleuth report XLSX build failed: %s", exc,
+        )
+        return None
+    return Block("file", {
+        "filename": filename,
+        "size_bytes": size,
+        "download_token": token,
+        "row_count": result.total,
+    })
+
+
+def _handle_report(db: Session, pq: ParsedQuery, actor: User) -> Response:
+    """Run a report engine query and reply with a summary table + file
+    block the user can download as XLSX.
+
+    Authorisation: managers + admins only. Regular users get the same
+    capability gate as the REST endpoint.
+    """
+    if actor.role not in _REPORTS_ROLE_ALLOWED:
+        return _report_forbidden_response()
+
+    report_key = pick_report_key(pq.raw_message or "") or "item_detail"
+    from app.reports import REPORT_CATALOG, run_report
+    meta = REPORT_CATALOG.get(report_key, {})
+    filters = _filters_from_parsed(pq)
+    try:
+        result = run_report(report_key, filters, db)
+    except (ValueError, KeyError) as exc:
+        return Response(
+            blocks=[Block("text", {"text": f"I couldn't run that report: {exc}"})],
+            summary="Report error",
+            intent="report_error",
+        )
+
+    if result.total == 0:
+        return _report_empty_response(result)
+
+    preview_rows = result.rows[:15]
+    blocks: list[Block] = [
+        Block("text", {"text": _build_report_preview_text(result, filters, len(preview_rows))}),
+        Block("table", {
+            "headers": [c.label for c in result.columns],
+            "rows": [_report_row_to_table_row(r, result.columns) for r in preview_rows],
+        }),
+    ]
+    file_block = _try_stage_file_block(result, report_key)
+    if file_block is not None:
+        blocks.append(file_block)
+    else:
+        blocks.append(Block("text", {"text":
+            "(Couldn't build the spreadsheet right now — use the "
+            "**Reports** sidebar to download it manually)"}))
+
+    label = meta.get("label", result.report_label)
+    return Response(
+        blocks=blocks,
+        summary=f"Report: {label} ({result.total})",
+        intent="report",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public entry
 # ---------------------------------------------------------------------------
 
@@ -1110,6 +1344,8 @@ def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx) -> Opt
         return _handle_recent_activity(db, pq, actor)
     if intent == "list_bugs":
         return _handle_list_bugs(db, pq, ctx)
+    if intent == "report":
+        return _handle_report(db, pq, actor)
     return None
 
 

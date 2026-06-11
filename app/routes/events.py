@@ -76,20 +76,56 @@ def _user_brief(u: User) -> dict:
     return {"id": u.id, "name": u.name, "email": u.email, "role": u.role}
 
 
-def _event_brief(db: Session, ev: Event) -> dict:
-    item_count = db.scalar(
-        select(func.count(Bug.id)).where(Bug.event_id == ev.id)
-    ) or 0
-    assignee_count = db.scalar(
-        select(func.count(func.distinct(bug_assignees.c.user_id)))
-        .select_from(bug_assignees)
-        .join(Bug, Bug.id == bug_assignees.c.bug_id)
-        .where(Bug.event_id == ev.id)
-    ) or 0
+def _event_list_aggregates(
+    db: Session, event_ids: list[int],
+) -> tuple[dict[int, int], dict[int, int]]:
+    """Grouped (item_count, assignee_count) maps for a page of events —
+    two queries total instead of two per event in the list view."""
+    if not event_ids:
+        return {}, {}
+    item_counts = {
+        eid: int(n) for eid, n in db.execute(
+            select(Bug.event_id, func.count(Bug.id))
+            .where(Bug.event_id.in_(event_ids))
+            .group_by(Bug.event_id)
+        ).all()
+    }
+    assignee_counts = {
+        eid: int(n) for eid, n in db.execute(
+            select(Bug.event_id, func.count(func.distinct(bug_assignees.c.user_id)))
+            .select_from(bug_assignees)
+            .join(Bug, Bug.id == bug_assignees.c.bug_id)
+            .where(Bug.event_id.in_(event_ids))
+            .group_by(Bug.event_id)
+        ).all()
+    }
+    return item_counts, assignee_counts
+
+
+def _event_brief(
+    db: Session, ev: Event,
+    item_count: Optional[int] = None,
+    assignee_count: Optional[int] = None,
+    creator_names: Optional[dict[int, str]] = None,
+) -> dict:
+    if item_count is None:
+        item_count = db.scalar(
+            select(func.count(Bug.id)).where(Bug.event_id == ev.id)
+        ) or 0
+    if assignee_count is None:
+        assignee_count = db.scalar(
+            select(func.count(func.distinct(bug_assignees.c.user_id)))
+            .select_from(bug_assignees)
+            .join(Bug, Bug.id == bug_assignees.c.bug_id)
+            .where(Bug.event_id == ev.id)
+        ) or 0
     creator_name = None
     if ev.created_by_user_id:
-        u = db.get(User, ev.created_by_user_id)
-        creator_name = u.name if u else None
+        if creator_names is not None:
+            creator_name = creator_names.get(ev.created_by_user_id)
+        else:
+            u = db.get(User, ev.created_by_user_id)
+            creator_name = u.name if u else None
     return {
         "id": ev.id,
         "name": ev.name,
@@ -191,7 +227,23 @@ def list_events(
     if scheduled_for:
         stmt = stmt.where(Event.scheduled_for == scheduled_for)
     rows = list(db.scalars(stmt).all())
-    return [_event_brief(db, ev) for ev in rows]
+    item_counts, assignee_counts = _event_list_aggregates(
+        db, [ev.id for ev in rows])
+    creator_ids = {ev.created_by_user_id for ev in rows if ev.created_by_user_id}
+    creator_names: dict[int, str] = {}
+    if creator_ids:
+        creator_names = dict(db.execute(
+            select(User.id, User.name).where(User.id.in_(creator_ids))
+        ).all())
+    return [
+        _event_brief(
+            db, ev,
+            item_count=item_counts.get(ev.id, 0),
+            assignee_count=assignee_counts.get(ev.id, 0),
+            creator_names=creator_names,
+        )
+        for ev in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

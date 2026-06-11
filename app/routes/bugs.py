@@ -98,6 +98,15 @@ _ACTIVE_CONTENT_TYPES = {
     "application/x-javascript", "text/javascript;charset=utf-8",
 }
 
+# MIME types a browser may render inline without executing anything.
+# Everything outside this safelist is forced to Content-Disposition:
+# attachment — a blocklist (_ACTIVE_CONTENT_TYPES) alone can't keep up
+# with every renderable type a browser might treat actively. SVG is
+# deliberately absent (scriptable); it's also in the blocklist above so
+# it additionally gets the octet-stream treatment.
+_INLINE_SAFE_PREFIXES = ("image/", "video/", "audio/")
+_INLINE_SAFE_TYPES = {"application/pdf", "text/plain", "text/csv"}
+
 # Sanitize filename when echoed in headers — we still keep the original
 # in the DB; this is purely the bytes that go into Content-Disposition.
 # HTTP header values must be ASCII (RFC 7230); RFC 6266 says the plain
@@ -928,7 +937,11 @@ def download_attachment(
     ct_lower = (a.content_type or "").lower().split(";")[0].strip()
     is_active = ct_lower in _ACTIVE_CONTENT_TYPES
     safe_ct = _DEFAULT_MIME if is_active else (a.content_type or _DEFAULT_MIME)
-    disposition = "attachment" if is_active else "inline"
+    inline_ok = not is_active and (
+        ct_lower in _INLINE_SAFE_TYPES
+        or ct_lower.startswith(_INLINE_SAFE_PREFIXES)
+    )
+    disposition = "inline" if inline_ok else "attachment"
 
     safe_fname = _safe_filename_for_header(a.filename)
     # RFC 5987 form for non-ASCII filenames; keeps a plain ASCII fallback.

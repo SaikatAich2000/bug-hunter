@@ -324,6 +324,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Attachment downloads override this in their own headers if a
         # legitimate cross-origin use case ever appears.
         h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        h.setdefault("X-Permitted-Cross-Domain-Policies", "none")
         # Strip uvicorn's default "server: uvicorn" — minor info leak,
         # but no reason to advertise the stack to a scanner.
         if "server" in h:
@@ -540,11 +541,18 @@ if _origins:
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
+# Rendered-HTML cache. The placeholders depend only on asset_version
+# (fixed at process start) and APP_VERSION (env, fixed for the process
+# lifetime), so the rendered page never changes between restarts —
+# re-reading the file from disk on every request was pure I/O waste on
+# the small deployment target. Tests that mutate app.state.asset_version
+# key the cache on it, so they stay correct.
+_html_cache: dict[tuple[str, str], str] = {}
+
+
 def _serve_html(filename: str) -> HTMLResponse:
-    """Read an HTML file and replace the asset-version + app-version
-    placeholders with their live values. Querying the file system on
-    every request is fine — these files are tiny and we don't care
-    about a few µs.
+    """Render an HTML file with the asset-version + app-version
+    placeholders replaced, caching the result per (file, asset_version).
 
     __ASSET_VERSION__ → 12-char hash of the static bundle (used for
                        cache-busting).
@@ -552,9 +560,15 @@ def _serve_html(filename: str) -> HTMLResponse:
                        login page show the running version without an
                        extra round trip to /api/health.
     """
-    body = (settings.STATIC_DIR / filename).read_text(encoding="utf-8")
-    body = body.replace(ASSET_VERSION_PLACEHOLDER, app.state.asset_version)
-    body = body.replace(APP_VERSION_PLACEHOLDER, settings.APP_VERSION)
+    key = (filename, app.state.asset_version)
+    body = _html_cache.get(key)
+    if body is None:
+        body = (settings.STATIC_DIR / filename).read_text(encoding="utf-8")
+        body = body.replace(ASSET_VERSION_PLACEHOLDER, app.state.asset_version)
+        body = body.replace(APP_VERSION_PLACEHOLDER, settings.APP_VERSION)
+        if len(_html_cache) > 32:  # paranoia bound; we serve ~3 pages
+            _html_cache.clear()
+        _html_cache[key] = body
     return HTMLResponse(body)
 
 

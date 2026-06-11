@@ -226,6 +226,40 @@ def test_item_detail_text_search(admin_client):
     assert "payments" in body["rows"][0]["title"]
 
 
+def test_item_detail_attribute_and_entity_filters(admin_client):
+    """Exercise the priority / environment / assignee / reporter / event /
+    date filter branches in one pass — each independently narrows the set."""
+    me = admin_client.get("/api/auth/me").json()
+    p = _make_project(admin_client, name="FilterProj")
+    ev = admin_client.post("/api/events", json={"name": "FilterEvent"}).json()
+    # Target item matches every filter; the decoy matches none of them.
+    target = _make_item(
+        admin_client, p["id"], title="filter-target",
+        priority="Critical", environment="PROD",
+        assignee_ids=[me["id"]], event_id=ev["id"],
+    )
+    _make_item(admin_client, p["id"], title="filter-decoy",
+               priority="Low", environment="DEV")
+    today = datetime.now(timezone.utc).date().isoformat()
+    r = admin_client.post("/api/reports/run", json={
+        "report_key": "item_detail",
+        "filters": {
+            "priorities": ["Critical"],
+            "environments": ["PROD"],
+            "assignee_ids": [me["id"]],
+            "reporter_ids": [me["id"]],
+            "event_id": ev["id"],
+            "date_from": today,
+            "date_to": today,
+        },
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["rows"][0]["title"] == "filter-target"
+    assert body["rows"][0]["id"] == target["id"]
+
+
 # ---------------------------------------------------------------------------
 # Throughput — derived from activity_log
 # ---------------------------------------------------------------------------
@@ -371,6 +405,94 @@ def test_aging_orders_oldest_first(admin_client):
     # Every row carries an age bucket.
     for row in body["rows"]:
         assert "age_bucket" in row
+
+
+# ---------------------------------------------------------------------------
+# Timeline — created vs resolved per day
+# ---------------------------------------------------------------------------
+def test_timeline_counts_created_and_resolved_per_day(admin_client):
+    p = _make_project(admin_client)
+    a = _make_item(admin_client, p["id"], title="tl-1")
+    _make_item(admin_client, p["id"], title="tl-2")
+    _change_status(admin_client, a["id"], "Resolved")
+    r = admin_client.post("/api/reports/run", json={
+        "report_key": "timeline", "filters": {},
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["report_key"] == "timeline"
+    # Default window is the last 30 days → 30 daily rows.
+    assert body["summary"]["window_days"] == len(body["rows"])
+    assert body["summary"]["total_created"] == 2
+    assert body["summary"]["total_resolved"] == 1
+    # net = created - resolved
+    assert body["summary"]["net"] == 1
+    # Every row carries the per-day shape.
+    for row in body["rows"]:
+        assert set(row) >= {"date", "created", "resolved", "delta"}
+    # The day with activity reflects today's created count.
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_row = next(row for row in body["rows"] if row["date"] == today)
+    assert today_row["created"] == 2
+    assert today_row["resolved"] == 1
+
+
+def test_timeline_respects_explicit_window(admin_client):
+    p = _make_project(admin_client)
+    _make_item(admin_client, p["id"], title="tl-window")
+    # A 3-day window entirely in the past → no items, but still 3 rows.
+    r = admin_client.post("/api/reports/run", json={
+        "report_key": "timeline",
+        "filters": {"date_from": "2000-01-01", "date_to": "2000-01-03"},
+    })
+    body = r.json()
+    assert body["summary"]["window_days"] == 3
+    assert len(body["rows"]) == 3
+    assert body["summary"]["total_created"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Time to Resolution — hours from creation to resolution + stats
+# ---------------------------------------------------------------------------
+def test_time_to_resolution_reports_resolved_items(admin_client):
+    p = _make_project(admin_client)
+    b1 = _make_item(admin_client, p["id"], title="ttr-1")
+    b2 = _make_item(admin_client, p["id"], title="ttr-2")
+    # One still-open item must NOT appear.
+    _make_item(admin_client, p["id"], title="ttr-open")
+    _change_status(admin_client, b1["id"], "Resolved")
+    _change_status(admin_client, b2["id"], "Closed")
+    r = admin_client.post("/api/reports/run", json={
+        "report_key": "time_to_resolution", "filters": {},
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["report_key"] == "time_to_resolution"
+    # Two resolved items, the open one excluded.
+    assert body["summary"]["count"] == 2
+    assert body["total"] == 2
+    titles = {row["title"] for row in body["rows"]}
+    assert titles == {"ttr-1", "ttr-2"}
+    # Summary carries the aggregate stats keys.
+    for k in ("average_hours", "median_hours", "p95_hours",
+              "fastest_hours", "slowest_hours"):
+        assert k in body["summary"]
+    # Each row has both hours and days fields, resolved just now → ~0.
+    for row in body["rows"]:
+        assert row["hours_to_resolve"] >= 0
+        assert "days_to_resolve" in row
+
+
+def test_time_to_resolution_empty_when_nothing_resolved(admin_client):
+    p = _make_project(admin_client)
+    _make_item(admin_client, p["id"], title="never-resolved")
+    r = admin_client.post("/api/reports/run", json={
+        "report_key": "time_to_resolution", "filters": {},
+    })
+    body = r.json()
+    assert body["total"] == 0
+    assert body["summary"]["count"] == 0
+    assert body["summary"]["average_hours"] == 0
 
 
 # ---------------------------------------------------------------------------

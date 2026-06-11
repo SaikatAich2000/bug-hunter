@@ -36,7 +36,8 @@ if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9000" }
 if (-not $env:SONAR_TOKEN) {
     Abort "SONAR_TOKEN is not set. Run: `$env:SONAR_TOKEN = 'sqp_xxxx' first."
 }
-$ProjectKey = "Bug_Hunter"
+# Must match sonar.projectKey in sonar-project.properties exactly.
+$ProjectKey = "Bug-Hunter"
 $Base = $env:SONAR_HOST_URL.TrimEnd("/")
 
 # Sonar accepts the token as the Basic-auth USERNAME with an empty password.

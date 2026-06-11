@@ -4,6 +4,14 @@ All notable changes to Bug Hunter. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/). The project predates
 this file; releases older than v2.4 live in git history only.
 
+## [2.10] — 2026-06-11
+
+**Maintenance + quality pass.** No DB schema changes (migrations remain
+strictly additive).
+
+- SonarQube cleanup: resolved all open issues and security hotspots.
+- Expanded automated test coverage.
+
 ## [2.9] — 2026-06-09
 
 **Reports view + Sleuth report intent.** No DB schema change — the

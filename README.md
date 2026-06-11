@@ -4,7 +4,7 @@ A self-hosted, internal-use issue tracker. FastAPI + PostgreSQL + a
 zero-framework JavaScript SPA. One Docker command to run, no external
 auth, no external file storage — attachments live in the database.
 
-**Current version: v2.9** — adds a comprehensive **Reports** view (Jira-
+**Current version: v2.10** — adds a comprehensive **Reports** view (Jira-
 style report builder with 9 report types, universal filters, full
 Excel export including raw item data) plus a "report" intent in the
 **Sleuth** chatbot so the same reports can be requested in natural
@@ -181,7 +181,7 @@ API uses.
 
 ## Release notes
 
-Full history lives in [CHANGELOG.md](CHANGELOG.md). Latest: **v2.9** —
+Full history lives in [CHANGELOG.md](CHANGELOG.md). Latest: **v2.10** —
 Reports view + Sleuth report intent, multi-sheet XLSX export, legacy
 CSV export retired. No DB schema change.
 

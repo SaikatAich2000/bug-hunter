@@ -22,6 +22,12 @@ Architecture — three layers, ordered by cost:
                   if a GGUF model is dropped into models/. NEVER calls an
                   external API. Refuses to load when the container is too
                   small to fit the model (see memory_budget()).
+  - cloud_llm.py  Layer 4: OPTIONAL cloud LLM (Gemini primary, OpenRouter
+                  fallback). OFF unless SLEUTH_CLOUD_ENABLED + a key are
+                  set. Read-only by construction: data questions are routed
+                  back through the SQL handlers (numbers never invented) and
+                  any write intent is dropped. rag.py grounds it with bug /
+                  comment / doc retrieval; redaction.py scrubs secrets first.
   - executor.py   Read intents (list/count/detail/stats/export) → SQL
                   SELECTs only. Never writes.
   - actions.py    Write intents (assign/close/comment/create/...) →
@@ -33,17 +39,21 @@ Architecture — three layers, ordered by cost:
   - router.py     FastAPI router exposing /api/chat/ask and the
                   download endpoint for generated files.
 
-Database safety guarantee: Sleuth adds NO new tables. Read intents only
-issue SELECTs. Writes are atomic and roll back fully on error or
-permission denial. See tests/test_sleuth_safety.py for the verified
-properties.
+Database safety guarantee: the core read/write path adds NO tables and
+issues SELECTs for reads; writes are atomic and roll back fully on error
+or permission denial. The optional cloud layer adds exactly two ADDITIVE
+conversation tables (chat_conversations, chat_messages) — new tables only,
+existing tables and data untouched. See tests/test_sleuth_safety.py.
 
-Privacy: Sleuth makes NO outbound HTTP calls. No data leaves the box.
-The optional Layer 3 LLM runs locally via llama.cpp. There are no API
-keys to configure.
+Privacy: by DEFAULT Sleuth makes NO outbound HTTP calls — the Layer 3 LLM
+runs locally via llama.cpp and there are no keys to configure. The Layer 4
+cloud LLM is strictly opt-in (SLEUTH_CLOUD_ENABLED + a key); when enabled,
+it is the ONLY component that sends data off-box, and everything it sends
+is passed through redaction.py first. Leave it off for a fully local,
+no-egress deployment.
 """
 
 __all__ = [
     "nlu", "executor", "actions", "memory", "classifier", "llm",
-    "excel", "router",
+    "cloud_llm", "rag", "redaction", "excel", "router",
 ]

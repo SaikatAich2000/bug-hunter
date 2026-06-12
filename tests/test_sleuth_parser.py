@@ -23,6 +23,9 @@ os.environ["SESSION_SECRET"] = "test-secret-key-please-ignore-this"
 os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
+# Cloud assistant stays off in tests (avoid a real network call from a
+# developer's local .env that enables it).
+os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
 from app.database import Base, engine, SessionLocal
 from app import models

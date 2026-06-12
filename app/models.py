@@ -458,3 +458,57 @@ class Session(Base):
         Index("idx_sessions_user_id", "user_id"),
         Index("idx_sessions_expires_at", "expires_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Sleuth chat memory (ADDITIVE — new tables only; nothing existing changes)
+#
+# Persists the assistant conversation so context survives process restarts
+# and so the cloud layer can be given a short rolling history. The
+# in-process memory.store still handles fast per-turn referents ("it",
+# pending confirmations); these tables are the durable transcript.
+#
+# Created automatically by init_db()'s create_all() on next boot. Both are
+# scoped to a user_id and cascade-delete with the user.
+# ---------------------------------------------------------------------------
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        "ChatMessage", back_populates="conversation",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
+        order_by="ChatMessage.created_at",
+    )
+
+    __table_args__ = (Index("idx_chat_conv_user_id", "user_id"),)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    # "user" | "assistant"
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which engine answered: "rules" | "classifier" | "llm" | "cloud" | "" .
+    # Lightweight observability; never used for auth.
+    engine: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    conversation: Mapped[ChatConversation] = relationship(
+        "ChatConversation", back_populates="messages"
+    )
+
+    __table_args__ = (Index("idx_chat_msg_conversation_id", "conversation_id"),)

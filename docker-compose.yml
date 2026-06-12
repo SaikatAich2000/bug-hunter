@@ -69,6 +69,15 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       API_KEY: ${API_KEY:-}
 
+      # Sleuth cloud AI assistant (optional). OFF unless SLEUTH_CLOUD_ENABLED=1
+      # and a key are set in the server's .env. Read from .env via ${...} so
+      # the secret value never lives in this committed file.
+      SLEUTH_CLOUD_ENABLED: ${SLEUTH_CLOUD_ENABLED:-0}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      SLEUTH_RAG_ENABLED: ${SLEUTH_RAG_ENABLED:-0}
+
       # Authentication.
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}

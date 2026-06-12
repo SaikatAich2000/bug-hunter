@@ -36,6 +36,7 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin"
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
+os.environ["SLEUTH_CLOUD_ENABLED"] = "0"   # never call the cloud in tests
 
 from sqlalchemy import inspect, text
 from app.database import Base, engine, SessionLocal
@@ -170,14 +171,18 @@ def test_schema_unchanged() -> None:
             "bug_assignees", "comments", "activity_log",
             "attachments", "sessions",
         }
-        # We accept that the production schema may add a small number of
-        # tables in future, so the assertion is "no chatbot-specific
-        # leakage". Specifically: NO table named *chat*, *sleuth*,
-        # *memory*, etc.
+        # The cloud-assistant work (v2.10+) adds TWO durable conversation
+        # tables. They are strictly ADDITIVE (new tables, created by
+        # create_all; existing tables/data untouched) and are an explicit,
+        # approved design decision — so they are allow-listed here. The
+        # property this test still guards is that Sleuth's OPERATIONS never
+        # DROP/ALTER the schema or sneak in any OTHER table at runtime.
+        approved_chat_tables = {"chat_conversations", "chat_messages"}
         leaked = [t for t in tables
-                  if any(k in t.lower() for k in
-                         ("chat", "sleuth", "memory", "llm", "classif"))]
-        check("schema: no Sleuth-specific tables leaked into the DB",
+                  if t not in approved_chat_tables
+                  and any(k in t.lower() for k in
+                          ("chat", "sleuth", "memory", "llm", "classif"))]
+        check("schema: no unexpected Sleuth tables leaked into the DB",
               not leaked, f"leaked={leaked}")
         check("schema: production tables present",
               expected.issubset(tables), f"missing={expected - tables}")

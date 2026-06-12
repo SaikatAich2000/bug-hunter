@@ -29,13 +29,64 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from datetime import timedelta
+
 from app.auth import get_current_user
+from app.config import get_settings
 from app.database import get_db
-from app.models import User
+from app.models import ChatConversation, ChatMessage, User, _utcnow
 
 from . import excel, executor
 
 logger = logging.getLogger("bug_hunter.chatbot")
+
+
+def _persist_turn(db: Session, actor: User, user_msg: str,
+                  resp: "executor.Response") -> None:
+    """Append the user message + assistant reply to the durable chat_*
+    transcript. Additive, gated, and best-effort — any failure is swallowed
+    so persistence problems never affect the chat response.
+
+    One rolling conversation per user: we reuse the most recent conversation
+    if it was touched in the last 30 minutes, otherwise start a fresh one.
+    """
+    if not get_settings().SLEUTH_CHAT_MEMORY_ENABLED:
+        return
+    try:
+        cutoff = _utcnow() - timedelta(minutes=30)
+        conv = (
+            db.query(ChatConversation)
+            .filter(ChatConversation.user_id == actor.id,
+                    ChatConversation.updated_at >= cutoff)
+            .order_by(ChatConversation.updated_at.desc())
+            .first()
+        )
+        if conv is None:
+            conv = ChatConversation(user_id=actor.id)
+            db.add(conv)
+            db.flush()
+        # Engine label from the intent prefix for lightweight observability.
+        engine = "rules"
+        if resp.intent.startswith("cloud_"):
+            engine = "cloud"
+        elif resp.intent in {"unknown", "error"}:
+            engine = ""
+        # Store what the assistant actually SAID (first text block) so the
+        # cloud layer's rolling history is meaningful; fall back to the
+        # one-line summary for table/file-only replies.
+        said = next(
+            (b.payload.get("text", "") for b in resp.blocks if b.kind == "text"),
+            "",
+        ) or (resp.summary or "")
+        db.add(ChatMessage(conversation_id=conv.id, role="user",
+                           content=user_msg[:4000], engine=""))
+        db.add(ChatMessage(conversation_id=conv.id, role="assistant",
+                           content=said[:4000], engine=engine))
+        conv.updated_at = _utcnow()
+        db.commit()
+    except Exception:  # noqa: BLE001 — transcript is non-critical
+        db.rollback()
+        logger.debug("Sleuth chat transcript persist failed", exc_info=True)
 
 router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
@@ -122,6 +173,9 @@ def ask(
             summary="Internal error",
             intent="error",
         )
+
+    # Durable transcript (additive chat_* tables). Best-effort.
+    _persist_turn(db, actor, payload.message, resp)
 
     return ChatOut(
         blocks=[_BlockOut(kind=b.kind, payload=b.payload) for b in resp.blocks],

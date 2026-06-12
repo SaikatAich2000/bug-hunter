@@ -1,0 +1,191 @@
+"""Retrieval-Augmented Generation for Sleuth's cloud layer.
+
+Indexes the things a user asks free-form questions about — bugs,
+requirements, tasks (the `bugs` table), their comments, and any plain-text
+/ markdown docs under SLEUTH_DOCS_DIR — into a local Chroma vector store,
+embedded with Gemini's embedding API. `retrieve_text()` returns the top-k
+snippets as a compact CONTEXT block for cloud_llm.
+
+Scope / isolation note: this internal Bug Hunter deployment is
+SINGLE-TENANT — there is no organization table, and every authenticated
+user already sees every bug through the normal handlers. So retrieval is
+not org-filtered (there is only one company's data here). The `where`
+parameter on the Chroma query is the seam where a tenant/project filter
+would go if this app ever became multi-tenant — mirror the SQL handlers'
+scoping there.
+
+Everything is lazy and gated: with SLEUTH_RAG_ENABLED off, or chromadb not
+installed, or no embedding key, retrieve_text() returns "" and the cloud
+layer simply runs without grounding. Nothing here can break startup.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from typing import Optional
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.models import Bug, Comment, User
+
+logger = logging.getLogger("bug_hunter.sleuth.rag")
+
+_COLLECTION = "sleuth"
+
+
+# ---------------------------------------------------------------------------
+# Embeddings (Gemini API via httpx — no local model, keeps RAM flat)
+# ---------------------------------------------------------------------------
+def _embed(texts: list[str]) -> Optional[list[list[float]]]:
+    """Batch-embed texts with Gemini. Returns None on any failure."""
+    s = get_settings()
+    if not s.GEMINI_API_KEY or not texts:
+        return None
+    try:
+        import httpx
+        model = f"models/{s.GEMINI_EMBED_MODEL}"
+        r = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
+            params={"key": s.GEMINI_API_KEY},
+            json={"requests": [
+                {"model": model, "content": {"parts": [{"text": t[:8000]}]}}
+                for t in texts
+            ]},
+            timeout=s.SLEUTH_CLOUD_TIMEOUT_S,
+        )
+        r.raise_for_status()
+        return [e["values"] for e in r.json()["embeddings"]]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sleuth RAG embedding failed: %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Chroma collection (lazy, persistent)
+# ---------------------------------------------------------------------------
+def _collection():
+    """Return the Chroma collection, or None if unavailable."""
+    s = get_settings()
+    if not s.SLEUTH_RAG_ENABLED:
+        return None
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=s.SLEUTH_RAG_DIR)
+        # We supply embeddings explicitly, so no embedding_function here.
+        return client.get_or_create_collection(
+            _COLLECTION, metadata={"hnsw:space": "cosine"}
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sleuth RAG store unavailable (chromadb?): %s", exc)
+        return None
+
+
+def _doc_text(bug: Bug) -> str:
+    parts = [f"#{bug.id} [{bug.item_type}] {bug.title}",
+             f"status={bug.status} priority={bug.priority} env={bug.environment}"]
+    if bug.description:
+        parts.append(bug.description)
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Indexing
+# ---------------------------------------------------------------------------
+def index_all(db: Session) -> int:
+    """Full (re)index of bugs + comments + docs. Returns the doc count.
+    Run from scripts/build_sleuth_rag.py or a periodic job."""
+    col = _collection()
+    if col is None:
+        return 0
+    ids: list[str] = []
+    docs: list[str] = []
+    metas: list[dict] = []
+
+    for bug in db.scalars(select(Bug)).all():
+        ids.append(f"bug:{bug.id}")
+        docs.append(_doc_text(bug))
+        metas.append({"kind": "bug", "bug_id": bug.id, "title": bug.title})
+
+    for c in db.scalars(select(Comment)).all():
+        ids.append(f"comment:{c.id}")
+        docs.append(f"Comment on #{c.bug_id} by {c.author_name}: {c.body}")
+        metas.append({"kind": "comment", "bug_id": c.bug_id})
+
+    docs_dir = get_settings().SLEUTH_DOCS_DIR
+    if os.path.isdir(docs_dir):
+        for root, _dirs, files in os.walk(docs_dir):
+            for fn in files:
+                if not fn.lower().endswith((".md", ".txt")):
+                    continue
+                path = os.path.join(root, fn)
+                try:
+                    with open(path, encoding="utf-8", errors="ignore") as fh:
+                        body = fh.read()[:8000]
+                except OSError:
+                    continue
+                ids.append(f"doc:{os.path.relpath(path, docs_dir)}")
+                docs.append(f"Doc {fn}:\n{body}")
+                metas.append({"kind": "doc", "path": fn})
+
+    if not docs:
+        return 0
+    # Embed + upsert in batches to respect API limits.
+    written = 0
+    for i in range(0, len(docs), 64):
+        chunk = docs[i:i + 64]
+        vecs = _embed(chunk)
+        if vecs is None:
+            break
+        col.upsert(ids=ids[i:i + 64], documents=chunk,
+                   embeddings=vecs, metadatas=metas[i:i + 64])
+        written += len(chunk)
+    logger.info("Sleuth RAG indexed %d documents", written)
+    return written
+
+
+def upsert_bug(db: Session, bug_id: int) -> None:
+    """Incrementally (re)index a single bug. Best-effort; never raises."""
+    try:
+        col = _collection()
+        if col is None:
+            return
+        bug = db.get(Bug, bug_id)
+        if bug is None:
+            return
+        vecs = _embed([_doc_text(bug)])
+        if vecs:
+            col.upsert(ids=[f"bug:{bug.id}"], documents=[_doc_text(bug)],
+                       embeddings=vecs,
+                       metadatas=[{"kind": "bug", "bug_id": bug.id}])
+    except Exception:  # noqa: BLE001
+        logger.debug("Sleuth RAG upsert_bug failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Retrieval
+# ---------------------------------------------------------------------------
+def retrieve_text(message: str, db: Session, actor: User,
+                  where: Optional[dict] = None) -> str:
+    """Return a compact CONTEXT block of the top-k snippets, or "" if RAG
+    is disabled/unavailable. `where` is the multi-tenant scoping seam
+    (unused in this single-tenant build)."""
+    col = _collection()
+    if col is None:
+        return ""
+    qvec = _embed([message])
+    if not qvec:
+        return ""
+    try:
+        s = get_settings()
+        res = col.query(query_embeddings=qvec, n_results=s.SLEUTH_RAG_TOP_K,
+                        where=where)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sleuth RAG query failed: %s", exc)
+        return ""
+    docs = (res.get("documents") or [[]])[0]
+    return "\n---\n".join(docs) if docs else ""
+
+
+__all__ = ["retrieve_text", "index_all", "upsert_bug"]

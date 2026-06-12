@@ -5,6 +5,19 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+# Load a local .env file (if present) BEFORE any setting is read, so all the
+# values below can live in one git-ignored file for local dev / a single-VM
+# deploy. `override=False` (the default) means real environment variables —
+# e.g. those injected by docker-compose or the hosting platform — always win
+# over the file, so production config is never shadowed by a stray .env.
+# No-op if python-dotenv isn't installed or there's no .env file.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except Exception:  # pragma: no cover - dotenv is optional
+    pass
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
@@ -66,6 +79,53 @@ class Settings:
     BOOTSTRAP_ADMIN_EMAIL: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@bughunter.local")
     BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "ChangeMe123!")
     BOOTSTRAP_ADMIN_NAME: str = os.getenv("BOOTSTRAP_ADMIN_NAME", "Admin")
+
+    # ------------------------------------------------------------------
+    # Sleuth cloud LLM (optional Layer 4 — natural-language fallback).
+    #
+    # Everything here is OFF by default. With SLEUTH_CLOUD_ENABLED unset
+    # the chatbot behaves exactly as before: pure rules + classifier +
+    # the optional local llama.cpp layer, no outbound HTTP. Set the flag
+    # and paste a key to switch on the Gemini-primary / OpenRouter-fallback
+    # path for the ~5% of free-form questions the rules can't parse.
+    #
+    # The cloud layer NEVER performs writes and NEVER invents counts: data
+    # questions are routed back through the deterministic SQL handlers; the
+    # model only paraphrases or summarises retrieved context (see rag.py).
+    # ------------------------------------------------------------------
+    SLEUTH_CLOUD_ENABLED: bool = _env_bool("SLEUTH_CLOUD_ENABLED", False)
+    # Primary provider — Google AI Studio (free tier). Paste the key you
+    # create in AI Studio here via the env var; never hard-code it.
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    # gemini-2.5-flash is the current free-tier chat model. (gemini-2.0-flash
+    # returns HTTP 429 "limit: 0" on the free tier, and the 1.5 models are
+    # retired — both 404/429 as of mid-2026.)
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_EMBED_MODEL: str = os.getenv("GEMINI_EMBED_MODEL", "text-embedding-004")
+    # Fallback provider — OpenRouter free models. Used only if Gemini errors
+    # or is rate-limited. OpenAI-compatible chat completions API.
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-7b-instruct:free")
+    # Per-call budget. 20 s is generous; on timeout we fall back then fail
+    # closed to the normal "I didn't understand" reply.
+    SLEUTH_CLOUD_TIMEOUT_S: float = float(os.getenv("SLEUTH_CLOUD_TIMEOUT_S", "20") or "20")
+    SLEUTH_CLOUD_MAX_TOKENS: int = int(os.getenv("SLEUTH_CLOUD_MAX_TOKENS", "600") or "600")
+
+    # RAG (retrieval over bugs / comments / docs). Independent flag so you
+    # can run the cloud LLM with or without retrieval. Needs `chromadb`
+    # installed; if the import fails the layer disables itself cleanly.
+    SLEUTH_RAG_ENABLED: bool = _env_bool("SLEUTH_RAG_ENABLED", False)
+    SLEUTH_RAG_DIR: str = os.getenv(
+        "SLEUTH_RAG_DIR", str(BASE_DIR / ".sleuth_rag")
+    )
+    SLEUTH_RAG_TOP_K: int = int(os.getenv("SLEUTH_RAG_TOP_K", "5") or "5")
+    # Folder of plain-text / markdown docs (FAQs, runbooks) to index
+    # alongside the live bug/comment data. Optional.
+    SLEUTH_DOCS_DIR: str = os.getenv("SLEUTH_DOCS_DIR", str(BASE_DIR / "docs"))
+
+    # Persist Sleuth conversations to the additive chat_* tables. Additive
+    # only — existing tables are never touched. Safe to leave on.
+    SLEUTH_CHAT_MEMORY_ENABLED: bool = _env_bool("SLEUTH_CHAT_MEMORY_ENABLED", True)
 
     EMAIL_BACKEND: str = os.getenv("EMAIL_BACKEND", "console").strip().lower()
     EMAIL_FROM: str = os.getenv("EMAIL_FROM", "bughunter@localhost")

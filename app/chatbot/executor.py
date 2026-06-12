@@ -1394,6 +1394,36 @@ def _try_llm(message: str, db: Session, actor: User) -> Optional[Response]:
     return None
 
 
+# Greetings / one-word pleasantries that get instant canned replies even in
+# AI-first mode — no value in a network round-trip for "hi".
+_CLOUD_SKIP_EXACT = frozenset({
+    "hi", "hello", "hey", "yo", "help", "?", "thanks", "thank you",
+    "ok", "okay", "good morning", "good afternoon", "good evening",
+})
+
+
+def _try_cloud_llm(message: str, db: Session, actor: User,
+                   now: Optional[datetime]) -> Optional[Response]:
+    """Layer 4 fallback: optional cloud LLM (Gemini / OpenRouter). OFF unless
+    the operator enabled it and supplied a key. Like every other fallback, a
+    fault here must NEVER take down the chat — we swallow and return None.
+
+    The cloud layer is read-only by construction: data questions are routed
+    back through the SQL handlers and any action_* intent is dropped inside
+    cloud_llm. Writes still happen only via the rule-based confirmation flow.
+    """
+    try:
+        from app.chatbot import cloud_llm as _cloud
+        if _cloud.is_available():
+            return _cloud.try_understand(message, db, actor, now=now)
+    except Exception:
+        import logging
+        logging.getLogger("bug_hunter.sleuth").exception(
+            "Sleuth cloud fallback raised — swallowing and returning unknown."
+        )
+    return None
+
+
 def execute(message: str, db: Session, actor: User,
             now: Optional[datetime] = None) -> Response:
     """Parse the message and dispatch to the right handler.
@@ -1415,6 +1445,25 @@ def execute(message: str, db: Session, actor: User,
 
     if pq.intent.startswith("action_"):
         return _handle_action_request(pq, actor)
+
+    # AI-FIRST: when the cloud assistant is ON, it leads for everything that
+    # isn't a staged confirmation or an explicit write command. The keyword
+    # rules are precise for terse commands but greedily mis-match free-form
+    # chat (e.g. "...can you revoke someone's session?" contains "admin" →
+    # the old order confidently returned an admins table). The AI translates
+    # real data asks into canonical queries that run through the SAME SQL
+    # handlers below, so tables/counts stay deterministic — and everything
+    # conversational gets an actual conversational answer.
+    #
+    # Trivial one-worders ("hi", "help", "thanks") skip the network hop and
+    # keep their instant canned replies. If the cloud call fails (quota,
+    # outage, bad JSON) we fall straight back to the full deterministic
+    # chain, so the chatbot NEVER gets worse than it was without the AI.
+    msg_norm = message.strip().lower()
+    if msg_norm and msg_norm not in _CLOUD_SKIP_EXACT:
+        cloud_resp = _try_cloud_llm(message, db, actor, now)
+        if cloud_resp is not None:
+            return cloud_resp
 
     read_resp = _dispatch_read_intent(pq.intent, db, pq, actor, ctx)
     if read_resp is not None:

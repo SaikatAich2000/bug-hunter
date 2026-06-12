@@ -10,6 +10,7 @@ Three client fixtures:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Keep Sleuth's cloud layer OFF during tests, even if a developer's local
+# .env enables it (config.py auto-loads .env). Tests that exercise the
+# cloud path opt in explicitly by monkeypatching the settings object, so
+# the suite never makes a real network call. setdefault lets an explicit
+# environment override still win when intended.
+os.environ.setdefault("SLEUTH_CLOUD_ENABLED", "0")
 
 
 BOOTSTRAP_EMAIL = "admin@test.local"

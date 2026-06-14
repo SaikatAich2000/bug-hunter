@@ -11,7 +11,7 @@ them from the headline total.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -141,10 +141,14 @@ def stats(
 
     today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=13)
+    # Sargable filter: compare the raw column to a datetime boundary so the
+    # index on bugs.created_at can be used (wrapping the column in func.date()
+    # would force a full scan). func.date() stays only in SELECT/GROUP BY.
+    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
     timeline_rows = db.execute(
         _scoped(
             select(func.date(Bug.created_at), func.count(Bug.id))
-            .where(func.date(Bug.created_at) >= start)
+            .where(Bug.created_at >= start_dt)
             .group_by(func.date(Bug.created_at))
         )
     ).all()

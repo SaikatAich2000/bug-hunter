@@ -412,6 +412,12 @@ class Activity(Base):
         Index("idx_activity_bug_id", "bug_id"),
         Index("idx_activity_entity", "entity_type", "entity_id"),
         Index("idx_activity_created", "created_at"),
+        # v3.0 perf: reports filter `action == "status_changed"` joined to bugs
+        # (throughput / time-to-resolution / timeline) — without this they scan
+        # the whole ever-growing audit table. The audit "filter by actor" screen
+        # filters actor_user_id. Both added the additive init_db() way.
+        Index("idx_activity_action_bug", "action", "bug_id"),
+        Index("idx_activity_actor_user_id", "actor_user_id"),
     )
 
 
@@ -457,6 +463,103 @@ class Session(Base):
         Index("idx_sessions_jti", "jti"),
         Index("idx_sessions_user_id", "user_id"),
         Index("idx_sessions_expires_at", "expires_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Notification (ADDITIVE — new table only; nothing existing changes)
+#
+# Per-user in-app notifications — the in-app counterpart to the emails the
+# user already receives. Recipients mirror email_service exactly (reporter +
+# assignees minus the actor, event managers, etc.), so a notification is only
+# ever written for a user who is already entitled to know about the event.
+# That makes the feature inherently per-user and role-respecting: there is no
+# endpoint that returns another user's notifications.
+#
+# Created automatically by init_db()'s create_all() on next boot. Scoped to a
+# user_id and cascade-deletes with the user. Strictly additive.
+# ---------------------------------------------------------------------------
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), nullable=False
+    )
+    # Event category — drives the icon/label on the frontend:
+    # "assigned" | "reported" | "updated" | "comment" | "event".
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Optional deep-links — clicking the notification opens the related item.
+    # CASCADE so a notification can't outlive the bug/event it points at.
+    bug_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=True
+    )
+    event_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey(_FK_EVENTS_ID, ondelete="CASCADE"), nullable=True
+    )
+    # Snapshot of who triggered it — no FK, so it survives actor deletion.
+    actor_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    # NULL = unread; set to a timestamp when the user reads it.
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # NULL = this operation has not yet been included in a sent email digest.
+    # Stamped with the send time once the daily digest job mails it out, so the
+    # job is idempotent and never re-sends the same operation. Independent of
+    # read_at (in-app read state) — a row can be read in-app but not yet
+    # digested, or vice-versa.
+    emailed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_notifications_user_id", "user_id"),
+        # The unread badge + unread list both filter on (user_id, read_at).
+        Index("idx_notifications_user_read", "user_id", "read_at"),
+        # The panel lists a user's notifications newest-first.
+        Index("idx_notifications_user_created", "user_id", "created_at"),
+        # The daily digest job scans for un-emailed operations (emailed_at NULL).
+        Index("idx_notifications_emailed_at", "emailed_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Push subscriptions (web push via Firebase Cloud Messaging).
+#
+# One row per device/browser a user has granted push permission on. Stored as
+# the FCM **registration token** so the same table + send path serves a future
+# native Android app — Android devices simply register with platform="android".
+# Strictly additive: a brand-new table created by init_db(); nothing existing
+# changes. Push is sent IMMEDIATELY when an operation occurs (not digested).
+# ---------------------------------------------------------------------------
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), nullable=False
+    )
+    # FCM registration token — unique per device/browser install.
+    token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    # "web" today; "android" / "ios" when native clients register here too.
+    platform: Mapped[str] = mapped_column(String(20), nullable=False, default="web")
+    # Coarse device hint for the user's "your devices" view / debugging.
+    user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    # Refreshed every time the client re-subscribes (tokens rotate); lets a
+    # cleanup job drop tokens no client has touched in a long time.
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_push_subscriptions_user_id", "user_id"),
+        Index("idx_push_subscriptions_token", "token"),
     )
 
 

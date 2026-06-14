@@ -148,6 +148,19 @@ def deliver(subject: str, to: list[str], body: str) -> None:
         _send_console(msg)
 
 
+def _digest_owns_work_item_email() -> bool:
+    """True when the once-a-day digest job — not an immediate send — owns the
+    work-item *operation* emails (new item / update / assignment / comment /
+    event). When EMAIL_DIGEST_ENABLED is on, those `notify_*` functions become
+    no-ops and the operation is delivered later by `app.jobs.email_digest`,
+    batched into one email per user.
+
+    Security/transactional emails (e.g. password reset) NEVER consult this and
+    always send immediately — they are not operations and must not wait a day.
+    """
+    return get_settings().EMAIL_DIGEST_ENABLED
+
+
 # ---------------------------------------------------------------------------
 # Recipient selection
 # ---------------------------------------------------------------------------
@@ -209,6 +222,8 @@ def _bug_meta_lines(bug: BugSnapshot) -> list[str]:
 
 
 def notify_bug_created(bug: BugSnapshot, actor_user_id: int | None) -> None:
+    if _digest_owns_work_item_email():
+        return
     to = _recipients(bug, exclude_user_id=actor_user_id)
     if not to:
         return
@@ -228,6 +243,8 @@ def notify_bug_updated(
     actor_name: str,
     actor_user_id: int | None,
 ) -> None:
+    if _digest_owns_work_item_email():
+        return
     if not changes:
         return
     to = _recipients(bug, exclude_user_id=actor_user_id)
@@ -250,6 +267,8 @@ def notify_assignment(
     actor_name: str,
 ) -> None:
     """Send a personalized 'you've been assigned' email to each new assignee."""
+    if _digest_owns_work_item_email():
+        return
     label = _item_label(bug)
     for user in newly_assigned:
         if not user.email:
@@ -274,6 +293,8 @@ def notify_comment_added(
     comment_author_id: int | None,
     comment_body: str,
 ) -> None:
+    if _digest_owns_work_item_email():
+        return
     to = _recipients(bug, exclude_user_id=comment_author_id)
     if not to:
         return
@@ -343,6 +364,8 @@ def notify_event_created(
     actor_name: str,
     actor_user_id: int | None,
 ) -> None:
+    if _digest_owns_work_item_email():
+        return
     to = _event_recipients(ev, exclude_user_id=actor_user_id)
     if not to:
         return
@@ -364,6 +387,8 @@ def notify_event_updated(
     actor_name: str,
     actor_user_id: int | None,
 ) -> None:
+    if _digest_owns_work_item_email():
+        return
     if not changes:
         return
     to = _event_recipients(ev, exclude_user_id=actor_user_id)
@@ -383,6 +408,8 @@ def notify_event_deleted(
     actor_name: str,
     actor_user_id: int | None,
 ) -> None:
+    if _digest_owns_work_item_email():
+        return
     to = _event_recipients(ev, exclude_user_id=actor_user_id)
     if not to:
         return

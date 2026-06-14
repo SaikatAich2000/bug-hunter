@@ -42,7 +42,7 @@ class Settings:
     ]
 
     APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter")
-    APP_VERSION: str = os.getenv("APP_VERSION", "2.10")
+    APP_VERSION: str = os.getenv("APP_VERSION", "3.0")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # G3: hard ceiling on request body size, in bytes. The 50 MB attachment
@@ -136,6 +136,44 @@ class Settings:
     SMTP_USE_TLS: bool = _env_bool("SMTP_USE_TLS", True)
     SMTP_USE_SSL: bool = _env_bool("SMTP_USE_SSL", False)
     SMTP_TIMEOUT: int = int(os.getenv("SMTP_TIMEOUT", "10") or "10")
+
+    # --- Daily email digest -------------------------------------------------
+    # When ON, the per-operation work-item emails (new item / update /
+    # assignment / comment / event) are NOT sent immediately. Instead each
+    # operation is recorded as a notification row, and the once-a-day digest
+    # job (`python -m app.jobs.email_digest`) batches every user's operations
+    # into ONE grouped email. Security/transactional emails (password reset)
+    # are NEVER batched — they always send immediately, regardless of this flag.
+    # Default OFF preserves the existing immediate-email behaviour until ops
+    # opts in.
+    EMAIL_DIGEST_ENABLED: bool = _env_bool("EMAIL_DIGEST_ENABLED", False)
+    # How far back the digest job looks for un-emailed operations. Slightly
+    # more than 24h so a cron that drifts or runs late never drops a day, while
+    # still bounding the very first run so it can't replay months of history.
+    EMAIL_DIGEST_LOOKBACK_HOURS: int = int(
+        os.getenv("EMAIL_DIGEST_LOOKBACK_HOURS", "26") or "26"
+    )
+
+    # --- Web push (Firebase Cloud Messaging) --------------------------------
+    # Browser push notifications, sent IMMEDIATELY when an operation happens
+    # (independent of the email digest). OFF unless enabled AND a Firebase
+    # service account is configured — so the app/tests run fine without it.
+    #
+    #   WEB_PUSH_ENABLED            master switch.
+    #   FCM_CREDENTIALS_FILE        path to the Firebase service-account JSON
+    #                               (Project settings → Service accounts). The
+    #                               backend signs FCM sends with it.
+    # The remaining FIREBASE_* values are the *web app* config (public — they
+    # ship to the browser via GET /api/push/config) plus the Web-Push/VAPID
+    # public key (Cloud Messaging → Web configuration → Generate key pair).
+    WEB_PUSH_ENABLED: bool = _env_bool("WEB_PUSH_ENABLED", False)
+    FCM_CREDENTIALS_FILE: str = os.getenv("FCM_CREDENTIALS_FILE", "")
+    FIREBASE_API_KEY: str = os.getenv("FIREBASE_API_KEY", "")
+    FIREBASE_AUTH_DOMAIN: str = os.getenv("FIREBASE_AUTH_DOMAIN", "")
+    FIREBASE_PROJECT_ID: str = os.getenv("FIREBASE_PROJECT_ID", "")
+    FIREBASE_MESSAGING_SENDER_ID: str = os.getenv("FIREBASE_MESSAGING_SENDER_ID", "")
+    FIREBASE_APP_ID: str = os.getenv("FIREBASE_APP_ID", "")
+    FIREBASE_VAPID_KEY: str = os.getenv("FIREBASE_VAPID_KEY", "")
 
 
 @lru_cache(maxsize=1)

@@ -22,11 +22,23 @@ python -m uvicorn app.main:app --reload
 # browse http://127.0.0.1:8000
 ```
 
-Or via Docker:
+Or via Docker (the canonical run path):
 
 ```bash
-docker compose up -d
+./deploy.sh
 # browse http://localhost:8765
+```
+
+### Frontend
+
+The SPA source is in `frontend/` (React + TypeScript + Vite); the build
+emits the static bundle into `app/static/`, which FastAPI serves. After
+changing frontend code, rebuild so the running app picks it up:
+
+```bash
+cd frontend
+npm install
+npm run build
 ```
 
 ## Tests

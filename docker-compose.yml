@@ -100,6 +100,19 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+
+      # Web push (Firebase Cloud Messaging). Pulled from the host .env via ${...}.
+      # FCM_CREDENTIALS_FILE is FIXED to the in-container mount path below — the
+      # host path in .env does not exist inside the container.
+      WEB_PUSH_ENABLED: ${WEB_PUSH_ENABLED:-false}
+      FCM_CREDENTIALS_FILE: /app/secrets/firebase-admin.json
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
+      FIREBASE_VAPID_KEY: ${FIREBASE_VAPID_KEY:-}
+    volumes:
+      # Mount the Firebase service-account JSON into the container (read-only)
+      # so fcm_transport can initialise the Admin SDK.
+      - ./secrets:/app/secrets:ro
     ports:
       - "8765:8000"
     networks:

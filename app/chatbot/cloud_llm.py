@@ -264,7 +264,7 @@ def try_understand(
     context_text = ""
     try:
         from app.chatbot import rag
-        context_text = rag.retrieve_text(message, db, actor)
+        context_text = rag.retrieve_text(message)
     except Exception:  # noqa: BLE001
         logger.debug("Sleuth RAG retrieval skipped/failed", exc_info=True)
 

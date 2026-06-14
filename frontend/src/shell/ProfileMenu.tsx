@@ -1,0 +1,160 @@
+/**
+ * ProfileMenu — the top-right account control (v3.0 shell redesign).
+ *
+ * Replaces the old sidebar "Account" card + theme/logout footer. The button
+ * shows the signed-in user's avatar + name; clicking it opens a dropdown with
+ * the role/email, change-password, theme toggle and log-out.
+ *
+ * Test-parity: the name span keeps id="accountName" (the UI smoke test waits
+ * for it to be populated as its "SPA booted" signal), and the change-password /
+ * logout / theme controls keep their original ids.
+ */
+import { useEffect, useRef, useState } from "react";
+import { useApp } from "../state/AppContext";
+import { api } from "../lib/api";
+import { initials } from "../lib/format";
+import { confirmDialog } from "../components/ConfirmHost";
+
+/** Read the live theme from the document (set by the inline boot script). */
+function currentTheme(): "dark" | "light" {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+export default function ProfileMenu() {
+  const { currentUser, setChangePasswordOpen } = useApp();
+
+  const [open, setOpen] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">(currentTheme);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // ----- actions (ports of the old sidebar handlers) -----------------------
+  const handleLogout = async () => {
+    setOpen(false);
+    const ok = await confirmDialog("Log out now?", {
+      title: "Log out",
+      okLabel: "Log out",
+      danger: false,
+    });
+    if (!ok) return;
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch {
+      /* logging out locally regardless of the server result */
+    }
+    location.replace("/login.html");
+  };
+
+  const handleTheme = () => {
+    const next = currentTheme() === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    setTheme(next);
+    try {
+      localStorage.setItem("theme", next);
+    } catch {
+      /* private mode — non-fatal */
+    }
+  };
+
+  const handleChangePassword = () => {
+    setOpen(false);
+    setChangePasswordOpen(true);
+  };
+
+  const avatar = initials(currentUser.name) || "?";
+
+  return (
+    <div className="profile-wrap" ref={rootRef}>
+      <button
+        type="button"
+        className="profile-btn"
+        id="profileBtn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Account menu"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="profile-avatar" id="accountAvatar" aria-hidden="true">
+          {avatar}
+        </span>
+        <span className="profile-name" id="accountName">
+          {currentUser.name}
+        </span>
+        <span className="profile-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+
+      {open && (
+        <div className="profile-menu" role="menu" aria-label="Account">
+          <div className="profile-menu-head">
+            <span className="profile-avatar lg" aria-hidden="true">
+              {avatar}
+            </span>
+            <div className="profile-menu-id">
+              <div className="profile-menu-name">{currentUser.name}</div>
+              <div className="profile-menu-meta">
+                <span id="accountRole">{currentUser.role}</span>
+                {" · "}
+                <span id="accountEmail">{currentUser.email}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-menu-sep" />
+
+          <button
+            type="button"
+            role="menuitem"
+            className="profile-menu-item"
+            id="changePasswordBtn"
+            onClick={handleChangePassword}
+          >
+            <span className="profile-menu-ic" aria-hidden="true">🔑</span>
+            Change password
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="profile-menu-item"
+            id="themeBtn"
+            onClick={handleTheme}
+          >
+            <span className="profile-menu-ic" aria-hidden="true">{theme === "dark" ? "☀️" : "🌙"}</span>
+            {theme === "dark" ? "Light theme" : "Dark theme"}
+          </button>
+
+          <div className="profile-menu-sep" />
+
+          <button
+            type="button"
+            role="menuitem"
+            className="profile-menu-item danger"
+            id="logoutBtn"
+            onClick={() => void handleLogout()}
+          >
+            <span className="profile-menu-ic" aria-hidden="true">🚪</span>
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

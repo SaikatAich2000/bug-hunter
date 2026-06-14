@@ -6,8 +6,8 @@ Only the latest minor release receives security fixes.
 
 | Version | Supported |
 |---------|-----------|
-| 2.10.x  | ✅        |
-| < 2.10  | ❌        |
+| 3.0.x   | ✅        |
+| < 3.0   | ❌        |
 
 ## Reporting a vulnerability
 
@@ -34,7 +34,7 @@ Please include:
 
 ## Existing security posture
 
-See the **v2.10** entry in [CHANGELOG.md](CHANGELOG.md) and the
+See the **v3.0** entry in [CHANGELOG.md](CHANGELOG.md) and the
 *Live-data safety* and *Production checklist* sections of
 [README.md](README.md) for what's already in place — cookie auth with
 HttpOnly + SameSite + signed token, CSRF middleware, rate limiting,

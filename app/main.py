@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import time
@@ -26,7 +27,10 @@ from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.models import Project, Session as SessionRow, User
 from app.chatbot.router import router as chatbot_router
-from app.routes import audit, auth, bugs, events, projects, reports, sessions, stats, users
+from app.routes import (
+    audit, auth, bugs, events, notifications, projects, push, reports, sessions,
+    stats, users,
+)
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
     ALLOWED_ITEM_TYPES,
@@ -292,19 +296,38 @@ app.add_middleware(CacheControlMiddleware)
 # HSTS is conditional on COOKIE_SECURE so we don't accidentally emit it
 # behind an HTTP-only dev proxy and lock the browser into https://.
 # ---------------------------------------------------------------------------
-_CSP = (
-    "default-src 'self'; "
-    "img-src 'self' data: blob:; "
-    "media-src 'self' data: blob:; "
-    "style-src 'self' 'unsafe-inline'; "
-    "script-src 'self'; "
-    "font-src 'self' data:; "
-    "connect-src 'self'; "
-    "object-src 'none'; "
-    "frame-ancestors 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self'"
+# When web push is ON, the browser's Firebase Messaging SDK (self-hosted —
+# script-src stays 'self') talks to these Google endpoints to mint/refresh the
+# device token. They're added to connect-src ONLY then, so the default posture
+# stays locked to 'self' when push is off. Firebase scripts are bundled/vendored
+# locally, so script-src never needs to be relaxed.
+_FCM_CONNECT_SRC = (
+    " https://fcm.googleapis.com https://fcmregistrations.googleapis.com"
+    " https://firebaseinstallations.googleapis.com https://www.googleapis.com"
 )
+
+
+def _build_csp() -> str:
+    connect = "connect-src 'self'"
+    if get_settings().WEB_PUSH_ENABLED:
+        connect += _FCM_CONNECT_SRC
+    return (
+        "default-src 'self'; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; "
+        "font-src 'self' data:; "
+        f"{connect}; "
+        "worker-src 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+
+
+_CSP = _build_csp()
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -359,6 +382,11 @@ _RATE_RULES: dict[str, tuple[int, int]] = {
     # path: (max_requests, window_seconds)
     "/api/auth/login": (8, 60),
     "/api/auth/forgot-password": (3, 60),
+    # reset-password validates a 256-bit token (brute-force already infeasible)
+    # but we cap it anyway; change-password bcrypt-verifies the current password
+    # on every call, so an unthrottled endpoint is an auth-amplification vector.
+    "/api/auth/reset-password": (5, 60),
+    "/api/auth/change-password": (5, 60),
 }
 _rate_buckets: dict[tuple[str, str], deque] = {}
 _rate_lock = Lock()
@@ -652,6 +680,61 @@ def reset_page() -> HTMLResponse:
     return _serve_html("reset.html")
 
 
+# Firebase Cloud Messaging background service worker. Served from the ROOT
+# scope (a service worker can only control pages at or below its own URL path,
+# so /static/ would be too narrow). Firebase's compat SDK is self-hosted under
+# /static/vendor (CSP script-src stays 'self'); the public web config is
+# injected here the same way the HTML pages get their version placeholders.
+_FIREBASE_SW = """\
+importScripts('/static/vendor/firebase-app-compat.js');
+importScripts('/static/vendor/firebase-messaging-compat.js');
+firebase.initializeApp(__FIREBASE_CONFIG__);
+const messaging = firebase.messaging();
+messaging.onBackgroundMessage(function (payload) {
+  const n = payload.notification || {};
+  const d = payload.data || {};
+  self.registration.showNotification(n.title || 'Bug Hunter', {
+    body: n.body || '',
+    icon: '/static/icon.png',
+    badge: '/static/icon.png',
+    data: { url: d.url || '/' },
+    tag: d.url || 'bug-hunter'
+  });
+});
+self.addEventListener('notificationclick', function (event) {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (cl) {
+    for (const c of cl) { if ('focus' in c) { c.navigate(url); return c.focus(); } }
+    if (clients.openWindow) return clients.openWindow(url);
+  }));
+});
+"""
+
+
+@app.get("/firebase-messaging-sw.js", include_in_schema=False)
+def firebase_messaging_sw() -> Response:
+    """Serve the FCM background service worker with the public Firebase config
+    injected. A no-op worker when web push isn't configured, so registration
+    never 404s."""
+    media = "application/javascript"
+    headers = {"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"}
+    if not (settings.WEB_PUSH_ENABLED and settings.FIREBASE_API_KEY):
+        return Response("/* web push not configured */", media_type=media, headers=headers)
+    cfg = json.dumps({
+        "apiKey": settings.FIREBASE_API_KEY,
+        "authDomain": settings.FIREBASE_AUTH_DOMAIN,
+        "projectId": settings.FIREBASE_PROJECT_ID,
+        "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
+        "appId": settings.FIREBASE_APP_ID,
+    })
+    return Response(
+        _FIREBASE_SW.replace("__FIREBASE_CONFIG__", cfg),
+        media_type=media,
+        headers=headers,
+    )
+
+
 @app.get("/api/health", tags=["meta"])
 def health() -> dict[str, str]:
     return {
@@ -683,6 +766,8 @@ app.include_router(stats.router)
 app.include_router(reports.router)
 app.include_router(audit.router)
 app.include_router(sessions.router)
+app.include_router(notifications.router)
+app.include_router(push.router)
 app.include_router(chatbot_router)
 
 

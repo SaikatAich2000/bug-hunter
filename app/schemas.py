@@ -477,7 +477,7 @@ class BugCreate(BaseModel):
     # pasted screenshots (base64 data URLs) fit. Sanitized below.
     description: str = Field(default="", max_length=1_000_000)
     reporter_id: Optional[int] = None
-    assignee_ids: list[int] = Field(default_factory=list)
+    assignee_ids: list[int] = Field(default_factory=list, max_length=200)
     item_type: str = Field(default="Bug")
     status: str = Field(default="New")
     priority: str = Field(default="Medium")
@@ -560,7 +560,7 @@ class BugUpdate(BaseModel):
     title: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, max_length=1_000_000)
     reporter_id: Optional[int] = None
-    assignee_ids: Optional[list[int]] = None
+    assignee_ids: Optional[list[int]] = Field(default=None, max_length=200)
     item_type: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
@@ -650,7 +650,7 @@ class BugOut(BaseModel):
     status: str
     priority: str
     environment: str
-    due_date: Optional[str]
+    due_date: Optional[str] = None
     # Optional event link. Both fields nullable so standalone items
     # (no event) keep their existing shape.
     event_id: Optional[int] = None
@@ -785,7 +785,7 @@ class EventCreate(BaseModel):
     # deleted — but NOT when individual tasks inside the event are
     # filed. Empty list = no managers (the event has no notification
     # recipients beyond the creator).
-    manager_ids: list[int] = Field(default_factory=list)
+    manager_ids: list[int] = Field(default_factory=list, max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -820,7 +820,7 @@ class EventUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, max_length=10000)
     scheduled_for: Optional[str] = None
-    manager_ids: Optional[list[int]] = None
+    manager_ids: Optional[list[int]] = Field(default=None, max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -873,3 +873,54 @@ class EventOut(BaseModel):
 class EventDetail(EventOut):
     """Event with its full item list — what /api/events/{id} returns."""
     items: list[BugOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Notification (v3.0) — per-user in-app notification row.
+# ---------------------------------------------------------------------------
+class NotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    kind: str
+    title: str
+    body: str
+    bug_id: Optional[int] = None
+    event_id: Optional[int] = None
+    actor_name: str
+    read_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class UnreadCountOut(BaseModel):
+    unread: int
+
+
+# ---------------------------------------------------------------------------
+# Web push (Firebase Cloud Messaging)
+# ---------------------------------------------------------------------------
+class PushSubscribeIn(BaseModel):
+    """A browser/device registering its FCM token for push."""
+    token: str = Field(min_length=1, max_length=512)
+    platform: str = Field(default="web", max_length=20)
+    user_agent: str = Field(default="", max_length=400)
+
+
+class PushUnsubscribeIn(BaseModel):
+    token: str = Field(min_length=1, max_length=512)
+
+
+class PushConfigOut(BaseModel):
+    """Public Firebase web config handed to the browser to init messaging.
+
+    All values here are *publishable* (they're embedded in any Firebase web
+    app); the secret is the server-side service-account JSON, which never
+    leaves the backend. ``enabled`` is False when web push isn't configured,
+    so the frontend can hide the toggle cleanly.
+    """
+    enabled: bool
+    api_key: str = ""
+    auth_domain: str = ""
+    project_id: str = ""
+    messaging_sender_id: str = ""
+    app_id: str = ""
+    vapid_key: str = ""

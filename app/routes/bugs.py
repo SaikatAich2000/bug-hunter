@@ -23,6 +23,7 @@ from app.email_service import (
     BugSnapshot, UserSnapshot,
     notify_assignment, notify_bug_created, notify_bug_updated, notify_comment_added,
 )
+from app import notification_service
 from app.image_strip import strip_image_metadata
 from app.models import Activity, Attachment, Bug, Comment, Event, Project, User
 from app.schemas import (
@@ -59,33 +60,59 @@ _upload_rate_lock = threading.Lock()
 # Bound the dict so a churn of test users doesn't grow memory forever.
 _UPLOAD_BUCKETS_MAX = 5_000
 
+# Per-user comment rate limit (v3.0). Each comment writes a row AND fans out
+# notifications + emails to the reporter and every assignee, so unbounded
+# commenting is a notification/email-amplification vector. 30/min is generous
+# for a human discussion and tight enough to make a script obvious.
+_COMMENT_RATE_WINDOW_SECONDS = 60
+_COMMENT_RATE_MAX = 30
+_comment_buckets: dict[int, deque] = {}
+_comment_rate_lock = threading.Lock()
 
-def _check_upload_rate(user_id: int) -> None:
-    """Raise 429 if the user is uploading too fast.
 
-    Sliding window of timestamps per user. Cheap, no Redis. Multi-worker
-    deployments get per-worker buckets — for tighter global limits put
-    nginx limit_req in front of the upload endpoints.
+def _check_user_rate(
+    buckets: dict[int, deque], lock: threading.Lock, user_id: int,
+    *, max_req: int, window: int, detail: str, cap: int = _UPLOAD_BUCKETS_MAX,
+) -> None:
+    """Per-user sliding-window rate guard; raises 429 when exceeded.
+
+    Cheap, in-process, no Redis. Multi-worker deployments get per-worker
+    buckets — for a tighter global limit put nginx limit_req in front.
     """
     now = time.monotonic()
-    cutoff = now - _UPLOAD_RATE_WINDOW_SECONDS
-    with _upload_rate_lock:
-        bucket = _upload_buckets.get(user_id)
+    cutoff = now - window
+    with lock:
+        bucket = buckets.get(user_id)
         if bucket is None:
-            if len(_upload_buckets) >= _UPLOAD_BUCKETS_MAX:
-                _upload_buckets.pop(next(iter(_upload_buckets)), None)
+            if len(buckets) >= cap:
+                buckets.pop(next(iter(buckets)), None)
             bucket = deque()
-            _upload_buckets[user_id] = bucket
+            buckets[user_id] = bucket
         while bucket and bucket[0] < cutoff:
             bucket.popleft()
-        if len(bucket) >= _UPLOAD_RATE_MAX:
-            retry_after = max(1, int(_UPLOAD_RATE_WINDOW_SECONDS - (now - bucket[0])))
+        if len(bucket) >= max_req:
+            retry_after = max(1, int(window - (now - bucket[0])))
             raise HTTPException(
-                status_code=429,
-                detail="Too many uploads, slow down a moment.",
+                status_code=429, detail=detail,
                 headers={"Retry-After": str(retry_after)},
             )
         bucket.append(now)
+
+
+def _check_upload_rate(user_id: int) -> None:
+    _check_user_rate(
+        _upload_buckets, _upload_rate_lock, user_id,
+        max_req=_UPLOAD_RATE_MAX, window=_UPLOAD_RATE_WINDOW_SECONDS,
+        detail="Too many uploads, slow down a moment.",
+    )
+
+
+def _check_comment_rate(user_id: int) -> None:
+    _check_user_rate(
+        _comment_buckets, _comment_rate_lock, user_id,
+        max_req=_COMMENT_RATE_MAX, window=_COMMENT_RATE_WINDOW_SECONDS,
+        detail="Too many comments, slow down a moment.",
+    )
 
 # Content types we MUST NOT serve as-is, because a browser would render
 # them inline and execute embedded scripts in our same-origin context.
@@ -136,6 +163,12 @@ def _safe_filename_for_header(name: str) -> str:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _item_type(bug: Bug) -> str:
+    """Work-item flavour ('Bug' / 'Requirement' / 'Task'), defaulting legacy
+    rows created before the item_type column existed to 'Bug'."""
+    return getattr(bug, "item_type", None) or "Bug"
+
+
 def _user_brief(u: User) -> dict:
     return {"id": u.id, "name": u.name, "email": u.email, "role": u.role}
 
@@ -158,7 +191,7 @@ def _bug_to_out_dict(bug: Bug, attachment_count: int = 0, can_edit: bool = False
         "description": bug.description,
         "reporter": _user_brief(bug.reporter) if bug.reporter else None,
         "assignees": [_user_brief(a) for a in bug.assignees],
-        "item_type": getattr(bug, "item_type", None) or "Bug",
+        "item_type": _item_type(bug),
         "status": bug.status,
         "priority": bug.priority,
         "environment": bug.environment,
@@ -183,7 +216,7 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
         assignees=tuple(UserSnapshot(id=a.id, name=a.name, email=a.email) for a in bug.assignees),
         # Default "Bug" lets legacy bugs (predating the column) still
         # render correct-flavored emails without raising AttributeError.
-        item_type=getattr(bug, "item_type", None) or "Bug",
+        item_type=_item_type(bug),
         event_name=bug.event.name if getattr(bug, "event", None) else None,
     )
 
@@ -388,7 +421,7 @@ def list_bugs(
             b,
             int(att_counts.get(b.id, 0)),
             can_edit_bug(_user, b.reporter_id, [a.id for a in b.assignees],
-                         item_type=getattr(b, "item_type", None) or "Bug"),
+                         item_type=_item_type(b)),
         ))
 
     return BugListResponse.model_validate({
@@ -436,7 +469,7 @@ def get_bug(
         bug,
         len(all_atts),
         can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees],
-                     item_type=getattr(bug, "item_type", None) or "Bug"),
+                     item_type=_item_type(bug)),
     )
     payload["attachments"] = [_attachment_brief(a) for a in bug_level]
     payload["comments"] = []
@@ -517,6 +550,23 @@ def create_bug(
             db, bug.id, actor, "assignees_added",
             f"Bug #{bug.id} '{bug.title}' assigned to: {names}",
         )
+    # v3.0 in-app notifications — same recipients the emails target. Written on
+    # this session so they commit transactionally with the bug.
+    _itype = _item_type(bug).lower()
+    assignee_ids = [a.id for a in assignees]
+    notification_service.notify(
+        db, assignee_ids, kind="assigned", background=background,
+        title=f"Assigned to {_itype} #{bug.id}",
+        body=f"{actor.name} assigned you to “{bug.title}”.",
+        bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
+    )
+    if reporter.id != actor.id and reporter.id not in assignee_ids:
+        notification_service.notify(
+            db, [reporter.id], kind="reported", background=background,
+            title=f"You're the reporter on {_itype} #{bug.id}",
+            body=f"{actor.name} filed “{bug.title}” with you as reporter.",
+            bug_id=bug.id, actor_name=actor.name,
+        )
     db.commit()
 
     fresh = db.scalar(_eager_bug().where(Bug.id == bug.id))
@@ -548,9 +598,9 @@ _UPDATE_TRACKED_FIELDS = [
 
 def _validate_update_authorization(bug: Bug, actor: User) -> None:
     if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
-                        item_type=getattr(bug, "item_type", None) or "Bug"):
+                        item_type=_item_type(bug)):
         # v2.3: regular users can no longer edit Tasks or Requirements.
-        noun = (getattr(bug, "item_type", None) or "Bug").lower()
+        noun = _item_type(bug).lower()
         raise HTTPException(
             status_code=403,
             detail=f"You don't have permission to edit this {noun}.",
@@ -571,7 +621,7 @@ def _validate_update_status(fields: dict, bug: Bug) -> None:
     here we check the per-type set against the (possibly changing) type."""
     if "status" not in fields or fields["status"] is None:
         return
-    effective_type = fields.get("item_type") or (getattr(bug, "item_type", None) or "Bug")
+    effective_type = fields.get("item_type") or _item_type(bug)
     allowed_for_type = statuses_for_type(effective_type)
     if fields["status"] not in allowed_for_type and fields["status"] != bug.status:
         raise HTTPException(
@@ -712,6 +762,32 @@ def update_bug(
 
     _persist_update(db, bug, actor, changes)
 
+    # v3.0 in-app notifications mirror the update emails. Newly-assigned users
+    # get a single "assigned" notification (not also "updated"), so each
+    # recipient gets exactly one per change set.
+    if changes or newly_assigned:
+        new_ids = {u.id for u in newly_assigned}
+        _itype = _item_type(bug).lower()
+        if changes:
+            recipients = [
+                uid for uid in [bug.reporter_id, *[a.id for a in bug.assignees]]
+                if uid not in new_ids
+            ]
+            notification_service.notify(
+                db, recipients, kind="updated", background=background,
+                title=f"{_itype.capitalize()} #{bug.id} updated",
+                body=f"{actor.name} changed " + ", ".join(f for f, _, _ in changes) + ".",
+                bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
+            )
+        if newly_assigned:
+            notification_service.notify(
+                db, list(new_ids), kind="assigned", background=background,
+                title=f"Assigned to {_itype} #{bug.id}",
+                body=f"{actor.name} assigned you to “{bug.title}”.",
+                bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
+            )
+        db.commit()
+
     fresh = db.scalar(_eager_bug().where(Bug.id == bug_id))
     snap = _bug_snapshot(fresh)
     _schedule_update_notifications(background, snap, changes, newly_assigned, actor)
@@ -737,13 +813,13 @@ def delete_bug(
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
     # v3.1 spec: item deletion is admin-only across every type — managers
     # can edit, never delete. Reporters and assignees never could.
-    if not can_delete_bug(actor, item_type=getattr(bug, "item_type", None) or "Bug"):
+    if not can_delete_bug(actor, item_type=_item_type(bug)):
         raise HTTPException(
             status_code=403,
             detail="Only admins can delete items.",
         )
     title = bug.title
-    itype = getattr(bug, "item_type", None) or "Bug"
+    itype = _item_type(bug)
     # Detach the bug's audit history BEFORE deleting the bug so the trail
     # survives. Two-step on purpose:
     #   1. UPDATE activity_log SET bug_id = NULL WHERE bug_id = <id>
@@ -814,6 +890,7 @@ def add_comment(
     db: Session = Depends(get_db),
     author: User = Depends(get_current_user),
 ) -> dict:
+    _check_comment_rate(author.id)
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
@@ -828,6 +905,14 @@ def add_comment(
     db.flush()
     _log(db, bug_id, author, "comment_added",
          f"#{bug.id} '{bug.title}' — comment by {author.name}: {payload.body[:80]}")
+    # v3.0 in-app notification — reporter + assignees, minus the author.
+    notification_service.notify(
+        db, [bug.reporter_id, *[a.id for a in bug.assignees]],
+        kind="comment", background=background,
+        title=f"New comment on #{bug.id}",
+        body=f"{author.name} commented on “{bug.title}”.",
+        bug_id=bug.id, actor_name=author.name, exclude=author.id,
+    )
     db.commit()
     db.refresh(c)
 

@@ -1,14 +1,37 @@
 /* ============================================================
-   Bug Hunter — UI styles (v3.2 visual refresh)
+   Bug Hunter — UI styles (v3.0 "Spectrum Tide")
 
-   What changed from v3.1:
-   - Refined dark + light palettes with deeper, calmer surfaces.
-   - Gradient accents on KPIs, primary buttons, brand and badges.
-   - Subtle depth: layered shadows, soft borders, glass-like surfaces.
-   - Typography scale tightened; Inter system stack with tabular nums for IDs.
+   Spectrum Tide = ocean-deep base × brand-logo colours, a five-colour system:
+   - Ocean cerulean  (--accent)        primary: buttons, links, nav, KPI Total
+   - Brand gold      (--accent-2/warn)  In Progress, KPI Open, gold accents
+   - Cool steel      (silver)           Resolved, Low priority, borders, ghost
+   - Walnut brown                       Closed
+   - Brick red       (--danger)         Reopened, Critical, PROD, danger
+   KPI tiles + status/priority/env badges are colour-coded across the palette.
+   - Self-hosted Plus Jakarta Sans (UI) + JetBrains Mono (IDs/code), CSP-safe.
+   - Per-user notifications bell + dropdown panel in the top bar.
    - All animations honour prefers-reduced-motion.
-   - Every selector / id / class from v3.1 retained — JS hooks unchanged.
+   - Every selector / id / class + every design-token NAME retained — only the
+     token VALUES changed, so JS hooks + backend token tests stay green.
    ============================================================ */
+
+/* ---------- Fonts (self-hosted, CSP-safe — no external CDN) ----------
+   Plus Jakarta Sans for UI text, JetBrains Mono for IDs/code. Bundled as
+   variable woff2 under public/fonts → served at /static/fonts/. */
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/static/fonts/PlusJakartaSans.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/static/fonts/JetBrainsMono.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* ---------- Reset & base ---------- */
 * { box-sizing: border-box; }
@@ -33,9 +56,10 @@
 html, body {
   margin: 0; padding: 0;
   height: 100%;
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 14px;
+  font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14.5px;
   line-height: 1.55;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -44,135 +68,146 @@ html, body {
 .kpi-num, .col-id, .att-count, .session-line3,
 .audit-time, .activity-time, .comment-time {
   font-variant-numeric: tabular-nums;
+  font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 /* ---------- Theme tokens ---------- */
 :root,
 [data-theme="dark"] {
-  --bg: #0a0e1a;
-  --bg-grad: radial-gradient(ellipse 1200px 600px at 20% -10%, rgba(99,102,241,0.08), transparent 60%),
-             radial-gradient(ellipse 1000px 500px at 90% 110%, rgba(56,189,248,0.06), transparent 55%),
-             #0a0e1a;
-  --bg-elev: #131829;
-  --bg-elev-2: #1a2138;
-  --bg-elev-3: #232c47;
-  --surface-glass: rgba(26, 33, 56, 0.72);
-  --border: #232c47;
-  --border-strong: #344063;
-  --border-soft: rgba(255,255,255,0.05);
+  /* ---- Spectrum Tide (dark) — v3.0 ocean × brand-logo mix ----
+     Five-colour system: ocean cerulean (primary) + brand gold, cool steel,
+     walnut and brick-red. */
+  --bg: #08161f;
+  --bg-grad: radial-gradient(58% 55% at 16% 10%, rgba(47,143,190,0.34), transparent 60%),
+             radial-gradient(54% 55% at 88% 12%, rgba(201,154,51,0.20), transparent 60%),
+             radial-gradient(55% 60% at 82% 98%, rgba(156,111,67,0.24), transparent 60%),
+             radial-gradient(38% 40% at 24% 100%, rgba(207,70,60,0.12), transparent 60%),
+             #08161f;
+  --bg-elev: #0f2230;
+  --bg-elev-2: #16293a;
+  --bg-elev-3: #20384b;
+  --surface-glass: rgba(16, 29, 40, 0.76);
+  --border: #233646;
+  --border-strong: #34485c;
+  --border-soft: rgba(154,166,184,0.08);
 
-  --text: #eef2ff;
-  --text-muted: #9aa6c4;
-  --text-faint: #5e6a85;
+  --text: #eef3f8;
+  --text-muted: #a4b3c1;
+  --text-faint: #71849a;
 
-  --accent: #818cf8;
-  --accent-strong: #6366f1;
-  --accent-2: #38bdf8;
-  --accent-soft: rgba(129, 140, 248, 0.16);
-  --accent-glow: rgba(129, 140, 248, 0.35);
+  --accent: #3aa6d6;
+  --accent-strong: #2f8fbe;
+  --accent-2: #c99a33;
+  --accent-soft: rgba(58, 166, 214, 0.15);
+  --accent-glow: rgba(47, 143, 190, 0.42);
   --accent-text: #ffffff;
-  --accent-grad: linear-gradient(135deg, #6366f1 0%, #818cf8 50%, #38bdf8 100%);
-  --accent-grad-hover: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #0ea5e9 100%);
+  --accent-grad: linear-gradient(135deg, #2f8fbe 0%, #3aa6d6 44%, #c99a33 100%);
+  --accent-grad-hover: linear-gradient(135deg, #287ba6 0%, #2f93c2 44%, #b3892c 100%);
 
-  --danger: #f43f5e;
-  --danger-strong: #e11d48;
-  --danger-soft: rgba(244, 63, 94, 0.14);
-  --danger-grad: linear-gradient(135deg, #e11d48, #f43f5e);
-  --warn: #f59e0b;
-  --warn-soft: rgba(245, 158, 11, 0.14);
-  --ok: #10b981;
-  --ok-soft: rgba(16, 185, 129, 0.14);
+  --danger: #e26157;
+  --danger-strong: #cf463c;
+  --danger-soft: rgba(207, 70, 60, 0.15);
+  --danger-grad: linear-gradient(135deg, #cf463c, #e26157);
+  --warn: #d9a93f;
+  --warn-soft: rgba(217, 169, 63, 0.15);
+  --ok: #1fa98f;
+  --ok-soft: rgba(31, 169, 143, 0.15);
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.18);
   --shadow: 0 4px 12px rgba(0,0,0,0.30), 0 1px 3px rgba(0,0,0,0.20);
-  --shadow-lg: 0 12px 32px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.25);
-  --shadow-xl: 0 24px 56px rgba(0,0,0,0.55), 0 8px 24px rgba(0,0,0,0.30);
+  --shadow-lg: 0 20px 50px -28px rgba(8,20,30,0.70), 0 12px 32px rgba(0,0,0,0.42);
+  --shadow-xl: 0 28px 64px -24px rgba(8,20,30,0.75), 0 24px 56px rgba(0,0,0,0.52);
   --shadow-focus: 0 0 0 3px var(--accent-glow);
 
-  --kpi-bg: linear-gradient(140deg, #1a2138 0%, #131829 100%);
+  --kpi-bg: linear-gradient(140deg, #16293a 0%, #0f2230 100%);
 
-  --status-new: #38bdf8;
-  --status-progress: #f59e0b;
-  --status-resolved: #10b981;
-  --status-closed: #94a3b8;
-  --status-reopened: #a78bfa;
-  --status-not-bug: #64748b;
-  --status-later: #f59e0b;
+  --status-new: #3aa6d6;       /* ocean blue */
+  --status-progress: #d9a93f;  /* gold */
+  --status-resolved: #9aa6b8;  /* steel */
+  --status-closed: #b98a5a;    /* walnut */
+  --status-reopened: #e26157;  /* red */
+  --status-not-bug: #7e8ca0;   /* muted steel */
+  --status-later: #c9803a;     /* amber */
 
-  --p-low: #94a3b8;
-  --p-medium: #38bdf8;
-  --p-high: #f59e0b;
-  --p-critical: #f43f5e;
+  --p-low: #9aa6b8;       /* steel */
+  --p-medium: #3aa6d6;    /* blue */
+  --p-high: #d9a93f;      /* gold */
+  --p-critical: #e26157;  /* red */
 
-  --env-dev: #10b981;
-  --env-uat: #f59e0b;
-  --env-prod: #f43f5e;
+  --env-dev: #3aa6d6;     /* blue */
+  --env-uat: #d9a93f;     /* gold */
+  --env-prod: #e26157;    /* red */
 
-  --scrollbar-thumb: #2a3553;
-  --scrollbar-thumb-hover: #3a4870;
+  --scrollbar-thumb: #28425a;
+  --scrollbar-thumb-hover: #38597a;
 }
 
 [data-theme="light"] {
-  --bg: #f4f6fb;
-  --bg-grad: radial-gradient(ellipse 1200px 600px at 20% -10%, rgba(99,102,241,0.06), transparent 60%),
-             radial-gradient(ellipse 1000px 500px at 90% 110%, rgba(56,189,248,0.05), transparent 55%),
-             #f4f6fb;
+  /* ---- Spectrum Tide (light) — v3.0 ocean × brand-logo mix ---- */
+  --bg: #eef6fb;
+  --bg-grad: radial-gradient(58% 55% at 16% 10%, rgba(47,143,190,0.16), transparent 60%),
+             radial-gradient(54% 55% at 88% 12%, rgba(201,154,51,0.16), transparent 60%),
+             radial-gradient(55% 60% at 82% 98%, rgba(156,111,67,0.10), transparent 60%),
+             linear-gradient(160deg, #eef6fb, #faf4e8);
   --bg-elev: #ffffff;
-  --bg-elev-2: #f1f4fb;
-  --bg-elev-3: #e6ecf6;
-  --surface-glass: rgba(255, 255, 255, 0.78);
-  --border: #e2e8f0;
-  --border-strong: #c8d2e0;
-  --border-soft: rgba(15,23,42,0.05);
+  --bg-elev-2: #f3f7fb;
+  --bg-elev-3: #e7eef5;
+  --surface-glass: rgba(255, 255, 255, 0.82);
+  --border: #dde5ee;
+  --border-strong: #c4cedb;
+  --border-soft: rgba(40,60,90,0.06);
 
-  --text: #0f172a;
-  --text-muted: #475569;
-  --text-faint: #94a3b8;
+  --text: #14202c;
+  --text-muted: #4d5e70;
+  --text-faint: #8493a4;
 
-  --accent: #6366f1;
-  --accent-strong: #4f46e5;
-  --accent-2: #0284c7;
-  --accent-soft: rgba(99, 102, 241, 0.12);
-  --accent-glow: rgba(99, 102, 241, 0.25);
+  /* Darkened from the pale #2f8fbe — that ocean cerulean read as washed-out on
+     the white light-theme surfaces. These hit WCAG-AA (~5.6:1) for accent text
+     and white-on-accent buttons while keeping the brand identity. */
+  --accent: #176187;
+  --accent-strong: #0f4e6e;
+  --accent-2: #9a7320;
+  --accent-soft: rgba(23, 97, 135, 0.14);
+  --accent-glow: rgba(23, 97, 135, 0.26);
   --accent-text: #ffffff;
-  --accent-grad: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #0284c7 100%);
-  --accent-grad-hover: linear-gradient(135deg, #4338ca 0%, #4f46e5 50%, #0369a1 100%);
+  --accent-grad: linear-gradient(135deg, #176187 0%, #1f7fa8 50%, #9a7320 100%);
+  --accent-grad-hover: linear-gradient(135deg, #0f4e6e 0%, #176187 50%, #7e5d1a 100%);
 
-  --danger: #dc2626;
-  --danger-strong: #b91c1c;
-  --danger-soft: rgba(220, 38, 38, 0.10);
-  --danger-grad: linear-gradient(135deg, #b91c1c, #dc2626);
-  --warn: #d97706;
-  --warn-soft: rgba(217, 119, 6, 0.10);
-  --ok: #059669;
-  --ok-soft: rgba(5, 150, 105, 0.10);
+  --danger: #cf463c;
+  --danger-strong: #b93b32;
+  --danger-soft: rgba(207, 70, 60, 0.10);
+  --danger-grad: linear-gradient(135deg, #b93b32, #cf463c);
+  --warn: #b07d1e;
+  --warn-soft: rgba(176, 125, 30, 0.10);
+  --ok: #1a8f78;
+  --ok-soft: rgba(26, 143, 120, 0.10);
 
-  --shadow-sm: 0 1px 2px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
-  --shadow: 0 4px 12px rgba(15,23,42,0.08), 0 1px 3px rgba(15,23,42,0.05);
-  --shadow-lg: 0 16px 40px rgba(15,23,42,0.16), 0 4px 12px rgba(15,23,42,0.08);
-  --shadow-xl: 0 28px 64px rgba(15,23,42,0.20), 0 12px 32px rgba(15,23,42,0.10);
+  --shadow-sm: 0 1px 2px rgba(40,60,90,0.06), 0 1px 3px rgba(40,60,90,0.04);
+  --shadow: 0 4px 12px rgba(30,60,90,0.10), 0 1px 3px rgba(30,60,90,0.06);
+  --shadow-lg: 0 16px 36px -22px rgba(30,60,90,0.24), 0 4px 12px rgba(30,60,90,0.08);
+  --shadow-xl: 0 28px 64px -28px rgba(47,143,190,0.20), 0 12px 32px rgba(30,60,90,0.10);
   --shadow-focus: 0 0 0 3px var(--accent-glow);
 
-  --kpi-bg: #ffffff;
+  --kpi-bg: linear-gradient(140deg, #ffffff 0%, #f3f7fb 100%);
 
-  --status-new: #0284c7;
-  --status-progress: #d97706;
-  --status-resolved: #059669;
-  --status-closed: #64748b;
-  --status-reopened: #7c3aed;
-  --status-not-bug: #94a3b8;
-  --status-later: #d97706;
+  --status-new: #1f7fa8;       /* ocean blue */
+  --status-progress: #9a7320;  /* gold */
+  --status-resolved: #5b6675;  /* steel */
+  --status-closed: #7a5530;    /* walnut */
+  --status-reopened: #bb352c;  /* red */
+  --status-not-bug: #64748b;   /* muted steel */
+  --status-later: #9a6a24;     /* amber */
 
-  --p-low: #64748b;
-  --p-medium: #0284c7;
-  --p-high: #d97706;
-  --p-critical: #dc2626;
+  --p-low: #5b6675;       /* steel */
+  --p-medium: #1f7fa8;    /* blue */
+  --p-high: #9a7320;      /* gold */
+  --p-critical: #bb352c;  /* red */
 
-  --env-dev: #059669;
-  --env-uat: #d97706;
-  --env-prod: #dc2626;
+  --env-dev: #1f7fa8;     /* blue */
+  --env-uat: #9a7320;     /* gold */
+  --env-prod: #bb352c;    /* red */
 
-  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb: #c4cedb;
   --scrollbar-thumb-hover: #94a3b8;
 }
 
@@ -280,15 +315,6 @@ body.sidebar-collapsed .sidebar-collapse-btn {
 body.sidebar-collapsed .nav-btn { justify-content: center; padding: 10px 4px; }
 body.sidebar-collapsed .nav-btn span:not(.nav-icon) { display: none; }
 body.sidebar-collapsed .side-section { display: none; }
-body.sidebar-collapsed .side-account { display: flex !important; }
-body.sidebar-collapsed .side-account .side-section-header { display: none; }
-body.sidebar-collapsed .account-card { padding: 4px; justify-content: center; }
-body.sidebar-collapsed .account-info,
-body.sidebar-collapsed .account-actions { display: none; }
-body.sidebar-collapsed .side-footer .link-btn { padding: 6px 4px; text-align: center; font-size: 0; }
-body.sidebar-collapsed .side-footer .link-btn::first-letter { font-size: 14px; }
-body.sidebar-collapsed .theme-icon { margin-right: 0; }
-body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-btn {
@@ -454,11 +480,21 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   letter-spacing: -0.01em;
 }
 .search-wrap {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   justify-content: center;
   max-width: 540px;
+}
+/* Persistent right-hand cluster (New + bell + profile). margin-left:auto
+   absorbs all leftover row space so the cluster is pinned to the right on
+   EVERY view — whether or not the (list-only) search box is present. This is
+   the fix for the bell jumping to the left on non-list views. */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 .search-wrap input {
   width: 100%;
@@ -484,6 +520,221 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   box-shadow: var(--shadow-focus);
 }
 .search-wrap input::placeholder { color: var(--text-faint); }
+
+/* ---------- Notifications (bell + panel) ---------- */
+/* The bell sits inside .topbar-right, which owns the right alignment, so the
+   wrap itself only needs to be a positioning context for the dropdown. */
+.notif-wrap { position: relative; flex-shrink: 0; }
+.notif-btn {
+  position: relative;
+  width: 40px; height: 40px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 18px; line-height: 1;
+  border-radius: 11px;
+}
+.notif-btn:hover { background: var(--accent-soft); }
+.notif-bell { filter: grayscale(0.1); }
+.notif-badge {
+  position: absolute;
+  top: 2px; right: 2px;
+  min-width: 17px; height: 17px;
+  padding: 0 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 700;
+  color: #fff;
+  background: var(--danger-grad);
+  border: 2px solid var(--bg-elev);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  max-height: min(560px, 78vh);
+  display: flex; flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-xl);
+  z-index: 40;
+  overflow: hidden;
+  animation: notif-pop 0.14s ease;
+}
+@keyframes notif-pop {
+  from { opacity: 0; transform: translateY(-6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.notif-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--accent-soft), transparent);
+}
+.notif-panel-title { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.notif-readall {
+  background: none; border: 0;
+  color: var(--accent);
+  font-size: 12.5px; font-weight: 600;
+  cursor: pointer; padding: 4px 6px; border-radius: 7px;
+}
+.notif-readall:hover:not(:disabled) { background: var(--accent-soft); }
+.notif-readall:disabled { color: var(--text-faint); cursor: default; }
+.notif-list { overflow-y: auto; padding: 6px; }
+.notif-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 40px 20px;
+  color: var(--text-muted); text-align: center;
+}
+.notif-empty-glyph { font-size: 30px; opacity: 0.8; }
+.notif-item {
+  position: relative;
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 11px 12px 11px 12px;
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.notif-item:hover { background: var(--bg-elev-2); }
+.notif-item.is-unread { background: var(--accent-soft); }
+.notif-item.is-unread:hover { background: var(--accent-soft); filter: brightness(1.05); }
+.notif-icon {
+  flex-shrink: 0;
+  width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  background: var(--bg-elev-3);
+  border-radius: 10px;
+}
+.notif-body { min-width: 0; flex: 1; }
+.notif-title {
+  font-weight: 600; font-size: 13.5px; color: var(--text);
+  line-height: 1.35;
+}
+.notif-text {
+  font-size: 12.5px; color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.notif-time {
+  font-size: 11.5px; color: var(--text-faint);
+  margin-top: 4px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.notif-dot {
+  position: absolute; top: 14px; right: 30px;
+  width: 8px; height: 8px; border-radius: 999px;
+  background: var(--accent);
+}
+.notif-del {
+  position: absolute; top: 8px; right: 8px;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: none;
+  color: var(--text-faint);
+  font-size: 12px; cursor: pointer; border-radius: 6px;
+  opacity: 0; transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.notif-item:hover .notif-del { opacity: 1; }
+.notif-del:hover { background: var(--danger-soft); color: var(--danger); }
+
+/* ---------- Profile menu (top-right account control) ---------- */
+.profile-wrap { position: relative; flex-shrink: 0; }
+.profile-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 11px 0 5px;
+  border-radius: 11px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  max-width: 220px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.profile-btn:hover { border-color: var(--accent); background: var(--bg-elev-3); }
+.profile-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.profile-avatar {
+  display: grid;
+  place-items: center;
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--accent-grad);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  font-style: normal;
+  letter-spacing: 0.02em;
+}
+.profile-avatar.lg { width: 40px; height: 40px; border-radius: 11px; font-size: 15px; }
+.profile-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-caret { font-size: 11px; color: var(--text-faint); flex-shrink: 0; }
+
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 268px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-xl);
+  z-index: 40;
+  padding: 8px;
+  animation: notif-pop 0.14s ease;
+}
+.profile-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 10px 12px;
+}
+.profile-menu-id { min-width: 0; }
+.profile-menu-name {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.profile-menu-meta {
+  font-size: 11.5px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.profile-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.profile-menu-item:hover { background: var(--bg-elev-2); }
+.profile-menu-item:focus-visible { outline: none; background: var(--accent-soft); }
+.profile-menu-item.danger:hover { background: var(--danger-soft); color: var(--danger); }
+.profile-menu-ic { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
 
 /* ---------- KPI strip ----------
    Each tile is a real <button> so keyboard users can tab to it and screen
@@ -546,15 +797,36 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
   color: var(--accent);
   line-height: 1.1;
   letter-spacing: -0.02em;
-  background: var(--accent-grad);
+  /* Total tile = ocean blue; other tiles override via .kpi-* below. Use
+     background-image (not the shorthand) so background-clip:text survives. */
+  background-image: linear-gradient(135deg, #4fb4de, #2f8fbe);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.kpi-num.kpi-open     { background: linear-gradient(135deg, var(--status-new), var(--accent-2)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-.kpi-num.kpi-resolved { background: linear-gradient(135deg, var(--status-resolved), #34d399); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-.kpi-num.kpi-closed   { background: linear-gradient(135deg, var(--status-closed), #cbd5e1); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-.kpi-num.kpi-later    { background: linear-gradient(135deg, var(--warn), #fbbf24); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+/* Spectrum Tide KPI colour-coding — Total=blue, Open=gold, Resolved=steel,
+   Closed=walnut, Resolve Later=red. Fixed mid-tone gradients chosen to read on
+   BOTH the dark tiles and the white light-theme tiles (background-IMAGE keeps
+   the inherited background-clip:text intact so the digits always render).
+   Total (base .kpi-num) is blue — set on the base rule above. */
+.kpi-num.kpi-open     { background-image: linear-gradient(135deg, #e0b24e, #bd8c26); }
+.kpi-num.kpi-resolved { background-image: linear-gradient(135deg, #9aa6b8, #6b7686); }
+.kpi-num.kpi-closed   { background-image: linear-gradient(135deg, #c08f5a, #8a5f37); }
+.kpi-num.kpi-later    { background-image: linear-gradient(135deg, #dd5a50, #c1352b); }
+/* Slim colour-coded top accent per tile (matches the approved mockup). */
+.kpi::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 3px;
+  background: var(--accent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+.kpi[data-kpi="open"]::after          { background: #d9a93f; }
+.kpi[data-kpi="resolved"]::after      { background: #9aa6b8; }
+.kpi[data-kpi="closed"]::after        { background: #b98a5a; }
+.kpi[data-kpi="resolve_later"]::after { background: #cf463c; }
 .kpi-label {
   font-size: 11px;
   color: var(--text-muted);
@@ -918,14 +1190,14 @@ body.sidebar-collapsed .side-footer .link-btn svg { margin-right: 0; }
 .badge[data-priority="Critical"] { color: var(--p-critical); }
 .badge[data-priority="Critical"]::before { opacity: 0.16; }
 
-.badge[data-env="DEV"]  { color: var(--env-dev); border-color: rgba(16,185,129,0.45); }
-.badge[data-env="UAT"]  { color: var(--env-uat); border-color: rgba(245,158,11,0.45); }
-.badge[data-env="PROD"] { color: var(--env-prod); border-color: rgba(244,63,94,0.45); }
+.badge[data-env="DEV"]  { color: var(--env-dev); border-color: rgba(58,166,214,0.45); }
+.badge[data-env="UAT"]  { color: var(--env-uat); border-color: rgba(217,169,63,0.45); }
+.badge[data-env="PROD"] { color: var(--env-prod); border-color: rgba(207,70,60,0.45); }
 
 /* Work-item-type badges — Bug / Requirement / Task. */
-.badge[data-type="Bug"]         { color: #ef4444; border-color: rgba(239,68,68,0.45); }
-.badge[data-type="Requirement"] { color: #8b5cf6; border-color: rgba(139,92,246,0.45); }
-.badge[data-type="Task"]        { color: #10b981; border-color: rgba(16,185,129,0.45); }
+.badge[data-type="Bug"]         { color: var(--danger); border-color: rgba(207,70,60,0.45); }
+.badge[data-type="Requirement"] { color: var(--accent); border-color: rgba(58,166,214,0.45); }
+.badge[data-type="Task"]        { color: var(--ok); border-color: rgba(31,169,143,0.45); }
 
 .assignee-stack {
   display: inline-flex;
@@ -1885,6 +2157,11 @@ fieldset.field > legend {
   .kpi-strip { grid-template-columns: repeat(2, 1fr); padding: 14px; gap: 8px; }
   .filter-bar { padding: 0 12px 12px; }
   .topbar { padding: 12px; }
+  /* Compact the right cluster: drop the profile name (avatar stays) and the
+     search box so New + bell + avatar stay on one row. */
+  .topbar-right { gap: 8px; }
+  .profile-name, .profile-caret { display: none; }
+  .profile-btn { padding: 0; }
   .view { padding: 0 12px 24px; }
   .row { flex-direction: column; }
   .modal-card { max-height: 95vh; }
@@ -2050,13 +2327,18 @@ fieldset.field > legend {
 .auth-body {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 16px;
   background: var(--bg-grad);
   padding: 32px 16px;
   position: relative;
   overflow: hidden;
 }
+/* The version line is a sibling of #root (kept outside the React tree so
+   _serve_html can substitute __APP_VERSION__). Column layout above stacks it
+   directly beneath the sign-in card, centered — instead of beside it. */
 .auth-body::before, .auth-body::after {
   content: "";
   position: absolute;
@@ -2192,59 +2474,6 @@ fieldset.field > legend {
   text-transform: uppercase;
 }
 
-/* Account card */
-.side-account {
-  margin-top: auto !important;
-  padding-top: 12px !important;
-}
-.account-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px;
-  background: var(--bg-elev-2);
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  transition: border-color 0.15s ease;
-}
-.account-card:hover { border-color: var(--border-strong); }
-.account-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--accent-grad);
-  color: var(--accent-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 13px;
-  flex-shrink: 0;
-  box-shadow: 0 2px 6px var(--accent-glow);
-}
-.account-info { flex: 1; min-width: 0; }
-.account-name {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.account-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.account-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 8px;
-}
-
 [data-needs-role] { display: none; }
 
 .field .hint {
@@ -2280,9 +2509,7 @@ fieldset.field > legend {
   body.sidebar-collapsed .sidebar { padding: 16px 12px; gap: 12px; }
   body.sidebar-collapsed .brand-text,
   body.sidebar-collapsed .nav-btn span:not(.nav-icon),
-  body.sidebar-collapsed .side-section,
-  body.sidebar-collapsed .account-info,
-  body.sidebar-collapsed .account-actions { display: ""; }
+  body.sidebar-collapsed .side-section { display: ""; }
   .sidebar-collapse-btn { display: none; }
 }
 

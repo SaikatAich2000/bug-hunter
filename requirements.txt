@@ -19,6 +19,13 @@ Pillow==12.2.0
 # 1-vCPU / 2 GB target box. It powers the "export to excel" replies.
 openpyxl==3.1.5
 
+# --- Web push (Firebase Cloud Messaging) ---
+# Backend transport for browser push notifications. Lazily imported by
+# app/fcm_transport.py, and only used when WEB_PUSH_ENABLED=true AND a Firebase
+# service-account JSON is configured — so a deploy that doesn't use push runs
+# fine even if this import is unavailable (the transport just disables itself).
+firebase-admin==6.6.0
+
 # --- Sleuth: optional local LLM layer ---
 # Uncomment to enable Layer 3 (local llama.cpp inference). Requires a
 # GGUF model file at models/sleuth.gguf. See models/README.md for

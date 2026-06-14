@@ -5,6 +5,8 @@ issues that have now been resolved."""
 from __future__ import annotations
 
 import io
+import re
+from pathlib import Path
 
 
 def _make_user(c, name="Some User", email="user@x.com", role="user", password="TestUserPwd9X"):
@@ -53,7 +55,16 @@ class TestCacheControl:
         assert "no-store" in cc, f"/api/health missing no-store: {cc!r}"
 
     def test_static_assets_are_cached_long(self, client):
-        r = client.get("/static/styles.css")
+        # Post React+TS migration the long-cached assets are Vite's
+        # content-hashed bundles under /static/assets/. Pull a real one out
+        # of the built index.html and assert the middleware applies the
+        # immutable 1-year cache to it (safe: the hash changes per deploy).
+        index = (
+            Path(__file__).resolve().parents[1] / "app" / "static" / "index.html"
+        ).read_text(encoding="utf-8")
+        m = re.search(r"/static/assets/[\w.-]+\.(?:js|css)", index)
+        assert m, "no hashed asset URL found in built index.html"
+        r = client.get(m.group(0))
         assert r.status_code == 200
         cc = r.headers.get("Cache-Control", "")
         assert "max-age=31536000" in cc, f"static asset not long-cached: {cc!r}"
@@ -71,9 +82,11 @@ class TestCacheControl:
         body = r.text
         # The placeholder must be replaced — never delivered to the browser.
         assert "__ASSET_VERSION__" not in body, "asset version placeholder leaked into HTML"
-        # And the static URLs should carry the v= query string.
-        assert "/static/styles.css?v=" in body
-        assert "/static/login.js?v=" in body or "/static/app.js?v=" in body or "?v=" in body
+        # Cache-busting is now twofold: Vite content-hashes the JS/CSS bundle
+        # filenames (inherently versioned), and the favicon link still carries
+        # the server-substituted ?v= asset-version query.
+        assert "/static/assets/login-" in body, "hashed login bundle not referenced"
+        assert "/static/favicon.png?v=" in body, "favicon asset-version query missing"
 
     def test_html_url_changes_when_asset_version_changes(self, client):
         # Request once, capture the URL hash; mutate app.state.asset_version

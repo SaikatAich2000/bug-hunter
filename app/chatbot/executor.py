@@ -20,6 +20,7 @@ target shape to emit, so rule-engine and LLM responses look identical.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,6 +46,10 @@ from .nlu import (
     parse,
     pick_report_key,
 )
+
+# Shared logger for the executor's best-effort fallbacks (rule, LLM, cloud,
+# file-export). Named so all Sleuth logs share the "bug_hunter.sleuth" tree.
+_LOGGER = logging.getLogger("bug_hunter.sleuth")
 
 
 # ---------------------------------------------------------------------------
@@ -352,15 +357,53 @@ def _handle_about(message: str) -> Response:
     )
 
 
+# v3.0: when the rule engine AND the classifier both miss, the statistical
+# model still ranks intents — if the top near-miss has real signal we offer it
+# as a "did you mean", mapping the intent to a canonical example phrasing.
+_INTENT_SUGGESTION: dict[str, str] = {
+    "list_bugs": "list open bugs",
+    "count_bugs": "how many bugs are open?",
+    "stats": "show me a summary",
+    "list_users": "list users",
+    "list_projects": "list projects",
+    "bug_detail": "show bug #123",
+    "export": "export open bugs to excel",
+    "audit": "what changed recently?",
+    "report": "throughput report for last week",
+}
+
+
+def _did_you_mean(message: str) -> Optional[str]:
+    """A near-miss intent suggestion, or None. Pure + deterministic; the
+    classifier already declined to classify confidently, so we surface its
+    top-ranked guess only when it carries minimal signal."""
+    try:
+        from app.chatbot import classifier as _clf
+        scored = _clf.explain(message, top_k=1)
+    except Exception:
+        # Best-effort suggestion — a classifier hiccup must never break the
+        # unknown-fallback path; just skip the "did you mean".
+        return None
+    if not scored:
+        return None
+    intent, score = scored[0]
+    if score >= 0.12 and intent in _INTENT_SUGGESTION:
+        return _INTENT_SUGGESTION[intent]
+    return None
+
+
 def _handle_unknown(message: str = "") -> Response:
     """Friendly fallback for queries the rule engine couldn't classify.
 
     v3.2.1 — tries to suggest a closer rephrasing based on tokens we DID
-    see. Plain-language echo so the user understands what slipped past
-    the parser. Falls back to the original generic hint if no signal.
+    see. v3.0 — also offers a classifier-ranked "did you mean". Plain-language
+    echo so the user understands what slipped past the parser.
     """
     msg = (message or "").lower()
     hints: list[str] = []
+    suggestion = _did_you_mean(message)
+    if suggestion:
+        hints.append(f"*{suggestion}*")
     # Default hints suggest the canonical bug-search phrasings — they're
     # what most users actually want. We swap in topic-specific hints when
     # the user clearly mentioned users / projects / stats; otherwise we
@@ -1032,10 +1075,7 @@ def _try_stage_file_block(result, report_key: str) -> Optional[Block]:
     try:
         token, size, filename = _stage_report_xlsx(result, report_key)
     except Exception as exc:   # noqa: BLE001 — file build must never crash chat
-        import logging
-        logging.getLogger("bug_hunter.sleuth").exception(
-            "Sleuth report XLSX build failed: %s", exc,
-        )
+        _LOGGER.exception("Sleuth report XLSX build failed: %s", exc)
         return None
     return Block("file", {
         "filename": filename,
@@ -1387,8 +1427,7 @@ def _try_llm(message: str, db: Session, actor: User) -> Optional[Response]:
         if _llm.is_available():
             return _llm.try_understand(message, db, actor)
     except Exception:
-        import logging
-        logging.getLogger("bug_hunter.sleuth").exception(
+        _LOGGER.exception(
             "Sleuth LLM fallback raised — swallowing and returning unknown."
         )
     return None
@@ -1417,8 +1456,7 @@ def _try_cloud_llm(message: str, db: Session, actor: User,
         if _cloud.is_available():
             return _cloud.try_understand(message, db, actor, now=now)
     except Exception:
-        import logging
-        logging.getLogger("bug_hunter.sleuth").exception(
+        _LOGGER.exception(
             "Sleuth cloud fallback raised — swallowing and returning unknown."
         )
     return None

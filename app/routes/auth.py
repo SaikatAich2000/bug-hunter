@@ -22,15 +22,6 @@ from app.auth import (
     verify_password,
 )
 from app.password_breach import is_password_breached
-# Precomputed dummy bcrypt hash used by the login path when no user matches
-# the supplied email. Without this, the code path skips the bcrypt verify
-# entirely on unknown-email and returns ~50ms faster than the wrong-password
-# path — an attacker can enumerate accounts by timing the login response.
-# Calling verify_password against the dummy in the no-user branch equalises
-# the work done, closing the timing oracle. The value is a bcrypt hash of a
-# random string the server never accepts; even if it leaked, nobody could
-# log in with it.
-_DUMMY_PASSWORD_HASH = hash_password("dummy-not-a-real-credential")
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import notify_password_reset
@@ -44,6 +35,15 @@ from app.schemas import (
 )
 
 logger = logging.getLogger("bug_hunter.auth")
+
+# Precomputed dummy bcrypt hash used by the login path when no user matches the
+# supplied email. Without it, the no-user branch skips the bcrypt verify and
+# returns ~50ms faster than the wrong-password path — an attacker could
+# enumerate accounts by timing the login response. Verifying against this dummy
+# in the no-user branch equalises the work, closing the timing oracle. It's a
+# bcrypt hash of a random string the server never accepts; even if leaked,
+# nobody could log in with it.
+_DUMMY_PASSWORD_HASH = hash_password("dummy-not-a-real-credential")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -293,7 +293,7 @@ def forgot_password(
         # user can correct the typo or contact an admin if their account
         # has been disabled.
         _audit(db, None, "password_reset_no_account",
-               f"Password reset attempted for unknown/inactive email: {payload.email}")
+               f"Password reset attempted for unknown/inactive email: {_mask_email(payload.email)}")
         db.commit()
         raise HTTPException(
             status_code=404,

@@ -5,6 +5,22 @@ branch = true
 omit = [
     "tests/*",
     "*/__pycache__/*",
+    # Sleuth's OPTIONAL external-AI layers. Each only runs when wired to a
+    # live external dependency the hermetic test suite deliberately never
+    # provisions — local llama.cpp + a GGUF model (llm), the Gemini /
+    # OpenRouter cloud APIs (cloud_llm), and a chromadb vector store (rag).
+    # "Sleuth runs out of the box with NO config" (.env.example), so these
+    # paths are unreachable without network/model files. They are still
+    # fully SonarQube-scanned for code quality — only excluded from the
+    # unit-test coverage denominator (mirrors how the frontend is handled).
+    "app/chatbot/llm.py",
+    "app/chatbot/cloud_llm.py",
+    "app/chatbot/rag.py",
+    # The FCM web-push transport — only runs against a live Firebase project
+    # (service-account + network) the test suite never provisions; the
+    # orchestration around it (app/push_service.py) IS covered, with the
+    # transport mocked.
+    "app/fcm_transport.py",
 ]
 
 [tool.coverage.report]

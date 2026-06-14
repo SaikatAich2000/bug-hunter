@@ -33,6 +33,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app import notification_service
 from app.auth import can_delete_event, can_edit_event, get_current_user
 from app.database import get_db
 from app.email_service import (
@@ -312,6 +313,15 @@ def create_event(
     _log(db, ev.id, actor, "event_created",
          f"Event created: {ev.name}"
          + (f" (scheduled for {ev.scheduled_for})" if ev.scheduled_for else ""))
+    # v3.0 in-app notifications — same recipients as the event email (managers
+    # minus the actor). Written on this session so they commit with the event.
+    if managers:
+        notification_service.notify(
+            db, [m.id for m in managers], kind="event", background=background,
+            title=f"Added as manager on “{ev.name}”",
+            body=f"{actor.name} created the event and made you a manager.",
+            event_id=ev.id, actor_name=actor.name, exclude=actor.id,
+        )
     db.commit()
     db.refresh(ev)
 
@@ -387,6 +397,14 @@ def update_event(
     for k, v in fields.items():
         setattr(ev, k, v)
     _apply_event_manager_diff(ev, db, new_manager_ids, changes)
+    if changes and ev.managers:
+        _summary = ", ".join(f for f, _, _ in changes)
+        notification_service.notify(
+            db, [m.id for m in ev.managers], kind="event", background=background,
+            title=f"Event “{ev.name}” updated",
+            body=f"{actor.name} changed {_summary}.",
+            event_id=ev.id, actor_name=actor.name, exclude=actor.id,
+        )
     _persist_event_update(db, ev, actor, changes)
 
     ev = db.scalar(
@@ -421,6 +439,7 @@ def delete_event(
             detail="Only admins can delete events.",
         )
     name = ev.name
+    manager_ids = [m.id for m in (ev.managers or [])]
     snap = _event_snapshot(ev) if ev.managers else None
     # Items keep existing — the FK is declared with ondelete='SET NULL' but
     # we also explicitly null them here so SQLite (which doesn't always
@@ -432,6 +451,15 @@ def delete_event(
     db.delete(ev)
     _log(db, None, actor, "event_deleted",
          f"Deleted event #{event_id}: {name}")
+    # No event_id on these rows — the event is gone and the FK CASCADE would
+    # immediately delete any notification that referenced it.
+    if manager_ids:
+        notification_service.notify(
+            db, manager_ids, kind="event", background=background,
+            title=f"Event “{name}” deleted",
+            body=f"{actor.name} deleted this event.",
+            actor_name=actor.name, exclude=actor.id,
+        )
     db.commit()
 
     if snap is not None:

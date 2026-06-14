@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -39,6 +40,11 @@ from app.models import ChatConversation, ChatMessage, User, _utcnow
 from . import excel, executor
 
 logger = logging.getLogger("bug_hunter.chatbot")
+
+# FastAPI dependency aliases (Annotated form is the documented, S8410-clean
+# idiom — keeps the injection out of the parameter default).
+DbDep = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 def _persist_turn(db: Session, actor: User, user_msg: str,
@@ -141,11 +147,16 @@ class ChatOut(BaseModel):
 # ---------------------------------------------------------------------------
 # /api/chat/ask
 # ---------------------------------------------------------------------------
-@router.post("/ask", response_model=ChatOut)
+@router.post(
+    "/ask",
+    responses={
+        429: {"description": "Rate limit exceeded — too many chatbot requests."},
+    },
+)
 def ask(
     payload: ChatIn,
-    db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    db: DbDep,
+    actor: CurrentUser,
 ) -> ChatOut:
     """Answer a natural-language question.
 
@@ -187,10 +198,15 @@ def ask(
 # ---------------------------------------------------------------------------
 # /api/chat/download/{token}
 # ---------------------------------------------------------------------------
-@router.get("/download/{token}")
+@router.get(
+    "/download/{token}",
+    responses={
+        404: {"description": "Download link has expired or is no longer valid."},
+    },
+)
 def download_staged(
     token: str,
-    _user: User = Depends(get_current_user),
+    _user: CurrentUser,
 ):
     """Stream a previously-staged Excel workbook.
 

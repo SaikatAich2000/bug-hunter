@@ -96,6 +96,36 @@ def _read_static(name):
     return p.read_text(encoding="utf-8")
 
 
+# After the React+TS migration the rich-text editor / custom select / date
+# input live in these sources (the shipped JS is a content-hashed Vite bundle
+# under app/static/assets/, not human-readable). The marker tests below sniff
+# the React source the way they used to sniff app.js — same intent: a refactor
+# that drops a v2.6 fix breaks CI.
+def _read_frontend(relpath):
+    p = Path(__file__).resolve().parents[1] / "frontend" / "src" / relpath
+    return p.read_text(encoding="utf-8")
+
+
+def _rich_editor():
+    return _read_frontend("components/RichEditor.tsx")
+
+
+def _bh_select():
+    return _read_frontend("components/BhSelect.tsx")
+
+
+def _bh_date():
+    return _read_frontend("components/BhDateInput.tsx")
+
+
+def _bug_modal():
+    return _read_frontend("modals/BugModal.tsx")
+
+
+def _styles_css():
+    return _read_frontend("styles/styles.css")
+
+
 # ===========================================================================
 # 1. Rich-text editor fix markers (Bold / Italic / Underline / format-toggle)
 # ===========================================================================
@@ -104,7 +134,7 @@ class TestRichTextFixMarkers:
 
     def test_app_js_has_saved_selection_path(self):
         """Bold no-op fix: we save+restore selection across toolbar clicks."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         assert "savedRange" in js, "selection-save state must exist"
         assert "captureSelection" in js, "capture-selection helper must exist"
         assert "ensureCaret" in js, "ensure-caret helper must exist"
@@ -112,7 +142,7 @@ class TestRichTextFixMarkers:
     def test_app_js_runs_cmd_after_focus_restore(self):
         """Bold/Italic/Underline must run via the restored-selection helper,
         not by bare execCommand calls inside the keyboard handler."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         for cmd in ("bold", "italic", "underline"):
             assert f'runCmd("{cmd}")' in js, (
                 f"Ctrl+{cmd[0].upper()} should go through runCmd "
@@ -133,7 +163,7 @@ class TestRichTextFixMarkers:
 
     def test_app_js_toggles_blockquote_and_pre(self):
         """formatBlock for blockquote / pre toggles off when re-clicked."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         assert 'inAncestor([tag])' in js, "format-block ancestor check missing"
 
     def test_app_js_no_clear_formatting_button(self):
@@ -141,7 +171,7 @@ class TestRichTextFixMarkers:
         user found it confusing and rarely useful — block-toggle on the
         same button (blockquote/pre/list) covers the common case of
         \"get back to plain text\"."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         assert 'data-cmd="removeFormat"' not in js, (
             "Clear-formatting (⌫) button must not be rendered"
         )
@@ -155,9 +185,9 @@ class TestRichTextFixMarkers:
         silent no-op (Chrome's typing state didn't survive). The fix
         manually wraps a ZWSP placeholder; this asserts that path is
         wired."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         assert "toggleInlineAtCaret" in js, "manual-toggle helper missing"
-        assert "_INLINE_TOGGLE" in js, "inline-tag map missing"
+        assert "INLINE_TOGGLE" in js, "inline-tag map missing"
         # The ZWSP separator must be inserted on toggle-off too, or Chrome
         # absorbs the next keystroke back into the wrapper.
         assert "insertBefore(sep, n.nextSibling)" in js, (
@@ -176,13 +206,13 @@ class TestRichTextFixMarkers:
         invariant tested here is the preventDefault stays in place,
         regardless of whether the runner is the raw helper or the
         snapshot wrapper."""
-        js = _read_static("app.js")
-        # The mousedown handler MUST call preventDefault before running
-        # the toolbar command. Accept either the raw handler or the
-        # snapshot wrapper as the post-preventDefault call.
+        js = _rich_editor()
+        # The toolbar mousedown handler MUST call preventDefault before
+        # running the toolbar command (the React onMouseDown handler is
+        # handleToolbarMouseDown; it ends in runToolbarCmd, the snapshot
+        # wrapper).
         m = re.search(
-            r'toolbar\.addEventListener\("mousedown".*?e\.preventDefault\(\).*?'
-            r'(?:_runToolbarCmd|handleToolbarCmd)',
+            r'handleToolbarMouseDown.*?e\.preventDefault\(\).*?runToolbarCmd',
             js, re.S,
         )
         assert m, "mousedown must preventDefault before running the toolbar command"
@@ -192,7 +222,7 @@ class TestRichTextFixMarkers:
         the bug modal's stacking context, so we rolled our own. These
         helpers MUST exist or all of B/I/U/list/blockquote stop working
         for users on Chrome 148+."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         assert "applyInlineWrap" in js, "manual inline wrap missing"
         assert "applyList" in js, "manual list toggle missing"
         assert "applyBlockWrap" in js, "manual block-wrap missing"
@@ -205,9 +235,9 @@ class TestRichTextFixMarkers:
         """Users need visible feedback that Bold/Italic is armed. The
         toolbar buttons get an `.is-active` class driven by
         updateActiveStates."""
-        js = _read_static("app.js")
+        js = _rich_editor()
         assert "updateActiveStates" in js
-        css = _read_static("styles.css")
+        css = _styles_css()
         assert ".bh-rt-toolbar button.is-active" in css, (
             "is-active visual style missing from stylesheet"
         )
@@ -222,18 +252,17 @@ class TestCalendarNavStaysOpen:
     doesn't masquerade as an outside click."""
 
     def test_app_js_stops_propagation_for_nav_clicks(self):
-        js = _read_static("app.js")
-        # Look at the bh-date-nav click branch and assert it calls stopPropagation
-        # before the viewMonth--/++ logic. We grep the area to keep the test
-        # resilient to whitespace shuffles.
+        js = _bh_date()
+        # The next-month nav button's onClick must stopPropagation before
+        # paging the month, so the popover re-render isn't mistaken for an
+        # outside click that closes it.
         m = re.search(
-            r"navBtn\s*=\s*e\.target\.closest\(\"\.bh-date-nav\"\)"
-            r".*?viewMonth\+\+",
+            r'data-nav="next".*?navMonth\(1\)',
             js, re.S,
         )
-        assert m, "bh-date-nav click branch missing"
+        assert m, "next-month bh-date-nav button missing"
         assert "stopPropagation" in m.group(0), (
-            "nav-button branch must stopPropagation so the rebuild "
+            "nav-button onClick must stopPropagation so the rebuild "
             "doesn't trip outside-close"
         )
 
@@ -243,37 +272,40 @@ class TestCalendarNavStaysOpen:
 # ===========================================================================
 class TestReporterDropdownNoCaret:
     def test_index_html_reporter_select_is_disabled(self):
-        html = _read_static("index.html")
-        # The single Reporter <select> must remain disabled. If a future
-        # refactor un-disables it the caret-suppression test is silently
-        # bypassed — pin it here.
+        # The Reporter <select> now lives in BugModal.tsx. It must remain
+        # disabled — if a future refactor un-disables it the caret-suppression
+        # behaviour is silently bypassed, so pin it here.
+        src = _bug_modal()
         assert re.search(
             r'<select[^>]*name="reporter_id"[^>]*\bdisabled\b',
-            html,
+            src,
         ), "Reporter <select> must keep `disabled` attribute"
 
     def test_app_js_skips_caret_when_select_disabled(self):
-        js = _read_static("app.js")
-        # The updateLabel inside enhanceCustomSelect now emits "" for
-        # caret when sel.disabled. Make sure that branch exists.
+        # BhSelect renders the ▾ caret only when NOT disabled — a disabled
+        # select can't open, so the caret would falsely advertise "click me".
+        js = _bh_select()
         assert re.search(
-            r"const\s+caret\s*=\s*sel\.disabled\s*\?\s*\"\"",
+            r'!disabled\s*&&\s*<span className="bh-sel-caret"',
             js,
-        ), "disabled-select branch in updateLabel missing"
+        ), "disabled-select caret-suppression branch missing"
 
     def test_app_js_observer_rerenders_label_on_disabled_change(self):
-        js = _read_static("app.js")
-        # When code flips sel.disabled at runtime, updateLabel must run
-        # so the caret hides / re-appears immediately.
-        m = re.search(
-            r"MutationObserver\(\(\)\s*=>\s*\{[^}]*sel\.disabled[^}]*\}\)"
-            r"\.observe\(sel,\s*\{\s*attributes:\s*true",
-            js, re.S,
+        # Vanilla used a MutationObserver to re-render the caret when the
+        # select's disabled state flipped at runtime. In React the caret is a
+        # function of the `disabled` prop, so a prop change re-renders and the
+        # caret toggles immediately — no observer needed. Pin that the caret
+        # (and the trigger) stay driven by `disabled`.
+        js = _bh_select()
+        assert re.search(
+            r'!disabled\s*&&\s*<span className="bh-sel-caret"',
+            js,
+        ), (
+            "caret must be conditional on the disabled prop so it toggles "
+            "reactively when disabled changes"
         )
-        assert m, "disabled-state observer block missing"
-        assert "updateLabel" in m.group(0), (
-            "disabled-attribute observer must call updateLabel so the "
-            "caret toggles when the select switches disabled state"
+        assert "disabled={disabled}" in js, (
+            "native select + trigger must reflect the disabled prop"
         )
 
 
@@ -282,7 +314,7 @@ class TestReporterDropdownNoCaret:
 # ===========================================================================
 class TestImageInsertionAsAttachment:
     def test_app_js_no_legacy_pickimage_helper(self):
-        js = _read_static("app.js")
+        js = _rich_editor()
         # The old helper inserted <img> via insertHTML — exactly the
         # cause of "can't resize or remove" reports. It must be gone.
         assert "_bhRtPickImage" not in js, (
@@ -295,16 +327,16 @@ class TestImageInsertionAsAttachment:
         ), "rich-text editor must NOT inline <img> tags"
 
     def test_app_js_uses_attachment_pickfile(self):
-        js = _read_static("app.js")
-        assert "_bhRtPickFileAsAttachment" in js, (
+        js = _rich_editor()
+        assert "pickFileAsAttachment" in js, (
             "Toolbar image button must route through the attachment helper"
         )
         # And the toolbar `bh-image` button is the one that calls it.
         m = re.search(
-            r'cmd\s*===\s*"bh-image".*?_bhRtPickFileAsAttachment',
+            r'cmd\s*===\s*"bh-image".*?pickFileAsAttachment',
             js, re.S,
         )
-        assert m, "bh-image branch must call _bhRtPickFileAsAttachment"
+        assert m, "bh-image branch must call pickFileAsAttachment"
 
 
 # ===========================================================================

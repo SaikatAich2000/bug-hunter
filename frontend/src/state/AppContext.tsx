@@ -1,0 +1,696 @@
+/**
+ * Global app state — port of the vanilla `STATE` object + boot()/refresh*()
+ * functions (app.js L10-75, L1572-1800, L1806-1930).
+ *
+ * Everything cross-view lives here: current user, meta enums, users,
+ * projects, stats, the bug list + filters + pagination, the active view,
+ * and the shared modals. View-local state (events list, audit rows,
+ * report results, sessions) stays inside the view components.
+ */
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { api } from "../lib/api";
+import { toast, toastError } from "../lib/toast";
+import type {
+  BugDetail,
+  BugListResponse,
+  BugOut,
+  Filters,
+  HealthOut,
+  ItemType,
+  MeOut,
+  MetaOut,
+  NotificationOut,
+  ProjectOut,
+  StatsOut,
+  UnreadCountOut,
+  UserOut,
+  ViewName,
+} from "../types";
+
+// ---------------------------------------------------------------------------
+// Constants (ports of the vanilla tables)
+// ---------------------------------------------------------------------------
+
+export type TabName = "all" | ItemType;
+
+/** KPI → status-filter mapping (port of KPI_FILTER_MAP, L2366-2372). */
+export const KPI_FILTER_MAP: Record<string, string[]> = {
+  total: [],
+  open: ["New", "In Progress", "Reopened"],
+  resolved: ["Resolved"],
+  closed: ["Closed"],
+  resolve_later: ["Resolve Later"],
+};
+
+export const EMPTY_FILTERS: Filters = {
+  project_id: [],
+  status: [],
+  priority: [],
+  environment: [],
+  assignee_id: [],
+  item_type: [],
+  reporter_id: null,
+  q: "",
+};
+
+const FALLBACK_META: MetaOut = {
+  statuses: ["New", "In Progress", "Resolved", "Closed", "Reopened", "Not a Bug", "Resolve Later"],
+  statuses_by_type: {
+    Bug: ["New", "In Progress", "Resolved", "Closed", "Reopened", "Not a Bug", "Resolve Later"],
+    Requirement: ["New", "In Progress", "Resolved", "Closed"],
+    Task: ["New", "In Progress", "Resolved", "Closed"],
+  },
+  priorities: ["Low", "Medium", "High", "Critical"],
+  environments: ["DEV", "UAT", "PROD"],
+  item_types: ["Bug", "Requirement", "Task"],
+};
+
+// ---------------------------------------------------------------------------
+// Modal state shapes
+// ---------------------------------------------------------------------------
+
+export interface BugModalState {
+  open: boolean;
+  /** Loaded detail when viewing/editing; null = create mode. */
+  bug: BugDetail | null;
+  /** Create-mode defaults (split-button type pick, "+ Add Task" in events). */
+  defaultType?: ItemType;
+  defaultEventId?: number | null;
+}
+
+export interface ProjectModalState {
+  open: boolean;
+  project: ProjectOut | null;
+}
+
+export interface UserModalState {
+  open: boolean;
+  user: UserOut | null;
+}
+
+// ---------------------------------------------------------------------------
+// Context value
+// ---------------------------------------------------------------------------
+
+export interface AppState {
+  currentUser: MeOut;
+  meta: MetaOut;
+  users: UserOut[];
+  projects: ProjectOut[];
+  stats: StatsOut | null;
+  health: HealthOut | null;
+
+  view: ViewName;
+  setView: (v: ViewName) => void;
+
+  activeTab: TabName;
+  setActiveTab: (t: TabName) => void;
+  defaultNewType: ItemType;
+  setDefaultNewType: (t: ItemType) => void;
+
+  bugs: BugOut[];
+  page: number;
+  setPage: (p: number) => void;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+
+  filters: Filters;
+  setFilters: (f: Filters | ((prev: Filters) => Filters)) => void;
+  clearFilters: () => void;
+
+  sidebarCollapsed: boolean;
+  toggleSidebarCollapsed: () => void;
+
+  // Data refreshers (ports of refreshBugs/refreshStats/refreshAll/load*)
+  refreshBugs: () => Promise<void>;
+  refreshStats: () => Promise<void>;
+  refreshAll: () => Promise<void>;
+  loadUsers: () => Promise<void>;
+  loadProjects: () => Promise<void>;
+
+  // Shared modals
+  bugModal: BugModalState;
+  openBugForm: (opts?: { defaultType?: ItemType; defaultEventId?: number | null }) => void;
+  openBugDetail: (bugId: number) => Promise<void>;
+  reloadBugModal: () => Promise<void>;
+  closeBugModal: () => void;
+
+  projectModal: ProjectModalState;
+  openProjectForm: (project?: ProjectOut | null) => void;
+  closeProjectModal: () => void;
+
+  userModal: UserModalState;
+  openUserForm: (user?: UserOut | null) => void;
+  closeUserModal: () => void;
+
+  changePasswordOpen: boolean;
+  setChangePasswordOpen: (open: boolean) => void;
+
+  // Per-user notifications (v3.0)
+  notifications: NotificationOut[];
+  unreadCount: number;
+  loadNotifications: () => Promise<void>;
+  markNotificationRead: (id: number) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
+  deleteNotification: (id: number) => Promise<void>;
+  /** Mark read + navigate to the linked bug/event. */
+  openNotification: (n: NotificationOut) => Promise<void>;
+
+  /** Role rank helper (admin 3 > manager 2 > user 1). */
+  roleRank: (role: string) => number;
+  canManage: boolean; // manager or admin
+  isAdmin: boolean;
+}
+
+const Ctx = createContext<AppState | null>(null);
+
+export function useApp(): AppState {
+  const v = useContext(Ctx);
+  if (!v) throw new Error("useApp outside provider");
+  return v;
+}
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+const PAGE_SIZE = 20;
+const SESSION_POLL_MS = 15_000;
+const DATA_POLL_MS = 10_000;
+const VERSION_POLL_MS = 5 * 60_000;
+
+function readLs(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function AppProvider({
+  me,
+  children,
+}: {
+  me: MeOut;
+  children: ReactNode;
+}) {
+  const [currentUser, setCurrentUser] = useState<MeOut>(me);
+  const [meta, setMeta] = useState<MetaOut>(FALLBACK_META);
+  const [users, setUsers] = useState<UserOut[]>([]);
+  const [projects, setProjects] = useState<ProjectOut[]>([]);
+  const [stats, setStats] = useState<StatsOut | null>(null);
+  const [health, setHealth] = useState<HealthOut | null>(null);
+
+  const [view, setViewState] = useState<ViewName>("list");
+  const [activeTab, setActiveTabState] = useState<TabName>(() => {
+    const t = readLs("activeTab", "all");
+    return (["all", "Bug", "Requirement", "Task"] as const).includes(t as TabName)
+      ? (t as TabName)
+      : "all";
+  });
+  const [defaultNewType, setDefaultNewTypeState] = useState<ItemType>(() => {
+    const t = readLs("defaultNewType", "Bug");
+    return (["Bug", "Requirement", "Task"] as const).includes(t as ItemType)
+      ? (t as ItemType)
+      : "Bug";
+  });
+
+  const [bugs, setBugs] = useState<BugOut[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [filters, setFiltersState] = useState<Filters>(EMPTY_FILTERS);
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => readLs("sidebarCollapsed", "0") === "1",
+  );
+
+  const [bugModal, setBugModal] = useState<BugModalState>({ open: false, bug: null });
+  const [projectModal, setProjectModal] = useState<ProjectModalState>({ open: false, project: null });
+  const [userModal, setUserModal] = useState<UserModalState>({ open: false, user: null });
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+
+  const [notifications, setNotifications] = useState<NotificationOut[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Latest values for stable callbacks/pollers.
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const tabRef = useRef(activeTab);
+  tabRef.current = activeTab;
+
+  // ----- query-param builders (ports of _applyFilterToParams etc.) --------
+  const buildBugParams = useCallback((): URLSearchParams => {
+    const f = filtersRef.current;
+    const params = new URLSearchParams();
+    params.set("page", String(pageRef.current));
+    params.set("page_size", String(PAGE_SIZE));
+    for (const id of f.project_id) params.append("project_id", String(id));
+    for (const s of f.status) params.append("status", s);
+    for (const p of f.priority) params.append("priority", p);
+    for (const e of f.environment) params.append("environment", e);
+    for (const a of f.assignee_id) params.append("assignee_id", String(a));
+    for (const t of f.item_type) params.append("item_type", t);
+    if (f.reporter_id != null) params.set("reporter_id", String(f.reporter_id));
+    if (f.q.trim()) params.set("q", f.q.trim());
+    // Implicit tab filter on top (port of _applyTabFilterToParams).
+    const tab = tabRef.current;
+    if (tab !== "all" && !f.item_type.includes(tab)) {
+      params.append("item_type", tab);
+    }
+    return params;
+  }, []);
+
+  // ----- data loaders ------------------------------------------------------
+  const refreshBugs = useCallback(async () => {
+    try {
+      const res = await api<BugListResponse>(`/bugs?${buildBugParams()}`);
+      setBugs(res.items);
+      setTotal(res.total);
+      setTotalPages(Math.max(1, res.pages));
+    } catch (err) {
+      toastError(err);
+    }
+  }, [buildBugParams]);
+
+  const refreshStats = useCallback(async () => {
+    try {
+      const tab = tabRef.current;
+      const qs = tab !== "all" ? `?item_type=${encodeURIComponent(tab)}` : "";
+      setStats(await api<StatsOut>(`/stats${qs}`));
+    } catch (err) {
+      toastError(err);
+    }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshBugs(), refreshStats()]);
+  }, [refreshBugs, refreshStats]);
+
+  const loadUsers = useCallback(async () => {
+    try {
+      setUsers(await api<UserOut[]>("/users"));
+    } catch (err) {
+      toastError(err);
+    }
+  }, []);
+
+  const loadProjects = useCallback(async () => {
+    try {
+      setProjects(await api<ProjectOut[]>("/projects"));
+    } catch (err) {
+      toastError(err);
+    }
+  }, []);
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const [list, count] = await Promise.all([
+        api<NotificationOut[]>("/notifications?limit=50"),
+        api<UnreadCountOut>("/notifications/unread_count"),
+      ]);
+      setNotifications(list);
+      setUnreadCount(count.unread);
+    } catch (err) {
+      toastError(err);
+    }
+  }, []);
+
+  // ----- boot (port of boot(), minus the auth gate done in main.tsx) ------
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+    (async () => {
+      try {
+        const [h, m] = await Promise.all([
+          api<HealthOut>("/health"),
+          api<MetaOut>("/meta"),
+          loadUsers(),
+          loadProjects(),
+        ]);
+        setHealth(h);
+        if (m && Array.isArray(m.statuses)) setMeta({ ...FALLBACK_META, ...m });
+      } catch (err) {
+        toastError(err);
+      }
+      void loadNotifications();
+      await refreshAll();
+    })();
+  }, [loadUsers, loadProjects, refreshAll, loadNotifications]);
+
+  // Re-fetch the list whenever page / filters / tab change (the vanilla app
+  // called refreshBugs() inline at each mutation site; an effect is the
+  // React-idiomatic equivalent and keeps every mutation path covered).
+  const firstListEffect = useRef(true);
+  useEffect(() => {
+    if (firstListEffect.current) {
+      // boot() already triggers the initial refreshAll
+      firstListEffect.current = false;
+      return;
+    }
+    void refreshBugs();
+  }, [page, filters, activeTab, refreshBugs]);
+
+  // Tab change additionally refreshes stats (port of setActiveTab).
+  const firstTabEffect = useRef(true);
+  useEffect(() => {
+    if (firstTabEffect.current) {
+      firstTabEffect.current = false;
+      return;
+    }
+    void refreshStats();
+  }, [activeTab, refreshStats]);
+
+  // ----- pollers -----------------------------------------------------------
+  useEffect(() => {
+    // Session poll (port of scheduleSessionPoll, L1719-1764): /auth/me every
+    // 15s + on tab focus; 401 inside api() handles the bounce. The unread
+    // notification count rides on the same tick (cheap COUNT query) so the
+    // bell badge stays live without a second timer.
+    const tick = async () => {
+      try {
+        const m = await api<MeOut>("/auth/me", { cache: "no-store" });
+        setCurrentUser(m);
+      } catch {
+        /* 401 already bounced; network errors don't kick the user out */
+      }
+      try {
+        const c = await api<UnreadCountOut>("/notifications/unread_count");
+        setUnreadCount(c.unread);
+      } catch {
+        /* transient — keep the last known count */
+      }
+    };
+    const id = setInterval(tick, SESSION_POLL_MS);
+    const onVis = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
+  // Keep a live ref so the data poll always calls the latest refreshAll
+  // without resetting its interval on every render.
+  const refreshAllRef = useRef(refreshAll);
+  refreshAllRef.current = refreshAll;
+
+  useEffect(() => {
+    // Live data poll: refetch the bug list + KPI stats on a fixed cadence so
+    // items created/edited by OTHER users (or on another device) appear
+    // without a manual browser reload. Mirrors the session poll — paused
+    // while the tab is hidden, fires immediately on refocus to feel instant.
+    const refresh = () => {
+      if (!document.hidden) void refreshAllRef.current();
+    };
+    const id = setInterval(refresh, DATA_POLL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Version drift poll (port of scheduleVersionCheck, L1693-1708).
+    let warned = false;
+    const boot = health?.asset_version;
+    if (!boot) return;
+    const id = setInterval(async () => {
+      try {
+        const h = await api<HealthOut>("/health");
+        if (!warned && h.asset_version && h.asset_version !== boot) {
+          warned = true;
+          toast("A new version of Bug Hunter is available — refresh to update", "info");
+        }
+      } catch {
+        /* ignore */
+      }
+    }, VERSION_POLL_MS);
+    return () => clearInterval(id);
+  }, [health?.asset_version]);
+
+  // ----- setters with persistence -----------------------------------------
+  const setActiveTab = useCallback((t: TabName) => {
+    setActiveTabState(t);
+    setPage(1);
+    try {
+      localStorage.setItem("activeTab", t);
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  const setDefaultNewType = useCallback((t: ItemType) => {
+    setDefaultNewTypeState(t);
+    try {
+      localStorage.setItem("defaultNewType", t);
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  const setFilters = useCallback(
+    (f: Filters | ((prev: Filters) => Filters)) => {
+      setFiltersState((prev) => {
+        const next = typeof f === "function" ? f(prev) : f;
+        return next;
+      });
+      setPage(1);
+    },
+    [],
+  );
+
+  const clearFilters = useCallback(() => {
+    setFiltersState(EMPTY_FILTERS);
+    setPage(1);
+  }, []);
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("sidebarCollapsed", next ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+      return next;
+    });
+  }, []);
+
+  // Reflect collapse state on <body> (styles.css keys off body class).
+  useEffect(() => {
+    document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  }, [sidebarCollapsed]);
+
+  const setView = useCallback((v: ViewName) => {
+    setViewState(v);
+  }, []);
+
+  // ----- shared modals -----------------------------------------------------
+  const openBugForm = useCallback(
+    (opts?: { defaultType?: ItemType; defaultEventId?: number | null }) => {
+      setBugModal({
+        open: true,
+        bug: null,
+        defaultType: opts?.defaultType,
+        defaultEventId: opts?.defaultEventId ?? null,
+      });
+    },
+    [],
+  );
+
+  const openBugDetail = useCallback(async (bugId: number) => {
+    try {
+      const bug = await api<BugDetail>(`/bugs/${bugId}`);
+      setBugModal({ open: true, bug });
+    } catch (err) {
+      toastError(err);
+    }
+  }, []);
+
+  const reloadBugModal = useCallback(async () => {
+    const id = bugModal.bug?.id;
+    if (!id) return;
+    try {
+      const bug = await api<BugDetail>(`/bugs/${id}`);
+      setBugModal((prev) => ({ ...prev, bug }));
+    } catch (err) {
+      toastError(err);
+    }
+  }, [bugModal.bug?.id]);
+
+  const closeBugModal = useCallback(() => {
+    setBugModal({ open: false, bug: null });
+  }, []);
+
+  const openProjectForm = useCallback((project?: ProjectOut | null) => {
+    setProjectModal({ open: true, project: project ?? null });
+  }, []);
+  const closeProjectModal = useCallback(() => {
+    setProjectModal({ open: false, project: null });
+  }, []);
+
+  const openUserForm = useCallback((user?: UserOut | null) => {
+    setUserModal({ open: true, user: user ?? null });
+  }, []);
+  const closeUserModal = useCallback(() => {
+    setUserModal({ open: false, user: null });
+  }, []);
+
+  // ----- notification mutations --------------------------------------------
+  const markNotificationRead = useCallback(async (id: number) => {
+    // Optimistic: stamp read locally, decrement unread, then persist.
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.id === id && !n.read_at ? { ...n, read_at: new Date().toISOString() } : n,
+      ),
+    );
+    setUnreadCount((c) => Math.max(0, c - 1));
+    try {
+      await api(`/notifications/${id}/read`, { method: "POST" });
+    } catch (err) {
+      toastError(err);
+      void loadNotifications();
+    }
+  }, [loadNotifications]);
+
+  const markAllNotificationsRead = useCallback(async () => {
+    const now = new Date().toISOString();
+    setNotifications((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: now })));
+    setUnreadCount(0);
+    try {
+      await api("/notifications/read-all", { method: "POST" });
+    } catch (err) {
+      toastError(err);
+      void loadNotifications();
+    }
+  }, [loadNotifications]);
+
+  const deleteNotification = useCallback(async (id: number) => {
+    setNotifications((prev) => {
+      const gone = prev.find((n) => n.id === id);
+      if (gone && !gone.read_at) setUnreadCount((c) => Math.max(0, c - 1));
+      return prev.filter((n) => n.id !== id);
+    });
+    try {
+      await api(`/notifications/${id}`, { method: "DELETE" });
+    } catch (err) {
+      toastError(err);
+      void loadNotifications();
+    }
+  }, [loadNotifications]);
+
+  const openNotification = useCallback(
+    async (n: NotificationOut) => {
+      if (!n.read_at) void markNotificationRead(n.id);
+      if (n.bug_id != null) {
+        await openBugDetail(n.bug_id);
+      } else if (n.event_id != null) {
+        setView("events");
+      }
+    },
+    [markNotificationRead, openBugDetail, setView],
+  );
+
+  // Sleuth chat "open bug" deep-link (same CustomEvent as vanilla, L4771-79).
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ bugId?: number }>).detail?.bugId;
+      if (typeof id === "number") void openBugDetail(id);
+    };
+    document.addEventListener("sleuth:open-bug", onOpen);
+    return () => document.removeEventListener("sleuth:open-bug", onOpen);
+  }, [openBugDetail]);
+
+  // ----- role helpers ------------------------------------------------------
+  const roleRank = useCallback((role: string): number => {
+    if (role === "admin") return 3;
+    if (role === "manager") return 2;
+    return 1;
+  }, []);
+
+  const value = useMemo<AppState>(
+    () => ({
+      currentUser,
+      meta,
+      users,
+      projects,
+      stats,
+      health,
+      view,
+      setView,
+      activeTab,
+      setActiveTab,
+      defaultNewType,
+      setDefaultNewType,
+      bugs,
+      page,
+      setPage,
+      pageSize: PAGE_SIZE,
+      total,
+      totalPages,
+      filters,
+      setFilters,
+      clearFilters,
+      sidebarCollapsed,
+      toggleSidebarCollapsed,
+      refreshBugs,
+      refreshStats,
+      refreshAll,
+      loadUsers,
+      loadProjects,
+      bugModal,
+      openBugForm,
+      openBugDetail,
+      reloadBugModal,
+      closeBugModal,
+      projectModal,
+      openProjectForm,
+      closeProjectModal,
+      userModal,
+      openUserForm,
+      closeUserModal,
+      changePasswordOpen,
+      setChangePasswordOpen,
+      notifications,
+      unreadCount,
+      loadNotifications,
+      markNotificationRead,
+      markAllNotificationsRead,
+      deleteNotification,
+      openNotification,
+      roleRank,
+      canManage: roleRank(currentUser.role) >= 2,
+      isAdmin: currentUser.role === "admin",
+    }),
+    [
+      currentUser, meta, users, projects, stats, health, view, setView,
+      activeTab, setActiveTab, defaultNewType, setDefaultNewType, bugs, page,
+      total, totalPages, filters, setFilters, clearFilters, sidebarCollapsed,
+      toggleSidebarCollapsed, refreshBugs, refreshStats, refreshAll, loadUsers,
+      loadProjects, bugModal, openBugForm, openBugDetail, reloadBugModal,
+      closeBugModal, projectModal, openProjectForm, closeProjectModal,
+      userModal, openUserForm, closeUserModal, changePasswordOpen, roleRank,
+      notifications, unreadCount, loadNotifications, markNotificationRead,
+      markAllNotificationsRead, deleteNotification, openNotification,
+    ],
+  );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}

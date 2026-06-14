@@ -19,12 +19,12 @@
   height: 56px;
   border-radius: 50%;
   border: none;
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   font-size: 22px;
   cursor: pointer;
   box-shadow:
-    0 8px 22px var(--accent-glow, rgba(129,140,248,0.45)),
+    0 8px 22px var(--accent-glow, rgba(47,143,190,0.42)),
     0 4px 10px rgba(0,0,0,0.25),
     inset 0 1px 0 rgba(255,255,255,0.18);
   z-index: 900;
@@ -41,7 +41,7 @@
   position: absolute;
   inset: -4px;
   border-radius: 50%;
-  border: 2px solid var(--accent, #818cf8);
+  border: 2px solid var(--accent, #3aa6d6);
   opacity: 0;
   pointer-events: none;
   animation: sleuth-pulse 2.6s ease-out infinite;
@@ -63,7 +63,7 @@
   outline: none;
   box-shadow:
     0 0 0 3px var(--accent-glow, rgba(129,140,248,0.4)),
-    0 8px 22px var(--accent-glow, rgba(129,140,248,0.45)),
+    0 8px 22px var(--accent-glow, rgba(47,143,190,0.42)),
     0 4px 10px rgba(0,0,0,0.25);
 }
 .sleuth-fab[aria-expanded="true"]::after { animation: none; opacity: 0; }
@@ -126,13 +126,43 @@
 }
 .sleuth-panel[hidden] { display: none; }
 
+/* Drag-to-resize grip — sits in the top-left corner. The panel is anchored
+   bottom-right, so dragging this corner up-and-left enlarges the window. */
+.sleuth-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  z-index: 3;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.sleuth-resize::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid var(--text-faint, #6f7aa0);
+  border-left: 2px solid var(--text-faint, #6f7aa0);
+  border-top-left-radius: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+.sleuth-resize:hover::before {
+  opacity: 1;
+  border-color: var(--accent, #3aa6d6);
+}
+
 /* ---------- Panel header ---------- */
 .sleuth-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 13px 14px;
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   border-bottom: 1px solid var(--border, #232c47);
   position: relative;
@@ -248,8 +278,8 @@
 }
 .sleuth-tab:hover { color: var(--text, #f1f5f9); }
 .sleuth-tab.active {
-  color: var(--accent, #818cf8);
-  border-bottom-color: var(--accent, #818cf8);
+  color: var(--accent, #3aa6d6);
+  border-bottom-color: var(--accent, #3aa6d6);
 }
 
 /* ---------- Body / messages ---------- */
@@ -279,7 +309,7 @@
 }
 .sleuth-msg.user {
   align-self: flex-end;
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   border-bottom-right-radius: 4px;
   box-shadow: 0 2px 8px var(--accent-glow, rgba(129,140,248,0.30));
@@ -315,7 +345,7 @@
 .sleuth-msg em { font-style: italic; }
 .sleuth-msg code {
   background: var(--bg-elev-2, #1a2138);
-  color: var(--accent, #818cf8);
+  color: var(--accent, #3aa6d6);
   padding: 1px 6px;
   border-radius: 4px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -331,7 +361,7 @@
 }
 .sleuth-msg li { margin-bottom: 2px; }
 .sleuth-msg a {
-  color: var(--accent, #818cf8);
+  color: var(--accent, #3aa6d6);
   text-decoration: underline;
 }
 .sleuth-msg.user a { color: inherit; text-decoration: underline; }
@@ -351,7 +381,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--accent, #818cf8);
+  background: var(--accent, #3aa6d6);
   animation: sleuth-typing 1.3s ease-in-out infinite;
 }
 .sleuth-typing span:nth-child(2) { animation-delay: 0.18s; }
@@ -382,8 +412,8 @@
 }
 .sleuth-chip:hover {
   background: var(--accent-soft, rgba(129,140,248,0.16));
-  border-color: var(--accent, #818cf8);
-  color: var(--accent, #818cf8);
+  border-color: var(--accent, #3aa6d6);
+  color: var(--accent, #3aa6d6);
   transform: translateY(-1px);
 }
 
@@ -423,7 +453,7 @@
   transition: transform 0.1s ease, box-shadow 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 .sleuth-confirm-yes {
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   box-shadow: 0 2px 6px var(--accent-glow, rgba(129,140,248,0.30));
 }
@@ -498,7 +528,7 @@
   height: 38px;
   border-radius: 9px;
   background: var(--accent-soft, rgba(129,140,248,0.16));
-  color: var(--accent, #818cf8);
+  color: var(--accent, #3aa6d6);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -529,7 +559,7 @@
    decides — and rule order favours us. */
 a.sleuth-file-btn,
 .sleuth-file-btn {
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   text-decoration: none;
   padding: 7px 14px;
@@ -576,8 +606,8 @@ a.sleuth-file-btn:active,
 }
 .sleuth-suggestions button:hover {
   background: var(--accent-soft, rgba(129,140,248,0.16));
-  border-color: var(--accent, #818cf8);
-  color: var(--accent, #818cf8);
+  border-color: var(--accent, #3aa6d6);
+  color: var(--accent, #3aa6d6);
   transform: translateY(-1px);
 }
 .sleuth-suggestions button:active { transform: translateY(0); }
@@ -609,12 +639,12 @@ a.sleuth-file-btn:active,
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .sleuth-input:focus {
-  border-color: var(--accent, #818cf8);
+  border-color: var(--accent, #3aa6d6);
   box-shadow: 0 0 0 3px var(--accent-glow, rgba(129,140,248,0.3));
 }
 .sleuth-input::placeholder { color: var(--text-faint, #94a3b8); }
 .sleuth-send {
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   border: none;
   border-radius: 10px;
@@ -633,7 +663,7 @@ a.sleuth-file-btn:active,
 }
 .sleuth-send:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px var(--accent-glow, rgba(129,140,248,0.45));
+  box-shadow: 0 4px 12px var(--accent-glow, rgba(47,143,190,0.42));
 }
 .sleuth-send:active { transform: translateY(0); }
 .sleuth-send:disabled {
@@ -663,7 +693,7 @@ a.sleuth-file-btn:active,
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 .sleuth-history-item:hover {
-  border-color: var(--accent, #818cf8);
+  border-color: var(--accent, #3aa6d6);
   background: var(--bg-elev-2, #1a2138);
   transform: translateX(2px);
 }
@@ -720,7 +750,7 @@ a.sleuth-file-btn:active,
 }
 .sleuth-setting-row select:focus,
 .sleuth-setting-row input[type="text"]:focus {
-  border-color: var(--accent, #818cf8);
+  border-color: var(--accent, #3aa6d6);
 }
 
 /* Toggle switch */
@@ -757,7 +787,7 @@ a.sleuth-file-btn:active,
   box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 .sleuth-toggle input:checked + .sleuth-toggle-slider {
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
 }
 .sleuth-toggle input:checked + .sleuth-toggle-slider::before {
   transform: translateX(16px);
@@ -797,7 +827,7 @@ a.sleuth-file-btn:active,
   gap: 6px;
   margin-top: 8px;
   padding: 7px 12px;
-  background: var(--accent-grad, linear-gradient(135deg, #6366f1, #38bdf8));
+  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
   color: var(--accent-text, #fff);
   border: none;
   border-radius: 8px;
@@ -833,6 +863,8 @@ a.sleuth-file-btn:active,
     max-height: calc(100vh - 96px);
     border-radius: 14px;
   }
+  /* Panel is near-fullscreen here; manual resize doesn't apply. */
+  .sleuth-resize { display: none; }
 }
 
 /* ---------- High-contrast / forced-colors ---------- */

@@ -84,7 +84,11 @@ These environment variables control the LLM layer:
 
 ## Privacy
 
-The LLM runs entirely on this server. No data leaves the box. Sleuth
-never calls a hosted API, never shells out to any external endpoint,
-and never sends user messages anywhere except through this local
-inference path.
+The local LLM runs entirely on this server. No data leaves the box on
+this path — Sleuth never calls a hosted API or shells out to any external
+endpoint for the local layer.
+
+> A separate, **off-by-default** cloud layer (`SLEUTH_CLOUD_ENABLED=1`)
+> can send free-form questions to Gemini / OpenRouter. That is the only
+> path that egresses data, and it stays disabled unless you opt in. See
+> the README *Sleuth* section.

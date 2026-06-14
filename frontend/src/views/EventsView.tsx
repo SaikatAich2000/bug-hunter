@@ -1,0 +1,751 @@
+/**
+ * EventsView — React port of the vanilla Events view
+ * (#viewEvents markup in app/static/index.html L293-364; list/detail logic
+ * in app/static/app.js L3834-4087; wiring at L4294-4403; delete flow at
+ * L3428-3443).
+ *
+ * Two modes:
+ *   • list   — card grid of every event, with a client-side search
+ *              (debounced 200ms) + exact-match scheduled-date filter;
+ *   • detail — one event open: header, meta (date · author · counts),
+ *              managers, "+ Add Task", and the event's items rendered as
+ *              the standard bug-table (minus the actions column) behind a
+ *              client-side search + status/priority/assignee multi-filters.
+ *
+ * Items open in the shared bug modal; when that modal closes while the
+ * detail panel is open, the detail is refetched (an effect watches
+ * bugModal.open transitions — port of the vanilla post-modal refresh).
+ *
+ * Adaptations: the detail filter multi-selects reuse the shared MsFilter
+ * widget, which renders `data-filter` on the wrap instead of the vanilla
+ * `data-event-filter` (a JS-only hook; no CSS keys off it). Role gating
+ * keeps the vanilla mechanism: `data-needs-role` stays on the button when
+ * the user lacks the role (styles.css hides it) and is dropped otherwise,
+ * exactly like applyRoleVisibility().
+ */
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import MsFilter from "../components/MsFilter";
+import EventModal from "../modals/EventModal";
+import { confirmDialog } from "../components/ConfirmHost";
+import { api } from "../lib/api";
+import { withLoader } from "../lib/loader";
+import { toast, toastError } from "../lib/toast";
+import { debounce, formatDate, initials } from "../lib/format";
+import { useApp } from "../state/AppContext";
+import type { BugOut, EventDetail, EventOut, ViewName } from "../types";
+
+// ---------------------------------------------------------------------------
+// Constants (ports of the vanilla tables)
+// ---------------------------------------------------------------------------
+
+/** Per-type emoji marker (port of ITEM_TYPE_EMOJI, app.js L2199). */
+const ITEM_TYPE_EMOJI: Record<string, string> = { Bug: "🐞", Requirement: "📐", Task: "✅" };
+function itemTypeEmoji(t: string): string {
+  return ITEM_TYPE_EMOJI[t] ?? "📝";
+}
+
+/**
+ * Column set for the items table inside an event — the per-type "All"
+ * columns minus the actions column (deletion happens from the bug modal),
+ * port of renderEventDetail (app.js L3998).
+ */
+type DetailCol =
+  | "id"
+  | "title-with-type"
+  | "project"
+  | "status"
+  | "priority"
+  | "due"
+  | "assignees"
+  | "att";
+
+const DETAIL_COLS: DetailCol[] = [
+  "id", "title-with-type", "project", "status", "priority", "due", "assignees", "att",
+];
+
+const COL_HEAD_LABEL: Record<DetailCol, string> = {
+  id: "#",
+  "title-with-type": "Title",
+  project: "Project",
+  status: "Status",
+  priority: "Priority",
+  due: "Due",
+  assignees: "Assignees",
+  att: "📎",
+};
+
+// ---------------------------------------------------------------------------
+// Pure helpers (ports of the vanilla filter / summary functions)
+// ---------------------------------------------------------------------------
+
+/** Port of _matchesEventFilter (app.js L3870-3877). */
+function matchesEventFilter(ev: EventOut, q: string, date: string): boolean {
+  if (date && (ev.scheduled_for || "") !== date) return false;
+  if (q) {
+    const hay = `${ev.name || ""} ${ev.description || ""}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+
+/** Port of _eventsSummaryText (app.js L3879-3886). */
+function eventsSummaryText(
+  rows: EventOut[],
+  totalItems: number,
+  totalPeople: number,
+  q: string,
+  date: string,
+): string {
+  if (rows.length === 0) return q || date ? "0 matching events" : "";
+  const peopleLabel = rows.length === 1 ? `${totalPeople}` : `~${totalPeople}`;
+  const prefix = q || date ? "showing " : "";
+  return `${prefix}${rows.length} event${rows.length === 1 ? "" : "s"} · `
+       + `${totalItems} item${totalItems === 1 ? "" : "s"} · `
+       + `${peopleLabel} ${totalPeople === 1 ? "person" : "people"}`;
+}
+
+/** Client-side filter state for the tasks inside an event. */
+interface EventDetailFilter {
+  q: string;
+  status: string[];
+  priority: string[];
+  assignee_id: string[];
+}
+
+const EMPTY_DETAIL_FILTER: EventDetailFilter = {
+  q: "",
+  status: [],
+  priority: [],
+  assignee_id: [],
+};
+
+/** Port of _itemMatchesAssignees (app.js L4015-4019). */
+function itemMatchesAssignees(item: BugOut, assignees: Set<string>): boolean {
+  if (!assignees.size) return true;
+  const ids = item.assignees.map((a) => String(a.id));
+  return ids.some((id) => assignees.has(id));
+}
+
+/** Port of _itemMatchesQuery (app.js L4023-4028). */
+function itemMatchesQuery(item: BugOut, q: string): boolean {
+  if (!q) return true;
+  const hay = `${item.title || ""} ${item.description || ""}`.toLowerCase();
+  if (/^\d+$/.test(q)) return String(item.id) === q || hay.includes(q);
+  return hay.includes(q);
+}
+
+/** Port of _filterEventItems (app.js L4030-4042). */
+function filterEventItems(items: BugOut[], f: EventDetailFilter): BugOut[] {
+  const q = (f.q || "").trim().toLowerCase().replace(/^#/, "");
+  const statuses = new Set(f.status);
+  const priorities = new Set(f.priority);
+  const assignees = new Set(f.assignee_id.map(String));
+  return items.filter(
+    (b) =>
+      (!statuses.size || statuses.has(b.status)) &&
+      (!priorities.size || priorities.has(b.priority)) &&
+      itemMatchesAssignees(b, assignees) &&
+      itemMatchesQuery(b, q),
+  );
+}
+
+/** Port of _renderCell (app.js L1962-2027) for the detail-column subset. */
+function renderCell(col: DetailCol, b: BugOut): ReactElement {
+  switch (col) {
+    case "id":
+      return <td key={col} className="col-id">#{b.id}</td>;
+    case "title-with-type": {
+      const itype = b.item_type || "Bug";
+      return (
+        <td key={col} className="col-title">
+          <div className="title-cell">
+            <strong className="title-text" title={b.title}>
+              <span className="inline-type" data-type={itype} title={itype}>
+                {itemTypeEmoji(itype)}
+              </span>{" "}
+              {b.title}
+            </strong>
+            <span className="title-meta">
+              {itype} · Updated {formatDate(b.updated_at)}
+            </span>
+          </div>
+        </td>
+      );
+    }
+    case "project":
+      return <td key={col} className="col-project">{b.project_name || ""}</td>;
+    case "status":
+      return (
+        <td key={col} className="col-status">
+          <span className="badge" data-status={b.status}>{b.status}</span>
+        </td>
+      );
+    case "priority":
+      return (
+        <td key={col} className="col-priority">
+          <span className="badge" data-priority={b.priority}>{b.priority}</span>
+        </td>
+      );
+    case "due":
+      return (
+        <td key={col} className="col-due">
+          {b.due_date ? b.due_date : <span className="muted">—</span>}
+        </td>
+      );
+    case "assignees":
+      return (
+        <td key={col} className="col-assignees">
+          <div className="assignee-stack">
+            {b.assignees.length ? (
+              b.assignees.map((a) => (
+                <span key={a.id} className="assignee-chip" title={a.email}>
+                  <span className="avatar">{initials(a.name)}</span>
+                  <span className="assignee-chip-name">{a.name}</span>
+                </span>
+              ))
+            ) : (
+              <span className="muted">—</span>
+            )}
+          </div>
+        </td>
+      );
+    case "att":
+      return (
+        <td key={col} className="col-att">
+          {b.attachment_count > 0 ? (
+            <span className="att-count">📎 {b.attachment_count}</span>
+          ) : (
+            <span className="muted">—</span>
+          )}
+        </td>
+      );
+  }
+}
+
+/**
+ * Vanilla applyRoleVisibility keeps `data-needs-role` (CSS-hidden) for
+ * users below the needed rank and strips the attribute otherwise — we
+ * compute the same final DOM directly.
+ */
+function roleAttr(
+  allowed: boolean,
+  need: "manager" | "admin",
+): { "data-needs-role"?: "manager" | "admin" } {
+  return allowed ? {} : { "data-needs-role": need };
+}
+
+// ---------------------------------------------------------------------------
+// Presentational pieces (extracted from the vanilla render templates)
+// ---------------------------------------------------------------------------
+
+/** One card in the list-mode grid (port of the renderEvents template). */
+function EventCard({ ev, onOpen }: Readonly<{ ev: EventOut; onOpen: (id: number) => void }>) {
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    onOpen(ev.id);
+  };
+  return (
+    <section
+      className="event-card"
+      data-event-id={ev.id}
+      tabIndex={0}
+      role="button"
+      aria-label={`Open event ${ev.name}`}
+      onClick={() => onOpen(ev.id)}
+      onKeyDown={onKeyDown}
+    >
+      <div className="event-card-head">
+        <h3 className="event-card-name">{ev.name}</h3>
+        {ev.scheduled_for ? (
+          <span className="event-card-sched">📅 {ev.scheduled_for}</span>
+        ) : (
+          <span className="event-card-sched muted small">No date</span>
+        )}
+      </div>
+      {ev.description ? <p className="event-card-desc">{ev.description}</p> : null}
+      <div className="event-card-foot">
+        <span className="event-card-count">
+          {ev.item_count} item{ev.item_count === 1 ? "" : "s"}
+        </span>
+        <span className="event-card-people">👥 {ev.assignee_count}</span>
+        {ev.created_by_name ? <span className="muted small">by {ev.created_by_name}</span> : null}
+      </div>
+    </section>
+  );
+}
+
+/** Detail header meta: bits line, description, manager chips. */
+function EventDetailMeta({ detail }: Readonly<{ detail: EventDetail }>) {
+  const metaBits = [
+    ...(detail.scheduled_for ? [`📅 ${detail.scheduled_for}`] : []),
+    ...(detail.created_by_name ? [`by ${detail.created_by_name}`] : []),
+    `${detail.item_count} item${detail.item_count === 1 ? "" : "s"}`,
+    `${detail.assignee_count} people`,
+  ];
+  return (
+    <>
+      <div className="event-detail-bits">{metaBits.join(" · ")}</div>
+      {detail.description ? <p className="event-detail-desc">{detail.description}</p> : null}
+      {detail.managers.length > 0 ? (
+        <div className="event-detail-managers">
+          <span className="muted small">Managers:</span>{" "}
+          {detail.managers.map((m) => (
+            <span key={m.id} className="assignee-chip" title={m.email}>
+              <span className="avatar">{initials(m.name)}</span>
+              <span className="assignee-chip-name">{m.name}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** One clickable item row inside the detail-mode table. */
+function EventItemRow({ b, onOpen }: Readonly<{ b: BugOut; onOpen: (id: number) => void }>) {
+  const onKeyDown = (e: KeyboardEvent<HTMLTableRowElement>) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    onOpen(b.id);
+  };
+  return (
+    <tr data-bug-id={b.id} tabIndex={0} onClick={() => onOpen(b.id)} onKeyDown={onKeyDown}>
+      {DETAIL_COLS.map((c) => renderCell(c, b))}
+    </tr>
+  );
+}
+
+/** The event's items as the standard bug-table minus the actions column. */
+function EventItemsTable({
+  items,
+  onOpen,
+}: Readonly<{ items: BugOut[]; onOpen: (id: number) => void }>) {
+  return (
+    <div className="table-scroll">
+      <table className="bug-table">
+        <thead>
+          <tr>
+            {DETAIL_COLS.map((c) => (
+              <th key={c} className={`col-${c === "title-with-type" ? "title" : c}`}>
+                {COL_HEAD_LABEL[c]}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((b) => (
+            <EventItemRow key={b.id} b={b} onOpen={onOpen} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+interface EventModalLocalState {
+  open: boolean;
+  /** Event being edited; null = create mode. */
+  event: EventOut | null;
+}
+
+export default function EventsView() {
+  const { view, meta, canManage, isAdmin, openBugForm, openBugDetail, bugModal } = useApp();
+
+  // ----- list-mode state (port of STATE.events / STATE.eventsFilter) ------
+  const [events, setEvents] = useState<EventOut[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [qInput, setQInput] = useState("");
+  const [q, setQ] = useState(""); // applied (debounced) search
+  const [date, setDate] = useState("");
+
+  // ----- detail-mode state (port of STATE.currentEvent[Id] / filter) ------
+  const [mode, setMode] = useState<"list" | "detail">("list");
+  const [detail, setDetail] = useState<EventDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailQInput, setDetailQInput] = useState("");
+  const [detailFilters, setDetailFilters] = useState<EventDetailFilter>(EMPTY_DETAIL_FILTER);
+
+  // ----- event create/edit modal (local, mounted by this view) ------------
+  const [modal, setModal] = useState<EventModalLocalState>({ open: false, event: null });
+
+  // Debounced search appliers (200ms, port of the vanilla input wiring).
+  const applyQ = useMemo(() => debounce((v: string) => setQ(v), 200), []);
+  const applyDetailQ = useMemo(
+    () => debounce((v: string) => setDetailFilters((f) => ({ ...f, q: v })), 200),
+    [],
+  );
+
+  // ----- data loaders (ports of refreshEvents / openEventDetail) ----------
+  const refreshEvents = useCallback(async () => {
+    setLoading(true);
+    try {
+      setEvents(await api<EventOut[]>("/events"));
+    } catch (err) {
+      setEvents(null); // vanilla blanks the grid on error
+      toastError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const openEventDetail = useCallback(async (eventId: number) => {
+    setMode("detail");
+    setDetail(null); // header shows "Event", items show Loading…
+    setDetailLoading(true);
+    try {
+      setDetail(await api<EventDetail>(`/events/${eventId}`));
+    } catch (err) {
+      toastError(err);
+      setMode("list");
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const showListMode = useCallback(() => {
+    setMode("list");
+    setDetail(null);
+  }, []);
+
+  // Entering the Events view resets to list mode and refetches (port of
+  // the nav handler, app.js L2320-2325).
+  const prevView = useRef<ViewName | null>(null);
+  useEffect(() => {
+    if (view === "events" && prevView.current !== "events") {
+      showListMode();
+      void refreshEvents();
+    }
+    prevView.current = view;
+  }, [view, refreshEvents, showListMode]);
+
+  // When the shared bug modal closes while the detail panel is open, the
+  // user may have added/edited/moved an item — refetch the detail.
+  const prevBugOpen = useRef(bugModal.open);
+  useEffect(() => {
+    const was = prevBugOpen.current;
+    prevBugOpen.current = bugModal.open;
+    if (was && !bugModal.open && mode === "detail" && detail) {
+      void openEventDetail(detail.id);
+    }
+  }, [bugModal.open, mode, detail, openEventDetail]);
+
+  // ----- delete (port of handleDeleteEvent, app.js L3428-3443) ------------
+  const handleDeleteEvent = useCallback(
+    async (event: EventOut) => {
+      const ok = await confirmDialog(
+        `Delete event "${event.name}"? Its tasks will be kept but unlinked from this event. Cannot be undone`,
+      );
+      if (!ok) return;
+      try {
+        await withLoader(async () => {
+          await api(`/events/${event.id}`, { method: "DELETE" });
+          showListMode();
+          await refreshEvents();
+        }, "Deleting event…");
+        toast(`Event "${event.name}" deleted`, "success");
+      } catch (err) {
+        toastError(err);
+      }
+    },
+    [refreshEvents, showListMode],
+  );
+
+  // ----- post-save (port of submitEventForm's refresh block) --------------
+  const handleSaved = useCallback(
+    async (saved: EventOut, isEdit: boolean) => {
+      await refreshEvents();
+      if (isEdit) {
+        if (mode === "detail" && detail?.id === saved.id) await openEventDetail(saved.id);
+      } else {
+        await openEventDetail(saved.id);
+      }
+    },
+    [refreshEvents, openEventDetail, mode, detail],
+  );
+
+  // ----- derived list-mode data (port of renderEvents) ---------------------
+  const all = events ?? [];
+  const qNorm = q.trim().toLowerCase();
+  const dateNorm = date.trim();
+  const rows = all.filter((ev) => matchesEventFilter(ev, qNorm, dateNorm));
+  const totalItems = rows.reduce((n, ev) => n + (ev.item_count || 0), 0);
+  const totalPeople = rows.reduce((n, ev) => n + (ev.assignee_count || 0), 0);
+  const summary = eventsSummaryText(rows, totalItems, totalPeople, qNorm, dateNorm);
+  const showEmptyBanner = !loading && events !== null && all.length === 0;
+
+  const openDetail = useCallback(
+    (id: number) => {
+      void openEventDetail(id);
+    },
+    [openEventDetail],
+  );
+  const openItem = useCallback(
+    (id: number) => {
+      void openBugDetail(id);
+    },
+    [openBugDetail],
+  );
+
+  let gridContent: ReactNode = null;
+  if (loading) {
+    gridContent = <div className="events-loading muted">Loading events…</div>;
+  } else if (events !== null && rows.length === 0) {
+    gridContent =
+      all.length > 0 ? (
+        <div className="events-empty muted">
+          <p>No events match the current filter. Try clearing the search or date</p>
+        </div>
+      ) : null;
+  } else if (events !== null) {
+    gridContent = rows.map((ev) => <EventCard key={ev.id} ev={ev} onOpen={openDetail} />);
+  }
+
+  // ----- derived detail-mode data (port of renderEventDetail) -------------
+  const allItems = detail?.items ?? [];
+  const filteredItems = filterEventItems(allItems, detailFilters);
+
+  // Assignee option pool from the event's items so the dropdown only
+  // shows people actually assigned to something in this event (port of
+  // refreshEventDetailFilters).
+  const assigneeOptions: [string, string][] = [];
+  {
+    const seen = new Set<number>();
+    for (const it of allItems) {
+      for (const a of it.assignees) {
+        if (!seen.has(a.id)) {
+          seen.add(a.id);
+          assigneeOptions.push([String(a.id), a.name]);
+        }
+      }
+    }
+  }
+  const statusOptions: [string, string][] = meta.statuses.map((s) => [s, s]);
+  const priorityOptions: [string, string][] = meta.priorities.map((p) => [p, p]);
+
+  const toggleDetailFilter = (key: "status" | "priority" | "assignee_id") => (value: string) => {
+    setDetailFilters((f) => {
+      const cur = f[key];
+      return {
+        ...f,
+        [key]: cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value],
+      };
+    });
+  };
+
+  let itemsContent: ReactNode = null;
+  if (detailLoading || !detail) {
+    itemsContent = <div className="muted">Loading…</div>;
+  } else if (allItems.length === 0) {
+    itemsContent = (
+      <div className="event-detail-empty muted">
+        <p>
+          No items yet. Click <strong>+ Add Task</strong> to create one inside this event, or
+          open any existing work item and assign it to this event from its Event field
+        </p>
+      </div>
+    );
+  } else if (filteredItems.length === 0) {
+    itemsContent = (
+      <div className="event-detail-empty muted">
+        <p>No tasks in this event match the current filter. Try clearing the search or filters</p>
+      </div>
+    );
+  } else {
+    itemsContent = <EventItemsTable items={filteredItems} onOpen={openItem} />;
+  }
+
+  return (
+    <>
+      <section className="view" id="viewEvents" hidden={view !== "events"}>
+        {/* list mode: card grid of all events */}
+        <div className="events-list-mode" id="eventsListMode" hidden={mode !== "list"}>
+          <div className="page-intro events-intro">
+            <div className="page-intro-icon" aria-hidden="true">📅</div>
+            <div className="page-intro-text">
+              <h2>Events</h2>
+              <p>
+                Group of work items — like a daily standup or sprint meeting. Open an event to
+                see the tasks assigned for it
+              </p>
+            </div>
+          </div>
+          <div className="events-controls">
+            <button
+              className="btn primary"
+              id="newEventBtn"
+              {...roleAttr(canManage, "manager")}
+              onClick={() => setModal({ open: true, event: null })}
+            >
+              + New Event
+            </button>
+            <button className="btn ghost" id="eventsRefreshBtn" onClick={() => void refreshEvents()}>
+              Refresh
+            </button>
+            <span className="events-summary" id="eventsSummary">{summary}</span>
+          </div>
+          <div className="events-filter-bar" id="eventsFilterBar">
+            <input
+              type="search"
+              id="eventsSearch"
+              placeholder="Search events by name or description…"
+              autoComplete="off"
+              value={qInput}
+              onChange={(e) => {
+                setQInput(e.target.value);
+                applyQ(e.target.value);
+              }}
+            />
+            <input
+              type="date"
+              id="eventsDateFilter"
+              aria-label="Filter by scheduled date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+            <button
+              className="btn ghost"
+              id="eventsClearFiltersBtn"
+              onClick={() => {
+                setQInput("");
+                setQ("");
+                setDate("");
+              }}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="events-grid" id="eventsGrid">{gridContent}</div>
+          <div className="events-empty" id="eventsEmpty" hidden={!showEmptyBanner}>
+            <p>
+              No events yet. Click <strong>+ New Event</strong> to create one — a standup, a
+              sprint meeting, whatever you want to track
+            </p>
+          </div>
+        </div>
+
+        {/* detail mode: a single event + its items */}
+        <div className="events-detail-mode" id="eventsDetailMode" hidden={mode !== "detail"}>
+          <div className="events-detail-head">
+            <button
+              className="btn ghost"
+              id="eventBackBtn"
+              onClick={() => {
+                showListMode();
+                void refreshEvents();
+              }}
+            >
+              <span aria-hidden="true">←</span> Back
+            </button>
+            <h2 id="eventDetailName">{detail ? detail.name : "Event"}</h2>
+            <div className="events-detail-actions">
+              <button
+                className="btn ghost"
+                id="editEventBtn"
+                {...roleAttr(canManage, "manager")}
+                onClick={() => {
+                  if (detail) setModal({ open: true, event: detail });
+                }}
+              >
+                ✎ Edit
+              </button>
+              <button
+                className="btn danger"
+                id="deleteEventBtn"
+                {...roleAttr(isAdmin, "admin")}
+                onClick={() => {
+                  if (detail) void handleDeleteEvent(detail);
+                }}
+              >
+                🗑 Delete
+              </button>
+            </div>
+          </div>
+          <div className="events-detail-meta" id="eventDetailMeta">
+            {detail ? <EventDetailMeta detail={detail} /> : null}
+          </div>
+          <div className="events-detail-controls">
+            <button
+              className="btn primary"
+              id="addItemToEventBtn"
+              {...roleAttr(canManage, "manager")}
+              onClick={() => {
+                if (detail) openBugForm({ defaultType: "Task", defaultEventId: detail.id });
+              }}
+            >
+              + Add Task
+            </button>
+          </div>
+          <div className="events-detail-filter-bar" id="eventDetailFilterBar">
+            <input
+              type="search"
+              id="eventDetailSearch"
+              placeholder="Search tasks (title or #id)…"
+              autoComplete="off"
+              value={detailQInput}
+              onChange={(e) => {
+                setDetailQInput(e.target.value);
+                applyDetailQ(e.target.value);
+              }}
+            />
+            <MsFilter
+              filterKey="status"
+              label="Statuses"
+              noun="Statuses"
+              options={statusOptions}
+              selected={detailFilters.status}
+              onToggle={toggleDetailFilter("status")}
+            />
+            <MsFilter
+              filterKey="priority"
+              label="Priorities"
+              noun="Priorities"
+              options={priorityOptions}
+              selected={detailFilters.priority}
+              onToggle={toggleDetailFilter("priority")}
+            />
+            <MsFilter
+              filterKey="assignee_id"
+              label="Assignees"
+              noun="Assignees"
+              options={assigneeOptions}
+              selected={detailFilters.assignee_id}
+              onToggle={toggleDetailFilter("assignee_id")}
+            />
+            <button
+              className="btn ghost"
+              id="eventDetailClearFiltersBtn"
+              onClick={() => {
+                setDetailFilters(EMPTY_DETAIL_FILTER);
+                setDetailQInput("");
+              }}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="events-detail-items" id="eventDetailItems">{itemsContent}</div>
+        </div>
+      </section>
+
+      <EventModal
+        open={modal.open}
+        event={modal.event}
+        onClose={() => setModal({ open: false, event: null })}
+        onSaved={handleSaved}
+      />
+    </>
+  );
+}

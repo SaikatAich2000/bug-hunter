@@ -41,6 +41,16 @@ sonar-hotspots.csv
 .env.local
 .env.*.local
 
+# Server-side credential files (never commit). The Firebase service-account
+# JSON (FCM_CREDENTIALS_FILE) lives here; these patterns also catch any
+# similarly-named credential downloaded into the repo by mistake.
+secrets/
+*firebase-adminsdk*.json
+*service-account*.json
+*serviceaccount*.json
+*-credentials.json
+google-credentials*.json
+
 # --- Local databases (SQLite fallback for dev) ---
 *.db
 *.sqlite

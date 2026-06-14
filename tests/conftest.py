@@ -47,6 +47,10 @@ def client(tmp_path, monkeypatch):
     # that exercise the breach path monkeypatch app.password_breach
     # directly instead of relying on real network calls.
     monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
+    # Web push off by default so the suite is hermetic regardless of the
+    # deployment .env (which may have WEB_PUSH_ENABLED=true) and never makes a
+    # real FCM call. Tests that need it on enable it explicitly via monkeypatch.
+    monkeypatch.setenv("WEB_PUSH_ENABLED", "false")
 
     # Force re-import so the engine picks up the env-var override.
     for mod in list(sys.modules):

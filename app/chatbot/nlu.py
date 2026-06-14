@@ -885,10 +885,31 @@ def _extract_bug_id(message: str) -> Optional[int]:
 _QUOTED_RE = re.compile(r'"([^"]{2,})"')
 
 
+# v3.0: bare (unquoted) free-text after an explicit topic cue, so users don't
+# have to remember quotes — "bugs about login crash" -> search "login crash".
+# The cue words almost always precede a topic rather than a filter clause.
+_FREE_TEXT_CUE_RE = re.compile(
+    r"\b(?:about|regarding|mentioning|containing|concerning|related\s+to)\s+(.+)$",
+    re.IGNORECASE,
+)
+
+
 def _extract_text_search(message: str) -> Optional[str]:
     m = _QUOTED_RE.search(message)
     if m:
         return m.group(1).strip() or None
+    m = _FREE_TEXT_CUE_RE.search(message)
+    if m:
+        # Drop any trailing filter clause ("... in project X", "with priority Y")
+        # the same way the bare create-bug title capture does, then guard against
+        # a term that is ONLY status/priority words (that's a filter, not text).
+        term = _strip_create_bug_tail(m.group(1).strip()).strip(" .?!,")
+        # Guard: a short term that is ONLY a status/priority word is a filter,
+        # not a search topic ("about high priority" -> let the enum extractors
+        # handle it), so don't hijack it as free text.
+        only_enum = bool(_extract_statuses(term) or _extract_priorities(term))
+        if term and not (only_enum and len(term.split()) <= 2):
+            return term or None
     return None
 
 

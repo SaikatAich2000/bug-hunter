@@ -165,7 +165,16 @@ def set_session_cookie(response: Response, user: User, jti: str | None = None) -
 
 
 def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(key=COOKIE_NAME, path="/")
+    # Mirror the attributes the cookie was SET with so every browser reliably
+    # matches and clears it (some browsers key the delete on samesite/secure).
+    settings = get_settings()
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="lax",
+    )
 
 
 # ---------------------------------------------------------------------------

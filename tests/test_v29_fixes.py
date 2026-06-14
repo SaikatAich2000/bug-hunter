@@ -19,15 +19,27 @@ catches accidental regressions when someone refactors the SPA.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-APP_JS = REPO_ROOT / "app" / "static" / "app.js"
-INDEX_HTML = REPO_ROOT / "app" / "static" / "index.html"
-STYLES_CSS = REPO_ROOT / "app" / "static" / "styles.css"
+
+# Post React+TS migration, the shipped frontend is the Vite-built bundle in
+# app/static/assets/ (content-hashed, not human-readable). These guard tests
+# pin behavioural fix-markers in the React SOURCE — the exact equivalent of
+# the old "sniff app.js" approach: a refactor that drops a fix still breaks
+# CI. The unchanged stylesheet lives at frontend/src/styles/styles.css.
+FRONTEND = REPO_ROOT / "frontend" / "src"
+RICH_EDITOR = FRONTEND / "components" / "RichEditor.tsx"
+BUG_MODAL = FRONTEND / "modals" / "BugModal.tsx"
+BUG_HELPERS = FRONTEND / "modals" / "bug" / "helpers.tsx"
+REPORTS_VIEW = FRONTEND / "views" / "ReportsView.tsx"
+SIDEBAR = FRONTEND / "shell" / "Sidebar.tsx"
+FORMAT_TS = FRONTEND / "lib" / "format.ts"
+STYLES_CSS = FRONTEND / "styles" / "styles.css"
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +47,7 @@ STYLES_CSS = REPO_ROOT / "app" / "static" / "styles.css"
 # ---------------------------------------------------------------------------
 def test_app_version_is_29():
     from app import __version__
-    assert __version__ == "2.10"
+    assert __version__ == "3.0"
 
 
 def test_config_default_app_version_is_29():
@@ -45,7 +57,7 @@ def test_config_default_app_version_is_29():
     # version locally.
     from app.config import get_settings
     get_settings.cache_clear()
-    assert get_settings().APP_VERSION == "2.10"
+    assert get_settings().APP_VERSION == "3.0"
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +68,11 @@ def test_delete_attachment_button_has_type_button():
     `submit` and triggers a form submit on click. The fix added
     type="button" so deleting a comment's attachment no longer also
     saves the bug and closes the modal."""
-    src = APP_JS.read_text(encoding="utf-8")
-    # Locate the renderAttachmentCard string template; verify the
-    # button it emits carries type="button".
+    src = BUG_HELPERS.read_text(encoding="utf-8")
+    # The AttachmentCard component emits the delete button; verify every
+    # rendered occurrence carries type="button". (JSX, like HTML, defaults a
+    # bare <button> inside a <form> to type=submit.)
     assert 'data-act="delete-attachment"' in src
-    # Walk every occurrence — every render of delete-attachment must be
-    # type="button".
     needle = 'data-act="delete-attachment"'
     pos = 0
     occurrences = 0
@@ -69,14 +80,16 @@ def test_delete_attachment_button_has_type_button():
         idx = src.find(needle, pos)
         if idx == -1:
             break
-        # Look back ~80 chars from the data-act for `type="button"`.
-        prefix = src[max(0, idx - 80): idx]
-        if "<button" in prefix:
-            assert 'type="button"' in prefix, (
-                f"delete-attachment button at offset {idx} lacks "
-                f"type=\"button\"; context: {prefix!r}"
-            )
-            occurrences += 1
+        # Walk back to the opening <button for this element and assert it
+        # declares type="button" before reaching the data-act attribute.
+        start = src.rfind("<button", 0, idx)
+        assert start != -1, "delete-attachment is not inside a <button>"
+        btn = src[start:idx]
+        assert 'type="button"' in btn, (
+            f"delete-attachment button at offset {idx} lacks "
+            f'type="button"; context: {btn!r}'
+        )
+        occurrences += 1
         pos = idx + len(needle)
     assert occurrences >= 1, "no rendered delete-attachment button found"
 
@@ -90,7 +103,7 @@ def test_post_comment_rejects_files_without_body():
     strictly separate — files attached in the comment composer must
     accompany comment text, or the composer refuses with a clear
     toast pointing the user at the bug-level uploader."""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = BUG_MODAL.read_text(encoding="utf-8")
     # The new code path must reject files-only:
     assert "if (!body && files.length > 0)" in src, (
         "postComment is missing the files-only reject branch"
@@ -112,9 +125,9 @@ def test_reports_chip_indicator_span_is_rendered():
     opacity:0 and shows the indicator span only when checked, via
     :has(input:checked). If either side breaks, the chip falls back to
     an ugly raw checkbox — what the user complained about."""
-    js = APP_JS.read_text(encoding="utf-8")
+    js = REPORTS_VIEW.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
-    assert "reports-chip-indicator" in js, "_chipNode no longer emits the indicator span"
+    assert "reports-chip-indicator" in js, "ReportsView no longer emits the indicator span"
     assert ".reports-chip-indicator" in css, "indicator selector missing from CSS"
     # The native checkbox must be visually hidden so the indicator is
     # what the user sees.
@@ -150,14 +163,15 @@ def test_reports_view_uses_theme_tokens(selector_block, must_contain):
 
 
 def test_no_literal_export_csv_button_in_index_html():
-    """The sidebar Export CSV button was removed in favour of the
-    Reports view. Make sure it stays gone."""
-    html = INDEX_HTML.read_text(encoding="utf-8")
-    assert 'id="exportCsvBtn"' not in html
-    assert "Export CSV" not in html
+    """The sidebar Export CSV button was removed in favour of the Reports
+    view. The React Sidebar must not resurrect it, and the Reports nav entry
+    must stay role-gated to manager+ (NAV_ITEMS `needs: "manager"`)."""
+    src = SIDEBAR.read_text(encoding="utf-8")
+    assert 'id="exportCsvBtn"' not in src
+    assert "Export CSV" not in src
     # And the Reports nav entry IS there, gated by role.
-    assert 'data-view="reports"' in html
-    assert 'data-needs-role="manager"' in html
+    m = re.search(r'view:\s*"reports".*?needs:\s*"manager"', src, re.S)
+    assert m, "Reports nav entry must exist and be gated to manager+"
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +180,11 @@ def test_no_literal_export_csv_button_in_index_html():
 def test_health_endpoint_reports_v29(client):
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json()["version"] == "2.10"
+    assert r.json()["version"] == "3.0"
 
 
 def test_login_page_shows_version_2_9(client):
-    """The login page renders "Version 2.10" below the sign-in card so a
+    """The login page renders "Version 3.0" below the sign-in card so a
     user looking at the landing page knows which release they're on
     without having to log in first."""
     r = client.get("/login.html")
@@ -178,7 +192,7 @@ def test_login_page_shows_version_2_9(client):
     body = r.text
     # Server-side placeholder substitution must have replaced the token.
     assert "__APP_VERSION__" not in body
-    assert "Version 2.10" in body
+    assert "Version 3.0" in body
     # And the styling hook must be there.
     assert 'class="auth-version"' in body
 
@@ -192,34 +206,36 @@ def test_login_page_shows_version_2_9(client):
 # undo/redo "not working properly at all".
 # ---------------------------------------------------------------------------
 def test_rich_editor_has_snapshot_history():
-    src = APP_JS.read_text(encoding="utf-8")
-    # The history structure must exist on every editor instance.
-    assert "_history = { stack: [], idx: -1," in src, (
-        "snapshot history object missing from enhanceRichEditor"
+    src = RICH_EDITOR.read_text(encoding="utf-8")
+    # The history structure must exist on every editor instance (stack +
+    # index, typed as HistoryState).
+    assert "HistoryState" in src and "stack:" in src and "idx:" in src, (
+        "snapshot history state missing from RichEditor"
     )
     # Ctrl+Z / Ctrl+Y handlers must explicitly call our undo/redo,
     # not fall back to the browser's broken native undo.
     assert "undoEdit()" in src
     assert "redoEdit()" in src
     # The toolbar mousedown path must run through the snapshot wrapper.
-    assert "_runToolbarCmd(btn)" in src
-    # _bhRtSet should reset the history so undo can't jump back to a
+    assert "runToolbarCmd(btn)" in src
+    # setHtml should reset the history so undo can't jump back to a
     # previous (unrelated) bug's content.
     assert "resetHistory()" in src
 
 
 def test_rich_editor_seeds_initial_snapshot():
     """The first Ctrl+Z must be able to return to the editor's initial
-    state. That requires a seed snapshot taken at enhancement time."""
-    src = APP_JS.read_text(encoding="utf-8")
-    # The "Seed the initial state" comment + _snapshot() call sits inside
-    # enhanceRichEditor before any user input can arrive.
-    start = src.find("function enhanceRichEditor")
-    assert start != -1
-    end = src.find("\nfunction ", start + 1)
-    body = src[start:end]
-    assert "_snapshot()" in body
-    assert "Seed the initial state" in body
+    state. That requires a seed snapshot taken at mount time —
+    resetHistory() (called from the mount layout effect) pushes it."""
+    src = RICH_EDITOR.read_text(encoding="utf-8")
+    # resetHistory seeds an initial snapshot().
+    start = src.find("const resetHistory")
+    assert start != -1, "resetHistory helper missing"
+    body = src[start:start + 400]
+    assert "snapshot()" in body, "resetHistory must seed an initial snapshot()"
+    # And it runs at mount, before any user input can arrive.
+    assert "resetHistory();" in src
+    assert "Seed the surface once on mount" in src
 
 
 # ---------------------------------------------------------------------------
@@ -231,13 +247,12 @@ def test_format_date_always_includes_date_and_time():
     """The formatDate() helper must combine the locale date and the
     locale time. Static-source check: verify both toLocale*() calls are
     in the same expression and the today-only shortcut is gone."""
-    src = APP_JS.read_text(encoding="utf-8")
-    # Find the formatDate body. We extract until the next top-level
-    # `const ` declaration so the slice covers the entire arrow-function
-    # body regardless of how it's formatted.
-    start = src.find("const formatDate = (iso) =>")
+    src = FORMAT_TS.read_text(encoding="utf-8")
+    # Extract the formatDate body (until the next top-level export) so the
+    # slice covers the whole function regardless of formatting.
+    start = src.find("export function formatDate")
     assert start != -1, "formatDate helper missing"
-    end = src.find("\nconst ", start + 1)
+    end = src.find("\nexport function", start + 1)
     assert end != -1
     body = src[start:end]
     assert "toLocaleDateString" in body
@@ -248,4 +263,4 @@ def test_format_date_always_includes_date_and_time():
         "both pieces of the timestamp visible everywhere"
     )
     # The rendered string must concatenate date + time.
-    assert "${datePart}, ${timePart}" in body
+    assert "${date}, ${time}" in body

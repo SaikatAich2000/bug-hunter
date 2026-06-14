@@ -168,12 +168,16 @@ def test_create_bug_button_actually_creates(live_server, browser):
     page.fill('#formBug input[name="title"]', "Smoke-test bug from Playwright")
     page.fill('#formBug textarea[name="description"]', "Created by an automated UI test.")
 
-    # Pick the project we just created
+    # Pick the project we just created. bubbles:true is required: real
+    # change events bubble, and the React frontend receives delegated
+    # events at the root — a non-bubbling synthetic event would never
+    # reach its onChange handler (the old vanilla app read the value at
+    # submit time, which masked this).
     page.evaluate("""
         () => {
             const sel = document.querySelector('#formBug select[name="project_id"]');
             sel.value = sel.options[1].value;  // skip the placeholder
-            sel.dispatchEvent(new Event('change'));
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
         }
     """)
 
@@ -214,6 +218,58 @@ def test_open_bug_shows_inline_comments_section(live_server, browser):
     # The post-comment button is a normal button, not a submit (no nested form).
     btn_type = page.evaluate("() => document.getElementById('commentPostBtn').type")
     assert btn_type == "button"
+
+    ctx.close()
+
+
+def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
+    """v3.0 shell redesign regression guard.
+
+    Locks in the three chrome bugs fixed in the redesign:
+      1. The notification panel actually renders when the bell is clicked.
+      2. The bell sits in the SAME (right-hand) place on every view — it used
+         to snap to the left next to the title on non-list views because a
+         hidden search box still matched a `~` sibling rule.
+      3. Account controls (change-password / theme / log out) live in a
+         top-right profile menu, NOT in the sidebar.
+    """
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    _login(page, live_server)
+
+    # The account name now lives in the top-right profile button, and the old
+    # sidebar account card / logout button are gone.
+    assert page.locator("#profileBtn #accountName").count() == 1, \
+        "Account name should be inside the top-right profile button"
+    assert page.locator(".sidebar #logoutBtn").count() == 0, \
+        "Log out must no longer live in the sidebar"
+
+    # The bell + profile share one right-hand cluster, so the bell's left edge
+    # must be well into the right half of the viewport (it used to be ~0 on
+    # non-list views). Switch to a NON-LIST view first (the original bug).
+    page.click('.nav-btn[data-view="events"]')
+    page.wait_for_selector("#viewEvents, .view", timeout=3000)
+    box = page.locator("#notifBtn").bounding_box()
+    vw = page.evaluate("() => window.innerWidth")
+    assert box and box["x"] > vw / 2, \
+        f"Bell should be right-aligned on the Events view (x={box and box['x']}, vw={vw})"
+
+    # Clicking the bell opens the panel (bug #1: it didn't render before).
+    page.click("#notifBtn")
+    page.wait_for_selector(".notif-panel", state="visible", timeout=2000)
+    assert page.locator(".notif-panel .notif-panel-title").inner_text().strip() == "Notifications"
+    page.keyboard.press("Escape")
+
+    # The profile menu exposes change-password / theme / log out.
+    page.click("#profileBtn")
+    for ctrl in ("#changePasswordBtn", "#themeBtn", "#logoutBtn"):
+        page.wait_for_selector(f".profile-menu {ctrl}", state="visible", timeout=2000)
+
+    # Theme toggle flips the document theme attribute (moved off the sidebar).
+    before = page.evaluate("() => document.documentElement.dataset.theme || 'dark'")
+    page.click("#themeBtn")
+    after = page.evaluate("() => document.documentElement.dataset.theme || 'dark'")
+    assert before != after, f"Theme toggle should flip the theme (was {before}, now {after})"
 
     ctx.close()
 

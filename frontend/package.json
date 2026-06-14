@@ -1,0 +1,26 @@
+{
+  "name": "bug-hunter-frontend",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "description": "Bug Hunter SPA — React + TypeScript frontend, built with Vite into app/static.",
+  "scripts": {
+    "dev": "vite",
+    "vendor": "node scripts/vendor-firebase.mjs",
+    "build": "node scripts/vendor-firebase.mjs && tsc --noEmit && vite build",
+    "build:nocheck": "node scripts/vendor-firebase.mjs && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "firebase": "^12.14.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.6.3",
+    "vite": "^5.4.11"
+  }
+}

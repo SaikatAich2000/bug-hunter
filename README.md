@@ -212,16 +212,15 @@ registers into them with no backend rework.
    read-only into the container and points `FCM_CREDENTIALS_FILE` at it.
 5. Set `WEB_PUSH_ENABLED=true` and restart. **Serve the app over HTTPS** —
    browsers only allow push on a secure origin (`localhost` is exempt for
-   dev). For a plain-HTTP VPN, see
-   [docs/insecure-origin-push.md](docs/insecure-origin-push.md).
+   dev). On the Android app, push works over plain HTTP (no secure-origin
+   rule applies).
 
 Each user then clicks **"Enable push notifications"** once in the profile
 menu to grant their browser permission. Everything else (the self-hosted
 Firebase SDK under `/static/vendor`, the `/firebase-messaging-sw.js`
 service worker, the `push_subscriptions` table, token registration and
 pruning) is built in. Adding the feature is additive (one new table); your
-production data is untouched. Design rationale:
-[docs/web-push-design.md](docs/web-push-design.md).
+production data is untouched.
 
 ---
 
@@ -392,7 +391,6 @@ app/
 frontend/        # React + TypeScript SPA source (Vite) → builds into app/static
 tests/           # hermetic SQLite-backed pytest suite
 models/          # GGUF files for Sleuth's optional local LLM (gitignored)
-docs/            # design / ops notes (web push, insecure-origin push)
 deploy.sh · down.sh             # data-safe build/start + stop
 docker-compose.yml · Dockerfile · requirements.txt · .env.example
 ```

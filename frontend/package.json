@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "vite",
     "vendor": "node scripts/vendor-firebase.mjs",
-    "build": "node scripts/vendor-firebase.mjs && tsc --noEmit && vite build",
-    "build:nocheck": "node scripts/vendor-firebase.mjs && vite build",
+    "clean:assets": "node -e \"require('fs').rmSync('../app/static/assets',{recursive:true,force:true})\"",
+    "build": "npm run clean:assets && node scripts/vendor-firebase.mjs && tsc --noEmit && vite build",
+    "build:nocheck": "npm run clean:assets && node scripts/vendor-firebase.mjs && vite build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

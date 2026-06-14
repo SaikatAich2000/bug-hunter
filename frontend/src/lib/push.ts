@@ -131,7 +131,8 @@ async function subscribeToken(cfg: PushConfig): Promise<boolean> {
  * is a browser/OS-level "denied" — that is the user's own browser setting, and
  * no web API can force-grant notification permission. Never throws; never
  * blocks boot. No-op when web push is disabled or the browser can't support it
- * (e.g. an insecure-context origin — see docs/insecure-origin-push.md).
+ * (e.g. an insecure-context origin — browsers only allow push over HTTPS or on
+ * localhost).
  */
 export async function initPushOnBoot(): Promise<void> {
   try {

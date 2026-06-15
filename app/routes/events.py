@@ -215,6 +215,8 @@ def _require_edit(actor: User) -> None:
 @router.get("", response_model=list[EventOut])
 def list_events(
     scheduled_for: Optional[str] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=500, ge=1, le=500),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
@@ -227,6 +229,11 @@ def list_events(
     )
     if scheduled_for:
         stmt = stmt.where(Event.scheduled_for == scheduled_for)
+    # Hard row ceiling (+ optional pagination) so this list can't grow
+    # unbounded as standups/sprints accrue — mirrors the caps on /bugs and
+    # /audit. The default page_size (500) returns every event for any realistic
+    # board, so the SPA and existing callers are unaffected.
+    stmt = stmt.limit(page_size).offset((page - 1) * page_size)
     rows = list(db.scalars(stmt).all())
     item_counts, assignee_counts = _event_list_aggregates(
         db, [ev.id for ev in rows])
@@ -283,7 +290,9 @@ def get_event(
         ).all())
     else:
         att_counts = {}
-    payload = _event_brief(db, ev)
+    # We already loaded every item — pass the count so _event_brief doesn't
+    # re-issue a COUNT(*) for the detail view (it would otherwise fall back).
+    payload = _event_brief(db, ev, item_count=len(items))
     payload["items"] = [_bug_to_brief(b, int(att_counts.get(b.id, 0))) for b in items]
     return payload
 

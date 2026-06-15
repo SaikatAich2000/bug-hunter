@@ -64,6 +64,11 @@ bug_assignees = Table(
     Column("bug_id", Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
+# user_id is the TRAILING column of the (bug_id, user_id) PK, so Postgres can't
+# seek on it alone. A standalone index backs "all bugs assigned to user X"
+# joins (stats by-assignee, event assignee counts). Added additively by
+# init_db's _add_missing_indexes — never recreates the table.
+Index("idx_bug_assignees_user_id", bug_assignees.c.user_id)
 
 # event_managers: many-to-many between events and the (admin/manager) users
 # who own that event. Notifications about the event (create / edit /
@@ -76,6 +81,11 @@ event_managers = Table(
     Column("event_id", Integer, ForeignKey(_FK_EVENTS_ID, ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
+# Mirror bug_assignees: user_id is the TRAILING column of the (event_id,
+# user_id) PK, so Postgres can't seek on it alone. A standalone index backs
+# "events managed by user X" lookups and the ON DELETE CASCADE that fires when
+# a user is deleted. Added additively by init_db's _add_missing_indexes.
+Index("idx_event_managers_user_id", event_managers.c.user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +148,13 @@ class PasswordResetToken(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
-    __table_args__ = (Index("idx_prt_token_hash", "token_hash"),)
+    __table_args__ = (
+        Index("idx_prt_token_hash", "token_hash"),
+        # Covers invalidate_outstanding_reset_tokens' WHERE (user_id, used_at)
+        # run on every password change/reset, and the ON DELETE CASCADE on user
+        # delete. Additive — created by init_db's _add_missing_indexes.
+        Index("idx_prt_user_id_used_at", "user_id", "used_at"),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ BUG_MODAL = FRONTEND / "modals" / "BugModal.tsx"
 BUG_HELPERS = FRONTEND / "modals" / "bug" / "helpers.tsx"
 REPORTS_VIEW = FRONTEND / "views" / "ReportsView.tsx"
 SIDEBAR = FRONTEND / "shell" / "Sidebar.tsx"
+TYPES = FRONTEND / "types.ts"
 FORMAT_TS = FRONTEND / "lib" / "format.ts"
 STYLES_CSS = FRONTEND / "styles" / "styles.css"
 
@@ -165,13 +166,30 @@ def test_reports_view_uses_theme_tokens(selector_block, must_contain):
 def test_no_literal_export_csv_button_in_index_html():
     """The sidebar Export CSV button was removed in favour of the Reports
     view. The React Sidebar must not resurrect it, and the Reports nav entry
-    must stay role-gated to manager+ (NAV_ITEMS `needs: "manager"`)."""
+    must stay role-gated to manager+.
+
+    Role gating moved from an inline `needs:` key on each NAV_ITEMS entry to a
+    single source of truth — VIEW_MIN_ROLE in types.ts — which the Sidebar
+    (nav-button visibility) and the Shell (view mount + fetch) both consult so
+    they can't drift. This test pins all three facts: the button stays gone,
+    the gate map still gates Reports to manager+, and the Sidebar actually
+    consumes that map to hide the button."""
     src = SIDEBAR.read_text(encoding="utf-8")
     assert 'id="exportCsvBtn"' not in src
     assert "Export CSV" not in src
-    # And the Reports nav entry IS there, gated by role.
-    m = re.search(r'view:\s*"reports".*?needs:\s*"manager"', src, re.S)
-    assert m, "Reports nav entry must exist and be gated to manager+"
+    # The Reports nav entry is still present in the Sidebar.
+    assert 'view: "reports"' in src, "Reports nav entry must exist in NAV_ITEMS"
+    # The gate map is the source of truth and must gate Reports to manager+.
+    types_src = TYPES.read_text(encoding="utf-8")
+    m = re.search(r"VIEW_MIN_ROLE[^{]*\{(.*?)\}", types_src, re.S)
+    assert m, "VIEW_MIN_ROLE map must exist in types.ts"
+    assert re.search(r'reports:\s*"manager"', m.group(1)), (
+        "Reports must be gated to manager+ in VIEW_MIN_ROLE"
+    )
+    # And the Sidebar must consume that gate to hide the nav button, so the
+    # map and the rendered button set can't drift.
+    assert "VIEW_MIN_ROLE" in src, "Sidebar must consult VIEW_MIN_ROLE to gate nav buttons"
+    assert "allowed(item.view)" in src, "Sidebar must filter NAV_ITEMS through the role gate"
 
 
 # ---------------------------------------------------------------------------

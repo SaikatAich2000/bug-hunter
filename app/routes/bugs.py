@@ -607,6 +607,26 @@ def _validate_update_authorization(bug: Bug, actor: User) -> None:
         )
 
 
+def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
+    """Over-post guard: re-authorize a client-supplied item_type change against
+    the TARGET type. _validate_update_authorization only checked the CURRENT
+    type, so without this a regular user could PUT {"item_type": "Task"} to
+    convert a Bug into a type (Task/Requirement) they are not allowed to edit.
+    """
+    new_type = fields.get("item_type")
+    if new_type is None or new_type == _item_type(bug):
+        return
+    if not can_edit_bug(actor, bug.reporter_id,
+                        [a.id for a in bug.assignees], item_type=new_type):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You don't have permission to convert this item to a "
+                f"{new_type.lower()}."
+            ),
+        )
+
+
 def _normalize_update_event_id(fields: dict, db: Session) -> None:
     if "event_id" in fields and fields["event_id"]:
         if db.get(Event, fields["event_id"]) is None:
@@ -737,6 +757,9 @@ def update_bug(
 
     fields = payload.model_dump(exclude_unset=True)
     _validate_update_payload(fields, bug, db)
+    # Over-post guard: block converting a Bug into a Task/Requirement the caller
+    # can't edit (the auth check above only saw the CURRENT type).
+    _authorize_item_type_change(fields, bug, actor)
 
     assignee_ids = fields.pop("assignee_ids", None)
     has_reporter_in_payload = "reporter_id" in fields

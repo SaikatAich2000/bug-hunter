@@ -11,6 +11,42 @@ changes are strictly additive (one new `notifications` table created by
 `init_db()` on boot; no existing table is altered, so the production database
 is untouched on upgrade).
 
+### Post-release hardening — 2026-06-15
+
+Security + performance hardening and a full front-end auto-refresh / responsive
+/ contrast pass. Code/config only or additive DB (two new indexes via
+`init_db()`'s add-missing pass); production data is untouched and the legacy
+`changeme` password stays valid. SonarQube: 0 open issues, A/A/A ratings; 747
+backend tests pass at 91% coverage.
+
+- **Security.** Sleuth chat now enforces the same per-type edit rules as the
+  REST API — a regular user can no longer edit Tasks/Requirements via chat that
+  `PUT /api/bugs/{id}` forbids. `PUT /api/bugs/{id}` re-authorizes an
+  `item_type` change against the *target* type (mass-assignment guard).
+  `POST /api/auth/forgot-password` is account-enumeration-safe by default
+  (always 204; `FORGOT_PASSWORD_ENUMERATION_SAFE=false` restores the legacy
+  404). `/api/events`, `/api/users`, `/api/projects` and the Reports XLSX
+  export are row-bounded (and `users?q=` length-capped). The SPA now refuses to
+  *mount* a privileged view (Reports/Audit/Sessions) — and fire its fetch — for
+  under-privileged users, not just hide the nav button. Two new covering
+  indexes (`password_reset_tokens(user_id, used_at)`, `event_managers(user_id)`).
+- **Performance.** Front-end code-splitting drops the main bundle ~137 kB →
+  ~77 kB (the five secondary views, the Sleuth panel and the rich-text editor
+  load on demand). The idle 10s data poll and 15s session poll skip the state
+  commit + whole-tree re-render when nothing changed; FilterBar/MsFilter and
+  audit rows are memoized; Reports detail queries are row-bounded server-side.
+- **Auto-refresh everywhere — no manual reload.** Users/projects, the open bug
+  modal, Events, Sessions, Audit and the notifications list all poll on a shared
+  10s cadence (paused when the tab is hidden, instant on refocus).
+- **Deeper light-mode contrast** (KPI numerals, status/priority/environment
+  tokens, muted text, borders) to WCAG AA — dark theme unchanged. Phone
+  responsive fixes (Audit/Sessions margins, KPI grid, Reports filter height,
+  44 px touch targets, Events detail header).
+- **New `.env` flags:** `FORGOT_PASSWORD_ENUMERATION_SAFE`, `MAX_REPORT_ROWS`,
+  `PASSWORD_MIN_LENGTH`, `PASSWORD_REQUIRE_COMPLEXITY` (the legacy `changeme` is
+  always accepted regardless), plus the in-app digest scheduler
+  (`EMAIL_DIGEST_CRON` / `EMAIL_DIGEST_TIMEZONE`).
+
 - **Frontend rewritten in React 18 + TypeScript** (Vite multi-page build into
   `app/static`); the backend and its `_serve_html()` contract are unchanged.
 - **Per-user in-app notifications.** A new bell in the top bar surfaces the

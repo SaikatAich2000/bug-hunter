@@ -31,8 +31,13 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # JWTs: three base64url segments separated by dots.
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
      _REDACTED),
-    # Bearer tokens in Authorization headers.
-    (re.compile(r"(?i)\b(bearer|token|authorization)(\s*[:=]?\s*)\S+"), None),
+    # Bearer tokens in Authorization headers. The separator group is written
+    # `\s*(?:[:=]\s*)?` rather than `\s*[:=]?\s*` so the two whitespace runs can
+    # never both match the same spaces — that adjacent-`\s*` overlap is a
+    # polynomial-backtracking (ReDoS) shape. This form is unambiguous (the inner
+    # `\s*` is gated behind a literal `:`/`=`) and captures the exact same text,
+    # so redaction output is unchanged.
+    (re.compile(r"(?i)\b(bearer|token|authorization)(\s*(?:[:=]\s*)?)\S+"), None),
     # key=value / "password": "x" / secret: x   (label kept, value scrubbed)
     (re.compile(
         r"(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|"

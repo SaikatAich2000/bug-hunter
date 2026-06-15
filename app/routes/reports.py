@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.auth import require_manager_or_admin
+from app.config import get_settings
 from app.database import get_db
 from app.models import User
 from app.reports import (
@@ -183,12 +184,26 @@ def export_xlsx(
 ) -> StreamingResponse:
     """Run the report and stream the resulting workbook.
 
-    NO row cap here — Reports exports are an audit / compliance surface,
-    so the caller decides how big a slice they want. The route layer
-    bounds total cost via request size and timeouts; very-large reports
-    will time out, which is the right pressure relief.
+    Bounded by MAX_REPORT_ROWS (config): the workbook is built fully in memory
+    and GZip re-buffers it, so an unbounded export over the entire work-item
+    table could OOM a small worker. Above the cap we return 413 and ask the
+    caller to narrow the filters — generous enough for real audit / compliance
+    exports while removing the unbounded worst case.
     """
     result, filters = _run_or_400(payload, db)
+    # Resource guard: cap by the dominant row driver (detail reports key off
+    # `rows`; aggregated reports off the `detail_rows` drill-down).
+    settings = get_settings()
+    n_rows = max(result.total, len(result.detail_rows))
+    if n_rows > settings.MAX_REPORT_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"This export matches {n_rows} rows, above the "
+                f"{settings.MAX_REPORT_ROWS}-row limit. Narrow the date range "
+                "or add filters and try again."
+            ),
+        )
     try:
         payload_bytes = build_workbook_bytes(result)
     except XlsxBuildError as exc:

@@ -78,6 +78,25 @@ def test_user_can_edit_bug_but_not_task_or_requirement(admin_client):
     assert "task" in r.json()["detail"].lower()
 
 
+def test_user_cannot_convert_bug_to_task_via_item_type_overpost(admin_client):
+    """Mass-assignment guard: a regular user may edit a Bug, but must not be
+    able to reclassify it into a Task/Requirement (a type they cannot edit) by
+    over-posting item_type. The PUT is rejected 403 and the row is unchanged."""
+    p = _make_project(admin_client)
+    bug = _make_item(admin_client, p["id"], item_type="Bug")
+    _make_user(admin_client, "Regular", role="user")
+    _login(admin_client, "regular@x.test", "User12345Aa")
+
+    r = admin_client.put(f"/api/bugs/{bug['id']}", json={"item_type": "Task"})
+    assert r.status_code == 403, r.text
+    assert "convert" in r.json()["detail"].lower()
+
+    # Still a Bug — the guard rejects before any write (no partial update).
+    got = admin_client.get(f"/api/bugs/{bug['id']}")
+    assert got.status_code == 200, got.text
+    assert got.json()["item_type"] == "Bug"
+
+
 def test_manager_can_edit_task_and_requirement(admin_client):
     p = _make_project(admin_client)
     task = _make_item(admin_client, p["id"], item_type="Task")

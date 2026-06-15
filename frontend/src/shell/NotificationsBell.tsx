@@ -38,6 +38,16 @@ export default function NotificationsBell() {
     if (open) void loadNotifications();
   }, [open, loadNotifications]);
 
+  // AUTO-06: while the panel is OPEN, re-fetch the list every 15s (matching the
+  // badge cadence) so new notifications appear without reopening. Only runs
+  // while open; the open-load effect already does the first fetch. Skips when
+  // the tab is hidden.
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => { if (!document.hidden) void loadNotifications(); }, 15_000);
+    return () => clearInterval(id);
+  }, [open, loadNotifications]);
+
   // Close on outside click or Escape.
   useEffect(() => {
     if (!open) return;

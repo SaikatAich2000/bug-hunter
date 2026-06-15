@@ -10,11 +10,11 @@
  * marker instead. The search box is debounced 300ms like the vanilla input
  * handler; entity / actor selects refetch immediately.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { toastError } from "../lib/toast";
 import { formatDate } from "../lib/format";
-import { useApp } from "../state/AppContext";
+import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import type { AuditRow } from "../types";
 
 // v3.0 perf: page the audit trail in smaller chunks (the "Load more" offset
@@ -37,6 +37,32 @@ function activityIcon(action: string): string {
   if (action.includes("assign")) return "👥";
   return "📝";
 }
+
+// PERF-09: each audit row is memoized so typing in the search box (which only
+// changes view-local `q`) doesn't re-render the whole list. The row JSX is pure
+// over `r` and module-scope helpers (activityIcon/formatDate) — no view-local
+// closures — so memoization is behaviour-preserving.
+const AuditRowView = memo(function AuditRowView({ r }: { r: AuditRow }) {
+  return (
+    <div className="audit-row">
+      <span className="audit-icon">{activityIcon(r.action)}</span>
+      <div className="audit-text">
+        <div>
+          <span className="audit-actor">{r.actor_name}</span>
+          <span className="audit-action">{r.action}</span>
+          {r.entity_type ? (
+            <span className="audit-entity">
+              {r.entity_type}
+              {r.entity_id ? `#${r.entity_id}` : ""}
+            </span>
+          ) : null}
+        </div>
+        {r.detail ? <div className="audit-detail">{r.detail}</div> : null}
+      </div>
+      <span className="audit-time">{formatDate(r.created_at)}</span>
+    </div>
+  );
+});
 
 export default function AuditView() {
   const { users } = useApp();
@@ -105,6 +131,22 @@ export default function AuditView() {
     return () => clearTimeout(t);
   }, [q, fetchAudit]);
 
+  // AUTO-04: live poll the audit trail on the shared cadence so events logged
+  // by other users appear without a manual Refresh. A clean page-1 fetch keeps
+  // the active filters but resets the offset — so it's SKIPPED when the user has
+  // paged back via "Load older entries" (loadedCount past the first page), to
+  // avoid collapsing their accumulated list. Paused while hidden; runs on focus.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden) return;
+      if (loadedCountRef.current > AUDIT_PAGE_SIZE) return; // user paged back; don't collapse
+      void fetchAudit(true); // clean=true preserves active filters, resets to page 1
+    };
+    const id = setInterval(refresh, DATA_POLL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", refresh); };
+  }, [fetchAudit]);
+
   // Port of the auditClearBtn handler (app.js L4506-4511): reset all three
   // filters, then one immediate clean fetch (via the tick effect).
   const onClear = () => {
@@ -172,25 +214,7 @@ export default function AuditView() {
         {loaded && rows.length === 0 ? (
           <p className="no-content">No audit events match</p>
         ) : null}
-        {rows.map((r, i) => (
-          <div className="audit-row" key={`${i}-${r.id}`}>
-            <span className="audit-icon">{activityIcon(r.action)}</span>
-            <div className="audit-text">
-              <div>
-                <span className="audit-actor">{r.actor_name}</span>
-                <span className="audit-action">{r.action}</span>
-                {r.entity_type ? (
-                  <span className="audit-entity">
-                    {r.entity_type}
-                    {r.entity_id ? `#${r.entity_id}` : ""}
-                  </span>
-                ) : null}
-              </div>
-              {r.detail ? <div className="audit-detail">{r.detail}</div> : null}
-            </div>
-            <span className="audit-time">{formatDate(r.created_at)}</span>
-          </div>
-        ))}
+        {rows.map((r, i) => <AuditRowView key={`${i}-${r.id}`} r={r} />)}
         {!drained && rows.length > 0 ? (
           <div className="audit-load-more">
             <button

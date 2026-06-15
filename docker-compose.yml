@@ -64,7 +64,7 @@ services:
       # not via the host port mapping above.
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-bugtracker}:${POSTGRES_PASSWORD:-bugtracker_pw}@db:5432/${POSTGRES_DB:-bugtracker}
       APP_NAME: ${APP_NAME:-Bug Hunter}
-      APP_VERSION: ${APP_VERSION:-2.9}
+      APP_VERSION: ${APP_VERSION:-3.0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       API_KEY: ${API_KEY:-}
@@ -86,6 +86,12 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-ChangeMe123!}
       BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Admin}
 
+      # Password policy ("changeme" is ALWAYS accepted regardless, so existing
+      # accounts keep working). Forgot-password is enumeration-safe by default.
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-8}
+      PASSWORD_REQUIRE_COMPLEXITY: ${PASSWORD_REQUIRE_COMPLEXITY:-true}
+      FORGOT_PASSWORD_ENUMERATION_SAFE: ${FORGOT_PASSWORD_ENUMERATION_SAFE:-true}
+
       # Public URL the email links should point to.
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8765}
 
@@ -100,6 +106,16 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+
+      # Email digest + optional in-app scheduler (no host cron needed when
+      # EMAIL_DIGEST_CRON is a cron expression). All pulled from the host .env.
+      EMAIL_DIGEST_ENABLED: ${EMAIL_DIGEST_ENABLED:-false}
+      EMAIL_DIGEST_LOOKBACK_HOURS: ${EMAIL_DIGEST_LOOKBACK_HOURS:-26}
+      EMAIL_DIGEST_CRON: ${EMAIL_DIGEST_CRON:-}
+      EMAIL_DIGEST_TIMEZONE: ${EMAIL_DIGEST_TIMEZONE:-}
+
+      # Reports — cap rows a single XLSX export may materialize before 413.
+      MAX_REPORT_ROWS: ${MAX_REPORT_ROWS:-50000}
 
       # Web push (Firebase Cloud Messaging). Pulled from the host .env via ${...}.
       # FCM_CREDENTIALS_FILE is FIXED to the in-container mount path below — the

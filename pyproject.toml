@@ -28,6 +28,10 @@ exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
+    # `if TYPE_CHECKING:` blocks hold import-only type aliases that never
+    # execute at runtime, so they can't be covered by tests — exclude them
+    # from the denominator (standard coverage.py practice).
+    "if TYPE_CHECKING:",
 ]
 
 [tool.coverage.xml]

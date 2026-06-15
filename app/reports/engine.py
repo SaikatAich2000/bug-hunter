@@ -38,6 +38,7 @@ from typing import Any, Optional
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import get_settings
 from app.models import (
     Activity,
     Attachment,
@@ -549,7 +550,12 @@ def _detail_columns() -> list[ReportColumn]:
 # ---------------------------------------------------------------------------
 def _report_item_detail(db: Session, filters: Filters) -> ReportResult:
     """Universal SQL-like detail export — every item matching filters."""
-    stmt = _apply_bug_filters(_eager_bug(), filters).order_by(Bug.id.desc())
+    # Bound the DB read so a no-filter export can't materialize an unbounded
+    # set; the route layer turns an over-limit result into a 413 (see
+    # routes/reports.py). +1 lets the route detect "there were more".
+    stmt = (_apply_bug_filters(_eager_bug(), filters)
+            .order_by(Bug.id.desc())
+            .limit(get_settings().MAX_REPORT_ROWS + 1))
     bugs = list(db.scalars(stmt).all())
     bug_ids = [b.id for b in bugs]
     attach = _attachments_by_bug(db, bug_ids)
@@ -599,7 +605,9 @@ def _report_pending_snapshot(db: Session, filters: Filters) -> ReportResult:
         )
     stmt = _apply_bug_filters(_eager_bug(), filters, apply_status=False).where(
         Bug.status.in_(list(open_set))
-    ).order_by(Bug.priority.desc(), Bug.created_at.asc())
+    ).order_by(Bug.priority.desc(), Bug.created_at.asc()).limit(
+        get_settings().MAX_REPORT_ROWS + 1
+    )
     bugs = list(db.scalars(stmt).all())
     bug_ids = [b.id for b in bugs]
     attach = _attachments_by_bug(db, bug_ids)

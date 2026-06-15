@@ -27,7 +27,7 @@ const HINTS = {
 } as const;
 
 export default function UserModal() {
-  const { userModal, closeUserModal, loadUsers, refreshAll } = useApp();
+  const { userModal, closeUserModal, loadUsers, refreshAll, canManage } = useApp();
   const { open, user } = userModal;
   const isEdit = user != null;
 
@@ -49,6 +49,11 @@ export default function UserModal() {
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, user]);
+
+  // Fail-closed: only admins/managers may create/update users, independent of
+  // whoever set the open state. The backend enforces this too
+  // (require_manager_or_admin); this keeps the form from rendering at all.
+  if (!open || !canManage) return null;
 
   // Port of submitUserForm().
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {

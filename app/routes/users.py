@@ -72,7 +72,7 @@ def _like_escape(needle: str) -> str:
 @router.get("", response_model=list[UserOut])
 def list_users(
     include_inactive: bool = Query(default=True),
-    q: Optional[str] = None,
+    q: Optional[str] = Query(default=None, max_length=200),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[User]:
@@ -86,7 +86,9 @@ def list_users(
             func.lower(User.email).like(like, escape="\\"),
             func.lower(User.role).like(like, escape="\\"),
         ))
-    stmt = stmt.order_by(func.lower(User.name))
+    # Hard row ceiling so this picker list can't grow unbounded; the users
+    # table is bounded by team size, so 500 is well above any realistic count.
+    stmt = stmt.order_by(func.lower(User.name)).limit(500)
     return list(db.scalars(stmt).all())
 
 

@@ -14,6 +14,7 @@ import { toast, toastError } from "../lib/toast";
 import { withLoader } from "../lib/loader";
 import { formatDate, initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
+import { DATA_POLL_MS } from "../state/AppContext";
 import type { SessionOut } from "../types";
 
 /**
@@ -44,17 +45,27 @@ export default function SessionsView() {
   const [sessions, setSessions] = useState<SessionOut[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  const refreshSessions = useCallback(async () => {
+  const refreshSessions = useCallback(async (quiet = false) => {
     try {
       setSessions(await api<SessionOut[]>("/sessions"));
       setLoaded(true);
     } catch (err) {
-      toastError(err);
+      if (!quiet) toastError(err);
     }
   }, []);
 
   useEffect(() => {
     void refreshSessions();
+  }, [refreshSessions]);
+
+  // Live poll: refetch the session list on the shared cadence so a login /
+  // revoke on another device shows up without a manual reload. Quiet (no error
+  // toast every tick) and paused while the tab is hidden; fires on refocus.
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) void refreshSessions(true); };
+    const id = setInterval(tick, DATA_POLL_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", tick); };
   }, [refreshSessions]);
 
   // Port of handleRevokeSession (app.js L4141-4162).

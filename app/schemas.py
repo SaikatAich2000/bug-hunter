@@ -267,33 +267,32 @@ def _normalize_role(v: str) -> str:
 def _check_password_strength(v: str) -> str:
     if not isinstance(v, str):
         raise ValueError("Password must be a string")
-    if len(v) < MIN_PASSWORD_LENGTH:
-        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
-    if len(v) > 200:
-        raise ValueError("Password is too long")
-    # Backwards-compat exception: 'changeme' (case-insensitive) is the
-    # legacy default password widely used in existing deployments and
-    # already present in the production database for many accounts.
-    # Allowing it here means admins can keep provisioning the same
-    # default and existing reset flows don't break for users picking the
-    # familiar value. New accounts created with anything else still fall
-    # under the stricter checks below.
+    # Backwards-compat exception: 'changeme' (case-insensitive) is the legacy
+    # default password widely used in existing deployments and already present
+    # in the production database for many accounts. It is ALWAYS accepted.
+    # This MUST stay ABOVE the length/complexity checks so it keeps working
+    # even when PASSWORD_MIN_LENGTH is raised above 8 characters.
     if v.lower() == "changeme":
         return v
-    # v3.2: composition checks. Cheap defenses against the worst entries
-    # (all-letters, all-digits, the literal word "password"). We deliberately
-    # do NOT require special characters — research (NIST 800-63B §5.1.1.2)
+    # Upper bound is a DoS guard (bcrypt cost grows with input) — always on.
+    if len(v) > 200:
+        raise ValueError("Password is too long")
+    # Configurable strength rules (app/config). Defaults preserve the prior
+    # behaviour exactly: min length 8, letter+digit required.
+    from app.config import get_settings  # local import avoids an import cycle
+    settings = get_settings()
+    min_len = max(1, settings.PASSWORD_MIN_LENGTH)
+    if len(v) < min_len:
+        raise ValueError(f"Password must be at least {min_len} characters")
+    # We deliberately do NOT require special characters — NIST 800-63B §5.1.1.2
     # finds character-class rules push users toward predictable substitutions
-    # without raising real entropy. Length + variety + a no-pwned-list policy
-    # would be ideal; for an in-house tracker, length + letter + digit is
-    # a reasonable middle ground.
-    has_letter = any(c.isalpha() for c in v)
-    has_digit  = any(c.isdigit() for c in v)
-    if not (has_letter and has_digit):
-        raise ValueError("Password must contain at least one letter and one number")
-    # Block a small list of obviously-terrible passwords. Exact match only;
-    # case-insensitive. Not a substitute for a real breach-check service,
-    # but stops the laziest choices.
+    # without raising real entropy. Length + letter + digit is the middle ground.
+    if settings.PASSWORD_REQUIRE_COMPLEXITY:
+        has_letter = any(c.isalpha() for c in v)
+        has_digit = any(c.isdigit() for c in v)
+        if not (has_letter and has_digit):
+            raise ValueError("Password must contain at least one letter and one number")
+    # Block a small list of obviously-terrible passwords (exact, case-insensitive).
     if v.lower() in {"password", "password1", "password123", "admin123",
                      "qwerty123", "12345678a", "letmein123"}:
         raise ValueError("Password is too common — please choose a stronger one")

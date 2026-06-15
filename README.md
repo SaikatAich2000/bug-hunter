@@ -135,6 +135,10 @@ parsed in `app/config.py`. The most important variables:
 | `EMAIL_BACKEND` | `console` | `console` (log to stdout), `smtp`, or `disabled`. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_USE_TLS` | — | SMTP delivery when `EMAIL_BACKEND=smtp`. |
 | `EMAIL_DIGEST_ENABLED` | `false` | Batch per-operation emails into one daily digest. |
+| `EMAIL_DIGEST_CRON` / `_TIMEZONE` | _(blank)_ | Run the digest in-app on a 5-field cron (no host cron needed); blank = external scheduler. |
+| `PASSWORD_MIN_LENGTH` / `PASSWORD_REQUIRE_COMPLEXITY` | `8` / `true` | New-password strength rules (the legacy `changeme` is always accepted). |
+| `FORGOT_PASSWORD_ENUMERATION_SAFE` | `true` | Always 204 on forgot-password so addresses can't be enumerated; `false` restores the 404-on-unknown UX. |
+| `MAX_REPORT_ROWS` | `50000` | Row ceiling for one Reports XLSX export (413 above it). |
 | `WEB_PUSH_ENABLED` | `false` | Master switch for browser push (FCM). |
 | `FCM_CREDENTIALS_FILE` | _(blank)_ | Path to the Firebase service-account JSON (mounted secret). |
 | `FIREBASE_*` | _(blank)_ | Firebase web-app config + VAPID key for push. |
@@ -182,6 +186,10 @@ The digest is a standalone job; schedule it however you already run jobs:
 # …or run the module directly outside Docker:
 python -m app.jobs.email_digest
 ```
+
+Or skip host cron entirely: set `EMAIL_DIGEST_CRON` (a standard 5-field cron
+expression, e.g. `0 7 * * *`) plus `EMAIL_DIGEST_TIMEZONE`, and the app runs the
+digest itself on that schedule — no external scheduler needed.
 
 On Windows, point Task Scheduler at the same command. The job is
 **idempotent** (it stamps each operation as it sends, via the additive

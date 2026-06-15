@@ -4,10 +4,12 @@
  * and the global Escape handler (port of closeTopModal, app.js L244-247 +
  * the keydown delegation at L4751-4769).
  */
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import Shell from "./shell/Shell";
 import ConfirmHost from "./components/ConfirmHost";
-import SleuthPanel from "./sleuth/SleuthPanel";
+// Sleuth (the chat assistant + its rules/markdown deps) is a sizeable, secondary
+// feature shown only behind the chat FAB — lazy-load it out of the main bundle.
+const SleuthPanel = lazy(() => import("./sleuth/SleuthPanel"));
 
 export default function App() {
   // Escape closes the top-most open modal — DOM-driven exactly like the
@@ -60,7 +62,9 @@ export default function App() {
       <div id="toast" className="toast" hidden></div>
 
       <ConfirmHost />
-      <SleuthPanel />
+      <Suspense fallback={null}>
+        <SleuthPanel />
+      </Suspense>
     </>
   );
 }

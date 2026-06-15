@@ -70,15 +70,16 @@ def test_forgot_password_known_email_returns_204(client):
     assert r.status_code == 204
 
 
-def test_forgot_password_unknown_email_returns_404(client):
+def test_forgot_password_unknown_email_returns_204_by_default(client):
+    """Enumeration-safe default: unknown emails get the SAME 204 as known ones."""
     r = client.post("/api/auth/forgot-password",
                     json={"email": "ghost@example.com"})
-    assert r.status_code == 404
-    assert "couldn't find" in r.json()["detail"].lower()
+    assert r.status_code == 204
 
 
-def test_forgot_password_inactive_email_returns_404(admin_client):
-    """An inactive account shouldn't receive reset emails — same 404 path."""
+def test_forgot_password_inactive_email_returns_204_by_default(admin_client):
+    """An inactive account shouldn't receive reset emails — and in the
+    enumeration-safe default it returns the same 204 as any other email."""
     # Create a user, then deactivate them.
     u = admin_client.post("/api/users", json={
         "name": "Inactive", "email": "off@test.local",
@@ -92,4 +93,17 @@ def test_forgot_password_inactive_email_returns_404(admin_client):
     admin_client.post("/api/auth/logout")
     r = admin_client.post("/api/auth/forgot-password",
                           json={"email": "off@test.local"})
+    assert r.status_code == 204
+
+
+def test_forgot_password_enumeration_optout_returns_404(client, monkeypatch):
+    """With FORGOT_PASSWORD_ENUMERATION_SAFE=False the legacy friendlier-but-
+    leakier behaviour is restored: an unknown address gets a 404. Patch the live
+    Settings class so the route (which reads get_settings() per request) sees it.
+    """
+    import app.config as config
+    monkeypatch.setattr(config.Settings, "FORGOT_PASSWORD_ENUMERATION_SAFE", False)
+    r = client.post("/api/auth/forgot-password",
+                    json={"email": "ghost@example.com"})
     assert r.status_code == 404
+    assert "couldn't find" in r.json()["detail"].lower()

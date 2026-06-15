@@ -186,7 +186,9 @@ export function useApp(): AppState {
 
 const PAGE_SIZE = 20;
 const SESSION_POLL_MS = 15_000;
-const DATA_POLL_MS = 10_000;
+/** Shared cadence for all live-data pollers (list, stats, directory, open
+ *  modal, per-view lists). Exported so view-local pollers use one interval. */
+export const DATA_POLL_MS = 10_000;
 const VERSION_POLL_MS = 5 * 60_000;
 
 function readLs(key: string, fallback: string): string {
@@ -195,6 +197,20 @@ function readLs(key: string, fallback: string): string {
   } catch {
     return fallback;
   }
+}
+
+/** Shallow-compare the MeOut fields the session poll can change, so an
+ *  unchanged /auth/me tick keeps the SAME currentUser object and React bails
+ *  out of re-rendering every useApp() consumer. MeOut has exactly these five
+ *  fields (id/name/email/role/is_active) — keep this in sync with types.ts. */
+function sameMe(a: MeOut, b: MeOut): boolean {
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.email === b.email &&
+    a.role === b.role &&
+    a.is_active === b.is_active
+  );
 }
 
 export function AppProvider({
@@ -251,6 +267,12 @@ export function AppProvider({
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
 
+  // Poll-equality guards: skip the state commit (and the whole-tree re-render
+  // + ~40 Intl formats it triggers) when a 10s poll returns byte-identical
+  // data — the common idle case.
+  const lastBugsSig = useRef("");
+  const lastStatsSig = useRef("");
+
   // ----- query-param builders (ports of _applyFilterToParams etc.) --------
   const buildBugParams = useCallback((): URLSearchParams => {
     const f = filtersRef.current;
@@ -277,6 +299,9 @@ export function AppProvider({
   const refreshBugs = useCallback(async () => {
     try {
       const res = await api<BugListResponse>(`/bugs?${buildBugParams()}`);
+      const sig = `${res.total}|${res.pages}|${JSON.stringify(res.items)}`;
+      if (sig === lastBugsSig.current) return; // unchanged poll → no re-render
+      lastBugsSig.current = sig;
       setBugs(res.items);
       setTotal(res.total);
       setTotalPages(Math.max(1, res.pages));
@@ -289,7 +314,11 @@ export function AppProvider({
     try {
       const tab = tabRef.current;
       const qs = tab !== "all" ? `?item_type=${encodeURIComponent(tab)}` : "";
-      setStats(await api<StatsOut>(`/stats${qs}`));
+      const res = await api<StatsOut>(`/stats${qs}`);
+      const sig = JSON.stringify(res);
+      if (sig === lastStatsSig.current) return; // unchanged poll → no re-render
+      lastStatsSig.current = sig;
+      setStats(res);
     } catch (err) {
       toastError(err);
     }
@@ -383,7 +412,8 @@ export function AppProvider({
     const tick = async () => {
       try {
         const m = await api<MeOut>("/auth/me", { cache: "no-store" });
-        setCurrentUser(m);
+        // Bail when nothing changed so a quiet 15s tick re-renders nobody.
+        setCurrentUser((prev) => (sameMe(prev, m) ? prev : m));
       } catch {
         /* 401 already bounced; network errors don't kick the user out */
       }
@@ -417,6 +447,27 @@ export function AppProvider({
     // while the tab is hidden, fires immediately on refocus to feel instant.
     const refresh = () => {
       if (!document.hidden) void refreshAllRef.current();
+    };
+    const id = setInterval(refresh, DATA_POLL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
+  // Live directory poll: users & projects are loaded once at boot and feed the
+  // sidebar, filter dropdowns, report chips and the audit actor picker. Poll
+  // them on the shared cadence so a user/project added on another device shows
+  // up without a manual reload. Kept separate from refreshAll (reused at ~10
+  // mutation sites) to avoid double-fetching on every bug save / view switch.
+  const loadDirRef = useRef({ loadUsers, loadProjects });
+  loadDirRef.current = { loadUsers, loadProjects };
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden) return;
+      void loadDirRef.current.loadUsers();
+      void loadDirRef.current.loadProjects();
     };
     const id = setInterval(refresh, DATA_POLL_MS);
     document.addEventListener("visibilitychange", refresh);
@@ -538,6 +589,27 @@ export function AppProvider({
   const closeBugModal = useCallback(() => {
     setBugModal({ open: false, bug: null });
   }, []);
+
+  // Live refresh of the OPEN bug modal so comments / attachments / activity /
+  // status from concurrent edits appear without a manual reload. reloadBugModal
+  // merges into modal state with no spinner and preserves in-progress form
+  // fields (the BugModal seed is keyed on [open, bugId]). Keyed on the numeric
+  // id so it only re-arms on open/close, not on every modal state change.
+  const reloadBugModalRef = useRef(reloadBugModal);
+  reloadBugModalRef.current = reloadBugModal;
+  const bugModalOpenId = bugModal.open && bugModal.bug ? bugModal.bug.id : null;
+  useEffect(() => {
+    if (bugModalOpenId == null) return;
+    const tick = () => {
+      if (!document.hidden) void reloadBugModalRef.current();
+    };
+    const id = setInterval(tick, DATA_POLL_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [bugModalOpenId]);
 
   const openProjectForm = useCallback((project?: ProjectOut | null) => {
     setProjectModal({ open: true, project: project ?? null });

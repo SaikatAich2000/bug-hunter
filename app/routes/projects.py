@@ -39,7 +39,11 @@ def list_projects(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[Project]:
-    return list(db.scalars(select(Project).order_by(func.lower(Project.name))).all())
+    # Hard row ceiling so this list can't grow unbounded; projects is a small,
+    # admin/manager-managed table, so 500 is far above any realistic count.
+    return list(db.scalars(
+        select(Project).order_by(func.lower(Project.name)).limit(500)
+    ).all())
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)

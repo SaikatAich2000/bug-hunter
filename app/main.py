@@ -87,6 +87,14 @@ def _bootstrap() -> None:
         # immediately without poking at SQL. After first login, the admin
         # should change the password (settings menu → Change password).
         if db.query(User).count() == 0:
+            if s.COOKIE_SECURE and s.BOOTSTRAP_ADMIN_PASSWORD == "ChangeMe123!":
+                # Don't stand up a live admin with a publicly-known password on
+                # a production (COOKIE_SECURE=true) deploy — fail closed.
+                raise RuntimeError(
+                    "Refusing to bootstrap the default admin with the built-in "
+                    "default password in a production (COOKIE_SECURE=true) "
+                    "deploy. Set BOOTSTRAP_ADMIN_PASSWORD to a strong value."
+                )
             admin = User(
                 name=s.BOOTSTRAP_ADMIN_NAME,
                 email=s.BOOTSTRAP_ADMIN_EMAIL.lower(),
@@ -112,15 +120,31 @@ async def lifespan(app: FastAPI):
     # session, and multiple uvicorn workers each get their OWN secret so
     # users would be randomly logged out as load-balanced requests hit
     # different workers. Both surprises in production.
-    if not get_settings().SESSION_SECRET:
+    _settings = get_settings()
+    if _settings.COOKIE_SECURE and len(_settings.SESSION_SECRET) < 32:
+        # Production signal (COOKIE_SECURE=true / HTTPS) but no stable, strong
+        # secret → fail closed rather than silently weakening every session
+        # (per-process random secret = users logged out on every restart and
+        # non-deterministically across workers).
+        raise RuntimeError(
+            "SESSION_SECRET must be set to a strong value (>= 32 chars) when "
+            "COOKIE_SECURE=true. Generate one with `openssl rand -hex 32`."
+        )
+    if not _settings.SESSION_SECRET:
         logger.warning(
             "SESSION_SECRET is not set. Using a random per-process fallback. "
             "Set SESSION_SECRET in your environment for stable sessions across "
             "restarts and multi-worker deployments."
         )
 
+    # Optional in-app email-digest scheduler. No-op unless EMAIL_DIGEST_CRON
+    # is configured (see app/scheduler.py); never breaks startup.
+    from app import scheduler
+    scheduler.start()
+
     logger.info("Bug Hunter started. asset_version=%s", app.state.asset_version)
     yield
+    await scheduler.stop()
     logger.info("Bug Hunter shutting down.")
 
 

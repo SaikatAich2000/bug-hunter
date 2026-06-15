@@ -157,8 +157,10 @@ export default function BugModal() {
   const bugAttachStaged = useStagedFiles(); // post-creation "Add attachment"
 
   // Per-role read-only mode (port of canEditItem + applyBugFormReadOnly).
-  // Create mode is never read-only — anyone can file an item.
-  const canEditThis = isEdit ? canEditItemType(currentUser.role, bug.item_type) : true;
+  // Create mode is never read-only — anyone can file an item. Prefer the
+  // backend per-item can_edit flag (source of truth) and fall back to the
+  // local role heuristic only when the server didn't supply one.
+  const canEditThis = isEdit ? (bug.can_edit ?? canEditItemType(currentUser.role, bug.item_type)) : true;
   const readOnly = isEdit && !canEditThis;
 
   // ----- seeding (port of openBugForm, L2707-2730) --------------------------
@@ -225,7 +227,8 @@ export default function BugModal() {
       });
 
     // Focus the title shortly after open (skipped in read-only mode).
-    const ro = bug != null && !canEditItemType(currentUser.role, bug.item_type);
+    // Reuse the single readOnly computed above so the two sites can't drift.
+    const ro = readOnly;
     let timer: number | undefined;
     if (!ro) timer = window.setTimeout(() => titleRef.current?.focus(), 50);
     return () => {
@@ -241,6 +244,19 @@ export default function BugModal() {
   useEffect(() => {
     if (editingCommentId != null) editCommentRef.current?.focus();
   }, [editingCommentId]);
+
+  // A closed modal renders nothing — and, crucially, skips ALL the derived
+  // option arrays + the large render tree below. The modal is always mounted
+  // in Shell and re-renders on every context change (the 10s data poll and
+  // 15s session poll both swap the context value), so without this guard a
+  // closed BugModal would recompute statusOpts/projectOpts/assigneeItems
+  // (filtering `users`, mapping `projects`) and rebuild its xxl form +
+  // RichEditors on every tick. Returning null is behaviourally identical to
+  // the `hidden` attribute here: `.modal[hidden]` is display:none, the global
+  // Escape handler only queries `.modal:not([hidden])`, and the enter
+  // animation lives on .modal-card (fires on mount either way). All hooks run
+  // above this point, so the early return never trips the Rules of Hooks.
+  if (!open) return null;
 
   // ----- derived select options ---------------------------------------------
 

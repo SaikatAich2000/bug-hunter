@@ -24,6 +24,15 @@ export default defineConfig({
         login: resolve(__dirname, "login.html"),
         reset: resolve(__dirname, "reset.html"),
       },
+      output: {
+        // Split the ~1177-line rich-text editor (RichEditor.tsx) into its own
+        // chunk so the main bundle doesn't carry it. It stays a STATIC import
+        // (BugModal reads it through a forwardRef), so this is a pure
+        // code-split with no ref-wiring change — unlike React.lazy.
+        manualChunks(id: string) {
+          if (id.includes("RichEditor")) return "rich-editor";
+        },
+      },
     },
   },
   server: {

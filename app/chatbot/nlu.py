@@ -888,8 +888,13 @@ _QUOTED_RE = re.compile(r'"([^"]{2,})"')
 # v3.0: bare (unquoted) free-text after an explicit topic cue, so users don't
 # have to remember quotes — "bugs about login crash" -> search "login crash".
 # The cue words almost always precede a topic rather than a filter clause.
+# ReDoS-safe: the trailing `\s+(.+)` had two overlapping quantifiers (`.`
+# also matches whitespace), a polynomial-backtracking shape. Anchoring the
+# capture to a non-space first char — `\s+(\S.*)` — makes the whitespace/term
+# split unambiguous (linear matching) with identical results, since the char
+# right after a whitespace run is by definition non-whitespace.
 _FREE_TEXT_CUE_RE = re.compile(
-    r"\b(?:about|regarding|mentioning|containing|concerning|related\s+to)\s+(.+)$",
+    r"\b(?:about|regarding|mentioning|containing|concerning|related\s+to)\s+(\S.*)$",
     re.IGNORECASE,
 )
 

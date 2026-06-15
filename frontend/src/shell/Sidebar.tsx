@@ -19,15 +19,16 @@ import { toast, toastError } from "../lib/toast";
 import { initials } from "../lib/format";
 import { withLoader } from "../lib/loader";
 import { confirmDialog } from "../components/ConfirmHost";
-import type { Role, ViewName } from "../types";
+import type { ViewName } from "../types";
+import { VIEW_MIN_ROLE } from "../types";
 
-const NAV_ITEMS: { view: ViewName; icon: string; label: string; needs?: Role }[] = [
+const NAV_ITEMS: { view: ViewName; icon: string; label: string }[] = [
   { view: "list", icon: "📋", label: "Work Items" },
   { view: "events", icon: "📅", label: "Events" },
   { view: "analytics", icon: "📊", label: "Analytics" },
-  { view: "reports", icon: "📈", label: "Reports", needs: "manager" },
-  { view: "audit", icon: "🛡", label: "Audit Trail", needs: "manager" },
-  { view: "sessions", icon: "🔐", label: "Sessions", needs: "admin" },
+  { view: "reports", icon: "📈", label: "Reports" },
+  { view: "audit", icon: "🛡", label: "Audit Trail" },
+  { view: "sessions", icon: "🔐", label: "Sessions" },
 ];
 
 interface Props {
@@ -57,8 +58,12 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
     isAdmin,
   } = useApp();
 
-  const allowed = (needs?: Role): boolean =>
-    !needs || roleRank(currentUser.role) >= roleRank(needs);
+  // Same VIEW_MIN_ROLE source of truth the Shell uses to gate rendering, so the
+  // hidden-button set and the mountable-view set can never drift.
+  const allowed = (v: ViewName): boolean => {
+    const need = VIEW_MIN_ROLE[v];
+    return !need || roleRank(currentUser.role) >= roleRank(need);
+  };
 
   // ----- filter toggles (port of the #projectList/#userList delegation) ---
   const toggleProjectFilter = (id: number) => {
@@ -159,7 +164,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
       </div>
 
       <nav className="nav" aria-label="Main sections">
-        {NAV_ITEMS.filter((item) => allowed(item.needs)).map((item) => (
+        {NAV_ITEMS.filter((item) => allowed(item.view)).map((item) => (
           <button
             key={item.view}
             className={`nav-btn${view === item.view ? " active" : ""}`}

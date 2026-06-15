@@ -80,6 +80,33 @@ class Settings:
     BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "ChangeMe123!")
     BOOTSTRAP_ADMIN_NAME: str = os.getenv("BOOTSTRAP_ADMIN_NAME", "Admin")
 
+    # --- Password policy ----------------------------------------------------
+    # Strength rules for NEW passwords, enforced in one place
+    # (app/schemas._check_password_strength). The legacy default "changeme"
+    # is ALWAYS accepted regardless of these, so existing accounts keep
+    # working — the exception lives above these checks by design.
+    PASSWORD_MIN_LENGTH: int = int(os.getenv("PASSWORD_MIN_LENGTH", "8") or "8")
+    # Require at least one letter AND one digit. On by default (current rule).
+    PASSWORD_REQUIRE_COMPLEXITY: bool = _env_bool("PASSWORD_REQUIRE_COMPLEXITY", True)
+    # Account-enumeration resistance on POST /api/auth/forgot-password. When
+    # True (default, most-secure) the endpoint ALWAYS returns 204 and never
+    # reveals whether an email maps to an account — the canonical "if an account
+    # exists, we've sent a link" behaviour. Set False to restore the friendlier
+    # legacy UX that 404s on an unknown address (a documented, lower-security
+    # trade-off). Either way a reset email is only ever sent to a real, active
+    # account, and the server-side "no account" signal is still audited.
+    FORGOT_PASSWORD_ENUMERATION_SAFE: bool = _env_bool(
+        "FORGOT_PASSWORD_ENUMERATION_SAFE", True
+    )
+
+    # --- Reports ------------------------------------------------------------
+    # Hard ceiling on rows a single XLSX export (POST /api/reports/export.xlsx)
+    # may materialize. The export buffers the entire workbook in memory, so an
+    # unbounded export over the full work-item table could OOM a small worker.
+    # Above this many matching rows the endpoint returns 413 and asks the caller
+    # to narrow filters. Generous enough for real audit/compliance exports.
+    MAX_REPORT_ROWS: int = int(os.getenv("MAX_REPORT_ROWS", "50000") or "50000")
+
     # ------------------------------------------------------------------
     # Sleuth cloud LLM (optional Layer 4 — natural-language fallback).
     #
@@ -153,6 +180,15 @@ class Settings:
     EMAIL_DIGEST_LOOKBACK_HOURS: int = int(
         os.getenv("EMAIL_DIGEST_LOOKBACK_HOURS", "26") or "26"
     )
+    # In-app scheduler (optional). Set to a standard 5-field cron expression
+    # (e.g. "0 7 * * *" = every day at 07:00) and the app runs the digest job
+    # itself on that schedule — no host cron / Task Scheduler needed. Empty
+    # (default) leaves scheduling to an external runner, unchanged. The
+    # scheduler only does anything when EMAIL_DIGEST_ENABLED is also true.
+    EMAIL_DIGEST_CRON: str = os.getenv("EMAIL_DIGEST_CRON", "").strip()
+    # IANA timezone the cron is evaluated in (e.g. "Asia/Kolkata", "UTC").
+    # Empty = UTC.
+    EMAIL_DIGEST_TIMEZONE: str = os.getenv("EMAIL_DIGEST_TIMEZONE", "").strip()
 
     # --- Web push (Firebase Cloud Messaging) --------------------------------
     # Browser push notifications, sent IMMEDIATELY when an operation happens

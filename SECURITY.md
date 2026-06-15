@@ -34,10 +34,12 @@ Please include:
 
 ## Existing security posture
 
-See the **v3.0** entry in [CHANGELOG.md](CHANGELOG.md) and the
-*Live-data safety* and *Production checklist* sections of
-[README.md](README.md) for what's already in place — cookie auth with
-HttpOnly + SameSite + signed token, CSRF middleware, rate limiting,
-account lockout, HaveIBeenPwned breach check, EXIF strip on uploads,
-attachment content-type defenses, bcrypt password hashing, and a full
-audit trail.
+See the **v3.0** entry (including the *Post-release hardening — 2026-06-15*
+subsection) in [CHANGELOG.md](CHANGELOG.md) and the *Live-data safety* and
+*Production checklist* sections of [README.md](README.md) for what's already in
+place — cookie auth with HttpOnly + SameSite + signed token, CSRF middleware,
+rate limiting, account lockout, HaveIBeenPwned breach check, EXIF strip on
+uploads, attachment content-type defenses, bcrypt password hashing, per-type
+authorization enforced identically on the REST and chat write paths, a
+mass-assignment guard on item-type changes, account-enumeration-safe
+password-reset, row-bounded list/report endpoints, and a full audit trail.

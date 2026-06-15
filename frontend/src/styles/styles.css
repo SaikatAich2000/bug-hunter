@@ -153,20 +153,20 @@ html, body {
   --bg-elev-2: #f3f7fb;
   --bg-elev-3: #e7eef5;
   --surface-glass: rgba(255, 255, 255, 0.82);
-  --border: #dde5ee;
-  --border-strong: #c4cedb;
-  --border-soft: rgba(40,60,90,0.06);
+  --border: #c4cfdd;
+  --border-strong: #a3b1c4;
+  --border-soft: rgba(40,60,90,0.12);
 
   --text: #14202c;
   --text-muted: #4d5e70;
-  --text-faint: #8493a4;
+  --text-faint: #5d6877;
 
   /* Darkened from the pale #2f8fbe — that ocean cerulean read as washed-out on
      the white light-theme surfaces. These hit WCAG-AA (~5.6:1) for accent text
      and white-on-accent buttons while keeping the brand identity. */
   --accent: #176187;
   --accent-strong: #0f4e6e;
-  --accent-2: #9a7320;
+  --accent-2: #7e5d1a;
   --accent-soft: rgba(23, 97, 135, 0.14);
   --accent-glow: rgba(23, 97, 135, 0.26);
   --accent-text: #ffffff;
@@ -177,9 +177,9 @@ html, body {
   --danger-strong: #b93b32;
   --danger-soft: rgba(207, 70, 60, 0.10);
   --danger-grad: linear-gradient(135deg, #b93b32, #cf463c);
-  --warn: #b07d1e;
+  --warn: #8a6010;
   --warn-soft: rgba(176, 125, 30, 0.10);
-  --ok: #1a8f78;
+  --ok: #147a66;
   --ok-soft: rgba(26, 143, 120, 0.10);
 
   --shadow-sm: 0 1px 2px rgba(40,60,90,0.06), 0 1px 3px rgba(40,60,90,0.04);
@@ -190,21 +190,21 @@ html, body {
 
   --kpi-bg: linear-gradient(140deg, #ffffff 0%, #f3f7fb 100%);
 
-  --status-new: #1f7fa8;       /* ocean blue */
-  --status-progress: #9a7320;  /* gold */
+  --status-new: #1c728f;       /* ocean blue */
+  --status-progress: #7e5d1a;  /* gold */
   --status-resolved: #5b6675;  /* steel */
   --status-closed: #7a5530;    /* walnut */
   --status-reopened: #bb352c;  /* red */
-  --status-not-bug: #64748b;   /* muted steel */
-  --status-later: #9a6a24;     /* amber */
+  --status-not-bug: #5b6a7e;   /* muted steel */
+  --status-later: #7a5413;     /* amber */
 
   --p-low: #5b6675;       /* steel */
-  --p-medium: #1f7fa8;    /* blue */
-  --p-high: #9a7320;      /* gold */
+  --p-medium: #1c728f;    /* blue */
+  --p-high: #7e5d1a;      /* gold */
   --p-critical: #bb352c;  /* red */
 
-  --env-dev: #1f7fa8;     /* blue */
-  --env-uat: #9a7320;     /* gold */
+  --env-dev: #1c728f;     /* blue */
+  --env-uat: #7e5d1a;     /* gold */
   --env-prod: #bb352c;    /* red */
 
   --scrollbar-thumb: #c4cedb;
@@ -813,6 +813,14 @@ body.sidebar-collapsed .side-section { display: none; }
 .kpi-num.kpi-resolved { background-image: linear-gradient(135deg, #9aa6b8, #6b7686); }
 .kpi-num.kpi-closed   { background-image: linear-gradient(135deg, #c08f5a, #8a5f37); }
 .kpi-num.kpi-later    { background-image: linear-gradient(135deg, #dd5a50, #c1352b); }
+/* Light-theme KPI digits: the base gradients above are tuned for the dark
+   tiles and read washed-out on the white light KPI cards. Deepen them so the
+   numbers hit WCAG-AA on white, keeping the 135deg direction. */
+[data-theme="light"] .kpi-num             { background-image: linear-gradient(135deg, #2f93c2, #1d6f96); }
+[data-theme="light"] .kpi-num.kpi-open     { background-image: linear-gradient(135deg, #b9852a, #946811); }
+[data-theme="light"] .kpi-num.kpi-resolved { background-image: linear-gradient(135deg, #717c8c, #576275); }
+[data-theme="light"] .kpi-num.kpi-closed   { background-image: linear-gradient(135deg, #a4754a, #7a5530); }
+[data-theme="light"] .kpi-num.kpi-later    { background-image: linear-gradient(135deg, #cf463c, #b0352c); }
 /* Slim colour-coded top accent per tile (matches the approved mockup). */
 .kpi::after {
   content: "";
@@ -1337,6 +1345,20 @@ body.sidebar-collapsed .side-section { display: none; }
   flex-wrap: wrap;
   align-items: center;
   padding: 18px 24px 12px;
+}
+/* Shared card chrome for the audit + sessions control bars. Declared here,
+   BEFORE every responsive @media block, so the phone overrides
+   (max-width:700px / 380px) win on source order and the desktop 24px side
+   margins collapse on small screens (previously this block lived after the
+   media queries and always beat them — the cascade trap). */
+.audit-controls,
+.sessions-controls {
+  padding: 14px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  margin: 14px 24px 18px;
 }
 .audit-controls select, .audit-controls input {
   background: var(--bg-elev);
@@ -2143,7 +2165,7 @@ fieldset.field > legend {
     z-index: 20;
   }
   .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-xl); }
-  .topbar .menu-btn { display: inline-flex; }
+  .topbar .menu-btn { display: inline-flex; width: 44px; height: 44px; }
 
   .bug-modal-grid { grid-template-columns: 1fr; gap: 16px; }
   .bug-modal-side {
@@ -2167,9 +2189,9 @@ fieldset.field > legend {
   .modal-card { max-height: 95vh; }
   .modal-card.xxl { width: 100%; max-width: 100%; }
   .charts-grid { grid-template-columns: 1fr; }
-  .audit-controls { padding: 14px 12px 12px; }
+  .audit-controls { padding: 14px 12px 12px; margin: 14px 12px 12px; }
   .audit-list { padding: 0 12px 24px; }
-  .sessions-controls { padding: 14px 12px 12px; flex-direction: column; align-items: stretch; }
+  .sessions-controls { padding: 14px 12px 12px; margin: 14px 12px 12px; flex-direction: column; align-items: stretch; }
   .sessions-list { padding: 0 12px 24px; }
   .page-intro { padding: 16px 12px 14px; gap: 12px; }
   .page-intro-icon { width: 40px; height: 40px; font-size: 18px; }
@@ -2187,6 +2209,7 @@ fieldset.field > legend {
 
 @media (max-width: 500px) {
   .kpi-strip { grid-template-columns: 1fr 1fr; }
+  .kpi:nth-child(5) { grid-column: span 2; }
   .kpi { padding: 12px 14px; }
   .kpi-num { font-size: 22px; }
   .page-title { font-size: 17px; }
@@ -2231,10 +2254,14 @@ fieldset.field > legend {
 
 /* Phone landscape & smaller — improve touch targets and modal density. */
 @media (max-width: 600px) {
-  /* Bigger comfortable tap targets — Apple HIG / Material both ~44px. */
-  .btn, .icon-btn, .ms-btn, .chip {
-    min-height: 38px;
-  }
+  /* Bigger comfortable tap targets — Apple HIG / Material both ~44px.
+     Icon-style buttons get explicit boxes (they're box-sizing:border-box and
+     the overlay ones are absolutely positioned, so growing them won't reflow). */
+  .icon-btn { width: 40px; height: 40px; min-height: 40px; }
+  .notif-del, .attach-staged-remove { width: 36px; height: 36px; }
+  .bh-date-clear { width: 28px; height: 28px; }
+  .sidebar-collapse-btn { width: 40px; height: 40px; }
+  .btn, .ms-btn, .chip { min-height: 38px; }
   /* Tighten chips so the assignee picker still fits two-per-row. */
   .chip { padding: 6px 10px; }
   /* Filter-bar wraps onto two rows on phones; keep margin tight. */
@@ -2253,6 +2280,8 @@ fieldset.field > legend {
    non-essential bug table columns aggressively. */
 @media (max-width: 380px) {
   .kpi-strip { grid-template-columns: 1fr; }
+  .kpi:nth-child(5) { grid-column: auto; }
+  .audit-controls, .sessions-controls { margin: 10px 8px; padding: 12px 10px; }
   .col-project { display: none; }
   .bug-table { min-width: 360px; }
   .topbar { gap: 6px; }
@@ -2269,7 +2298,7 @@ fieldset.field > legend {
    give them clean output. Was missing entirely before. */
 @media print {
   .sidebar, .topbar, .filter-bar, .sleuth-fab, .sleuth-panel,
-  .modal-foot, .bug-modal-head-actions, .pagination-bar { display: none !important; }
+  .modal-foot, .bug-modal-head-actions, .pagination, .empty-state { display: none !important; }
   .app { grid-template-columns: 1fr; }
   .main, .view { padding: 0; }
   body { background: white; color: black; }
@@ -2520,16 +2549,16 @@ fieldset.field > legend {
 }
 @media (max-width: 500px) {
   .ms-btn, .ms-wrap { flex-basis: 100%; }
-  .kpi-strip { grid-template-columns: repeat(2, 1fr); }
-  .kpi:nth-child(5) { grid-column: span 2; }
 }
 
 /* Sessions admin view */
+/* Padding/margin + card chrome come from the shared .audit-controls,
+   .sessions-controls rule declared earlier (before the @media blocks); this
+   rule only owns the flex layout so the phone overrides keep winning. */
 .sessions-controls {
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 18px 24px 14px;
   flex-wrap: wrap;
 }
 .sessions-help {
@@ -2899,6 +2928,14 @@ fieldset.field > legend {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+/* Events detail header stacks on phones: the title takes the full first row
+   and the action buttons drop below, right-aligned, instead of crushing the
+   ellipsised title. */
+@media (max-width: 600px) {
+  .events-detail-head { flex-wrap: wrap; }
+  .events-detail-head h2 { flex: 1 1 100%; order: -1; white-space: normal; overflow: visible; text-overflow: clip; }
+  .events-detail-actions { margin-left: auto; }
 }
 .events-detail-meta {
   background: var(--bg-elev);
@@ -3744,19 +3781,9 @@ body.is-loading .events-detail-mode {
    inlined at the source so the cascade order can't drift away from
    the intent if the file is re-organized.
 
-   The standalone rules that remain in this section are the ones
-   without a duplicate elsewhere: audit/sessions controls and the
-   comment composer width. */
-
-.audit-controls,
-.sessions-controls {
-  padding: 14px 16px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
-  margin: 14px 24px 18px;
-}
+   The audit/sessions control-bar chrome moved up next to the base
+   .sessions-controls rule (before the responsive @media blocks) so the
+   phone margin overrides win on source order. */
 
 #commentForm textarea { width: 100%; }
 
@@ -3797,7 +3824,7 @@ body.is-loading .events-detail-mode {
 }
 @media (max-width: 1000px) {
   .reports-shell { grid-template-columns: 1fr; }
-  .reports-side { max-height: none !important; position: static !important; }
+  .reports-side { height: auto !important; max-height: none !important; position: static !important; }
 }
 @media (max-width: 720px) {
   .reports-intro { padding: 14px 14px 6px; }

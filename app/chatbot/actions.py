@@ -113,11 +113,20 @@ class ActionPlan:
 # Permission helpers
 # ---------------------------------------------------------------------------
 def _check_can_edit_bug(actor: User, bug: Bug) -> Optional[str]:
-    """Returns None if OK, otherwise an error string."""
+    """Returns None if OK, otherwise an error string.
+
+    Passes the work-item's REAL type so the chat write path enforces the same
+    v2.3 per-type rules as PUT /api/bugs/{id}: regular users may edit Bugs but
+    not Tasks/Requirements. Without item_type, can_edit_bug defaults to 'Bug'
+    and returns True for everyone, which let chat silently bypass the REST 403
+    (the module is explicitly "not a back door").
+    """
+    itype = getattr(bug, "item_type", None) or "Bug"
     if not can_edit_bug(actor,
                         bug.reporter_id,
-                        [a.id for a in bug.assignees]):
-        return "You don't have permission to edit that bug"
+                        [a.id for a in bug.assignees],
+                        item_type=itype):
+        return f"You don't have permission to edit that {itype.lower()}"
     return None
 
 

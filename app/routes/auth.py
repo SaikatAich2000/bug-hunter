@@ -277,24 +277,27 @@ def forgot_password(
 ) -> Response:
     """Issue a password-reset email.
 
-    Product decision: this endpoint validates the email against the DB
-    before sending. If no account matches we return 404 so the user
-    immediately knows they typed the wrong address instead of waiting
-    for an email that will never arrive.
-
-    (Trade-off: this allows account enumeration. The product owner
-    accepted that risk in exchange for a friendlier UX — login is
-    behind a strong password + session-revocation system, and the
-    audit log captures every reset attempt.)
+    Enumeration resistance is controlled by FORGOT_PASSWORD_ENUMERATION_SAFE
+    (default True = most secure): the endpoint then ALWAYS returns 204 and never
+    reveals whether the email maps to an account — the canonical "if an account
+    exists, we've sent a link" behaviour. Set the flag False to restore the
+    friendlier legacy UX that 404s on an unknown address (the documented,
+    lower-security trade-off the product owner originally accepted). Either way
+    a reset email is sent only to a real, active account and every attempt is
+    audited.
     """
+    settings = get_settings()
     user = db.scalar(select(User).where(User.email == payload.email))
     if user is None or not user.is_active:
-        # Don't trigger an email — surface the failure directly so the
-        # user can correct the typo or contact an admin if their account
-        # has been disabled.
+        # Always record the server-side signal for auditing, regardless of mode.
         _audit(db, None, "password_reset_no_account",
                f"Password reset attempted for unknown/inactive email: {_mask_email(payload.email)}")
         db.commit()
+        if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
+            # Enumeration-resistant default: identical 204 to the success path,
+            # so an unauthenticated caller can't probe which emails exist.
+            return Response(status_code=204)
+        # Opt-out: reveal that the address is unknown for a friendlier UX.
         raise HTTPException(
             status_code=404,
             detail="We couldn't find an account with that email. Check the address or contact an administrator",

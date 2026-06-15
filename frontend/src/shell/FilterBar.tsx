@@ -11,6 +11,7 @@
  *    L1920-1926). Vanilla kept the wraps in the DOM with display:none;
  *    here the corresponding MsFilter simply isn't rendered.
  */
+import { useCallback, useMemo } from "react";
 import { useApp } from "../state/AppContext";
 import MsFilter from "../components/MsFilter";
 import type { ItemType } from "../types";
@@ -31,17 +32,65 @@ export default function FilterBar() {
   const { view, activeTab, meta, projects, users, filters, setFilters, clearFilters } = useApp();
 
   // ----- option lists (port of _msOptions) ---------------------------------
-  const projectOptions: [string, string][] = projects.map((p) => [String(p.id), p.name]);
-  const itemTypeOptions: [string, string][] = meta.item_types.map((t) => [
-    t,
-    `${ITEM_TYPE_EMOJI[t]} ${t}`,
-  ]);
-  const statusOptions: [string, string][] = meta.statuses.map((s) => [s, s]);
-  const priorityOptions: [string, string][] = meta.priorities.map((s) => [s, s]);
-  const environmentOptions: [string, string][] = meta.environments.map((s) => [s, s]);
-  const assigneeOptions: [string, string][] = users
-    .filter((u) => u.is_active)
-    .map((u) => [String(u.id), u.name]);
+  // Memoized on their sources so the arrays (and the new Set() MsFilter builds
+  // from `selected`) aren't rebuilt on every context-driven re-render.
+  const projectOptions = useMemo<[string, string][]>(
+    () => projects.map((p) => [String(p.id), p.name]),
+    [projects],
+  );
+  const itemTypeOptions = useMemo<[string, string][]>(
+    () => meta.item_types.map((t) => [t, `${ITEM_TYPE_EMOJI[t]} ${t}`]),
+    [meta.item_types],
+  );
+  const statusOptions = useMemo<[string, string][]>(
+    () => meta.statuses.map((s) => [s, s]),
+    [meta.statuses],
+  );
+  const priorityOptions = useMemo<[string, string][]>(
+    () => meta.priorities.map((s) => [s, s]),
+    [meta.priorities],
+  );
+  const environmentOptions = useMemo<[string, string][]>(
+    () => meta.environments.map((s) => [s, s]),
+    [meta.environments],
+  );
+  const assigneeOptions = useMemo<[string, string][]>(
+    () => users.filter((u) => u.is_active).map((u) => [String(u.id), u.name]),
+    [users],
+  );
+
+  // ----- selected-string arrays (memoized so MsFilter sees stable refs) -----
+  const projectSelected = useMemo(() => filters.project_id.map(String), [filters.project_id]);
+  const assigneeSelected = useMemo(() => filters.assignee_id.map(String), [filters.assignee_id]);
+
+  // ----- stable per-filter onToggle handlers (port of the splice/push) ------
+  const onToggleProject = useCallback(
+    (v: string) =>
+      setFilters((prev) => ({ ...prev, project_id: toggled(prev.project_id, Number(v)) })),
+    [setFilters],
+  );
+  const onToggleItemType = useCallback(
+    (v: string) => setFilters((prev) => ({ ...prev, item_type: toggled(prev.item_type, v) })),
+    [setFilters],
+  );
+  const onToggleStatus = useCallback(
+    (v: string) => setFilters((prev) => ({ ...prev, status: toggled(prev.status, v) })),
+    [setFilters],
+  );
+  const onTogglePriority = useCallback(
+    (v: string) => setFilters((prev) => ({ ...prev, priority: toggled(prev.priority, v) })),
+    [setFilters],
+  );
+  const onToggleEnvironment = useCallback(
+    (v: string) =>
+      setFilters((prev) => ({ ...prev, environment: toggled(prev.environment, v) })),
+    [setFilters],
+  );
+  const onToggleAssignee = useCallback(
+    (v: string) =>
+      setFilters((prev) => ({ ...prev, assignee_id: toggled(prev.assignee_id, Number(v)) })),
+    [setFilters],
+  );
 
   // ----- tab-aware visibility (port of refreshFilterBarVisibility) ---------
   const showTypeFilter = activeTab === "all";
@@ -54,10 +103,8 @@ export default function FilterBar() {
         label="Projects"
         noun="Projects"
         options={projectOptions}
-        selected={filters.project_id.map(String)}
-        onToggle={(v) =>
-          setFilters((prev) => ({ ...prev, project_id: toggled(prev.project_id, Number(v)) }))
-        }
+        selected={projectSelected}
+        onToggle={onToggleProject}
       />
       {showTypeFilter && (
         <MsFilter
@@ -66,9 +113,7 @@ export default function FilterBar() {
           noun="Types"
           options={itemTypeOptions}
           selected={filters.item_type}
-          onToggle={(v) =>
-            setFilters((prev) => ({ ...prev, item_type: toggled(prev.item_type, v) }))
-          }
+          onToggle={onToggleItemType}
         />
       )}
       <MsFilter
@@ -77,7 +122,7 @@ export default function FilterBar() {
         noun="Statuses"
         options={statusOptions}
         selected={filters.status}
-        onToggle={(v) => setFilters((prev) => ({ ...prev, status: toggled(prev.status, v) }))}
+        onToggle={onToggleStatus}
       />
       <MsFilter
         filterKey="priority"
@@ -85,9 +130,7 @@ export default function FilterBar() {
         noun="Priorities"
         options={priorityOptions}
         selected={filters.priority}
-        onToggle={(v) =>
-          setFilters((prev) => ({ ...prev, priority: toggled(prev.priority, v) }))
-        }
+        onToggle={onTogglePriority}
       />
       {showEnvFilter && (
         <MsFilter
@@ -96,9 +139,7 @@ export default function FilterBar() {
           noun="Envs"
           options={environmentOptions}
           selected={filters.environment}
-          onToggle={(v) =>
-            setFilters((prev) => ({ ...prev, environment: toggled(prev.environment, v) }))
-          }
+          onToggle={onToggleEnvironment}
         />
       )}
       <MsFilter
@@ -106,10 +147,8 @@ export default function FilterBar() {
         label="Assignees"
         noun="Assignees"
         options={assigneeOptions}
-        selected={filters.assignee_id.map(String)}
-        onToggle={(v) =>
-          setFilters((prev) => ({ ...prev, assignee_id: toggled(prev.assignee_id, Number(v)) }))
-        }
+        selected={assigneeSelected}
+        onToggle={onToggleAssignee}
       />
       <button className="btn ghost" id="clearFiltersBtn" onClick={clearFilters}>
         Clear

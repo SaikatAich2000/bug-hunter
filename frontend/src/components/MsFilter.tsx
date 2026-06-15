@@ -21,7 +21,7 @@
  * had none either). Only one panel may be open across all instances:
  * a module-level subscriber registry replicates _closeAllMsPanelsExcept.
  */
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 // --- one-open-panel-at-a-time registry (port of _closeAllMsPanelsExcept /
 // --- _collapseAllMsBtnsExcept). Every mounted instance subscribes its
@@ -65,7 +65,7 @@ interface Props {
   onToggle: (value: string) => void;
 }
 
-export default function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props) {
+function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
 
@@ -87,7 +87,7 @@ export default function MsFilter({ filterKey, label, noun, options, selected, on
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  const selectedSet = new Set(selected);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
 
   return (
     <div className="ms-wrap" data-filter={filterKey}>
@@ -134,3 +134,9 @@ export default function MsFilter({ filterKey, label, noun, options, selected, on
     </div>
   );
 }
+
+// Memoized so a parent re-render (e.g. the 10s/15s context polls) doesn't
+// re-render every filter when its own props are unchanged. FilterBar now
+// passes stable useCallback handlers + useMemo'd option/selected arrays, so
+// the shallow prop compare actually holds.
+export default memo(MsFilter);

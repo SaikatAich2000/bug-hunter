@@ -188,9 +188,14 @@ def main() -> int:
             "across %s user(s).",
             stats["emails_sent"], stats["operations"], stats["users"],
         )
+        return 0
+    except Exception:
+        # Broad on purpose: any failure becomes a non-zero exit code (logged
+        # below) so a cron wrapper can detect it, rather than a raw traceback.
+        logger.exception("Email digest job failed.")
+        return 1
     finally:
         db.close()
-    return 0
 
 
 if __name__ == "__main__":

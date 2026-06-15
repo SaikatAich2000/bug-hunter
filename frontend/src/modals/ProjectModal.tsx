@@ -18,7 +18,7 @@ import { useApp } from "../state/AppContext";
 const DEFAULT_COLOR = "#c9764f";
 
 export default function ProjectModal() {
-  const { projectModal, closeProjectModal, loadProjects, refreshAll, setView } =
+  const { projectModal, closeProjectModal, loadProjects, refreshAll, setView, canManage } =
     useApp();
   const { open, project } = projectModal;
 
@@ -37,6 +37,10 @@ export default function ProjectModal() {
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, project]);
+
+  // Fail-closed: only admins/managers may create/update projects, independent
+  // of whoever set the open state (backend uses require_manager_or_admin).
+  if (!open || !canManage) return null;
 
   // Port of submitProjectForm().
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {

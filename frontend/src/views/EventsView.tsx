@@ -40,7 +40,7 @@ import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
 import { debounce, formatDate, initials } from "../lib/format";
-import { useApp } from "../state/AppContext";
+import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import type { BugOut, EventDetail, EventOut, ViewName } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -231,18 +231,6 @@ function renderCell(col: DetailCol, b: BugOut): ReactElement {
   }
 }
 
-/**
- * Vanilla applyRoleVisibility keeps `data-needs-role` (CSS-hidden) for
- * users below the needed rank and strips the attribute otherwise — we
- * compute the same final DOM directly.
- */
-function roleAttr(
-  allowed: boolean,
-  need: "manager" | "admin",
-): { "data-needs-role"?: "manager" | "admin" } {
-  return allowed ? {} : { "data-needs-role": need };
-}
-
 // ---------------------------------------------------------------------------
 // Presentational pieces (extracted from the vanilla render templates)
 // ---------------------------------------------------------------------------
@@ -416,6 +404,17 @@ export default function EventsView() {
     }
   }, []);
 
+  // Silent detail refetch for the live poll — unlike openEventDetail it does
+  // NOT toggle detailLoading, so a background tick won't flash "Loading…"
+  // over the open table.
+  const refreshDetailSilently = useCallback(async (id: number) => {
+    try {
+      setDetail(await api<EventDetail>(`/events/${id}`));
+    } catch {
+      /* keep last good detail */
+    }
+  }, []);
+
   const showListMode = useCallback(() => {
     setMode("list");
     setDetail(null);
@@ -431,6 +430,28 @@ export default function EventsView() {
     }
     prevView.current = view;
   }, [view, refreshEvents, showListMode]);
+
+  // Live poll while the Events view is active so items/events created,
+  // edited or deleted by other users show up without leaving & reopening.
+  // The list refreshes in list mode; the open detail refreshes *silently*
+  // in detail mode. A ref holds the tick body so the interval can read the
+  // latest mode/detail without resubscribing on every change.
+  const pollRef = useRef<() => void>(() => {});
+  pollRef.current = () => {
+    if (document.hidden) return;
+    if (mode === "detail" && detail) void refreshDetailSilently(detail.id);
+    else void refreshEvents();
+  };
+  useEffect(() => {
+    if (view !== "events") return;
+    const tick = () => pollRef.current();
+    const id = setInterval(tick, DATA_POLL_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [view]);
 
   // When the shared bug modal closes while the detail panel is open, the
   // user may have added/edited/moved an item — refetch the detail.
@@ -584,14 +605,15 @@ export default function EventsView() {
             </div>
           </div>
           <div className="events-controls">
-            <button
-              className="btn primary"
-              id="newEventBtn"
-              {...roleAttr(canManage, "manager")}
-              onClick={() => setModal({ open: true, event: null })}
-            >
-              + New Event
-            </button>
+            {canManage && (
+              <button
+                className="btn primary"
+                id="newEventBtn"
+                onClick={() => setModal({ open: true, event: null })}
+              >
+                + New Event
+              </button>
+            )}
             <button className="btn ghost" id="eventsRefreshBtn" onClick={() => void refreshEvents()}>
               Refresh
             </button>
@@ -652,42 +674,45 @@ export default function EventsView() {
             </button>
             <h2 id="eventDetailName">{detail ? detail.name : "Event"}</h2>
             <div className="events-detail-actions">
-              <button
-                className="btn ghost"
-                id="editEventBtn"
-                {...roleAttr(canManage, "manager")}
-                onClick={() => {
-                  if (detail) setModal({ open: true, event: detail });
-                }}
-              >
-                ✎ Edit
-              </button>
-              <button
-                className="btn danger"
-                id="deleteEventBtn"
-                {...roleAttr(isAdmin, "admin")}
-                onClick={() => {
-                  if (detail) void handleDeleteEvent(detail);
-                }}
-              >
-                🗑 Delete
-              </button>
+              {canManage && (
+                <button
+                  className="btn ghost"
+                  id="editEventBtn"
+                  onClick={() => {
+                    if (detail) setModal({ open: true, event: detail });
+                  }}
+                >
+                  ✎ Edit
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  className="btn danger"
+                  id="deleteEventBtn"
+                  onClick={() => {
+                    if (detail) void handleDeleteEvent(detail);
+                  }}
+                >
+                  🗑 Delete
+                </button>
+              )}
             </div>
           </div>
           <div className="events-detail-meta" id="eventDetailMeta">
             {detail ? <EventDetailMeta detail={detail} /> : null}
           </div>
           <div className="events-detail-controls">
-            <button
-              className="btn primary"
-              id="addItemToEventBtn"
-              {...roleAttr(canManage, "manager")}
-              onClick={() => {
-                if (detail) openBugForm({ defaultType: "Task", defaultEventId: detail.id });
-              }}
-            >
-              + Add Task
-            </button>
+            {canManage && (
+              <button
+                className="btn primary"
+                id="addItemToEventBtn"
+                onClick={() => {
+                  if (detail) openBugForm({ defaultType: "Task", defaultEventId: detail.id });
+                }}
+              >
+                + Add Task
+              </button>
+            )}
           </div>
           <div className="events-detail-filter-bar" id="eventDetailFilterBar">
             <input

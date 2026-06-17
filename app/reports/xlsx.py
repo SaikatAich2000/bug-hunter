@@ -45,13 +45,13 @@ _BANNER_FG = "FFFFFF"
 _ZEBRA_FILL = "F2F4F8"
 
 
-# G2 (inherited from the legacy CSV export): Excel / LibreOffice / Numbers
-# interpret a cell whose value starts with one of these characters as a
-# FORMULA, not text. A bug title like `=cmd|'/c calc.exe'!A1` would
-# therefore execute when the workbook is opened — the same attack surface
-# the CSV export defended against. We neutralise by prefixing such cells
-# with a single quote (OWASP-recommended). The quote is consumed by Excel
-# on display so the user still sees the original text.
+# Formula-injection defense: Excel / LibreOffice / Numbers interpret a cell
+# whose value starts with one of these characters as a FORMULA, not text. A
+# bug title like `=cmd|'/c calc.exe'!A1` would therefore execute when the
+# workbook is opened — the same attack surface the CSV export guards against.
+# Prefixing such cells with a single quote (OWASP-recommended) neutralizes it;
+# the quote is consumed by Excel on display, so the user still sees the
+# original text.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 

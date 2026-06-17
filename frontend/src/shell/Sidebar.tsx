@@ -1,17 +1,10 @@
 /**
- * Sidebar — port of the index.html aside (L28-84) plus its behaviours:
- *  - brand block + collapse button (app.js L4466-4478)
- *  - nav buttons with role gating (applyRoleVisibility, L1651-1667)
- *  - project / user side lists (renderProjectList / renderUserList,
- *    L2066-2146) with the swatch/avatar=filter vs name=edit click split
- *    and delete handlers (L4547-4599, handleDeleteProject/User L3561-3600)
- *  - account card (renderAccountCard, L1669-1676)
- *  - change-password / logout / theme buttons (L4404-4427)
+ * Sidebar — the library rail: Projects and Team entity lists only.
  *
- * Role gating note: vanilla hid `[data-needs-role]` elements via CSS and
- * deleted the attribute for allowed roles. Here gated elements simply
- * aren't rendered for insufficient roles, and allowed ones render without
- * the attribute — same end state in both cases.
+ * The brand mark and view nav live in the TopChrome bar; the sidebar is purely
+ * the project / user lists, with the swatch/avatar = filter vs name = edit
+ * click split and the manager/admin add + delete handlers. Account actions
+ * (change-password / theme / log out) live in the top-right ProfileMenu.
  */
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
@@ -19,53 +12,47 @@ import { toast, toastError } from "../lib/toast";
 import { initials } from "../lib/format";
 import { withLoader } from "../lib/loader";
 import { confirmDialog } from "../components/ConfirmHost";
-import type { ViewName } from "../types";
-import { VIEW_MIN_ROLE } from "../types";
-
-const NAV_ITEMS: { view: ViewName; icon: string; label: string }[] = [
-  { view: "list", icon: "📋", label: "Work Items" },
-  { view: "events", icon: "📅", label: "Events" },
-  { view: "analytics", icon: "📊", label: "Analytics" },
-  { view: "reports", icon: "📈", label: "Reports" },
-  { view: "audit", icon: "🛡", label: "Audit Trail" },
-  { view: "sessions", icon: "🔐", label: "Sessions" },
-];
+import { VIEW_MIN_ROLE, type ViewName } from "../types";
+import { NAV_ITEMS } from "./navItems";
 
 interface Props {
   readonly mobileOpen: boolean;
-  readonly onCloseMobile: () => void;
+  /** Close the mobile drawer after navigating (no-op on desktop). */
+  readonly onNavigate?: () => void;
 }
 
-export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
+export default function Sidebar({ mobileOpen, onNavigate }: Props) {
   const {
-    currentUser,
-    health,
     projects,
     users,
     filters,
     setFilters,
-    view,
-    setView,
-    sidebarCollapsed,
-    toggleSidebarCollapsed,
     openProjectForm,
     openUserForm,
     loadProjects,
     loadUsers,
     refreshAll,
-    roleRank,
     canManage,
     isAdmin,
+    view,
+    setView,
+    roleRank,
+    currentUser,
   } = useApp();
 
-  // Same VIEW_MIN_ROLE source of truth the Shell uses to gate rendering, so the
-  // hidden-button set and the mountable-view set can never drift.
+  // Same VIEW_MIN_ROLE gate the TopChrome nav uses — the mobile drawer nav and
+  // the desktop chrome nav consume one source of truth so they can't drift.
   const allowed = (v: ViewName): boolean => {
     const need = VIEW_MIN_ROLE[v];
     return !need || roleRank(currentUser.role) >= roleRank(need);
   };
 
-  // ----- filter toggles (port of the #projectList/#userList delegation) ---
+  const goTo = (v: ViewName) => {
+    setView(v);
+    onNavigate?.();
+  };
+
+  // ----- filter toggles ----------------------------------------------------
   const toggleProjectFilter = (id: number) => {
     setFilters((prev) => ({
       ...prev,
@@ -84,7 +71,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
     }));
   };
 
-  // ----- deletes (ports of handleDeleteProject / handleDeleteUser) --------
+  // ----- deletes -----------------------------------------------------------
   const handleDeleteProject = async (id: number) => {
     const project = projects.find((p) => p.id === id);
     const name = project ? project.name : `#${id}`;
@@ -127,9 +114,6 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
     }
   };
 
-  // Account actions (change-password / theme / log out) now live in the
-  // top-right ProfileMenu — the sidebar is navigation + entity lists only.
-
   const activeProjectIds = new Set(filters.project_id);
   const activeUsers = users.filter((u) => u.is_active);
 
@@ -137,42 +121,19 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
     <aside
       className={`sidebar${mobileOpen ? " open" : ""}`}
       id="sidebar"
-      aria-label="Primary navigation"
+      aria-label="Projects and team"
     >
-      <div className="brand">
-        <div className="brand-logo">
-          <img src="/static/icon.png" alt="Bug Hunter" />
-        </div>
-        <div className="brand-text">
-          <div className="brand-title">Bug Hunter</div>
-          <div className="brand-version" id="brandVersion">
-            {health ? `v${health.version}` : "v—"}
-          </div>
-        </div>
-        <button
-          className="icon-btn sidebar-collapse-btn"
-          id="sidebarCollapseBtn"
-          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label="Collapse sidebar"
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleSidebarCollapsed();
-          }}
-        >
-          {sidebarCollapsed ? "»" : "«"}
-        </button>
-      </div>
-
-      <nav className="nav" aria-label="Main sections">
+      {/* Mobile-only view nav — on desktop the chrome bar owns the view nav,
+          so this is hidden via CSS (≥900px). On phones the chrome nav is
+          hidden and this drawer becomes the way to switch views. */}
+      <nav className="sidebar-nav" aria-label="Main sections">
         {NAV_ITEMS.filter((item) => allowed(item.view)).map((item) => (
           <button
             key={item.view}
+            type="button"
             className={`nav-btn${view === item.view ? " active" : ""}`}
             data-view={item.view}
-            onClick={() => {
-              setView(item.view);
-              onCloseMobile();
-            }}
+            onClick={() => goTo(item.view)}
           >
             <span className="nav-icon">{item.icon}</span>
             <span>{item.label}</span>
@@ -217,9 +178,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
                   className="label-text"
                   data-act="open-project"
                   title={canManage ? `${p.name} — click to edit` : p.name}
-                  onClick={() =>
-                    canManage ? openProjectForm(p) : toggleProjectFilter(p.id)
-                  }
+                  onClick={() => (canManage ? openProjectForm(p) : toggleProjectFilter(p.id))}
                 >
                   {p.name}
                 </span>
@@ -256,7 +215,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
       {canManage && (
         <section className="side-section">
           <div className="side-section-header">
-            <span>Users</span>
+            <span>Team</span>
             <button
               className="icon-btn"
               id="newUserBtn"
@@ -290,9 +249,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
                     className="label-text"
                     data-act="open-user"
                     title={canManage ? `${u.name} — click to edit` : u.name}
-                    onClick={() =>
-                      canManage ? openUserForm(u) : toggleAssigneeFilter(u.id)
-                    }
+                    onClick={() => (canManage ? openUserForm(u) : toggleAssigneeFilter(u.id))}
                   >
                     {u.name}
                     {u.role ? <span className="meta"> · {u.role}</span> : null}
@@ -327,7 +284,6 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: Props) {
           </ul>
         </section>
       )}
-
     </aside>
   );
 }

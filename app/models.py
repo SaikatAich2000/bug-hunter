@@ -3,19 +3,18 @@
 Tables:
   - users            : team members
   - projects         : workspaces
-  - bugs             : core entity (slimmer than v2.1: no severity, labels,
-                       steps_to_reproduce, expected_result, actual_result)
+  - bugs             : core work-item entity
   - bug_assignees    : many-to-many between bugs and users
   - comments         : threaded discussion on a bug
   - attachments      : file blobs (PDF / image / video) attached to a bug
-                       OR to a comment. Stored INSIDE the database so they
+                       or to a comment. Stored inside the database so they
                        persist across restarts and survive backups.
   - activity_log     : audit trail
   - password_reset_tokens : single-use email-based password reset tokens
-  - sessions         : server-side record of every active login. Lets
-                       admins see who's currently signed in (Keycloak-style)
-                       and revoke individual sessions to forcibly log a
-                       specific device out without affecting any others.
+  - sessions         : server-side record of every active login. Lets admins
+                       see who's currently signed in and revoke individual
+                       sessions to log a specific device out without
+                       affecting any others.
 """
 from __future__ import annotations
 
@@ -42,8 +41,8 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
-# FK target strings — extracted to module-level constants so Sonar's S1192
-# duplicate-string-literal rule stops flagging each ForeignKey() call.
+# FK target strings, extracted to module-level constants to avoid repeating
+# the same literal across every ForeignKey() call.
 _FK_BUGS_ID = "bugs.id"
 _FK_USERS_ID = "users.id"
 _FK_PROJECTS_ID = "projects.id"
@@ -64,10 +63,10 @@ bug_assignees = Table(
     Column("bug_id", Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
-# user_id is the TRAILING column of the (bug_id, user_id) PK, so Postgres can't
+# user_id is the trailing column of the (bug_id, user_id) PK, so Postgres can't
 # seek on it alone. A standalone index backs "all bugs assigned to user X"
 # joins (stats by-assignee, event assignee counts). Added additively by
-# init_db's _add_missing_indexes — never recreates the table.
+# init_db's _add_missing_indexes; never recreates the table.
 Index("idx_bug_assignees_user_id", bug_assignees.c.user_id)
 
 # event_managers: many-to-many between events and the (admin/manager) users
@@ -81,7 +80,7 @@ event_managers = Table(
     Column("event_id", Integer, ForeignKey(_FK_EVENTS_ID, ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
-# Mirror bug_assignees: user_id is the TRAILING column of the (event_id,
+# As with bug_assignees, user_id is the trailing column of the (event_id,
 # user_id) PK, so Postgres can't seek on it alone. A standalone index backs
 # "events managed by user X" lookups and the ON DELETE CASCADE that fires when
 # a user is deleted. Added additively by init_db's _add_missing_indexes.
@@ -268,21 +267,19 @@ class Bug(Base):
     )
     comments: Mapped[list["Comment"]] = relationship(
         "Comment", back_populates="bug", cascade=_CASCADE_ALL_DELETE_ORPHAN,
-        # v2.6: newest comment at the top by default. The order_by here
-        # drives every access via Bug.comments (get_bug response, etc.).
+        # Newest comment first. This order_by drives every access via
+        # Bug.comments (get_bug response, etc.).
         order_by="(Comment.created_at.desc(), Comment.id.desc())",
     )
-    # Activities ordered newest-first with an id-DESC tiebreaker so two
-    # events recorded in the same second still come back in a stable,
-    # insert-consistent order. Without the id tiebreaker the relationship
-    # ordering disagreed with the dedicated /activity endpoint, which had
-    # this same tuple already.
-    # Note: we deliberately do NOT cascade-delete activity rows when a bug
-    # is deleted. The audit trail must outlive the bugs it describes so an
-    # admin can still find "who deleted bug #42 and when". On delete the
-    # route handler detaches the rows (bug_id → NULL); the entity_id stays
-    # set to the original bug id and the detail string preserves the title,
-    # so the global audit screen still shows the full history.
+    # Activities ordered newest-first with an id-DESC tiebreaker so two rows
+    # recorded in the same second still come back in a stable, insert-
+    # consistent order that matches the dedicated /activity endpoint.
+    # Activity rows are deliberately NOT cascade-deleted when a bug is
+    # deleted: the audit trail must outlive the bugs it describes so an admin
+    # can still find "who deleted bug #42 and when". On delete the route
+    # handler detaches the rows (bug_id → NULL); entity_id stays set to the
+    # original bug id and the detail string preserves the title, so the
+    # global audit screen still shows the full history.
     activities: Mapped[list["Activity"]] = relationship(
         "Activity", back_populates="bug",
         order_by="(Activity.created_at.desc(), Activity.id.desc())",
@@ -302,17 +299,21 @@ class Bug(Base):
         Index("idx_bugs_item_type", "item_type"),
         Index("idx_bugs_item_type_status", "item_type", "status"),
         Index("idx_bugs_event_id", "event_id"),
-        # v3.2 additive composite indexes — speed up the common dashboard
-        # queries which filter on multiple columns at once. Single-column
-        # indexes above still serve queries that filter on just one field.
-        # SQLAlchemy create_all() is idempotent, so adding these on a live
-        # DB is safe — existing data and indexes are untouched.
+        # Additive composite indexes for the common dashboard queries that
+        # filter on multiple columns at once. The single-column indexes above
+        # still serve queries that filter on just one field. create_all() is
+        # idempotent, so adding these on a live DB leaves existing data and
+        # indexes untouched.
         Index("idx_bugs_project_status", "project_id", "status"),
         Index("idx_bugs_status_priority", "status", "priority"),
         Index("idx_bugs_updated_at", "updated_at"),
-        # v2.9.x — stats timeline (GROUP BY date(created_at)) and the
-        # "oldest first" report orderings scan on created_at. Additive;
-        # created by init_db's index reconciliation on next boot.
+        # The default list page orders by (updated_at DESC, id DESC); this
+        # composite lets the database satisfy that ordering from the index and
+        # skip a sort on large tables.
+        Index("idx_bugs_updated_id", "updated_at", "id"),
+        # The stats timeline (GROUP BY date(created_at)) and the "oldest first"
+        # report orderings scan on created_at. Additive; created by init_db's
+        # index reconciliation on next boot.
         Index("idx_bugs_created_at", "created_at"),
     )
 
@@ -372,12 +373,11 @@ class Attachment(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Deferred (v3.2.1) — the BLOB is only fetched when actually read
-    # (.data is touched). Listing attachments for a bug or comment no
-    # longer pulls the full file content from the DB; the download
-    # endpoint still works because accessing `a.data` lazily issues a
-    # single SELECT for the bytes. Schema unchanged — this is a Python-
-    # side loading strategy, safe for the live DB.
+    # Deferred: the BLOB is fetched only when .data is touched, so listing
+    # attachments for a bug or comment doesn't pull the full file content from
+    # the DB. The download endpoint still works because accessing `a.data`
+    # lazily issues a single SELECT for the bytes. Python-side loading
+    # strategy only — the schema is unchanged.
     data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
@@ -386,8 +386,8 @@ class Attachment(Base):
     __table_args__ = (
         Index("idx_attachments_bug_id", "bug_id"),
         Index("idx_attachments_comment_id", "comment_id"),
-        # v3.2: composite supports the per-bug "load all attachments and
-        # split into bug-level vs by-comment" pattern in routes/bugs.py.
+        # Composite supports the per-bug "load all attachments and split into
+        # bug-level vs by-comment" pattern in routes/bugs.py.
         Index("idx_attachments_bug_comment", "bug_id", "comment_id"),
     )
 
@@ -395,9 +395,8 @@ class Attachment(Base):
 # ---------------------------------------------------------------------------
 # Activity (audit trail)
 #
-# Same purpose as before — but `bug_id` is now nullable so we can also
-# log non-bug events (user created, project deleted, etc.) for the
-# global audit-trail screen.
+# `bug_id` is nullable so non-bug events (user created, project deleted, etc.)
+# can also be logged for the global audit-trail screen.
 # ---------------------------------------------------------------------------
 class Activity(Base):
     __tablename__ = "activity_log"
@@ -428,11 +427,15 @@ class Activity(Base):
         Index("idx_activity_bug_id", "bug_id"),
         Index("idx_activity_entity", "entity_type", "entity_id"),
         Index("idx_activity_created", "created_at"),
-        # v3.0 perf: reports filter `action == "status_changed"` joined to bugs
-        # (throughput / time-to-resolution / timeline) — without this they scan
-        # the whole ever-growing audit table. The audit "filter by actor" screen
-        # filters actor_user_id. Both added the additive init_db() way.
+        # Reports filter `action == "status_changed"` joined to bugs
+        # (throughput / time-to-resolution / timeline); without this they scan
+        # the whole ever-growing audit table. The audit "filter by actor"
+        # screen filters actor_user_id. Both added additively by init_db().
         Index("idx_activity_action_bug", "action", "bug_id"),
+        # The resolution/throughput/timeline reports order the matched rows by
+        # (bug_id, created_at); extending the action index with created_at lets
+        # those reports avoid an in-memory sort over the audit table.
+        Index("idx_activity_action_bug_created", "action", "bug_id", "created_at"),
         Index("idx_activity_actor_user_id", "actor_user_id"),
     )
 
@@ -465,8 +468,8 @@ class Session(Base):
     # Random opaque ID baked into the signed cookie. We look up sessions
     # by this on every authenticated request.
     jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    # Best-effort metadata for the admin session-list screen. Never used
-    # for auth decisions — purely informational.
+    # Metadata for the admin session-list screen. Never used for auth
+    # decisions — purely informational.
     user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
     ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
@@ -483,17 +486,16 @@ class Session(Base):
 
 
 # ---------------------------------------------------------------------------
-# Notification (ADDITIVE — new table only; nothing existing changes)
+# Notification
 #
 # Per-user in-app notifications — the in-app counterpart to the emails the
 # user already receives. Recipients mirror email_service exactly (reporter +
 # assignees minus the actor, event managers, etc.), so a notification is only
-# ever written for a user who is already entitled to know about the event.
-# That makes the feature inherently per-user and role-respecting: there is no
-# endpoint that returns another user's notifications.
+# ever written for a user already entitled to know about the event, and no
+# endpoint returns another user's notifications.
 #
-# Created automatically by init_db()'s create_all() on next boot. Scoped to a
-# user_id and cascade-deletes with the user. Strictly additive.
+# Created by init_db()'s create_all() on next boot. Scoped to a user_id and
+# cascade-deletes with the user.
 # ---------------------------------------------------------------------------
 class Notification(Base):
     __tablename__ = "notifications"
@@ -546,10 +548,9 @@ class Notification(Base):
 # Push subscriptions (web push via Firebase Cloud Messaging).
 #
 # One row per device/browser a user has granted push permission on. Stored as
-# the FCM **registration token** so the same table + send path serves a future
-# native Android app — Android devices simply register with platform="android".
-# Strictly additive: a brand-new table created by init_db(); nothing existing
-# changes. Push is sent IMMEDIATELY when an operation occurs (not digested).
+# the FCM registration token so the same table and send path also serve a
+# native Android app (which registers with platform="android"). Push is sent
+# immediately when an operation occurs, not digested.
 # ---------------------------------------------------------------------------
 class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
@@ -580,15 +581,15 @@ class PushSubscription(Base):
 
 
 # ---------------------------------------------------------------------------
-# Sleuth chat memory (ADDITIVE — new tables only; nothing existing changes)
+# Sleuth chat memory
 #
-# Persists the assistant conversation so context survives process restarts
-# and so the cloud layer can be given a short rolling history. The
-# in-process memory.store still handles fast per-turn referents ("it",
-# pending confirmations); these tables are the durable transcript.
+# Persists the assistant conversation so context survives process restarts and
+# so the cloud layer can be given a short rolling history. The in-process
+# memory.store still handles fast per-turn referents ("it", pending
+# confirmations); these tables are the durable transcript.
 #
-# Created automatically by init_db()'s create_all() on next boot. Both are
-# scoped to a user_id and cascade-delete with the user.
+# Created by init_db()'s create_all() on next boot. Both are scoped to a
+# user_id and cascade-delete with the user.
 # ---------------------------------------------------------------------------
 class ChatConversation(Base):
     __tablename__ = "chat_conversations"
@@ -631,3 +632,43 @@ class ChatMessage(Base):
     )
 
     __table_args__ = (Index("idx_chat_msg_conversation_id", "conversation_id"),)
+
+
+# ---------------------------------------------------------------------------
+# BugLink
+#
+# A directed relationship between two work items: "#12 blocks #34", "#5
+# duplicates #2", "#7 relates to #9". Stored as a single directed edge
+# (source -> target) with a link_type; the route layer renders the inverse
+# label from the target's perspective ("is blocked by"), so no redundant
+# reverse rows are stored. Both FKs CASCADE so a link can't outlive either of
+# the items it connects.
+# ---------------------------------------------------------------------------
+class BugLink(Base):
+    __tablename__ = "bug_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_bug_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=False
+    )
+    target_bug_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=False
+    )
+    # "relates" | "blocks" | "duplicate" — validated in the schema layer.
+    link_type: Mapped[str] = mapped_column(String(20), nullable=False, default="relates")
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    source: Mapped["Bug"] = relationship("Bug", foreign_keys=[source_bug_id])
+    target: Mapped["Bug"] = relationship("Bug", foreign_keys=[target_bug_id])
+
+    __table_args__ = (
+        # One edge per (source, target, type) — re-linking is idempotent.
+        Index("idx_bug_links_unique", "source_bug_id", "target_bug_id", "link_type", unique=True),
+        Index("idx_bug_links_source", "source_bug_id"),
+        Index("idx_bug_links_target", "target_bug_id"),
+    )

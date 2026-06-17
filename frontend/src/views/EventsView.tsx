@@ -1,10 +1,5 @@
 /**
- * EventsView — React port of the vanilla Events view
- * (#viewEvents markup in app/static/index.html L293-364; list/detail logic
- * in app/static/app.js L3834-4087; wiring at L4294-4403; delete flow at
- * L3428-3443).
- *
- * Two modes:
+ * EventsView — the Events view, in two modes:
  *   • list   — card grid of every event, with a client-side search
  *              (debounced 200ms) + exact-match scheduled-date filter;
  *   • detail — one event open: header, meta (date · author · counts),
@@ -12,16 +7,10 @@
  *              the standard bug-table (minus the actions column) behind a
  *              client-side search + status/priority/assignee multi-filters.
  *
- * Items open in the shared bug modal; when that modal closes while the
- * detail panel is open, the detail is refetched (an effect watches
- * bugModal.open transitions — port of the vanilla post-modal refresh).
- *
- * Adaptations: the detail filter multi-selects reuse the shared MsFilter
- * widget, which renders `data-filter` on the wrap instead of the vanilla
- * `data-event-filter` (a JS-only hook; no CSS keys off it). Role gating
- * keeps the vanilla mechanism: `data-needs-role` stays on the button when
- * the user lacks the role (styles.css hides it) and is dropped otherwise,
- * exactly like applyRoleVisibility().
+ * Items open in the shared bug modal; when that modal closes while the detail
+ * panel is open, the detail is refetched (an effect watches bugModal.open
+ * transitions). The detail filter multi-selects reuse the shared MsFilter
+ * widget.
  */
 import {
   useCallback,
@@ -44,19 +33,18 @@ import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import type { BugOut, EventDetail, EventOut, ViewName } from "../types";
 
 // ---------------------------------------------------------------------------
-// Constants (ports of the vanilla tables)
+// Constants
 // ---------------------------------------------------------------------------
 
-/** Per-type emoji marker (port of ITEM_TYPE_EMOJI, app.js L2199). */
+/** Per-type emoji marker. */
 const ITEM_TYPE_EMOJI: Record<string, string> = { Bug: "🐞", Requirement: "📐", Task: "✅" };
 function itemTypeEmoji(t: string): string {
   return ITEM_TYPE_EMOJI[t] ?? "📝";
 }
 
 /**
- * Column set for the items table inside an event — the per-type "All"
- * columns minus the actions column (deletion happens from the bug modal),
- * port of renderEventDetail (app.js L3998).
+ * Column set for the items table inside an event — the per-type "All" columns
+ * minus the actions column (deletion happens from the bug modal).
  */
 type DetailCol =
   | "id"
@@ -84,10 +72,9 @@ const COL_HEAD_LABEL: Record<DetailCol, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Pure helpers (ports of the vanilla filter / summary functions)
+// Pure helpers — filter / summary functions
 // ---------------------------------------------------------------------------
 
-/** Port of _matchesEventFilter (app.js L3870-3877). */
 function matchesEventFilter(ev: EventOut, q: string, date: string): boolean {
   if (date && (ev.scheduled_for || "") !== date) return false;
   if (q) {
@@ -97,7 +84,6 @@ function matchesEventFilter(ev: EventOut, q: string, date: string): boolean {
   return true;
 }
 
-/** Port of _eventsSummaryText (app.js L3879-3886). */
 function eventsSummaryText(
   rows: EventOut[],
   totalItems: number,
@@ -128,14 +114,12 @@ const EMPTY_DETAIL_FILTER: EventDetailFilter = {
   assignee_id: [],
 };
 
-/** Port of _itemMatchesAssignees (app.js L4015-4019). */
 function itemMatchesAssignees(item: BugOut, assignees: Set<string>): boolean {
   if (!assignees.size) return true;
   const ids = item.assignees.map((a) => String(a.id));
   return ids.some((id) => assignees.has(id));
 }
 
-/** Port of _itemMatchesQuery (app.js L4023-4028). */
 function itemMatchesQuery(item: BugOut, q: string): boolean {
   if (!q) return true;
   const hay = `${item.title || ""} ${item.description || ""}`.toLowerCase();
@@ -143,7 +127,6 @@ function itemMatchesQuery(item: BugOut, q: string): boolean {
   return hay.includes(q);
 }
 
-/** Port of _filterEventItems (app.js L4030-4042). */
 function filterEventItems(items: BugOut[], f: EventDetailFilter): BugOut[] {
   const q = (f.q || "").trim().toLowerCase().replace(/^#/, "");
   const statuses = new Set(f.status);
@@ -158,7 +141,7 @@ function filterEventItems(items: BugOut[], f: EventDetailFilter): BugOut[] {
   );
 }
 
-/** Port of _renderCell (app.js L1962-2027) for the detail-column subset. */
+/** Render one cell for the detail-column subset. */
 function renderCell(col: DetailCol, b: BugOut): ReactElement {
   switch (col) {
     case "id":
@@ -232,10 +215,10 @@ function renderCell(col: DetailCol, b: BugOut): ReactElement {
 }
 
 // ---------------------------------------------------------------------------
-// Presentational pieces (extracted from the vanilla render templates)
+// Presentational pieces
 // ---------------------------------------------------------------------------
 
-/** One card in the list-mode grid (port of the renderEvents template). */
+/** One card in the list-mode grid. */
 function EventCard({ ev, onOpen }: Readonly<{ ev: EventOut; onOpen: (id: number) => void }>) {
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== "Enter" && e.key !== " ") return;
@@ -351,16 +334,17 @@ interface EventModalLocalState {
 }
 
 export default function EventsView() {
-  const { view, meta, canManage, isAdmin, openBugForm, openBugDetail, bugModal } = useApp();
+  const { view, meta, canManage, isAdmin, openBugForm, openBugDetail, bugModal, refreshAll } =
+    useApp();
 
-  // ----- list-mode state (port of STATE.events / STATE.eventsFilter) ------
+  // ----- list-mode state ---------------------------------------------------
   const [events, setEvents] = useState<EventOut[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState(""); // applied (debounced) search
   const [date, setDate] = useState("");
 
-  // ----- detail-mode state (port of STATE.currentEvent[Id] / filter) ------
+  // ----- detail-mode state -------------------------------------------------
   const [mode, setMode] = useState<"list" | "detail">("list");
   const [detail, setDetail] = useState<EventDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -370,20 +354,20 @@ export default function EventsView() {
   // ----- event create/edit modal (local, mounted by this view) ------------
   const [modal, setModal] = useState<EventModalLocalState>({ open: false, event: null });
 
-  // Debounced search appliers (200ms, port of the vanilla input wiring).
+  // Debounced search appliers (200ms).
   const applyQ = useMemo(() => debounce((v: string) => setQ(v), 200), []);
   const applyDetailQ = useMemo(
     () => debounce((v: string) => setDetailFilters((f) => ({ ...f, q: v })), 200),
     [],
   );
 
-  // ----- data loaders (ports of refreshEvents / openEventDetail) ----------
+  // ----- data loaders ------------------------------------------------------
   const refreshEvents = useCallback(async () => {
     setLoading(true);
     try {
       setEvents(await api<EventOut[]>("/events"));
     } catch (err) {
-      setEvents(null); // vanilla blanks the grid on error
+      setEvents(null); // blank the grid on error
       toastError(err);
     } finally {
       setLoading(false);
@@ -420,8 +404,7 @@ export default function EventsView() {
     setDetail(null);
   }, []);
 
-  // Entering the Events view resets to list mode and refetches (port of
-  // the nav handler, app.js L2320-2325).
+  // Entering the Events view resets to list mode and refetches.
   const prevView = useRef<ViewName | null>(null);
   useEffect(() => {
     if (view === "events" && prevView.current !== "events") {
@@ -464,7 +447,7 @@ export default function EventsView() {
     }
   }, [bugModal.open, mode, detail, openEventDetail]);
 
-  // ----- delete (port of handleDeleteEvent, app.js L3428-3443) ------------
+  // ----- delete ------------------------------------------------------------
   const handleDeleteEvent = useCallback(
     async (event: EventOut) => {
       const ok = await confirmDialog(
@@ -485,20 +468,23 @@ export default function EventsView() {
     [refreshEvents, showListMode],
   );
 
-  // ----- post-save (port of submitEventForm's refresh block) --------------
+  // ----- post-save ---------------------------------------------------------
   const handleSaved = useCallback(
     async (saved: EventOut, isEdit: boolean) => {
       await refreshEvents();
+      // Refresh the bell so a manager notification (incl. self-assignment on
+      // create) shows up immediately instead of waiting for the next poll.
+      void refreshAll();
       if (isEdit) {
         if (mode === "detail" && detail?.id === saved.id) await openEventDetail(saved.id);
       } else {
         await openEventDetail(saved.id);
       }
     },
-    [refreshEvents, openEventDetail, mode, detail],
+    [refreshEvents, openEventDetail, mode, detail, refreshAll],
   );
 
-  // ----- derived list-mode data (port of renderEvents) ---------------------
+  // ----- derived list-mode data --------------------------------------------
   const all = events ?? [];
   const qNorm = q.trim().toLowerCase();
   const dateNorm = date.trim();
@@ -535,13 +521,12 @@ export default function EventsView() {
     gridContent = rows.map((ev) => <EventCard key={ev.id} ev={ev} onOpen={openDetail} />);
   }
 
-  // ----- derived detail-mode data (port of renderEventDetail) -------------
+  // ----- derived detail-mode data ------------------------------------------
   const allItems = detail?.items ?? [];
   const filteredItems = filterEventItems(allItems, detailFilters);
 
-  // Assignee option pool from the event's items so the dropdown only
-  // shows people actually assigned to something in this event (port of
-  // refreshEventDetailFilters).
+  // Assignee option pool from the event's items so the dropdown only shows
+  // people actually assigned to something in this event.
   const assigneeOptions: [string, string][] = [];
   {
     const seen = new Set<number>();
@@ -594,16 +579,6 @@ export default function EventsView() {
       <section className="view" id="viewEvents" hidden={view !== "events"}>
         {/* list mode: card grid of all events */}
         <div className="events-list-mode" id="eventsListMode" hidden={mode !== "list"}>
-          <div className="page-intro events-intro">
-            <div className="page-intro-icon" aria-hidden="true">📅</div>
-            <div className="page-intro-text">
-              <h2>Events</h2>
-              <p>
-                Group of work items — like a daily standup or sprint meeting. Open an event to
-                see the tasks assigned for it
-              </p>
-            </div>
-          </div>
           <div className="events-controls">
             {canManage && (
               <button

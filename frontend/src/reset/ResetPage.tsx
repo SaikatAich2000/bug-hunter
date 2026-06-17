@@ -1,9 +1,6 @@
-// Reset-password page — React port of app/static/reset.html +
-// app/static/reset.js.
+// Reset-password page.
 //
-// Fidelity rules: all ids, classes and user-visible text match the
-// vanilla page exactly. No inline scripts/styles (strict CSP); the
-// theme bootstrap lives in main.tsx.
+// No inline scripts/styles (strict CSP); the theme bootstrap lives in main.tsx.
 import { useState } from "react";
 import type { FormEvent } from "react";
 
@@ -20,8 +17,7 @@ export default function ResetPage() {
   const [token] = useState(
     () => new URLSearchParams(location.search).get("token") || "",
   );
-  // No token → show the error immediately and disable the whole form,
-  // exactly like reset.js does on load.
+  // No token → show the error immediately and disable the whole form.
   const [resetAlert, setResetAlert] = useState<AlertState | null>(
     token
       ? null
@@ -60,8 +56,7 @@ export default function ResetPage() {
           location.replace("/login.html");
         }, 1500);
       } else {
-        // Mirrors reset.js: take {detail} as-is, fall back on parse
-        // failure or a falsy detail.
+        // Take {detail} as-is, falling back on parse failure or a falsy detail.
         let msg = "Reset failed";
         try {
           const detail: unknown = ((await res.json()) as { detail?: unknown }).detail;

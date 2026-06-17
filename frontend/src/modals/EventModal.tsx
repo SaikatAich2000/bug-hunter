@@ -1,23 +1,16 @@
 /**
- * EventModal — React port of the vanilla Event create / edit form
- * (#modalEvent markup in app/static/index.html L842-877; openEventForm /
- * submitEventForm in app/static/app.js L3362-3426).
+ * EventModal — the Event create / edit form.
  *
- * Behavioral parity:
- *  - create mode defaults scheduled_for to today (same UTC
- *    `toISOString().slice(0, 10)` as vanilla);
- *  - the manager picker only offers active admin/manager users (the
- *    backend rejects regular users in that slot);
- *  - submit POSTs /events or PUTs /events/{id} under the blocking loader
- *    with the vanilla loader messages and success/error toasts;
- *  - after a successful save the modal closes and `onSaved` runs inside
- *    the loader (the parent refreshes the list and drills into the event,
- *    port of the refreshEvents/openEventDetail block in submitEventForm).
+ *  - Create mode defaults scheduled_for to today (UTC).
+ *  - The manager picker only offers active admin/manager users (the backend
+ *    rejects regular users in that slot).
+ *  - Submit POSTs /events or PUTs /events/{id} under the blocking loader.
+ *  - After a successful save the modal closes and `onSaved` runs inside the
+ *    loader (the parent refreshes the list and drills into the event).
  *
- * Adaptations: the native `<input type="date">` is replaced by the shared
- * BhDateInput widget (per the React port conventions), and the modal head
- * comes from the shared <Modal> wrapper — #modalEventTitle is kept as a
- * span inside the h2 so selectors keep resolving.
+ * The date field uses the shared BhDateInput widget, and the modal head comes
+ * from the shared <Modal> wrapper — #modalEventTitle is kept as a span inside
+ * the h2 so selectors keep resolving.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -47,7 +40,7 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
   const [managerIds, setManagerIds] = useState<number[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Seed the form whenever the modal opens (port of openEventForm).
+  // Seed the form whenever the modal opens.
   useEffect(() => {
     if (!open) return;
     if (event) {

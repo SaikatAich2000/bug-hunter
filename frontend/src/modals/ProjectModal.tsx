@@ -1,12 +1,9 @@
 /**
- * Project create/edit modal — port of #modalProject (index.html L723-750)
- * + openProjectForm()/submitProjectForm() (app.js L3316-3357).
+ * Project create/edit modal.
  *
  * Driven by `projectModal` in AppContext: `project == null` means create
- * (color defaults to #c9764f, like the vanilla form.reset() + default),
- * otherwise edit. On success: close, jump to the list view, reload
- * projects, refresh bugs/stats, toast — same sequence as the vanilla
- * submit handler.
+ * (color defaults to #c9764f), otherwise edit. On success: close, reload
+ * projects, refresh bugs/stats, toast.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -18,7 +15,7 @@ import { useApp } from "../state/AppContext";
 const DEFAULT_COLOR = "#c9764f";
 
 export default function ProjectModal() {
-  const { projectModal, closeProjectModal, loadProjects, refreshAll, setView, canManage } =
+  const { projectModal, closeProjectModal, loadProjects, refreshAll, canManage } =
     useApp();
   const { open, project } = projectModal;
 
@@ -27,8 +24,8 @@ export default function ProjectModal() {
   const [description, setDescription] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Port of openProjectForm(): reset + prefill on every open, then focus
-  // the name input after the modal becomes visible (vanilla 50ms timeout).
+  // Reset and prefill on every open, then focus the name input after the modal
+  // becomes visible.
   useEffect(() => {
     if (!open) return;
     setName(project ? project.name : "");
@@ -42,7 +39,6 @@ export default function ProjectModal() {
   // of whoever set the open state (backend uses require_manager_or_admin).
   if (!open || !canManage) return null;
 
-  // Port of submitProjectForm().
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     const id = project?.id;
@@ -59,8 +55,9 @@ export default function ProjectModal() {
           } else {
             await api("/projects", { method: "POST", json: payload });
           }
+          // Closing returns to whatever view the user was on — saving a
+          // project must not yank them to Work Items.
           closeProjectModal();
-          setView("list");
           await loadProjects();
           await refreshAll();
         },

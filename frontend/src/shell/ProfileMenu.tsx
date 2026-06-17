@@ -1,13 +1,11 @@
 /**
- * ProfileMenu — the top-right account control (v3.0 shell redesign).
+ * ProfileMenu — the top-right account control. The button shows the signed-in
+ * user's avatar + name; clicking it opens a dropdown with the role/email,
+ * change-password, theme toggle and log-out.
  *
- * Replaces the old sidebar "Account" card + theme/logout footer. The button
- * shows the signed-in user's avatar + name; clicking it opens a dropdown with
- * the role/email, change-password, theme toggle and log-out.
- *
- * Test-parity: the name span keeps id="accountName" (the UI smoke test waits
- * for it to be populated as its "SPA booted" signal), and the change-password /
- * logout / theme controls keep their original ids.
+ * The name span keeps id="accountName" (the UI smoke test waits for it to be
+ * populated as its "SPA booted" signal), and the change-password / logout /
+ * theme controls keep their ids.
  */
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
@@ -44,7 +42,7 @@ export default function ProfileMenu() {
     };
   }, [open]);
 
-  // ----- actions (ports of the old sidebar handlers) -----------------------
+  // ----- actions -----------------------------------------------------------
   const handleLogout = async () => {
     setOpen(false);
     const ok = await confirmDialog("Log out now?", {

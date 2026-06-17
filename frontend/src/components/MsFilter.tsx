@@ -1,9 +1,6 @@
 /**
- * MsFilter — React port of the filter-bar multi-select dropdown
- * (initMultiSelects / _renderMsRows / _msButtonLabel / refreshMultiSelects,
- * app/static/app.js L2160-L2302, markup from app/static/index.html).
- *
- * DOM (class names must match styles.css exactly):
+ * MsFilter — the filter-bar multi-select dropdown. Class names must match
+ * styles.css:
  *
  *   <div class="ms-wrap" data-filter="{filterKey}">
  *     <button class="ms-btn [active]" data-ms-toggle aria-haspopup="menu" aria-expanded>
@@ -17,14 +14,13 @@
  *     </div>
  *   </div>
  *
- * The panel is plain absolute-positioned CSS (no placement JS — vanilla
- * had none either). Only one panel may be open across all instances:
- * a module-level subscriber registry replicates _closeAllMsPanelsExcept.
+ * The panel is plain absolute-positioned CSS (no placement JS). Only one panel
+ * may be open across all instances: a module-level subscriber registry closes
+ * the others when one opens.
  */
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-// --- one-open-panel-at-a-time registry (port of _closeAllMsPanelsExcept /
-// --- _collapseAllMsBtnsExcept). Every mounted instance subscribes its
+// --- one-open-panel-at-a-time registry. Every mounted instance subscribes its
 // --- close callback; opening one instance closes all the others.
 const closers = new Set<() => void>();
 function closeOthers(except: () => void): void {
@@ -34,8 +30,8 @@ function closeOthers(except: () => void): void {
 }
 
 /**
- * Port of _msButtonLabel: "All {label}" when nothing is selected, the
- * single option's label when exactly one, "{noun} (n)" when several.
+ * "All {label}" when nothing is selected, the single option's label when
+ * exactly one, "{noun} (n)" when several.
  */
 function msButtonLabel(
   label: string,
@@ -77,9 +73,8 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
     };
   }, [close]);
 
-  // Any document click closes the panel (port of the vanilla document
-  // listener). Toggle and row clicks stopPropagation to survive, exactly
-  // like vanilla, so no containment check is needed here.
+  // Any document click closes the panel. Toggle and row clicks stopPropagation
+  // to survive, so no containment check is needed here.
   useEffect(() => {
     if (!open) return;
     const onDocClick = () => setOpen(false);

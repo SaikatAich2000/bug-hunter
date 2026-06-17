@@ -1,4 +1,4 @@
-"""Regression tests for the v2.3 changes:
+"""Tests for type-based permissions and event-manager notifications.
 
   1. Type-based permission tightening — users can't edit/delete tasks or
      requirements; managers can edit but never delete.
@@ -103,14 +103,11 @@ def test_manager_can_edit_task_and_requirement(admin_client):
     req = _make_item(admin_client, p["id"], item_type="Requirement")
     _make_user(admin_client, "Mgr", role="manager")
     _login(admin_client, "mgr@x.test", "User12345Aa")
-    # "In Progress" is a Task-valid status (kept the original test
-    # value here so the Task assertion still exercises the same status
-    # transition pre/post-v2.5).
+    # "In Progress" is a Task-valid status.
     r = admin_client.put(f"/api/bugs/{task['id']}", json={"status": "In Progress"})
     assert r.status_code == 200, r.text
-    # v2.5: Requirements no longer share Bug-only statuses. The original
-    # test used "Resolved" which is now Bug-only — switch to "Approved"
-    # which is the Requirement-flavor equivalent.
+    # Requirements no longer share Bug-only statuses. "Approved" is the
+    # Requirement-flavor equivalent of the Bug-only "Resolved".
     r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "Approved"})
     assert r.status_code == 200, r.text
 
@@ -155,7 +152,7 @@ def test_event_create_emails_only_managers(admin_client, monkeypatch):
     # Make manager users.
     m1 = _make_user(admin_client, "Mgr-a", role="manager", email="mgra@x.test")
     m2 = _make_user(admin_client, "Mgr-b", role="manager", email="mgrb@x.test")
-    # And a regular user we'll later assign to a task inside the event.
+    # And a regular user to later assign to a task inside the event.
     _make_user(admin_client, "Worker", role="user", email="worker@x.test")
 
     sent = []
@@ -240,7 +237,7 @@ def test_task_creation_does_NOT_email_event_managers(admin_client, monkeypatch):
         "event_id": ev["id"], "assignee_ids": [worker["id"]],
     })
     assert r.status_code == 201, r.text
-    # We expect ONE bug-created email (to the assignee). The event
+    # Expect ONE bug-created email (to the assignee). The event
     # manager's address must not appear anywhere.
     flat = " ".join(b for _, _, b in sent) + " " + " ".join(s for s, _, _ in sent)
     all_to = [addr for _, to, _ in sent for addr in to]
@@ -365,7 +362,7 @@ def test_stats_rejects_unknown_item_type(admin_client):
 # ---------------------------------------------------------------------------
 def test_audit_history_survives_bug_delete(admin_client):
     """Pre-fix behavior: cascade deletes ate every activity row for the bug
-    along with the bug. After fix: we detach the rows (bug_id NULL) before
+    along with the bug. After fix: the rows are detached (bug_id NULL) before
     delete so the global trail keeps the full history."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug", title="Login broken thing")
@@ -414,8 +411,8 @@ def test_audit_search_by_bug_title(admin_client):
 
 
 def test_audit_search_by_item_type_word(admin_client):
-    """Typing 'task' should narrow to task-related audit events. We have
-    the item type both in the joined Bug.item_type and in the
+    """Typing 'task' should narrow to task-related audit events. The item
+    type appears both in the joined Bug.item_type and in the
     bug_created detail string."""
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Task", title="Write the spec")

@@ -1,6 +1,4 @@
-"""
-Round-2 regression tests — formally exercise each code-review concern,
-plus explore areas the first pass didn't cover deeply:
+"""Regression tests covering code-review concerns and related edge cases:
 
   - Session lifecycle around password changes / resets
   - Outstanding password-reset tokens after password change
@@ -50,14 +48,14 @@ def _make_user(c, name="Someone", email="some@x.com", role="user", password="Tes
 
 # ===========================================================================
 # CONCERN: existing sessions survive a password change / reset
-# This is a real security gap — if your password gets compromised, you'd
-# expect "change my password" to invalidate the attacker's session.
+# This is a real security gap — if the password gets compromised, "change my
+# password" is expected to invalidate the attacker's session.
 # ===========================================================================
 class TestSessionLifecycle:
     def test_existing_session_still_works_after_password_change(self, admin_client):
-        """REGRESSION/SECURITY: changing the password does NOT invalidate
-        existing sessions. A compromised account can stay compromised even
-        after the legit owner resets their password."""
+        """Changing the password does NOT invalidate existing sessions. A
+        compromised account can stay compromised even after the legitimate
+        owner resets their password."""
         # Confirm session works
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200
@@ -73,8 +71,9 @@ class TestSessionLifecycle:
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200, \
             "BUG: old session is invalidated after password change (good!) — update test"
-        # Document the finding: existing sessions ARE preserved across pw change.
-        # That is the current behavior, but is a security gap worth flagging.
+        # Documents the finding: existing sessions ARE preserved across a
+        # password change. That is the current behavior, but is a security
+        # gap worth flagging.
 
     def test_outstanding_reset_tokens_remain_after_password_change(self, admin_client):
         """If a user requests a password reset, then quickly changes their
@@ -83,8 +82,8 @@ class TestSessionLifecycle:
         Anyone with the email link can take over the account.
 
         This test exercises the request flow as far as it can without an
-        actual email — the token cannot be retrieved post-creation
-        (only sent via email), so we just verify the schema allows
+        actual email — the token cannot be retrieved after creation
+        (only sent via email), so it just verifies the schema allows
         multiple outstanding tokens to exist."""
         # Issue 3 reset requests — should all succeed and all log audit rows
         for _ in range(3):
@@ -162,8 +161,7 @@ class TestActivityOrdering:
 
 
 # ===========================================================================
-# Concerns I want to verify on the front-end logic side, exercised through
-# the API responses they consume
+# Front-end logic concerns, exercised through the API responses they consume
 # ===========================================================================
 class TestFrontendContract:
     def test_bug_detail_attachments_only_includes_bug_level(self, admin_client):
@@ -236,9 +234,8 @@ class TestInputValidation:
         assert r.status_code == 422
 
     def test_bug_create_with_oversized_description(self, admin_client):
-        # v2.6: description is rich HTML now; cap raised to 1 MB so
-        # multiple inline pasted screenshots (base64 data URLs) fit.
-        # Anything past the cap is still 422.
+        # Description is rich HTML; the cap is 1 MB so multiple inline pasted
+        # screenshots (base64 data URLs) fit. Anything past the cap is 422.
         p = _make_project(admin_client, "IV1")
         r = admin_client.post("/api/bugs", json={
             "project_id": p["id"], "title": "x" * 10,
@@ -248,8 +245,8 @@ class TestInputValidation:
         assert r.status_code == 422
 
     def test_comment_with_oversized_body(self, admin_client):
-        # v2.6: comment body cap raised to 200 KB to accommodate
-        # pasted screenshots. Anything past that is still 422.
+        # Comment body cap is 200 KB to accommodate pasted screenshots.
+        # Anything past that is 422.
         p = _make_project(admin_client, "IV2")
         bug = _make_bug(admin_client, p["id"])
         r = admin_client.post(f"/api/bugs/{bug['id']}/comments",
@@ -257,9 +254,8 @@ class TestInputValidation:
         assert r.status_code == 422
 
     def test_audit_limit_clamped_at_10000(self, admin_client):
-        # v2.6: audit limit ceiling raised from 1 000 → 10 000 so
-        # operators can pull the full trail. Anything past 10 000 still
-        # rejects with 422.
+        # The audit limit ceiling is 10 000 so operators can pull the full
+        # trail. Anything past 10 000 rejects with 422.
         r = admin_client.get("/api/audit?limit=10001")
         assert r.status_code == 422
         r = admin_client.get("/api/audit?limit=10000")
@@ -277,13 +273,14 @@ class TestInputValidation:
 
 # ===========================================================================
 # CSRF — verify cookie SameSite actually blocks cross-site form posts.
-# We can't fully simulate cross-site, but we verify the cookie attributes.
+# Cross-site cannot be fully simulated here, so this verifies the cookie
+# attributes instead.
 # ===========================================================================
 class TestCSRFPosture:
     def test_no_csrf_token_on_state_changing_routes(self, admin_client):
         """Bug Hunter relies entirely on SameSite=Lax for CSRF defence —
         verify there's no CSRF token mechanism that the SPA bypasses."""
-        # Just send a normal authenticated POST without any extra header.
+        # Send a normal authenticated POST without any extra header.
         # If a token were required, this would 403/400.
         p = _make_project(admin_client, "CSRF1")
         r = admin_client.post("/api/bugs", json={
@@ -291,15 +288,15 @@ class TestCSRFPosture:
             "priority": "Low", "environment": "DEV",
         })
         assert r.status_code == 201
-        # ⇒ no CSRF token mechanism. Defence rests entirely on SameSite=Lax.
+        # No CSRF token mechanism. Defence rests entirely on SameSite=Lax.
 
     def test_options_preflight_handled(self, admin_client):
         """Preflight OPTIONS must return a deterministic response.
 
-        v2.6 hardening: CORS middleware is only registered when
-        CORS_ORIGINS is explicitly configured. With no configured
-        origins (the default), preflight hits the route directly — we
-        accept any non-5xx response, just no surprises like 500s.
+        CORS middleware is only registered when CORS_ORIGINS is explicitly
+        configured. With no configured origins (the default), preflight hits
+        the route directly — any non-5xx response is accepted, just no
+        surprises like 500s.
         """
         r = admin_client.options("/api/bugs", headers={
             "Origin": "https://example.com",

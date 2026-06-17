@@ -1,6 +1,6 @@
-"""Regression tests for the v2.9 follow-up bug fixes.
+"""Regression tests for a set of frontend bug fixes.
 
-The five fixes in this slice were:
+The fixes covered here:
 
   1. Reports chip checkbox UI redesigned — native checkbox hidden, custom
      indicator span rendered.
@@ -11,10 +11,10 @@ The five fixes in this slice were:
      is directed to the dedicated bug-level uploader.
   4. Reports view theme uses the app's theme tokens instead of white
      panel fallbacks.
-  5. Version bumped 2.8 -> 2.9 everywhere.
+  5. Application version reported consistently everywhere.
 
-The frontend invariants can't run through a TestClient (no DOM), so we
-assert them by sniffing the source files — cheap, deterministic and
+The frontend invariants cannot run through a TestClient (no DOM), so they
+are asserted by sniffing the source files — cheap, deterministic and
 catches accidental regressions when someone refactors the SPA.
 """
 from __future__ import annotations
@@ -27,17 +27,22 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Post React+TS migration, the shipped frontend is the Vite-built bundle in
-# app/static/assets/ (content-hashed, not human-readable). These guard tests
-# pin behavioural fix-markers in the React SOURCE — the exact equivalent of
-# the old "sniff app.js" approach: a refactor that drops a fix still breaks
-# CI. The unchanged stylesheet lives at frontend/src/styles/styles.css.
+# The shipped frontend is the Vite-built bundle in app/static/assets/
+# (content-hashed, not human-readable). These guard tests pin behavioural
+# fix-markers in the React source: a refactor that drops a fix still breaks
+# CI. The stylesheet lives at frontend/src/styles/styles.css.
 FRONTEND = REPO_ROOT / "frontend" / "src"
 RICH_EDITOR = FRONTEND / "components" / "RichEditor.tsx"
 BUG_MODAL = FRONTEND / "modals" / "BugModal.tsx"
 BUG_HELPERS = FRONTEND / "modals" / "bug" / "helpers.tsx"
 REPORTS_VIEW = FRONTEND / "views" / "ReportsView.tsx"
 SIDEBAR = FRONTEND / "shell" / "Sidebar.tsx"
+# The view nav lives outside the Sidebar. NAV_ITEMS lives in a shared module
+# (navItems.ts) consumed by both the desktop chrome bar (TopChrome) and the
+# mobile drawer (Sidebar); the role gate (VIEW_MIN_ROLE) is applied at each
+# consumer so the two nav surfaces cannot drift.
+TOPCHROME = FRONTEND / "shell" / "TopChrome.tsx"
+NAVITEMS = FRONTEND / "shell" / "navItems.ts"
 TYPES = FRONTEND / "types.ts"
 FORMAT_TS = FRONTEND / "lib" / "format.ts"
 STYLES_CSS = FRONTEND / "styles" / "styles.css"
@@ -46,12 +51,12 @@ STYLES_CSS = FRONTEND / "styles" / "styles.css"
 # ---------------------------------------------------------------------------
 # Fix 5: version
 # ---------------------------------------------------------------------------
-def test_app_version_is_29():
+def test_app_version_is_3_0():
     from app import __version__
     assert __version__ == "3.0"
 
 
-def test_config_default_app_version_is_29():
+def test_config_default_app_version_is_3_0():
     # The config default is what runs when no APP_VERSION env var is
     # set — production deployments override via env, but the baked-in
     # default must still be current so /api/health reports the right
@@ -100,7 +105,7 @@ def test_delete_attachment_button_has_type_button():
 # ---------------------------------------------------------------------------
 def test_post_comment_rejects_files_without_body():
     """The postComment() function used to allow files-only by quietly
-    routing those uploads to the bug-level endpoint. v2.9 keeps them
+    routing those uploads to the bug-level endpoint. They are now kept
     strictly separate — files attached in the comment composer must
     accompany comment text, or the composer refuses with a clear
     toast pointing the user at the bug-level uploader."""
@@ -168,17 +173,18 @@ def test_no_literal_export_csv_button_in_index_html():
     view. The React Sidebar must not resurrect it, and the Reports nav entry
     must stay role-gated to manager+.
 
-    Role gating moved from an inline `needs:` key on each NAV_ITEMS entry to a
-    single source of truth — VIEW_MIN_ROLE in types.ts — which the Sidebar
-    (nav-button visibility) and the Shell (view mount + fetch) both consult so
-    they can't drift. This test pins all three facts: the button stays gone,
-    the gate map still gates Reports to manager+, and the Sidebar actually
-    consumes that map to hide the button."""
-    src = SIDEBAR.read_text(encoding="utf-8")
-    assert 'id="exportCsvBtn"' not in src
-    assert "Export CSV" not in src
-    # The Reports nav entry is still present in the Sidebar.
-    assert 'view: "reports"' in src, "Reports nav entry must exist in NAV_ITEMS"
+    The view nav (NAV_ITEMS) lives in the TopChrome bar; role gating flows from
+    a single source of truth — VIEW_MIN_ROLE in types.ts — which the nav
+    (button visibility) and the Shell (view mount + fetch) both consult so they
+    cannot drift. This test pins all the facts: the Export-CSV button stays
+    gone from the sidebar, the gate map still gates Reports to manager+, and
+    the nav source actually consumes that map to hide the button."""
+    sidebar_src = SIDEBAR.read_text(encoding="utf-8")
+    assert 'id="exportCsvBtn"' not in sidebar_src
+    assert "Export CSV" not in sidebar_src
+    # The Reports nav entry now lives in the shared NAV_ITEMS module.
+    navitems_src = NAVITEMS.read_text(encoding="utf-8")
+    assert 'view: "reports"' in navitems_src, "Reports nav entry must exist in NAV_ITEMS"
     # The gate map is the source of truth and must gate Reports to manager+.
     types_src = TYPES.read_text(encoding="utf-8")
     m = re.search(r"VIEW_MIN_ROLE[^{]*\{(.*?)\}", types_src, re.S)
@@ -186,24 +192,28 @@ def test_no_literal_export_csv_button_in_index_html():
     assert re.search(r'reports:\s*"manager"', m.group(1)), (
         "Reports must be gated to manager+ in VIEW_MIN_ROLE"
     )
-    # And the Sidebar must consume that gate to hide the nav button, so the
-    # map and the rendered button set can't drift.
-    assert "VIEW_MIN_ROLE" in src, "Sidebar must consult VIEW_MIN_ROLE to gate nav buttons"
-    assert "allowed(item.view)" in src, "Sidebar must filter NAV_ITEMS through the role gate"
+    # And BOTH nav surfaces must consume that gate so the map and the rendered
+    # button set can't drift — the desktop chrome bar and the mobile drawer.
+    nav_src = TOPCHROME.read_text(encoding="utf-8")
+    assert "VIEW_MIN_ROLE" in nav_src, "TopChrome must consult VIEW_MIN_ROLE to gate nav buttons"
+    assert "allowed(item.view)" in nav_src, "TopChrome must filter NAV_ITEMS through the role gate"
+    assert "NAV_ITEMS" in nav_src, "TopChrome must render the shared NAV_ITEMS list"
+    assert "NAV_ITEMS" in sidebar_src, "Sidebar (mobile drawer) must render the shared NAV_ITEMS list"
+    assert "VIEW_MIN_ROLE" in sidebar_src, "Sidebar must consult VIEW_MIN_ROLE to gate its drawer nav"
 
 
 # ---------------------------------------------------------------------------
 # Smoke: a manager-only API still works after the version bump
 # ---------------------------------------------------------------------------
-def test_health_endpoint_reports_v29(client):
+def test_health_endpoint_reports_version(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["version"] == "3.0"
 
 
-def test_login_page_shows_version_2_9(client):
+def test_login_page_shows_version(client):
     """The login page renders "Version 3.0" below the sign-in card so a
-    user looking at the landing page knows which release they're on
+    user looking at the landing page knows which release they are on
     without having to log in first."""
     r = client.get("/login.html")
     assert r.status_code == 200

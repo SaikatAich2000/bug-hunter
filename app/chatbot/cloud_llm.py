@@ -151,7 +151,9 @@ def _call_gemini(system: str, user: str) -> Optional[str]:
         },
     }
     try:
-        r = httpx.post(url, params={"key": s.GEMINI_API_KEY}, json=body,
+        # The key goes in a header, not the query string, so it can't leak into
+        # a logged exception URL on failure.
+        r = httpx.post(url, headers={"x-goog-api-key": s.GEMINI_API_KEY}, json=body,
                        timeout=s.SLEUTH_CLOUD_TIMEOUT_S)
         r.raise_for_status()
         data = r.json()
@@ -210,6 +212,14 @@ def _complete(system: str, user_raw: str) -> Optional[dict[str, Any]]:
                     _COOLDOWN_S)
         return None
     return _extract_json(raw)
+
+
+def complete_json(system: str, user: str) -> Optional[dict[str, Any]]:
+    """Public wrapper around the provider call + JSON parse. Reused by the
+    admin document-ingest feature (app/chatbot/ingest.py) so it shares the same
+    redaction, Gemini→OpenRouter fallback and cooldown as the chat path.
+    Returns the parsed dict or None on any failure."""
+    return _complete(system, user)
 
 
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
@@ -346,4 +356,4 @@ def _route_data_query(canonical: str, db: Session, actor: User,
     return resp
 
 
-__all__ = ["is_available", "try_understand", "SYSTEM_PROMPT"]
+__all__ = ["is_available", "try_understand", "complete_json", "SYSTEM_PROMPT"]

@@ -1,7 +1,5 @@
 /**
- * Analytics view — port of the vanilla charts section (index.html L226-253)
- * and renderCharts/drawTimeline/drawBars/kindColor/drawProjectBars/
- * drawAssigneeBars (app.js L2413-2532).
+ * Analytics view — the charts section.
  *
  * Charts are scoped by the global type-tabs: the same activeTab that drives
  * the work-items list also drives analytics. Titles update per tab and the
@@ -18,7 +16,6 @@ import type {
   StatsTimelinePoint,
 } from "../types";
 
-// Port of _TAB_NOUNS (app.js L2416-2421).
 const TAB_NOUNS: Record<string, string> = {
   all: "Items",
   Bug: "Bugs",
@@ -26,7 +23,7 @@ const TAB_NOUNS: Record<string, string> = {
   Task: "Tasks",
 };
 
-/** Per-category bar colors — exact copy of the vanilla kindColor hex table. */
+/** Per-category bar colors. */
 function kindColor(kind: string, key: string): string {
   const map: Record<string, Record<string, string>> = {
     status: {
@@ -40,7 +37,7 @@ function kindColor(kind: string, key: string): string {
   return map[kind]?.[key] ?? "#8b8270";
 }
 
-/** 600×200 SVG line + area chart — port of drawTimeline (app.js L2447-2469). */
+/** 600×200 SVG line + area chart. */
 function TimelineChart({ data }: Readonly<{ data: StatsTimelinePoint[] }>) {
   if (!data.length) return <p className="muted">No data</p>;
   const W = 600;
@@ -87,7 +84,7 @@ function TimelineChart({ data }: Readonly<{ data: StatsTimelinePoint[] }>) {
   );
 }
 
-/** Vertical bar chart — port of drawBars (app.js L2471-2491). */
+/** Vertical bar chart. */
 function BarsChart({ data, kind }: Readonly<{ data: Record<string, number>; kind: string }>) {
   const entries = Object.entries(data ?? {});
   if (!entries.length) return <p className="muted">No data</p>;
@@ -121,7 +118,7 @@ function BarsChart({ data, kind }: Readonly<{ data: Record<string, number>; kind
   );
 }
 
-/** Horizontal project rows with color swatch — port of drawProjectBars (app.js L2506-2518). */
+/** Horizontal project rows with color swatch. */
 function ProjectBars({ rows }: Readonly<{ rows: StatsProjectSlice[] }>) {
   if (!rows.length) return <p className="muted">No data</p>;
   const max = Math.max(1, ...rows.map((r) => r.count));
@@ -148,7 +145,7 @@ function ProjectBars({ rows }: Readonly<{ rows: StatsProjectSlice[] }>) {
   );
 }
 
-/** Horizontal assignee rows with avatar initials — port of drawAssigneeBars (app.js L2520-2532). */
+/** Horizontal assignee rows with avatar initials. */
 function AssigneeBars({ rows }: Readonly<{ rows: StatsAssigneeSlice[] }>) {
   if (!rows.length) return <p className="muted">No assignments yet</p>;
   const max = Math.max(1, ...rows.map((r) => r.count));
@@ -176,12 +173,15 @@ function AssigneeBars({ rows }: Readonly<{ rows: StatsAssigneeSlice[] }>) {
 }
 
 export default function AnalyticsView() {
-  const { stats, activeTab, refreshStats } = useApp();
+  const { stats, activeTab, refreshStats, filters } = useApp();
 
-  // Entering the view re-fetches stats (vanilla setView("analytics") path).
+  // Entering the view re-fetches stats, and re-fetches whenever the status
+  // filter changes so the charts react to a KPI tile click in place
+  // (refreshStats reads the live filter at call time).
+  const statusKey = filters.status.join(",");
   useEffect(() => {
     void refreshStats();
-  }, [refreshStats]);
+  }, [refreshStats, statusKey]);
 
   const noun = TAB_NOUNS[activeTab] ?? "Items";
   // Environment doesn't apply to Requirements / Tasks — hide the card.

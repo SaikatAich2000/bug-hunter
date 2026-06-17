@@ -1,7 +1,7 @@
 """Global audit-trail endpoint — every action across the system.
 
-Hidden from regular users per v3.1 spec. Managers and admins can read
-the trail; everyone else gets 403."""
+Hidden from regular users. Managers and admins can read the trail; everyone
+else gets 403."""
 from __future__ import annotations
 
 import re
@@ -35,12 +35,10 @@ def list_audit(
     entity_type: Optional[str] = None,
     actor_user_id: Optional[int] = None,
     q: Optional[str] = None,
-    # v2.6: raise the cap so operators reviewing very old activity can
-    # actually see it. 1000 was too aggressive — long-running deployments
-    # have well over that. We bumped the ceiling to 10 000 (still a
-    # firm upper bound to keep the response size sane) and the SPA now
-    # asks for 5000 by default, with a "Load more" affordance for the
-    # rare case the user needs to dig further.
+    # The ceiling is 10 000 (a firm upper bound to keep the response size
+    # sane) so operators reviewing very old activity on long-running
+    # deployments can still reach it. The SPA asks for 5000 by default, with a
+    # "Load more" affordance for the rare case a user needs to dig further.
     limit: int = Query(default=5000, le=10000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -54,18 +52,20 @@ def list_audit(
     they should all hit. We OR every plausible column together rather than
     parsing the query into a structured form.
 
-    Performance: a LEFT JOIN on bugs gives us the current title for any
-    activity row still linked to a bug, so historical rows that didn't
-    bake the title into `detail` are still findable by title. The join
-    is OUTER because most audit rows aren't bug-related and even those
-    that are may have been detached (bug_id NULL) when the bug was
-    deleted — those rows still carry the original title in `detail`."""
-    stmt = select(Activity).outerjoin(Bug, Bug.id == Activity.bug_id)
+    Performance: searching by text needs the current bug title, which an
+    OUTER JOIN on bugs supplies for rows still linked to a live bug. The
+    join is added only when `q` is present, so plain paginated browsing
+    (the common case) doesn't pay for it. It is OUTER because most audit
+    rows aren't bug-related and even those that are may have been detached
+    (bug_id NULL) on bug delete — those rows still carry the original
+    title in `detail`."""
+    stmt = select(Activity)
     if entity_type:
         stmt = stmt.where(Activity.entity_type == entity_type)
     if actor_user_id is not None:
         stmt = stmt.where(Activity.actor_user_id == actor_user_id)
     if q:
+        stmt = stmt.outerjoin(Bug, Bug.id == Activity.bug_id)
         raw = q.strip()
         like = f"%{_like_escape(raw.lower())}%"
         clauses = [
@@ -93,7 +93,7 @@ def list_audit(
                 clauses.append(Activity.entity_id == entity_id_val)
                 # Also catch rows still attached to the bug via bug_id.
                 clauses.append(Activity.bug_id == entity_id_val)
-            except ValueError:
+            except ValueError:  # pragma: no cover - a \d+ match is always int-parseable
                 pass
             # Substring match on the entity_id column as text — lets the
             # user type "4" and find ids 4, 40, 41, … (handy when they

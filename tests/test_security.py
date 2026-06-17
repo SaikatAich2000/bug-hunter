@@ -1,15 +1,15 @@
-"""Security regression tests for v2.7-security.
+"""Security tests covering the hardening items from the OWASP audit.
 
-Covers the eight hardening items shipped after the OWASP audit:
+Covers:
 
-  G1 — login timing equality (no user-enumeration via response latency)
-  G2 — CSV formula injection guard on bug export
-  G3 — global request body size middleware
-  G4 — X-Forwarded-For trust gate on audit IP
-  G5 — masked email in INFO-level logs
-  T3 — per-account lockout after N failed logins
-  T4 — HaveIBeenPwned breach check on password set
-  T6 — EXIF / metadata strip on uploaded images
+  - login timing equality (no user-enumeration via response latency)
+  - CSV formula injection guard on bug export
+  - global request body size middleware
+  - X-Forwarded-For trust gate on audit IP
+  - masked email in INFO-level logs
+  - per-account lockout after N failed logins
+  - HaveIBeenPwned breach check on password set
+  - EXIF / metadata strip on uploaded images
 
 Each block has both a focused unit test and a route-level integration
 test where it makes sense. Module-level state used by the in-memory
@@ -53,7 +53,7 @@ def _make_bug(client, title: str, project_id: int = 1) -> int:
 
 
 # ---------------------------------------------------------------------------
-# G1 — Login timing equality
+# Login timing equality
 # ---------------------------------------------------------------------------
 class TestLoginTimingEquality:
     """Both the unknown-email and the wrong-password branches must run
@@ -61,7 +61,7 @@ class TestLoginTimingEquality:
     accounts by measuring response latency."""
 
     def test_unknown_email_still_runs_bcrypt(self, client):
-        # Patch verify_password so we can count calls without paying the
+        # Patch verify_password to count calls without paying the
         # 50 ms bcrypt cost in the test.
         from app.routes import auth as auth_routes
         with mock.patch.object(auth_routes, "verify_password",
@@ -105,15 +105,13 @@ class TestLoginTimingEquality:
 
 
 # ---------------------------------------------------------------------------
-# G2 — Spreadsheet formula injection (XLSX)
+# Spreadsheet formula injection (XLSX)
 #
-# The legacy CSV export was retired when the Reports view shipped. The
-# same attack surface (a bug title like `=cmd|'/c calc.exe'!A1` becoming
-# an Excel formula when the workbook is opened) applies to XLSX, because
-# openpyxl auto-treats cell values starting with `=`/`+`/`-`/`@`/`\t`/`\r`
-# as formulas. We defang at the same boundary in
-# app/reports/xlsx.py::_defang_formula_text. This test class moved with
-# the feature — same invariants, new path.
+# A bug title like `=cmd|'/c calc.exe'!A1` becomes an Excel formula when
+# the workbook is opened, because openpyxl auto-treats cell values
+# starting with `=`/`+`/`-`/`@`/`\t`/`\r` as formulas. The values are
+# defanged at the same boundary in
+# app/reports/xlsx.py::_defang_formula_text.
 # ---------------------------------------------------------------------------
 class TestXlsxFormulaInjectionGuard:
 
@@ -159,7 +157,7 @@ class TestXlsxFormulaInjectionGuard:
 
 
 # ---------------------------------------------------------------------------
-# G3 — Body size middleware
+# Body size middleware
 # ---------------------------------------------------------------------------
 class TestBodySizeMiddleware:
 
@@ -170,10 +168,10 @@ class TestBodySizeMiddleware:
 
     def test_oversize_content_length_rejected_with_413(self, client, monkeypatch):
         # Send a Content-Length that exceeds even a generous limit.
-        # We don't need to actually upload 70 MB — middleware checks the
+        # Uploading 70 MB isn't necessary — middleware checks the
         # header BEFORE reading the body. httpx normally overrides
-        # Content-Length to match the body, so we use the raw
-        # transport / send the actual body to make the assertion robust.
+        # Content-Length to match the body, so the raw transport sends
+        # the actual body to make the assertion robust.
         # Easiest deterministic path: lower the limit via env, send a
         # body slightly above it. Requires fresh client to re-read settings.
         # (Done in the next test.)
@@ -182,8 +180,8 @@ class TestBodySizeMiddleware:
         assert settings.MAX_REQUEST_BODY_BYTES >= 50 * 1024 * 1024
 
     def test_oversize_body_rejected(self, tmp_path, monkeypatch):
-        """End-to-end check with a deliberately tiny limit so we don't
-        have to allocate hundreds of MB just to exercise the rejection."""
+        """End-to-end check with a deliberately tiny limit to avoid
+        allocating hundreds of MB just to exercise the rejection."""
         import sys
         db_file = tmp_path / "bodysize.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
@@ -206,8 +204,8 @@ class TestBodySizeMiddleware:
             # Send a body larger than 1 KB to a JSON endpoint.
             payload = {"current_password": "Admin1234", "new_password": "x" * 2048}
             res = c.post("/api/auth/change-password", json=payload)
-            # The middleware fires BEFORE the route, so we get a 413
-            # (Payload Too Large) regardless of the route's own
+            # The middleware fires BEFORE the route, so the response is a
+            # 413 (Payload Too Large) regardless of the route's own
             # validation.
             assert res.status_code == 413, (
                 f"Expected 413, got {res.status_code}: {res.text}"
@@ -295,8 +293,8 @@ class TestAccountLockoutEdgeCases:
 
 
 class TestPasswordBreachFetchRange:
-    """Exercise the real ``_fetch_range`` body — every other T4 test
-    monkeypatches this seam to keep tests hermetic. These tests stub
+    """Exercise the real ``_fetch_range`` body — every other breach-check
+    test monkeypatches this seam to keep tests hermetic. These tests stub
     the httpx layer instead so the real branching is exercised."""
 
     @pytest.fixture(autouse=True)
@@ -392,8 +390,8 @@ class TestImageStripEdgeCases:
             format = "JPEG"
             info: dict = {}
             def load(self):
-                # No-op load — the failure we want to exercise is in
-                # save(), not in decode.
+                # No-op load — the failure under test is in save(),
+                # not in decode.
                 pass
             def save(self, _out, **_kw): raise OSError("disk full mid-encode")
 
@@ -405,7 +403,7 @@ class TestImageStripEdgeCases:
         """Some browsers send ``image/jpeg; charset=binary`` — the helper
         must strip the parameter before matching the prefix."""
         from app.image_strip import strip_image_metadata
-        # We don't have a real JPEG here, so we just verify the helper
+        # There's no real JPEG here, so this just verifies the helper
         # gets past the content-type guard (the real round-trip is
         # already exercised by TestExifStrip).
         raw = b"not-a-jpeg"
@@ -415,7 +413,7 @@ class TestImageStripEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# G4 — X-Forwarded-For trust gate
+# X-Forwarded-For trust gate
 # ---------------------------------------------------------------------------
 class TestXffTrustGate:
 
@@ -471,7 +469,7 @@ class TestXffTrustGate:
 
 
 # ---------------------------------------------------------------------------
-# G5 — Email masking in logs
+# Email masking in logs
 # ---------------------------------------------------------------------------
 class TestEmailMasking:
 
@@ -514,7 +512,7 @@ class TestEmailMasking:
 
 
 # ---------------------------------------------------------------------------
-# T3 — Account lockout
+# Account lockout
 # ---------------------------------------------------------------------------
 class TestAccountLockout:
 
@@ -588,14 +586,14 @@ class TestAccountLockout:
             "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD,
         })
         assert res.status_code == 200
-        # Bucket should now be cleared. We can't easily check the
-        # internal state without reaching into the module, but a fresh
+        # Bucket should now be cleared. The internal state isn't easily
+        # checkable without reaching into the module, but a fresh
         # failure-counter should not be in lockout state.
         account_lockout.check_locked(BOOTSTRAP_EMAIL)
 
 
 # ---------------------------------------------------------------------------
-# T4 — HIBP breach check
+# HIBP breach check
 # ---------------------------------------------------------------------------
 class TestPasswordBreachCheck:
     """The conftest disables PASSWORD_BREACH_CHECK_ENABLED for the rest
@@ -615,7 +613,7 @@ class TestPasswordBreachCheck:
 
     def test_unit_unknown_password_passes(self):
         from app import password_breach
-        # An empty response means our suffix isn't listed.
+        # An empty response means the suffix isn't listed.
         with mock.patch.object(password_breach, "_fetch_range", return_value=""):
             assert password_breach.is_password_breached("rare-uniq-pwd-9") is False
 
@@ -636,8 +634,8 @@ class TestPasswordBreachCheck:
         from app import password_breach
         monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
         # Even with a positive match the helper returns False when
-        # disabled. We don't even need to mock _fetch_range — the
-        # function returns before reaching it.
+        # disabled. Mocking _fetch_range isn't needed — the function
+        # returns before reaching it.
         assert password_breach.is_password_breached("password") is False
 
     @staticmethod
@@ -649,6 +647,19 @@ class TestPasswordBreachCheck:
         import hashlib
         digest = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()  # NOSONAR
         return f"{digest[5:]}:9999\n"
+
+    def test_unit_changeme_allowlisted_despite_breach_match(self):
+        """The legacy default 'changeme' is ALWAYS accepted (mirrors
+        schemas._check_password_strength), even though it is obviously in the
+        breach corpus — so the breach gate must whitelist it, case-insensitively
+        and before any network call."""
+        from app import password_breach
+        body = self._force_match("changeme")  # this body WOULD match its suffix
+        with mock.patch.object(password_breach, "_fetch_range", return_value=body) as m:
+            assert password_breach.is_password_breached("changeme") is False
+            assert password_breach.is_password_breached("CHANGEME") is False
+        # Whitelisted short-circuit returns before ever fetching the range.
+        m.assert_not_called()
 
     def test_change_password_rejects_breached(self, admin_client, monkeypatch):
         monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "true")
@@ -694,11 +705,11 @@ class TestPasswordBreachCheck:
 
 
 # ---------------------------------------------------------------------------
-# T6 — EXIF strip
+# EXIF strip
 # ---------------------------------------------------------------------------
 def _jpeg_with_exif(gps_value: str = "secret-gps-tag") -> bytes:
-    """Build an in-memory JPEG that carries a custom EXIF tag we can
-    look for after the upload roundtrip. Pillow 11+ exposes Image.Exif
+    """Build an in-memory JPEG that carries a custom EXIF tag to look
+    for after the upload roundtrip. Pillow 11+ exposes Image.Exif
     directly — no extra dependency needed."""
     from PIL import Image
 
@@ -711,7 +722,7 @@ def _jpeg_with_exif(gps_value: str = "secret-gps-tag") -> bytes:
 
 
 def _png_with_text(text: str = "stash-this") -> bytes:
-    """Build a PNG carrying a tEXt chunk we can grep for afterwards."""
+    """Build a PNG carrying a tEXt chunk to grep for afterwards."""
     from PIL import Image
     from PIL.PngImagePlugin import PngInfo
 
@@ -756,7 +767,7 @@ class TestExifStrip:
     def test_unit_garbage_image_passes_through(self):
         from app.image_strip import strip_image_metadata
         raw = b"this is definitely not a jpeg"
-        # Pillow can't decode; we fail open.
+        # Pillow can't decode; the helper fails open.
         assert strip_image_metadata(raw, "image/jpeg") == raw
 
     def test_unit_empty_bytes_returns_empty(self):

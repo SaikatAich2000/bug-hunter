@@ -1,12 +1,10 @@
 /**
- * Sessions admin view — port of the vanilla sessions section (index.html
- * L486-501), shortenUserAgent (app.js L3810-3831) and refreshSessions /
- * renderSessions / handleRevokeSession (app.js L4089-4162).
+ * Sessions admin view.
  *
  * Lists every active session row with user, role, IP, browser, when it was
- * created, when it was last seen, when it expires. Admin-only — the nav
- * button is role-gated and the API enforces 403 for non-admins. Your own
- * current session shows "This is you" and its Revoke button is disabled.
+ * created, when it was last seen, when it expires. Admin-only — the nav button
+ * is role-gated and the API enforces 403 for non-admins. Your own current
+ * session shows "This is you" and its Revoke button is disabled.
  */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
@@ -17,10 +15,7 @@ import { confirmDialog } from "../components/ConfirmHost";
 import { DATA_POLL_MS } from "../state/AppContext";
 import type { SessionOut } from "../types";
 
-/**
- * Short browser/OS hint from a full UA string — exact port of
- * shortenUserAgent (app.js L3810-3831).
- */
+/** Short browser/OS hint from a full UA string. */
 function shortenUserAgent(ua: string): string {
   if (!ua) return "Unknown";
   const lower = ua.toLowerCase();
@@ -68,7 +63,6 @@ export default function SessionsView() {
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", tick); };
   }, [refreshSessions]);
 
-  // Port of handleRevokeSession (app.js L4141-4162).
   const handleRevoke = useCallback(
     async (s: SessionOut) => {
       const who = s.user_name
@@ -96,16 +90,9 @@ export default function SessionsView() {
 
   return (
     <section className="view" id="viewSessions">
-      <div className="page-intro sessions-intro">
-        <div className="page-intro-icon" aria-hidden="true">🔐</div>
-        <div className="page-intro-text">
-          <h2>Active Sessions</h2>
-          <p>Every device currently logged in to Bug Hunter. Revoke a session to log that device out without affecting anything else</p>
-        </div>
-      </div>
       <div className="sessions-controls">
         <p className="sessions-help">
-          Click <strong>Revoke</strong> to log a specific device out without affecting any other session for that user. Your own current session can't be revoked from here — use the Log out button in the sidebar instead
+          Click <strong>Revoke</strong> to log a specific device out without affecting any other session for that user. Your own current session can't be revoked from here — use <strong>Log out</strong> in the profile menu instead
         </p>
         <button
           type="button"
@@ -161,7 +148,7 @@ export default function SessionsView() {
                 disabled={s.is_current}
                 title={
                   s.is_current
-                    ? "Use Log out from the sidebar to end your own session"
+                    ? "Use Log out from the profile menu to end your own session"
                     : undefined
                 }
                 onClick={() => void handleRevoke(s)}

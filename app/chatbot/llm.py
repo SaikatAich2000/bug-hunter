@@ -8,7 +8,7 @@ file the operator drops into `models/`.
 
 Hardware reality check:
 - The deployment target is 1 CPU, 2 GB RAM, no GPU.
-- A 0.5B-parameter GGUF model at Q4_K_M quantisation is ~350 MB on disk
+- A 0.5B-parameter GGUF model at Q4_K_M quantization is ~350 MB on disk
   and roughly the same in RAM once loaded. That fits — barely.
 - Inference speed on a single modern x86 core: 5-15 tokens/second. A
   structured JSON response of ~80 tokens lands in 6-15 seconds, inside
@@ -68,7 +68,7 @@ _MODEL_PATH = Path(
 _INFERENCE_TIMEOUT_S = float(os.getenv("SLEUTH_LLM_TIMEOUT_S", "12"))
 
 # Memory hygiene: unload the model after this many seconds of no use.
-# 10 minutes balances load-cost amortisation against keeping memory free.
+# 10 minutes balances load-cost amortization against keeping memory free.
 _IDLE_UNLOAD_S = float(os.getenv("SLEUTH_LLM_IDLE_UNLOAD_S", "600"))
 
 # Cap how many tokens we ever generate. Big enough to fit the JSON intent
@@ -88,7 +88,7 @@ _THREADS = int(os.getenv("SLEUTH_LLM_THREADS", "1"))
 # Headroom multiplier on top of the GGUF file size, accounting for KV
 # cache, model load buffer, and Python/llama.cpp overhead. 1.4x is a
 # conservative estimate from llama.cpp's own benchmarks for 1024-token
-# context windows on Q4_K_M quantised models. Larger contexts need more.
+# context windows on Q4_K_M quantized models. Larger contexts need more.
 _RAM_HEADROOM_MULT = float(os.getenv("SLEUTH_LLM_RAM_HEADROOM", "1.4"))
 # Hard floor in case someone uses a tiny model — even a 50 MB GGUF needs
 # at least ~200 MB of working memory once you count Python, llama.cpp
@@ -211,12 +211,8 @@ def memory_shortfall_message() -> Optional[str]:
     """Single-line user-facing notice. Returns None when there's no
     shortfall (or no model). The detailed operator-facing breakdown
     goes to the application log via is_available(); this function only
-    yields what's safe to show in the chat UI.
-
-    Most chat paths don't even use this — they just fall back to the
-    standard "I didn't understand" reply when the LLM is unavailable.
-    The string here is available for diagnostics or admin tools that
-    want a quick one-liner."""
+    yields what's safe to show in the chat UI, for diagnostics or admin
+    tools that want a quick one-liner."""
     budget = memory_budget()
     if budget is None or budget.sufficient:
         return None
@@ -335,7 +331,7 @@ def _unload() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Prompt — kept short to minimise prefill cost on a CPU-bound run
+# Prompt — kept short to minimize prefill cost on a CPU-bound run
 # ---------------------------------------------------------------------------
 _SYSTEM_PROMPT = (
     "You are Sleuth, an assistant for a bug tracker. Read the user's "

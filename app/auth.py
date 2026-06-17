@@ -219,7 +219,8 @@ _LAST_SEEN_THROTTLE_SECONDS = 60
 
 
 def _delete_expired_session(db: Session, sess: SessionRow, jti: str) -> None:
-    """Best-effort: drop an expired session row on a request-path read."""
+    """Drop an expired session row on a request-path read; errors are logged,
+    not raised."""
     try:
         db.delete(sess)
         db.commit()
@@ -326,8 +327,8 @@ def can_edit_bug(
 ) -> bool:
     """Whether `user` may edit a work item.
 
-    Per-type rules (v2.3 tightening):
-      - Bug:         every authenticated user can edit (legacy behaviour).
+    Per-type rules:
+      - Bug:         every authenticated user can edit.
       - Requirement: only admin or manager. Users are read-only here.
       - Task:        only admin or manager. Users are read-only here.
     """
@@ -338,9 +339,9 @@ def can_edit_bug(
 
 
 def can_delete_bug(user: User, item_type: str = "Bug") -> bool:
-    """Deletion is admin-only across every work-item type. Managers can
-    edit, never delete — this matches the v2.3 spec. The item_type
-    parameter exists for symmetry with can_edit_bug.
+    """Deletion is admin-only across every work-item type. Managers can edit,
+    never delete. The item_type parameter exists for symmetry with
+    can_edit_bug.
     """
     del item_type
     return user.role == ROLE_ADMIN
@@ -367,8 +368,8 @@ def can_delete_project(user: User) -> bool:
 
 
 def can_manage_users(user: User) -> bool:
-    """Create / edit users: admin or manager (per v3.1 spec). Previously
-    admin-only. Delete is still admin-only — see can_delete_user."""
+    """Create / edit users: admin or manager. Delete is admin-only — see
+    can_delete_user."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 
@@ -377,8 +378,8 @@ def can_delete_user(user: User) -> bool:
 
 
 def can_view_audit(user: User) -> bool:
-    """Audit trail is hidden from regular users per v3.1 spec — they don't
-    need to see who did what across the system."""
+    """Audit trail is hidden from regular users — they don't need to see who
+    did what across the system."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 

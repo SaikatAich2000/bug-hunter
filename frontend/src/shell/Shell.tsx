@@ -1,23 +1,23 @@
 /**
- * App shell — composes the chrome from index.html: sidebar, topbar, type
- * tabs, KPI strip, filter bar, the six view sections and the shared modals.
+ * App shell — the two-tier chrome:
  *
- * View sections keep their vanilla ids (#viewList etc., index.html
- * L202-501) and the vanilla show/hide mechanism (`hidden` attribute, port
- * of _toggleViewPanels, app.js L2328-2337); the React component for a view
- * only mounts while that view is active, which also replicates the
- * "re-fetch on entry" behaviour of _VIEW_REFRESHERS for the views that own
- * their data (events / audit / sessions / reports). The list + analytics
- * views read shared context data, so the entry-refresh for those is done
- * here (port of _VIEW_REFRESHERS.list / .analytics, app.js L2313-2326).
+ *   TopChrome   — brand + horizontal view nav + Ask Sleuth / bell / profile
+ *   SuperNav    — work-item type tabs + search (list / analytics only)
+ *   frame       — library-rail Sidebar + main(PageHead + content)
+ *
+ * Mounting is the show/hide mechanism: only the active view is mounted, which
+ * also re-fetches on entry for the views that own their data (events / audit /
+ * sessions / reports). The list and analytics views read shared context data,
+ * so their entry-refresh is done here.
  */
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { VIEW_MIN_ROLE } from "../types";
 import { initPushOnBoot } from "../lib/push";
+import TopChrome from "./TopChrome";
+import SuperNav from "./SuperNav";
+import PageHead from "./PageHead";
 import Sidebar from "./Sidebar";
-import Topbar from "./Topbar";
-import TypeTabs from "./TypeTabs";
 import KpiStrip from "./KpiStrip";
 import FilterBar from "./FilterBar";
 // ListView is the default view → keep it eager so first paint needs no extra
@@ -37,8 +37,6 @@ import ChangePasswordModal from "../modals/ChangePasswordModal";
 export default function Shell() {
   const { view, setView, refreshAll, refreshStats, roleRank, currentUser } = useApp();
 
-  // Mobile sidebar open state (port of #menuBtn / #sidebarBackdrop /
-  // closeSidebar, app.js L4456-4461, L4782).
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // If the user already granted web-push permission, silently refresh their FCM
@@ -48,8 +46,8 @@ export default function Shell() {
     void initPushOnBoot();
   }, []);
 
-  // Re-fetch shared data on view entry (port of _VIEW_REFRESHERS for the
-  // context-backed views; boot() already covers the initial load).
+  // Re-fetch shared data on view entry for the context-backed views; boot()
+  // already covers the initial load.
   const firstView = useRef(true);
   useEffect(() => {
     if (firstView.current) {
@@ -81,29 +79,35 @@ export default function Shell() {
         onClick={() => setMobileOpen(false)}
       ></div>
 
-      <div className="app">
-        <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
+      {/* Two-tier layout: a global chrome bar (brand + view nav + bell +
+          profile), a supernav (type tabs + search), then a fixed library-rail
+          Sidebar + scrolling main. Sidebar and nav coexist; no collapse. */}
+      <TopChrome onOpenMobile={() => setMobileOpen(true)} />
+      <SuperNav />
+
+      <div className="frame">
+        <Sidebar mobileOpen={mobileOpen} onNavigate={() => setMobileOpen(false)} />
 
         <main className="main">
-          <Topbar onOpenMobile={() => setMobileOpen(true)} />
-          <TypeTabs />
-          <KpiStrip />
-          <FilterBar />
+          <PageHead />
 
-          {/* Each view component renders its own <section class="view"
-              id="viewX"> root (vanilla ids preserved). Only the active view
-              is mounted — mounting IS the show/hide mechanism, and it also
-              replicates the "re-fetch on entry" behaviour of
-              _VIEW_REFRESHERS for the views that own their data. Wrapping
-              them in a second section here would duplicate the ids. */}
-          <Suspense fallback={null}>
-            {view === "list" && <ListView />}
-            {view === "analytics" && <AnalyticsView />}
-            {view === "audit" && !denied && <AuditView />}
-            {view === "events" && <EventsView />}
-            {view === "reports" && !denied && <ReportsView />}
-            {view === "sessions" && !denied && <SessionsView />}
-          </Suspense>
+          <div className="content">
+            <KpiStrip />
+            <FilterBar />
+
+            {/* Each view component renders its own <section class="view"
+                id="viewX"> root. Only the active view is mounted — mounting is
+                the show/hide mechanism, and it also re-fetches on entry for the
+                views that own their data. */}
+            <Suspense fallback={null}>
+              {view === "list" && <ListView />}
+              {view === "analytics" && <AnalyticsView />}
+              {view === "audit" && !denied && <AuditView />}
+              {view === "events" && <EventsView />}
+              {view === "reports" && !denied && <ReportsView />}
+              {view === "sessions" && !denied && <SessionsView />}
+            </Suspense>
+          </div>
         </main>
       </div>
 

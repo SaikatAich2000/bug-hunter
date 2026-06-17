@@ -1,17 +1,16 @@
-"""Per-account login lockout (T3).
+"""Per-account login lockout.
 
-In-memory sliding-window counter keyed by email. After N failed attempts
-in a rolling window, the email is locked for L seconds — subsequent
-requests are rejected with 429 before the bcrypt verify even runs.
+In-memory sliding-window counter keyed by email. After N failed attempts in a
+rolling window, the email is locked for L seconds — subsequent requests are
+rejected with 429 before the bcrypt verify even runs.
 
 Design notes:
-  - The bucket is keyed by email, not by IP. IP rate limit lives in
-    app/main.py and complements this. A determined attacker proxying
-    through many IPs is stopped by the per-account counter.
-  - Unknown emails also tick the counter. If we only ticked known emails
-    after they existed, an attacker could enumerate accounts by which
-    addresses do or do not lock — same enumeration risk we closed for
-    response timing (G1).
+  - The bucket is keyed by email, not by IP. The IP rate limit lives in
+    app/main.py and complements this. A determined attacker proxying through
+    many IPs is stopped by the per-account counter.
+  - Unknown emails also tick the counter. Ticking only known emails would let
+    an attacker enumerate accounts by which addresses do or do not lock — the
+    same enumeration risk closed for response timing.
   - Lockout is a known DoS vector: a hostile party can lock a target
     user's account by spamming bad logins. Operators who can't accept
     that trade-off should keep the limit high and the window short, or

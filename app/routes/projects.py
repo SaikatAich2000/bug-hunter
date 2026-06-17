@@ -1,11 +1,10 @@
 """Projects API.
 
-Permissions (v3.1):
+Permissions:
   - Read   : any authenticated user.
   - Create : admin or manager (require_manager_or_admin).
   - Update : admin or manager.
-  - Delete : admin ONLY. Managers used to be able to delete projects;
-             v3.1 narrows this to admin per the role-policy spec.
+  - Delete : admin only.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 
-# S1192: extract duplicated detail string into a module constant.
+# Extracted to a module constant to avoid duplicating the literal.
 _DETAIL_PROJECT_NOT_FOUND = "Project not found"
 
 def _audit(db: Session, actor: User, action: str, entity_id: int, detail: str) -> None:

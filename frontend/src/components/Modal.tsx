@@ -1,5 +1,5 @@
 /**
- * Generic modal wrapper matching the vanilla markup exactly:
+ * Generic modal wrapper:
  *
  *   <div class="modal" id={id} hidden>
  *     <div class="modal-card {size}">
@@ -9,9 +9,8 @@
  *   </div>
  *
  * Open/close is driven by the `hidden` attribute (styles.css:
- * `.modal[hidden] { display:none }`), same as the vanilla openModal/
- * closeModal helpers. Escape-to-close is handled centrally in App.tsx
- * (port of closeTopModal) so stacked modals close top-most first.
+ * `.modal[hidden] { display:none }`). Escape-to-close is handled centrally in
+ * App.tsx so stacked modals close top-most first.
  */
 import type { ReactNode } from "react";
 

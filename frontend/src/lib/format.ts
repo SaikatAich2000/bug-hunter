@@ -1,6 +1,6 @@
-/** Formatting helpers — ports of the vanilla app.js utilities (L82-130). */
+/** Formatting helpers. */
 
-/** "MMM D, YYYY, HH:MM" — v2.9 rule: ALWAYS show date AND time. */
+/** "MMM D, YYYY, HH:MM" — always shows both date and time. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -34,7 +34,7 @@ export function initials(name: string): string {
     .join("");
 }
 
-/** Emoji icon per MIME / filename — port of fileIcon (L121-130). */
+/** Emoji icon per MIME / filename. */
 export function fileIcon(
   contentType?: string | null,
   name?: string | null,

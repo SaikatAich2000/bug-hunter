@@ -1,12 +1,11 @@
 /**
- * Typed fetch wrapper — port of `api()` from the vanilla app.js (L135-174).
+ * Typed fetch wrapper for the JSON API.
  *
- * Behavioral parity:
- *  - same-origin cookies ride along automatically (credentials: include);
- *  - a 401 anywhere bounces to /login.html exactly once (no redirect storm
- *    when several in-flight calls all come back 401 after a session revoke);
- *  - 204 resolves to null; JSON parsed otherwise;
- *  - errors surface FastAPI's {detail} — string or Pydantic list — as a
+ *  - Same-origin cookies ride along automatically (credentials: include).
+ *  - A 401 anywhere bounces to /login.html exactly once (no redirect storm
+ *    when several in-flight calls all come back 401 after a session revoke).
+ *  - 204 resolves to null; JSON is parsed otherwise.
+ *  - Errors surface FastAPI's {detail} — string or Pydantic list — as a
  *    readable message on ApiError.
  */
 

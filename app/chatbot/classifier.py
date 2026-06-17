@@ -1,6 +1,6 @@
 """Sleuth Layer 2 — statistical intent classifier.
 
-The rule-based parser in nlu.py handles the queries it can recognise
+The rule-based parser in nlu.py handles the queries it can recognize
 verbatim. This module catches paraphrases the rules miss. It runs in
 pure Python with no external model files, no GPU, and a tiny memory
 footprint — the entire trained state is the corpus dict below plus a
@@ -9,7 +9,7 @@ handful of tiny floats.
 How it works:
 - A small hand-curated corpus maps example phrasings to intent labels.
 - We compute IDF weights once at import time over the corpus.
-- For each incoming message, we tokenise + normalise + compute a TF-IDF
+- For each incoming message, tokenize + normalize + compute a TF-IDF
   vector and find the highest cosine-similarity intent.
 - A confidence threshold gates whether we trust the prediction. Below
   threshold → return None and let the caller fall through to LLM (if
@@ -136,8 +136,8 @@ _CORPUS: list[tuple[str, list[str]]] = [
 
 
 # ---------------------------------------------------------------------------
-# Tokenisation — kept simple: lowercase, alphanumeric, drop very short tokens
-# unless they look like a bug id.
+# Tokenization — lowercase, alphanumeric, drop very short tokens unless they
+# look like a bug id.
 # ---------------------------------------------------------------------------
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _STOPWORDS = {
@@ -253,9 +253,8 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
     classifier isn't confident enough.
 
     The threshold is calibrated so paraphrases of corpus examples cross
-    it but free-form noise ("xyzzy frobnicate qux") doesn't. Bumping it
-    higher trades coverage for precision — see _classifier_test.py for
-    the calibration data."""
+    it but free-form noise ("xyzzy frobnicate qux") doesn't. Raising it
+    trades coverage for precision."""
     tokens = _tokenize(message)
     if not tokens:
         return None

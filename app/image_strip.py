@@ -1,16 +1,15 @@
-"""EXIF / metadata stripper for uploaded images (T6).
+"""EXIF / metadata stripper for uploaded images.
 
-Privacy concern: photos taken with a phone include EXIF metadata —
-GPS coordinates, camera serial number, capture timestamp, original
-filename, sometimes the photographer's name. When a bug report is
-filed with a screenshot snapped on a phone, all of that metadata
-travels into Bug Hunter and is downloadable by anyone with access to
-the bug.
+Photos taken with a phone include EXIF metadata — GPS coordinates, camera
+serial number, capture timestamp, original filename, sometimes the
+photographer's name. When a bug report is filed with a screenshot snapped on a
+phone, all of that metadata travels into Bug Hunter and is downloadable by
+anyone with access to the bug.
 
-This module re-encodes uploaded images through Pillow with the
-``info`` dict cleared, which drops EXIF (JPEG), tEXt/iTXt/eXIf chunks
-(PNG), XMP, ICC profiles, and any other ancillary metadata blocks.
-Pixel data is preserved exactly.
+This module re-encodes uploaded images through Pillow with the ``info`` dict
+cleared, which drops EXIF (JPEG), tEXt/iTXt/eXIf chunks (PNG), XMP, ICC
+profiles, and any other ancillary metadata blocks. Pixel data is preserved
+exactly.
 
 Behaviour:
   - Only runs when the upload's content_type starts with ``image/``.
@@ -76,10 +75,9 @@ def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
                 img.save(out, format=fmt)
             return out.getvalue()
     except (OSError, ValueError) as exc:
-        # Corrupt image, format Pillow can't decode, decompression-bomb
-        # trip — leave the file alone. Sonar S5713: PIL.UnidentifiedImageError
-        # is a subclass of OSError, so catching OSError covers it too;
-        # listing both would be redundant. Logged at info level (not warn)
-        # because it's an expected outcome for exotic uploads.
+        # Corrupt image, a format Pillow can't decode, or a decompression-bomb
+        # trip — leave the file alone. PIL.UnidentifiedImageError subclasses
+        # OSError, so catching OSError covers it too. Logged at info level (not
+        # warn) because it's an expected outcome for exotic uploads.
         logger.info("EXIF strip skipped (%s): %s", ct, exc)
         return data

@@ -24,8 +24,7 @@ from app.config import Settings, get_settings
 logger = logging.getLogger("bug_hunter.email")
 
 # Repeated section label used by every email body that has a free-text
-# description block. Extracted so Sonar's S1192 duplicate-string-literal
-# rule stays quiet.
+# description block. Extracted to avoid repeating the literal.
 _DESC_LABEL = "Description:"
 
 
@@ -77,11 +76,10 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> None:
         return
 
     try:
-        # Build an SSL context with EXPLICIT hostname + cert verification
-        # and an EXPLICIT minimum TLS version. ssl.create_default_context()
-        # already sets sane defaults on Python 3.10+, but Sonar's
-        # python:S4830 + python:S4423 rules want the posture stated locally
-        # so it's auditable without consulting stdlib internals.
+        # Build an SSL context with explicit hostname and cert verification
+        # and an explicit minimum TLS version. create_default_context()
+        # already sets sane defaults on Python 3.10+, but stating the posture
+        # locally makes it auditable without consulting stdlib internals.
         ctx = ssl.create_default_context()
         ctx.check_hostname = True
         ctx.verify_mode = ssl.CERT_REQUIRED

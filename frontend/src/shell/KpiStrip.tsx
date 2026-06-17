@@ -1,15 +1,9 @@
 /**
- * KPI strip — port of #kpiStrip (index.html L131-147), the tile numbers
- * (refreshStats, app.js L1645-1649), the active-tile highlight
- * (refreshKpiActiveState, L2381-2393) and the click-to-filter toggle
- * (handleKpiClick, L2395-2411).
- *
- * Visibility: shown on list + analytics only (_toggleViewChrome,
- * L2339-2352 — vanilla used style.display, replicated here).
+ * KPI strip — the tile numbers, the active-tile highlight and the
+ * click-to-filter toggle. Shown on the list and analytics views only.
  */
 import { useApp, KPI_FILTER_MAP } from "../state/AppContext";
 
-/** Port of _arraysEqualAsSets (app.js L2374-2379). */
 function arraysEqualAsSets(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sa = new Set(a);
@@ -34,7 +28,7 @@ const TILES: Tile[] = [
 ];
 
 export default function KpiStrip() {
-  const { view, setView, stats, filters, setFilters } = useApp();
+  const { view, stats, filters, setFilters } = useApp();
 
   const show = view === "list" || view === "analytics";
 
@@ -55,15 +49,17 @@ export default function KpiStrip() {
       : arraysEqualAsSets(filters.status, target);
   };
 
-  // Port of handleKpiClick: toggle — clicking the active filter clears it.
+  // Toggle: clicking the active filter clears it. The click only sets the
+  // status filter; it does not navigate. Forcing the user to the Work Items
+  // list when they clicked a KPI on Analytics would be a surprising redirect —
+  // on the list the filter shows immediately, and on Analytics the tile's
+  // active highlight gives feedback while they stay put.
   const onKpiClick = (key: string) => {
     const target = KPI_FILTER_MAP[key];
     if (!target) return;
     const next =
       arraysEqualAsSets(filters.status, target) && target.length > 0 ? [] : [...target];
     setFilters((prev) => ({ ...prev, status: next }));
-    // Make sure we're showing the list so the user can see the result.
-    if (view !== "list") setView("list");
   };
 
   return (

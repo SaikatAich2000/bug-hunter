@@ -83,10 +83,11 @@ class TestCacheControl:
         # The placeholder must be replaced — never delivered to the browser.
         assert "__ASSET_VERSION__" not in body, "asset version placeholder leaked into HTML"
         # Cache-busting is now twofold: Vite content-hashes the JS/CSS bundle
-        # filenames (inherently versioned), and the favicon link still carries
-        # the server-substituted ?v= asset-version query.
+        # filenames (inherently versioned), and the brand favicon link still
+        # carries the server-substituted ?v= asset-version query. The favicon is
+        # the real Bug Hunter emblem (icon.png), not a generic favicon.png.
         assert "/static/assets/login-" in body, "hashed login bundle not referenced"
-        assert "/static/favicon.png?v=" in body, "favicon asset-version query missing"
+        assert "/static/icon.png?v=" in body, "favicon asset-version query missing"
 
     def test_html_url_changes_when_asset_version_changes(self, client):
         # Request once, capture the URL hash; mutate app.state.asset_version
@@ -245,8 +246,8 @@ class TestAttachmentSafety:
     def test_safe_image_still_served_inline(self, admin_client):
         p = _make_project(admin_client, "ATX-4")
         bug = _make_bug(admin_client, p["id"])
-        # Tiny PNG header (8 bytes is enough for the test — we don't care if
-        # it's a valid PNG, only that the server respects the content-type).
+        # Tiny PNG header (8 bytes is enough for the test — validity as a PNG
+        # does not matter, only that the server respects the content-type).
         png = b"\x89PNG\r\n\x1a\n"
         r = admin_client.post(
             f"/api/bugs/{bug['id']}/attachments",
@@ -276,6 +277,74 @@ class TestAttachmentSafety:
         assert "\r" not in cd and "\n" not in cd
         # No injected pseudo-header.
         assert d.headers.get("X-Evil") is None
+
+    def test_download_advertises_accept_ranges(self, admin_client):
+        """Video seeking needs byte-range support — the full (200) response
+        must advertise Accept-Ranges so the browser will attempt to seek."""
+        p = _make_project(admin_client, "ATX-6")
+        bug = _make_bug(admin_client, p["id"])
+        blob = bytes(range(256)) * 4  # 1024 bytes
+        r = admin_client.post(
+            f"/api/bugs/{bug['id']}/attachments",
+            files={"file": ("clip.mp4", io.BytesIO(blob), "video/mp4")},
+        )
+        att_id = r.json()["id"]
+        d = admin_client.get(f"/api/bugs/{bug['id']}/attachments/{att_id}/download")
+        assert d.status_code == 200
+        assert d.headers.get("Accept-Ranges") == "bytes"
+        assert d.headers.get("Content-Length") == str(len(blob))
+        assert d.content == blob
+
+    def test_download_serves_partial_range(self, admin_client):
+        """A `Range: bytes=start-end` request returns 206 with the exact slice
+        and a correct Content-Range — this is what lets <video> seek."""
+        p = _make_project(admin_client, "ATX-7")
+        bug = _make_bug(admin_client, p["id"])
+        blob = bytes(range(256)) * 4  # 1024 bytes
+        r = admin_client.post(
+            f"/api/bugs/{bug['id']}/attachments",
+            files={"file": ("clip.mp4", io.BytesIO(blob), "video/mp4")},
+        )
+        att_id = r.json()["id"]
+        url = f"/api/bugs/{bug['id']}/attachments/{att_id}/download"
+
+        # Mid-file span.
+        d = admin_client.get(url, headers={"Range": "bytes=100-199"})
+        assert d.status_code == 206
+        assert d.headers.get("Content-Range") == f"bytes 100-199/{len(blob)}"
+        assert d.headers.get("Content-Length") == "100"
+        assert d.headers.get("Accept-Ranges") == "bytes"
+        assert d.content == blob[100:200]
+
+        # Open-ended span (start to EOF).
+        d2 = admin_client.get(url, headers={"Range": "bytes=1000-"})
+        assert d2.status_code == 206
+        assert d2.headers.get("Content-Range") == f"bytes 1000-{len(blob) - 1}/{len(blob)}"
+        assert d2.content == blob[1000:]
+
+        # Suffix span (last N bytes).
+        d3 = admin_client.get(url, headers={"Range": "bytes=-50"})
+        assert d3.status_code == 206
+        assert d3.content == blob[-50:]
+
+    def test_download_unsatisfiable_or_malformed_range_serves_full(self, admin_client):
+        """A malformed or out-of-bounds Range falls back to the full 200 body
+        rather than erroring."""
+        p = _make_project(admin_client, "ATX-8")
+        bug = _make_bug(admin_client, p["id"])
+        blob = b"0123456789"
+        r = admin_client.post(
+            f"/api/bugs/{bug['id']}/attachments",
+            files={"file": ("clip.mp4", io.BytesIO(blob), "video/mp4")},
+        )
+        att_id = r.json()["id"]
+        url = f"/api/bugs/{bug['id']}/attachments/{att_id}/download"
+
+        for bad in ("bytes=999-1500", "bytes=abc-def", "kilobytes=0-1", "bytes=5-2", "bytes=-"):
+            d = admin_client.get(url, headers={"Range": bad})
+            assert d.status_code == 200, bad
+            assert d.content == blob, bad
+            assert d.headers.get("Accept-Ranges") == "bytes"
 
 
 # ===========================================================================
@@ -316,7 +385,7 @@ class TestLikeWildcardEscape:
 
 
 # ===========================================================================
-# BUG-2 fix — owner can save their own bug
+# Owner can save their own bug
 # ===========================================================================
 class TestReporterPermissionFix:
     def test_user_can_save_own_bug_with_unchanged_reporter_id(self, admin_client):
@@ -352,7 +421,7 @@ class TestReporterPermissionFix:
 
 
 # ===========================================================================
-# BUG-3 fix — case-insensitive filters
+# Case-insensitive filters
 # ===========================================================================
 class TestFilterCaseInsensitive:
     def test_status_filter_matches_lowercase(self, admin_client):
@@ -375,7 +444,7 @@ class TestFilterCaseInsensitive:
 
 
 # ===========================================================================
-# BUG-4 fix — activity ordering consistent
+# Activity ordering consistent
 # ===========================================================================
 class TestActivityOrderingFix:
     def test_activity_order_consistent_between_endpoints(self, admin_client):
@@ -391,7 +460,7 @@ class TestActivityOrderingFix:
 
 
 # ===========================================================================
-# BUG-5 fix — description-only update persists
+# Description-only update persists
 # ===========================================================================
 class TestDescriptionOnlyUpdate:
     def test_description_only_update_persists(self, admin_client):
@@ -418,7 +487,7 @@ class TestDescriptionOnlyUpdate:
 
 
 # ===========================================================================
-# BUG-6 fix — search with whitespace
+# Search with whitespace
 # ===========================================================================
 class TestSearchWhitespace:
     def test_search_strips_whitespace(self, admin_client):
@@ -431,7 +500,7 @@ class TestSearchWhitespace:
 
 
 # ===========================================================================
-# BUG-1 fix — title min-length after strip
+# Title min-length after strip
 # ===========================================================================
 class TestTitleStripMinLength:
     def test_title_with_padded_whitespace_below_min_length_rejected(self, admin_client):

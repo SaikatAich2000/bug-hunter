@@ -1,8 +1,8 @@
 // Entry for /login.html.
 //
 // The app's CSP (script-src 'self', no 'unsafe-inline') forbids inline
-// scripts, so the theme bootstrap that the vanilla page ran from
-// /static/login.js happens here, before the React tree is created.
+// scripts, so the theme bootstrap happens here, before the React tree is
+// created.
 import { createRoot } from "react-dom/client";
 import LoginPage from "./LoginPage";
 import "../styles/styles.css";
@@ -15,10 +15,9 @@ const container = document.getElementById("root");
 if (!container) {
   throw new Error("login: #root container not found");
 }
-// .auth-body centers .auth-shell with flexbox in the vanilla page; make
-// the React mount node layout-transparent so that CSS keeps working
-// unchanged. (CSSOM assignment, not an inline style attribute, so the
-// strict style-src CSP is not violated.)
+// .auth-body centers .auth-shell with flexbox; make the React mount node
+// layout-transparent so that CSS keeps working unchanged. (CSSOM assignment,
+// not an inline style attribute, so the strict style-src CSP is not violated.)
 container.style.display = "contents";
 
 createRoot(container).render(<LoginPage />);

@@ -70,8 +70,7 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
     """Send one notification to many FCM tokens.
 
     Returns the list of tokens FCM reported as invalid/unregistered, so the
-    caller can prune them. Best-effort: returns ``[]`` on any failure and never
-    raises.
+    caller can prune them. Returns ``[]`` on any failure and never raises.
     """
     tokens = list(tokens or [])
     if not tokens:

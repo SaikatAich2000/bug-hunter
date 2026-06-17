@@ -49,7 +49,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 
-# S1192: extract duplicated detail string into a module constant.
+# Extracted to a module constant to avoid duplicating the literal.
 _DETAIL_INVALID_RESET_TOKEN = "Invalid or expired reset token"
 
 def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id: int | None = None) -> None:
@@ -62,11 +62,11 @@ def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id:
 
 
 def _reject_if_breached(plain: str) -> None:
-    """T4: refuse to accept a password that appears in the HIBP corpus.
+    """Refuse to accept a password that appears in the HIBP corpus.
 
-    Called from every code path that sets a password (login flow excluded
-    — the user can't change their existing creds at login time). Fail-open
-    on network errors so an HIBP outage doesn't block legitimate password
+    Called from every code path that sets a password (the login flow is
+    excluded — credentials can't be changed at login time). Fail-open on
+    network errors so an HIBP outage doesn't block legitimate password
     changes; see app/password_breach.py.
     """
     if is_password_breached(plain):
@@ -80,11 +80,11 @@ def _reject_if_breached(plain: str) -> None:
 def _mask_email(email: str) -> str:
     """Mask the local part of an email for safe inclusion in logs.
 
-    G5: log lines feed centralised log stores (Loki / CloudWatch / etc.)
-    whose access controls are usually broader than the app DB's. Writing
-    raw emails there is unnecessary PII leakage when a one-character +
-    asterisks form keeps the line just as useful for diagnosing the
-    event. ``alice@example.com`` -> ``a***@example.com``.
+    Log lines feed centralised log stores (Loki / CloudWatch / etc.) whose
+    access controls are usually broader than the app DB's. Writing raw emails
+    there is unnecessary PII leakage when a one-character-plus-asterisks form
+    keeps the line just as useful for diagnosing the event.
+    ``alice@example.com`` -> ``a***@example.com``.
     """
     if not email or "@" not in email:
         return "***"
@@ -96,14 +96,14 @@ def _mask_email(email: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    """Best-effort client IP for the session log + audit trail.
+    """Client IP for the session log and audit trail.
 
-    G4: only honour X-Forwarded-For when the deploy explicitly opted in
-    via TRUST_PROXY_FORWARDED_FOR. Without this gate, a client behind a
-    non-proxied deploy can set X-Forwarded-For to anything and spoof the
-    IP recorded in their session row and audit entries — making it look
-    like the login came from a different machine. This matches the
-    rate-limit middleware's ``_client_ip`` in app/main.py.
+    Only honours X-Forwarded-For when the deploy explicitly opted in via
+    TRUST_PROXY_FORWARDED_FOR. Without this gate, a client behind a non-proxied
+    deploy can set X-Forwarded-For to anything and spoof the IP recorded in
+    their session row and audit entries — making it look like the login came
+    from a different machine. Matches the rate-limit middleware's ``_client_ip``
+    in app/main.py.
     """
     if get_settings().TRUST_PROXY_FORWARDED_FOR:
         fwd = request.headers.get("x-forwarded-for", "")
@@ -121,46 +121,46 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     """Verify credentials, create a server-side session row, and set the
     signed cookie. The cookie carries a `jti` that maps back to the row,
     which is what makes per-session admin revocation possible."""
-    # T3: short-circuit if this email is currently locked out. Raised BEFORE
-    # the bcrypt verify so a flood of bad logins doesn't amplify into a
-    # flood of bcrypt rounds — keeping the lockout cheap to enforce.
+    # Short-circuit if this email is currently locked out. Raised before the
+    # bcrypt verify so a flood of bad logins doesn't amplify into a flood of
+    # bcrypt rounds, keeping the lockout cheap to enforce.
     account_lockout.check_locked(payload.email)
 
     # LoginIn already lowercases the email — no need to .lower() again here.
     user = db.scalar(select(User).where(User.email == payload.email))
-    # G1: equalise the timing of unknown-email vs wrong-password. If we
-    # skipped verify_password when user is None, an attacker could enumerate
-    # accounts by measuring response latency (bcrypt costs ~50 ms; the
-    # no-user branch returns in <1 ms). Always run the bcrypt verify, against
-    # the real hash when we have a user and against a server-side dummy
-    # otherwise. password_ok stays False for the no-user case because the
-    # dummy hash will never match the supplied password.
+    # Equalise the timing of unknown-email vs wrong-password. Skipping
+    # verify_password when user is None would let an attacker enumerate
+    # accounts by measuring response latency (bcrypt costs ~50 ms; the no-user
+    # branch returns in <1 ms). The bcrypt verify always runs — against the
+    # real hash when there's a user, against a server-side dummy otherwise.
+    # password_ok stays False for the no-user case because the dummy hash never
+    # matches the supplied password.
     if user is None:
         verify_password(payload.password, _DUMMY_PASSWORD_HASH)
         password_ok = False
     else:
         password_ok = verify_password(payload.password, user.password_hash)
     # Unified error message for all failure modes — never leak whether the
-    # email exists OR whether an existing account is disabled. Previously
-    # we returned 401 for bad creds but 403 for disabled accounts, which
-    # let an attacker who knew a valid password distinguish "this account
-    # exists but is disabled" from "wrong password". Both now return the
-    # same 401. Audit log still records the distinction server-side.
+    # email exists or whether an existing account is disabled. Returning a
+    # distinct status for a disabled account would let an attacker who knew a
+    # valid password distinguish "exists but disabled" from "wrong password";
+    # both return the same 401. The audit log still records the distinction
+    # server-side.
     if user is None or not password_ok:
-        # T3: tick the lockout counter for every failed attempt, including
-        # ones against unknown emails. Ticking only known emails would let
-        # an attacker enumerate accounts by which addresses ever lock.
+        # Tick the lockout counter for every failed attempt, including ones
+        # against unknown emails. Ticking only known emails would let an
+        # attacker enumerate accounts by which addresses ever lock.
         account_lockout.record_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
-        # G5: don't put the raw email in INFO logs — masked form keeps the
-        # event diagnosable without writing PII to centralised log stores.
+        # Keep the raw email out of INFO logs; the masked form stays
+        # diagnosable without writing PII to centralised log stores.
         logger.info("Login refused: inactive account %s", _mask_email(user.email))
-        # T3: still tick the counter — an inactive account is a failed login.
+        # An inactive account is a failed login, so still tick the counter.
         account_lockout.record_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # T3: success — clear the bucket so transient typos don't carry forward.
+    # Success — clear the bucket so transient typos don't carry forward.
     account_lockout.clear(payload.email)
 
     settings = get_settings()
@@ -234,7 +234,7 @@ def change_password(
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    # T4: HIBP check on the new password — fail before we touch the DB.
+    # HIBP check on the new password — fail before touching the DB.
     _reject_if_breached(payload.new_password)
 
     user.password_hash = hash_password(payload.new_password)
@@ -278,13 +278,12 @@ def forgot_password(
     """Issue a password-reset email.
 
     Enumeration resistance is controlled by FORGOT_PASSWORD_ENUMERATION_SAFE
-    (default True = most secure): the endpoint then ALWAYS returns 204 and never
-    reveals whether the email maps to an account — the canonical "if an account
-    exists, we've sent a link" behaviour. Set the flag False to restore the
-    friendlier legacy UX that 404s on an unknown address (the documented,
-    lower-security trade-off the product owner originally accepted). Either way
-    a reset email is sent only to a real, active account and every attempt is
-    audited.
+    (default True = most secure): the endpoint then always returns 204 and
+    never reveals whether the email maps to an account — the canonical "if an
+    account exists, a link has been sent" behaviour. Set the flag False for the
+    friendlier UX that 404s on an unknown address, a documented lower-security
+    trade-off. Either way a reset email is sent only to a real, active account
+    and every attempt is audited.
     """
     settings = get_settings()
     user = db.scalar(select(User).where(User.email == payload.email))
@@ -346,9 +345,8 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> R
     if user is None or not user.is_active:
         raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
 
-    # T4: HIBP check before we accept the reset. Done AFTER the token is
-    # validated so we don't leak the breach signal back to a holder of an
-    # invalid token.
+    # HIBP check before accepting the reset, done after the token is validated
+    # so the breach signal isn't leaked back to a holder of an invalid token.
     _reject_if_breached(payload.new_password)
 
     user.password_hash = hash_password(payload.new_password)

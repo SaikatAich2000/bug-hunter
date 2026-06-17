@@ -1,25 +1,18 @@
 /**
- * RichEditor — React 18 + TypeScript port of the Bug Hunter v2.6/v2.9
- * vanilla rich-text editor (app/static/app.js, enhanceRichEditor + the
- * unsafe-file paste filter).
+ * RichEditor — a contentEditable rich-text editor with a custom toolbar.
  *
- * Port notes:
  * - React renders the shell (wrap > toolbar > surface) once; the
- *   contentEditable surface body is UNCONTROLLED. All formatting is done
- *   with direct DOM manipulation inside the surface, exactly like the
- *   vanilla code — do not convert the surface to controlled JSX.
- * - The hidden <textarea> sync of the vanilla version is replaced by the
- *   onChange prop + the getHtml()/setHtml() imperative handle; the
- *   `textarea._bhPasteHandler` / `opts.onPasteFile` hook is replaced by
- *   the onPasteFile prop.
- * - Why execCommand still appears as a last-resort fallback despite
- *   "deprecated": same rationale as the vanilla source — every browser
- *   still implements it, and all primary paths here are manual DOM code
- *   (the v2.6 cross-browser fixes). Those helpers are load-bearing and
- *   must not be "modernized" — see the SONAR_RT notes in app/static/app.js.
- * - Styling comes exclusively from the existing .bh-rt-* rules in
- *   app/static/styles.css (including the :empty::before data-placeholder
- *   empty-state). No new CSS.
+ *   contentEditable surface body is uncontrolled. All formatting is done with
+ *   direct DOM manipulation inside the surface — do not convert the surface to
+ *   controlled JSX.
+ * - Output flows through the onChange prop and the getHtml()/setHtml()
+ *   imperative handle; pasted files flow through the onPasteFile prop.
+ * - execCommand appears only as a last-resort fallback. Every browser still
+ *   implements it, and the primary paths here are manual DOM code for
+ *   cross-browser correctness; those helpers are load-bearing and must not be
+ *   "modernized".
+ * - Styling comes from the .bh-rt-* rules in styles.css (including the
+ *   :empty::before data-placeholder empty-state).
  */
 
 import {
@@ -37,11 +30,10 @@ import type {
 import { toast } from "../lib/toast";
 
 // ---------------------------------------------------------------------------
-// Unsafe-file paste filter (ported verbatim from app.js L569-601). We block
-// anything whose extension or MIME would let the user trick a colleague into
-// opening a hostile payload from the attachments grid. The list mirrors the
-// Windows "potentially dangerous" set plus the obvious cross-platform
-// binaries.
+// Unsafe-file paste filter. Block anything whose extension or MIME would let
+// the user trick a colleague into opening a hostile payload from the
+// attachments grid. The list mirrors the Windows "potentially dangerous" set
+// plus the obvious cross-platform binaries.
 // ---------------------------------------------------------------------------
 const UNSAFE_EXTS = new Set<string>([
   "exe", "bat", "cmd", "com", "scr", "pif", "msi", "msp", "msc",
@@ -77,13 +69,12 @@ function isUnsafeMime(mime: string): boolean {
   return first !== undefined && UNSAFE_MIMES.has(first.trim());
 }
 
-// Mirrors the vanilla `err.message || err` toast formatting.
 function describeError(err: unknown): string {
   return err instanceof Error && err.message ? err.message : String(err);
 }
 
 // ---------------------------------------------------------------------------
-// Editor constants (ported verbatim).
+// Editor constants
 // ---------------------------------------------------------------------------
 
 // Inline-style commands toggled via manual wrappers (Chrome 148 silently
@@ -97,12 +88,11 @@ const INLINE_TOGGLE: Record<string, string> = {
 };
 
 // Zero-width space used to arm the "next typed character is styled" state.
-// (Escape form of the literal ZWSP the vanilla source embeds.)
 const ZWSP = "​";
 
 // Word characters for the auto word-select: letters / digits / underscore /
-// hyphen / apostrophe, plus the Latin-extended, Greek and CJK ranges the
-// vanilla regex covers (À-ɏ Ͱ-῿ 一-鿿).
+// hyphen / apostrophe, plus the Latin-extended, Greek and CJK ranges
+// (À-ɏ Ͱ-῿ 一-鿿).
 const WORD_RE = /[A-Za-z0-9_'\-À-ɏͰ-῿一-鿿]/;
 
 const MAX_HISTORY = 100;
@@ -137,11 +127,10 @@ interface Props {
   ariaLabel?: string;
   disabled?: boolean;
   /**
-   * Rendered on the visually-hidden native <textarea> kept behind the
-   * surface (vanilla parity: enhanceRichEditor kept the original textarea
-   * as `.bh-rt-native`, the form-submission source of truth). Automation
-   * and tests fill that textarea directly — `.bh-rt-native` is clipped to
-   * 1×1px, NOT display:none, precisely so it stays fillable.
+   * Rendered on the visually-hidden native <textarea> kept behind the surface
+   * (`.bh-rt-native`, the form-submission source of truth). Automation and
+   * tests fill that textarea directly — it is clipped to 1×1px, not
+   * display:none, precisely so it stays fillable.
    */
   name?: string;
   textareaId?: string;
@@ -193,7 +182,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     onPasteFileRef.current = onPasteFile;
   });
 
-  // ----- value sync (vanilla `sync()` minus the hidden textarea) ----------
+  // ----- value sync --------------------------------------------------------
 
   // Empty heuristic: contenteditable inserts a leading <br> or empty <div>
   // when the user clears all text. Treat "<br>" / "<div><br></div>" as empty
@@ -212,7 +201,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   const sync = (): void => {
     const html = computeHtml();
     // Keep the hidden native textarea mirroring the surface — it is the
-    // form-submission / automation contract (vanilla `sync()`).
+    // form-submission / automation contract.
     if (nativeRef.current && nativeRef.current.value !== html) {
       nativeRef.current.value = html;
     }
@@ -885,12 +874,12 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- toolbar events ------------------------------------------------------------
 
-  // Critical: BOTH capture-selection AND preventDefault must run on
-  // mousedown. preventDefault stops the browser from shifting focus away
-  // from the contenteditable to the button — without it, the editor's
-  // typing state is wiped before the user can type anything. We then ALSO
-  // run the command on mousedown so the user gets immediate feedback, and
-  // swallow the click handler's mouse path entirely.
+  // Both capture-selection and preventDefault must run on mousedown.
+  // preventDefault stops the browser from shifting focus away from the
+  // contenteditable to the button — without it, the editor's typing state is
+  // wiped before the user can type anything. The command also runs on
+  // mousedown for immediate feedback, and the click handler's mouse path is
+  // swallowed entirely.
   const handleToolbarMouseDown = (e: ReactMouseEvent<HTMLDivElement>): void => {
     const target = e.target instanceof Element ? e.target : null;
     const btn = target?.closest<HTMLButtonElement>("button[data-cmd]");
@@ -928,11 +917,9 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     updateActiveStates();
   };
 
-  // External writes to the hidden native textarea (Playwright fill, any
-  // form automation) mirror INTO the surface — the inverse of sync().
-  // Vanilla treated the textarea as the source of truth on submit, so a
-  // direct fill simply worked; here the surface is canonical, so we
-  // propagate eagerly on the textarea's input event instead.
+  // External writes to the hidden native textarea (Playwright fill, any form
+  // automation) mirror into the surface — the inverse of sync(). The surface
+  // is canonical, so propagate eagerly on the textarea's input event.
   const handleNativeInput = (): void => {
     const editor = editorRef.current;
     const ta = nativeRef.current;
@@ -1068,8 +1055,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Track selection while the editor is the active element (mirrors the
-  // vanilla document-level selectionchange listener, scoped to the surface).
+  // Track selection while the editor is the active element (document-level
+  // selectionchange listener, scoped to the surface).
   useEffect(() => {
     const onSelectionChange = (): void => {
       if (document.activeElement === editorRef.current) captureSelection();
@@ -1100,9 +1087,9 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   return (
     <div className="bh-rt-wrap">
-      {/* Visually-hidden native textarea (vanilla .bh-rt-native parity):
-          clipped to 1×1px so it stays programmatically fillable, synced
-          both ways with the contenteditable surface. */}
+      {/* Visually-hidden native textarea (.bh-rt-native): clipped to 1×1px so
+          it stays programmatically fillable, synced both ways with the
+          contenteditable surface. */}
       <textarea
         ref={nativeRef}
         className="bh-rt-native"

@@ -1,4 +1,4 @@
-"""Regression tests for the v2.9.x security-hardening + perf pass.
+"""Tests for security-hardening and performance behavior.
 
 Covers:
   1. Chatbot Excel export — formula triggers are defanged the same way

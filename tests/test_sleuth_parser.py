@@ -27,14 +27,33 @@ os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 # developer's local .env that enables it).
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
+# Force a fresh app import bound to THIS file's dedicated DB (see the long note
+# in test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
+# engine bound to an earlier-collected module's torn-down DB.
+import sys as _sys_purge
+for _m in list(_sys_purge.modules):
+    if _m == "app" or _m.startswith("app."):
+        del _sys_purge.modules[_m]
+
 from app.database import Base, engine, SessionLocal
 from app import models
+import pytest
+
 from app.auth import hash_password
 from app.chatbot import nlu, executor, excel
 from app.chatbot.executor import build_context
 
 PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _seed_module_db():
+    """Under pytest the ``__main__`` block never runs, so seed the dedicated
+    DB once for this module's read-only test functions (mirrors the manual
+    ``seed()`` call in ``if __name__ == "__main__"``)."""
+    seed()
+    yield
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:

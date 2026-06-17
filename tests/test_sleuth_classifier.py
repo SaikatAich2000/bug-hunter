@@ -26,6 +26,14 @@ os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 # layer reports unavailable for the duration of these tests.
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__sleuth_no_model__.gguf"
 
+# Force a fresh app import bound to THIS file's dedicated DB (see the long note
+# in test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
+# engine bound to an earlier-collected module's torn-down DB.
+import sys as _sys_purge
+for _m in list(_sys_purge.modules):
+    if _m == "app" or _m.startswith("app."):
+        del _sys_purge.modules[_m]
+
 from app.database import Base, engine, SessionLocal
 from app import models
 from app.auth import hash_password

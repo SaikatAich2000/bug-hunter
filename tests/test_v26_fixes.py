@@ -1,11 +1,11 @@
-"""Regression tests for the v2.6 bug-fix wave (post-initial-release).
+"""Regression tests for a wave of rich-text and form bug fixes.
 
 The reported issues were:
 
   1. Bold / Italic / Underline (toolbar + Ctrl+B/I/U) silently no-op'd
      when the contenteditable surface had focus but no caret yet, and
-     formatBlock (blockquote / pre) wouldn't toggle off on a second
-     click — so users were stuck with formatting they couldn't remove.
+     formatBlock (blockquote / pre) would not toggle off on a second
+     click — so users were stuck with formatting they could not remove.
 
   2. Calendar prev / next buttons closed the popover instead of
      paging the month, because pop.innerHTML was rebuilt inside the
@@ -13,13 +13,13 @@ The reported issues were:
      then saw the original target as "outside".
 
   3. The Reporter <select> is permanently disabled but the custom
-     dropdown chrome still rendered the ▾ caret, falsely advertising
+     dropdown chrome still rendered the open-caret, falsely advertising
      "click me to open".
 
-  4. Toolbar 🖼 inserted an inline <img> via insertHTML; the
-     contenteditable surface can't reliably resize or position a
-     caret after an inline image, so the user got trapped — couldn't
-     remove the image, couldn't type after it.
+  4. The toolbar image button inserted an inline <img> via insertHTML;
+     the contenteditable surface cannot reliably resize or position a
+     caret after an inline image, so the user got trapped — could not
+     remove the image, could not type after it.
 
 The fixes for #1, #2 and #3 are pure-JS (no DDL, no schema, no API
 change). #4 turns the toolbar image picker into a paste-as-attachment
@@ -28,9 +28,9 @@ managed through the proper grid with delete affordances).
 
 These tests assert:
 
-  * The shipped app.js carries the fix markers — so a future refactor
+  * The shipped frontend carries the fix markers — so a future refactor
     that accidentally removes one breaks CI.
-  * The static asset DOES NOT carry the old inline-image embed path
+  * The source does not carry the old inline-image embed path
     that caused #4 (no `_bhRtPickImage`, no `insertHTML.*<img`).
   * Server-side HTML sanitisation lets the rich-text formatting tags
     survive a round-trip through bug-description and comment-body
@@ -38,13 +38,12 @@ These tests assert:
     code, paragraphs).
   * Server-side sanitisation still strips obviously-dangerous payloads
     (<script>, javascript: URLs, onerror handlers).
-  * The Reporter field stays disabled in the rendered index.html
+  * The Reporter field stays disabled in the rendered modal
     (so the custom-dropdown's `sel.disabled` branch is actually
     exercised in real form rendering).
-  * Existing data behaviour the v2.5 round added — admin-only
-    comment edit/delete and admin-only bug-attachment delete — still
-    holds (we re-cover them here so the v2.6 bug-fix suite is
-    self-sufficient, per "do not rely on old tests").
+  * The admin-only comment edit/delete and admin-only bug-attachment
+    delete rules still hold (re-covered here so this suite is
+    self-sufficient).
 
 Production database safety: every test runs against a tmp SQLite file
 created by the conftest fixture; nothing here touches the real
@@ -61,9 +60,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Test helpers — duplicated from test_v25_changes intentionally so this file
-# stands alone and a future maintainer can delete the v2.5 file without
-# losing v2.6 coverage.
+# Test helpers — duplicated intentionally so this file stands alone.
 # ---------------------------------------------------------------------------
 def _login(client, email, password):
     client.post("/api/auth/logout")
@@ -96,11 +93,10 @@ def _read_static(name):
     return p.read_text(encoding="utf-8")
 
 
-# After the React+TS migration the rich-text editor / custom select / date
-# input live in these sources (the shipped JS is a content-hashed Vite bundle
-# under app/static/assets/, not human-readable). The marker tests below sniff
-# the React source the way they used to sniff app.js — same intent: a refactor
-# that drops a v2.6 fix breaks CI.
+# The rich-text editor / custom select / date input live in these sources
+# (the shipped JS is a content-hashed Vite bundle under app/static/assets/,
+# not human-readable). The marker tests below sniff the React source: a
+# refactor that drops a fix breaks CI.
 def _read_frontend(relpath):
     p = Path(__file__).resolve().parents[1] / "frontend" / "src" / relpath
     return p.read_text(encoding="utf-8")
@@ -130,10 +126,10 @@ def _styles_css():
 # 1. Rich-text editor fix markers (Bold / Italic / Underline / format-toggle)
 # ===========================================================================
 class TestRichTextFixMarkers:
-    """Smoke-check the v2.6 fixes survive in the shipped JS bundle."""
+    """Smoke-check the rich-text fixes survive in the shipped JS bundle."""
 
     def test_app_js_has_saved_selection_path(self):
-        """Bold no-op fix: we save+restore selection across toolbar clicks."""
+        """Bold no-op fix: selection is saved and restored across toolbar clicks."""
         js = _rich_editor()
         assert "savedRange" in js, "selection-save state must exist"
         assert "captureSelection" in js, "capture-selection helper must exist"
@@ -146,10 +142,10 @@ class TestRichTextFixMarkers:
         for cmd in ("bold", "italic", "underline"):
             assert f'runCmd("{cmd}")' in js, (
                 f"Ctrl+{cmd[0].upper()} should go through runCmd "
-                "(post-v2.6) not bare execCommand"
+                "not bare execCommand"
             )
-        # Strip line comments before asserting the call ISN'T made
-        # directly (we still mention it in comments explaining the
+        # Strip line comments before asserting the call is not made
+        # directly (it is still mentioned in comments explaining the
         # Chrome-148 workaround).
         code_only = "\n".join(
             ln for ln in js.splitlines()
@@ -167,13 +163,12 @@ class TestRichTextFixMarkers:
         assert 'inAncestor([tag])' in js, "format-block ancestor check missing"
 
     def test_app_js_no_clear_formatting_button(self):
-        """v2.6 follow-up: the Clear-formatting button was removed. The
-        user found it confusing and rarely useful — block-toggle on the
-        same button (blockquote/pre/list) covers the common case of
-        \"get back to plain text\"."""
+        """The Clear-formatting button was removed. It was confusing and
+        rarely useful — block-toggle on the same button (blockquote/pre/list)
+        covers the common case of "get back to plain text"."""
         js = _rich_editor()
         assert 'data-cmd="removeFormat"' not in js, (
-            "Clear-formatting (⌫) button must not be rendered"
+            "Clear-formatting button must not be rendered"
         )
         # The dedicated handler branch went with it.
         assert '"removeFormat"' not in js, (
@@ -201,9 +196,9 @@ class TestRichTextFixMarkers:
         user can type. This is the original "click Bold, nothing
         happens" regression.
 
-        v2.9 wrapped handleToolbarCmd() in _runToolbarCmd() so the
+        handleToolbarCmd() is wrapped in _runToolbarCmd() so the
         undo-history can snapshot before / after the mutation; the
-        invariant tested here is the preventDefault stays in place,
+        invariant tested here is that preventDefault stays in place,
         regardless of whether the runner is the raw helper or the
         snapshot wrapper."""
         js = _rich_editor()
@@ -219,8 +214,8 @@ class TestRichTextFixMarkers:
 
     def test_app_js_has_manual_formatting_implementations(self):
         """Chrome 148 silently no-ops document.execCommand("bold") inside
-        the bug modal's stacking context, so we rolled our own. These
-        helpers MUST exist or all of B/I/U/list/blockquote stop working
+        the bug modal's stacking context, so the editor implements its own.
+        These helpers MUST exist or all of B/I/U/list/blockquote stop working
         for users on Chrome 148+."""
         js = _rich_editor()
         assert "applyInlineWrap" in js, "manual inline wrap missing"
@@ -282,8 +277,9 @@ class TestReporterDropdownNoCaret:
         ), "Reporter <select> must keep `disabled` attribute"
 
     def test_app_js_skips_caret_when_select_disabled(self):
-        # BhSelect renders the ▾ caret only when NOT disabled — a disabled
-        # select can't open, so the caret would falsely advertise "click me".
+        # BhSelect renders the dropdown caret only when not disabled — a
+        # disabled select cannot open, so the caret would falsely advertise
+        # "click me".
         js = _bh_select()
         assert re.search(
             r'!disabled\s*&&\s*<span className="bh-sel-caret"',
@@ -439,7 +435,7 @@ class TestSanitiserStillBlocksUnsafe:
 
 
 # ===========================================================================
-# 7. Re-cover the v2.5 admin-only rules (so this suite stands alone)
+# 7. Re-cover the admin-only rules (so this suite stands alone)
 # ===========================================================================
 class TestAdminOnlyMutations:
 
@@ -467,7 +463,7 @@ class TestAdminOnlyMutations:
         r = client.put(f"/api/bugs/{bug['id']}/comments/{cid}",
                        json={"body": "<p>edited</p>"})
         assert r.status_code == 403, (
-            "Non-admin must NOT edit even their own comment per v2.5"
+            "Non-admin must NOT edit even their own comment"
         )
 
     def test_non_admin_cannot_delete_comment(self, client):
@@ -475,7 +471,7 @@ class TestAdminOnlyMutations:
         proj = _make_project(client, name="Perm v2.6 b")
         u = self._make_user(client, "Gamma")
         bug = _make_bug(client, proj["id"])
-        # admin posts the comment so we know the user isn't the owner
+        # admin posts the comment so the user is not the owner
         r = client.post(f"/api/bugs/{bug['id']}/comments",
                         json={"body": "<p>admin note</p>"})
         cid = r.json()["id"]
@@ -500,7 +496,7 @@ class TestAdminOnlyMutations:
         assert r.status_code == 403
 
     def test_non_admin_CAN_upload_attachment_after_creation(self, client):
-        """v2.5 requirement: post-creation uploads stay open to non-admins."""
+        """Post-creation uploads stay open to non-admins."""
         _login(client, "admin@test.local", "Admin1234")
         proj = _make_project(client, name="Perm v2.6 d")
         u = self._make_user(client, "Epsilon")
@@ -555,7 +551,7 @@ class TestInitDbIsIdempotent:
         )
 
     def test_no_new_tables_introduced_by_v26_fixes(self, tmp_path, monkeypatch):
-        """The v2.6 bug-fix wave is application-layer only. The set of
+        """This bug-fix wave is application-layer only. The set of
         tables MUST match a fixed allowlist; if a developer adds a
         table here they get a load-bearing reminder that the migration
         plan needs review."""
@@ -579,21 +575,20 @@ class TestInitDbIsIdempotent:
 
         init_db()
         names = set(inspect(engine).get_table_names())
-        # We don't pin the exact set (that's brittle), we just check
-        # the file actually creates the canonical core tables. If a
-        # v2.6 fix accidentally introduced a new table, this test will
-        # still pass — but the migration test above will pair with it
-        # in CI to catch any double-init drift.
+        # The exact set is not pinned (that's brittle); this only checks
+        # the file actually creates the canonical core tables. A newly
+        # introduced table would still pass here — but the migration test
+        # above pairs with it in CI to catch any double-init drift.
         for required in ("users", "projects", "bugs", "comments",
                          "attachments", "activity_log"):
             assert required in names, f"missing canonical table {required!r}"
 
 
 # ===========================================================================
-# Sonar / static-analysis hardening (v2.6 follow-up)
+# Static-analysis hardening
 # ===========================================================================
 class TestSonarHardening:
-    """Regression coverage for the v2.6 SonarQube-driven fixes.
+    """Regression coverage for the static-analysis-driven fixes.
 
     Each test pins a behavioural property of a fix so an accidental revert
     breaks CI rather than silently re-introducing the issue.
@@ -623,7 +618,7 @@ class TestSonarHardening:
     def test_cors_middleware_not_registered_when_no_origins(self):
         """No CORS_ORIGINS configured → CORSMiddleware must not be added."""
         from starlette.middleware.cors import CORSMiddleware
-        # Build a fresh app process-locally via importing main
+        # Build a fresh app by importing main
         import importlib, os, sys
         os.environ.pop("CORS_ORIGINS", None)
         for m in list(sys.modules):
@@ -647,7 +642,7 @@ class TestSonarHardening:
         src = (Path(__file__).resolve().parents[1] / "app" / "database.py").read_text(encoding="utf-8")
         # Allow except in the `# noqa: F401` import-registration comment, but
         # the actual try/except blocks must catch SQLAlchemyError specifically.
-        # Pylint flagged two `except Exception:` blocks; both must now be SQLAlchemyError.
+        # The `except Exception:` blocks must now be SQLAlchemyError.
         assert "except SQLAlchemyError:" in src
         assert src.count("except Exception:") == 0
 
@@ -660,7 +655,7 @@ class TestSonarHardening:
         assert "except Exception:\n        # Never let mailer failures" not in src
 
     def test_auth_uses_narrowed_except(self):
-        """session-table best-effort writes must narrow to SQLAlchemyError."""
+        """session-table writes must narrow to SQLAlchemyError."""
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1] / "app" / "auth.py").read_text(encoding="utf-8")
         assert "from sqlalchemy.exc import SQLAlchemyError" in src

@@ -1,4 +1,4 @@
-"""Per-user in-app notifications (v3.0).
+"""Per-user in-app notifications.
 
 The in-app counterpart to app/email_service.py. Where a route sends an email
 about an event, it ALSO writes one notification row per recipient via

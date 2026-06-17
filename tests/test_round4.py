@@ -1,6 +1,6 @@
-"""Round-4 bug-fix verification tests.
+"""Audit-search and forgot-password verification tests.
 
-Covers the changes in the round-4 patch:
+Covers:
 
 * Audit search must cover bug numbers (entity_id), entity types and actor
   names — not just action/detail/actor_name.

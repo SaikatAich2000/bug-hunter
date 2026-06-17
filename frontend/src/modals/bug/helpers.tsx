@@ -1,26 +1,17 @@
 /**
- * Shared building blocks for the bug list + unified bug modal — ports of the
- * vanilla helpers in app/static/app.js:
+ * Shared building blocks for the bug list and unified bug modal: item-type
+ * emoji, permission/meta lookups, the activity icon + row, the attachment
+ * card, and attachment staging (useStagedFiles + StagedTile).
  *
- *  - ITEM_TYPE_EMOJI / itemTypeEmoji            (L2199-2200)
- *  - canEditItem                                 (L2735-2740)
- *  - statusesForType                             (L1784-1787)
- *  - activityIcon                                (L3138-3150)
- *  - renderAttachmentCard → <AttachmentCard/>    (L3092-3124)
- *  - renderActivityRow    → <ActivityRow/>       (L3126-3136)
- *  - attachment STAGING (STATE.stagedFiles + _renderStagedFiles /
- *    clearStagedFiles / handleStagedInputChange / handleStagedListClick,
- *    L3152-3280) → useStagedFiles() + <StagedTile/>
- *
- * All class names / data-attributes match the vanilla markup exactly so
- * styles.css applies unchanged.
+ * Class names and data-attributes match the markup that styles.css keys off.
  */
 import { useCallback, useState, type ReactNode } from "react";
 import { fileIcon, formatBytes, formatDate } from "../../lib/format";
+import VideoLightbox from "../../components/VideoLightbox";
 import type { ActivityOut, AttachmentOut, MetaOut } from "../../types";
 
 // ---------------------------------------------------------------------------
-// Item-type emoji (vanilla L2199-2200)
+// Item-type emoji
 // ---------------------------------------------------------------------------
 
 export const ITEM_TYPE_EMOJI: Record<string, string> = {
@@ -38,21 +29,21 @@ export function itemTypeEmoji(t: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Mirror of the backend can_edit_bug rule (vanilla canEditItem, L2735-2740).
- * Regular users can edit Bugs; Tasks and Requirements require manager/admin.
+ * Mirror of the backend can_edit_bug rule. Regular users can edit Bugs; Tasks
+ * and Requirements require manager/admin.
  */
 export function canEditItemType(role: string, itemType: string | null | undefined): boolean {
   if (role === "admin" || role === "manager") return true;
   return (itemType || "Bug") === "Bug";
 }
 
-/** Port of statusesForType (vanilla L1784-1787). */
+/** Allowed statuses for a given item type, falling back to the global list. */
 export function statusesForType(meta: MetaOut, itype: string): string[] {
   const byType = meta.statuses_by_type as Record<string, string[] | undefined>;
   return byType[itype || "Bug"] ?? meta.statuses ?? [];
 }
 
-/** Local-time YYYY-MM-DD (port of _isoDate, used for the create-mode due-date default). */
+/** Local-time YYYY-MM-DD, used for the create-mode due-date default. */
 export function isoToday(): string {
   const d = new Date();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -60,18 +51,18 @@ export function isoToday(): string {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
-/** Mirrors the vanilla `err.message` toast interpolation. */
 export function errorMessage(err: unknown): string {
   return err instanceof Error && err.message ? err.message : String(err);
 }
 
-/** Staged-file count label: "Attach files" / "N file(s)" (vanilla _renderStagedFiles). */
+/** Staged-file count label: "Attach files" / "N file(s)". */
 export function stagedLabel(count: number, idle: string): string {
-  return count ? `${count} file${count > 1 ? "s" : ""}` : idle;
+  if (!count) return idle;
+  return `${count} file${count > 1 ? "s" : ""}`;
 }
 
 // ---------------------------------------------------------------------------
-// Activity icon + row (vanilla L3126-3150)
+// Activity icon + row
 // ---------------------------------------------------------------------------
 
 export function activityIcon(action: string): string {
@@ -83,12 +74,13 @@ export function activityIcon(action: string): string {
   if (action.includes("delete")) return "🗑";
   if (action.includes("comment")) return "💬";
   if (action.includes("attachment")) return "📎";
+  if (action.includes("link")) return "🔗";
   if (action.includes("status")) return "🔄";
   if (action.includes("assign")) return "👥";
   return "📝";
 }
 
-export function ActivityRow({ activity }: { activity: ActivityOut }) {
+export function ActivityRow({ activity }: Readonly<{ activity: ActivityOut }>) {
   return (
     <div className="activity-row">
       <span className="activity-icon">{activityIcon(activity.action)}</span>
@@ -105,7 +97,7 @@ export function ActivityRow({ activity }: { activity: ActivityOut }) {
 }
 
 // ---------------------------------------------------------------------------
-// Attachment card (vanilla renderAttachmentCard, L3092-3124)
+// Attachment card
 // ---------------------------------------------------------------------------
 
 interface AttachmentCardProps {
@@ -117,12 +109,18 @@ interface AttachmentCardProps {
   onDelete: (attId: number) => void;
 }
 
-export function AttachmentCard({ att, bugId, deletable, onDelete }: AttachmentCardProps) {
+export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<AttachmentCardProps>) {
   const url = `/api/bugs/${bugId}/attachments/${att.id}/download`;
   const ct = (att.content_type || "").toLowerCase();
   // Inline rendering is safe for raster images and video. SVG can carry
   // inline JS (server downgrades it on download) so it gets the file icon.
   const isRasterImg = ct.startsWith("image/") && ct !== "image/svg+xml";
+  const isVideo = ct.startsWith("video/");
+  // Video plays in the themed lightbox (so "View" never falls back to the
+  // browser's native player), opened from the thumbnail or the View action.
+  const [videoOpen, setVideoOpen] = useState(false);
+  const openVideo = useCallback(() => setVideoOpen(true), []);
+
   let preview: ReactNode;
   if (isRasterImg) {
     preview = (
@@ -130,11 +128,27 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: AttachmentCa
         <img src={url} alt={att.filename} loading="lazy" />
       </a>
     );
-  } else if (ct.startsWith("video/")) {
+  } else if (isVideo) {
+    // Compact poster (the #t=0.1 fragment makes the browser paint the first
+    // frame) + a play badge; clicking opens the full player in the lightbox.
     preview = (
-      <video controls preload="metadata">
-        <source src={url} type={att.content_type} />
-      </video>
+      <button
+        type="button"
+        className="attach-video-thumb"
+        onClick={openVideo}
+        aria-label={`Play ${att.filename}`}
+      >
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video
+          className="attach-video-poster"
+          src={`${url}#t=0.1`}
+          preload="metadata"
+          muted
+          playsInline
+          tabIndex={-1}
+        />
+        <span className="attach-video-play" aria-hidden="true">▶</span>
+      </button>
     );
   } else {
     preview = (
@@ -154,7 +168,13 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: AttachmentCa
         </div>
       </div>
       <div className="attach-actions">
-        <a href={url} target="_blank" rel="noopener">View</a>
+        {isVideo ? (
+          <button type="button" data-act="view-video" onClick={openVideo}>
+            View
+          </button>
+        ) : (
+          <a href={url} target="_blank" rel="noopener">View</a>
+        )}
         <a href={url} download={att.filename}>Download</a>
         {deletable && (
           <button
@@ -168,12 +188,20 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: AttachmentCa
           </button>
         )}
       </div>
+      {isVideo && videoOpen && (
+        <VideoLightbox
+          src={url}
+          type={att.content_type}
+          label={att.filename}
+          onClose={() => setVideoOpen(false)}
+        />
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Attachment staging (vanilla L3152-3280)
+// Attachment staging
 //
 // `input.files` is a read-only FileList, so staged selections are copied into
 // a plain array (with a blob URL each for the preview tile). Buckets are
@@ -240,10 +268,10 @@ interface StagedTileProps {
   onRemove: () => void;
 }
 
-/** One pending-upload preview tile (vanilla _renderStagedFiles per-file markup). */
-export function StagedTile({ staged, bucket, idx, onRemove }: StagedTileProps) {
-  // v2.6 fix: if the blob URL can't render as a real image, swap to the
-  // generic file icon so the row stays readable.
+/** One pending-upload preview tile. */
+export function StagedTile({ staged, bucket, idx, onRemove }: Readonly<StagedTileProps>) {
+  // If the blob URL can't render as a real image, swap to the generic file
+  // icon so the row stays readable.
   const [broken, setBroken] = useState(false);
   const f = staged.file;
   const wasImage = (f.type || "").startsWith("image/");

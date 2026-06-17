@@ -1,10 +1,8 @@
 /**
- * Toast notifications — exact port of vanilla toast()/toastError() (L218-234).
+ * Toast notifications.
  *
  * The app shell renders a single `<div id="toast" class="toast" hidden>`;
- * toast() swaps its text + type class and unhides it for 3.5s — identical
- * to the vanilla mechanism so styles.css (.toast, .toast.error,
- * .toast.success) applies unchanged.
+ * toast() swaps its text + type class and unhides it for 3.5s.
  *
  * Imperative on purpose: callable from anywhere (API error paths, editors)
  * without prop-drilling.

@@ -1,10 +1,6 @@
 /**
- * Type tabs — port of #typeTabs (index.html L113-126) + tab switching
- * (setActiveTab / refreshTypeTabActiveState, app.js L1888-1915) and the
- * badge counts from stats.by_type (refreshStats, L1650-1657).
- *
- * Visibility: shown on list + analytics only (_toggleViewChrome, L2339-2352
- * — vanilla used style.display, replicated here).
+ * Type tabs — tab switching plus the badge counts from stats.by_type. Shown on
+ * the list and analytics views only.
  */
 import { useApp, type TabName } from "../state/AppContext";
 
@@ -20,7 +16,7 @@ export default function TypeTabs() {
 
   const show = view === "list" || view === "analytics";
 
-  // Badge counts always come from by_type (global), port of L1650-1657.
+  // Badge counts always come from by_type (global).
   const byType = stats?.by_type ?? {};
   const counts: Record<TabName, number> = {
     Bug: byType["Bug"] ?? 0,

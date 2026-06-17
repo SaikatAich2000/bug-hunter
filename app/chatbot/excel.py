@@ -87,7 +87,7 @@ _HEADER_STYLE_FG = "FFFFFF"
 
 # Characters Excel/Numbers/LibreOffice interpret as a formula when they
 # start a cell. A bug title like `=cmd|'/c calc.exe'!A1` would execute
-# on open. Neutralised by prefixing a single quote — same defence as the
+# on open. Neutralized by prefixing a single quote — same defense as the
 # CSV export in routes/bugs.py and the reports writer (reports/xlsx.py).
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 

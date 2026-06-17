@@ -1,8 +1,5 @@
 /**
- * BhDateInput — React port of the vanilla custom date picker
- * (`enhanceDateInput`, app/static/app.js L290-L567).
- *
- * DOM (class names must match styles.css exactly):
+ * BhDateInput — a custom date picker. Class names must match styles.css:
  *
  *   <div class="bh-date-wrap">
  *     <input type="hidden" class="bh-date-native" …>   ← form-submission value
@@ -18,10 +15,9 @@
  *     </div>
  *   </div>
  *
- * Differences from vanilla: the popover renders in-place instead of being
- * appended to document.body (it is still `position: fixed`, placed by the
- * same placePop math, so it escapes overflow-clipping ancestors), and the
- * value is fully controlled via props instead of living on the input.
+ * The popover renders in-place but is `position: fixed`, placed by placePop so
+ * it escapes overflow-clipping ancestors. The value is fully controlled via
+ * props.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -31,7 +27,7 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** Format a JS Date as YYYY-MM-DD in local time (port of _isoDate). */
+/** Format a JS Date as YYYY-MM-DD in local time. */
 function isoDate(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -39,14 +35,14 @@ function isoDate(d: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Parse YYYY-MM-DD as a local-time Date (port of _parseIso). */
+/** Parse YYYY-MM-DD as a local-time Date. */
 function parseIso(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split("-").map((n) => Number.parseInt(n, 10));
   return new Date(y, m - 1, d);
 }
 
-/** "Jun 12, 2026" (port of _formatHumanDate). */
+/** "Jun 12, 2026". */
 function formatHumanDate(s: string): string {
   const d = parseIso(s);
   if (!d) return "";
@@ -60,7 +56,7 @@ interface Cell {
   muted: boolean;
 }
 
-/** Port of _computeCell: one calendar cell, marking prev/next-month bleed. */
+/** One calendar cell, marking prev/next-month bleed. */
 function computeCell(
   offset: number,
   daysInMonth: number,
@@ -90,7 +86,7 @@ interface Props {
   onChange: (iso: string) => void;
   required?: boolean;
   disabled?: boolean;
-  /** Goes on the hidden native input (where labels pointed in vanilla). */
+  /** Goes on the hidden native input (the label target). */
   id?: string;
 }
 
@@ -106,8 +102,8 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Port of placePop: fixed-position against the trigger, flipping above
-  // when below would clip and above has more room.
+  // Fixed-position against the trigger, flipping above when below would clip
+  // and above has more room.
   const placePop = useCallback(() => {
     const btn = btnRef.current;
     const pop = popRef.current;
@@ -144,7 +140,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
     };
   }, [open, placePop]);
 
-  // Outside click closes (port of outsideClose's containment check).
+  // Outside click closes.
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
@@ -162,7 +158,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
   }, [open]);
 
   const openPop = () => {
-    // Port of initView: seed the viewed month from the value or today.
+    // Seed the viewed month from the value or today.
     const seed = parseIso(value) ?? new Date();
     setView({ y: seed.getFullYear(), m: seed.getMonth() });
     setOpen(true);

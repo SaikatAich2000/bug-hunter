@@ -212,7 +212,7 @@ def test_email_subject_uses_item_type(monkeypatch):
     assert "task" in subj.lower(), subj
     assert "new task" in subj.lower(), subj
     assert "Type:        Task" in body
-    # And critically — must NOT lie that it's a bug.
+    # Must NOT report it as a bug.
     assert "new bug" not in subj.lower()
     assert "a new bug" not in body.lower()
 
@@ -302,9 +302,9 @@ def test_init_db_is_idempotent(admin_client):
 
 def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch):
     """Simulate a row that was inserted BEFORE the item_type column existed:
-    the third-pass ALTER TABLE must add the column with DEFAULT 'Bug' so
-    the row is interpreted as a Bug — exactly what we promise for the
-    live production database on upgrade."""
+    the ALTER TABLE must add the column with DEFAULT 'Bug' so the row is
+    interpreted as a Bug — the same guarantee the live production database
+    gets on upgrade."""
     # Build a minimal "old" SQLite DB that has a bugs table without the
     # item_type column, then point the engine at it and call init_db().
     import sqlite3

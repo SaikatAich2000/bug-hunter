@@ -1,9 +1,8 @@
-"""HaveIBeenPwned breach check (T4).
+"""HaveIBeenPwned breach check.
 
-Implements the privacy-preserving k-anonymity API: we send only the
-first 5 hex characters of the password's SHA-1 hash, and check the
-returned suffix list locally. The plaintext (and the full hash) never
-leave the server.
+Uses the privacy-preserving k-anonymity API: only the first 5 hex characters
+of the password's SHA-1 hash are sent, and the returned suffix list is checked
+locally. The plaintext (and the full hash) never leave the server.
 
 API:  GET https://api.pwnedpasswords.com/range/{PREFIX}
 Doc:  https://haveibeenpwned.com/API/v3#PwnedPasswords
@@ -34,6 +33,12 @@ logger = logging.getLogger("bug_hunter.password_breach")
 _API_URL = "https://api.pwnedpasswords.com/range/"
 _TIMEOUT_SECONDS = 3.0
 
+# Backwards-compat exception, mirroring app/schemas._check_password_strength:
+# 'changeme' (case-insensitive) is the legacy default password baked into many
+# existing deployments and the production DB. It is ALWAYS accepted, so the
+# breach gate must whitelist it even though it is (obviously) in the corpus.
+_ALWAYS_ALLOWED = frozenset({"changeme"})
+
 
 def _env_bool(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
@@ -44,11 +49,9 @@ def _is_enabled() -> bool:
 
 
 def _sha1_hex(plain: str) -> str:
-    # SHA-1 is the format HIBP's API expects — used here only as a
-    # k-anonymity index, NEVER as the stored password hash (that's
-    # bcrypt; see app/auth.py). Sonar python:S4790 would flag SHA-1 as
-    # weak in a hashing context; here it's intentionally an API-format
-    # constraint, not a security primitive.
+    # SHA-1 is the format the HIBP API expects, used here only as a
+    # k-anonymity index, never as the stored password hash (that's bcrypt; see
+    # app/auth.py). It's an API-format constraint, not a security primitive.
     return hashlib.sha1(plain.encode("utf-8")).hexdigest().upper()  # NOSONAR
 
 
@@ -77,6 +80,8 @@ def is_password_breached(plain: str) -> bool:
     """Return True iff this password appears in the HIBP breach corpus
     with a non-zero count. Fail-open on any error."""
     if not plain or not _is_enabled():
+        return False
+    if plain.lower() in _ALWAYS_ALLOWED:
         return False
     digest = _sha1_hex(plain)
     prefix, suffix = digest[:5], digest[5:]

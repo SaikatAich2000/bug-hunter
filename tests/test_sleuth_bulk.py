@@ -1,0 +1,446 @@
+"""Sleuth bulk actions + the admin-only write policy.
+
+Two things are exercised here:
+
+  * **Bulk writes** — "assign all the bugs to X", "close all bugs", etc. The
+    command is staged as ONE confirmable plan whose ``bug_ids`` covers every
+    matching item, and a single "yes" applies it to all of them.
+
+  * **Role policy** — Sleuth is a full read/write/edit assistant for ADMINS
+    only (never delete). Managers and regular users get read/lookup access;
+    any write attempt (single or bulk) is refused with intent ``action_denied``
+    while reads keep working.
+
+Self-contained temp-SQLite isolation, mirroring the other sleuth test files.
+"""
+from __future__ import annotations
+
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+import os
+import tempfile
+
+_tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_tmp.close()
+os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
+os.environ["SESSION_SECRET"] = "test-secret-bulk-only"
+os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
+
+# Fresh app import bound to THIS file's dedicated DB (see the long note in
+# test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
+# engine bound to an earlier-collected module's torn-down DB.
+import sys as _sys_purge
+for _m in list(_sys_purge.modules):
+    if _m == "app" or _m.startswith("app."):
+        del _sys_purge.modules[_m]
+
+from app.database import Base, engine, SessionLocal
+from app import models
+from app.auth import hash_password
+from app.chatbot import executor, actions
+from app.chatbot.memory import store as memstore
+
+
+def seed():
+    """Re-seed; return dict of ids. 3 bugs, all New/Medium/DEV in General."""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    memstore._clear_all_for_test()
+    db = SessionLocal()
+    try:
+        admin = models.User(name="Saikat Aich", email="admin@bulk.test",
+                            role="admin", password_hash=hash_password("AdminPass1!"),
+                            is_active=True)
+        mgr = models.User(name="Mark Manager", email="mgr@bulk.test",
+                          role="manager", password_hash=hash_password("MgrPass1!"),
+                          is_active=True)
+        usr = models.User(name="Uma User", email="usr@bulk.test",
+                          role="user", password_hash=hash_password("UsrPass1!"),
+                          is_active=True)
+        db.add_all([admin, mgr, usr])
+        db.commit()
+        proj = models.Project(name="General", description="d")
+        db.add(proj)
+        db.commit()
+        ids = []
+        for i in range(3):
+            b = models.Bug(title=f"Bug {i}", description="d", status="New",
+                           priority="Medium", environment="DEV",
+                           project_id=proj.id, reporter_id=admin.id)
+            db.add(b)
+            db.commit()
+            ids.append(b.id)
+        return {"admin": admin.id, "mgr": mgr.id, "usr": usr.id, "bugs": ids}
+    finally:
+        db.close()
+
+
+def _user(db, uid):
+    return db.get(models.User, uid)
+
+
+# --------------------------------------------------------------------------
+# Bulk writes (admin)
+# --------------------------------------------------------------------------
+def test_bulk_assign_all_admin():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("assign all the bugs to Saikat Aich", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        assert "3" in staged.blocks[0].payload["text"]
+
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        assert "3" in done.blocks[0].payload["text"]
+
+        db.expire_all()
+        assigned = sum(1 for b in db.query(models.Bug).all()
+                       if any(a.id == ids["admin"] for a in b.assignees))
+        assert assigned == 3, assigned
+        # Bulk emits ONE aggregate notification (not one per item) — and the
+        # actor (assignee here) gets it.
+        notifs = db.query(models.Notification).filter_by(user_id=ids["admin"]).all()
+        assert len(notifs) == 1, len(notifs)
+        assert notifs[0].kind == "assigned"
+    finally:
+        db.close()
+
+
+def test_bulk_close_all_admin():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("close all bugs", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        closed = sum(1 for b in db.query(models.Bug).all() if b.status == "Closed")
+        assert closed == 3, closed
+    finally:
+        db.close()
+
+
+def test_bulk_unassign_all_admin():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        # First assign everyone, then bulk-unassign.
+        executor.execute("assign all the bugs to Saikat Aich", db, admin)
+        executor.execute("yes", db, admin)
+        staged = executor.execute("unassign Saikat Aich from all the bugs", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        still = sum(1 for b in db.query(models.Bug).all()
+                    if any(a.id == ids["admin"] for a in b.assignees))
+        assert still == 0, still
+    finally:
+        db.close()
+
+
+def test_bulk_assign_needs_a_user():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        r = executor.execute("assign all the bugs", db, admin)
+        assert r.intent == "action_invalid", r.intent
+        assert "user" in r.blocks[0].payload["text"].lower()
+    finally:
+        db.close()
+
+
+def test_bulk_assign_unknown_user():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        r = executor.execute("assign all the bugs to Nobody McGhost", db, admin)
+        assert r.intent == "action_invalid", r.intent
+    finally:
+        db.close()
+
+
+def test_bulk_priority_all_admin():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("set all bugs to high priority", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        assert all(b.priority == "High" for b in db.query(models.Bug).all())
+    finally:
+        db.close()
+
+
+def test_bulk_assign_with_status_filter():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        # Flip one bug to In Progress so the New filter selects only the rest.
+        b = db.get(models.Bug, ids["bugs"][0]); b.status = "In Progress"; db.commit()
+        staged = executor.execute("assign all new bugs to Saikat Aich", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        assert "2" in staged.blocks[0].payload["text"]
+        executor.execute("yes", db, admin)
+        db.expire_all()
+        assigned = sum(1 for b in db.query(models.Bug).all()
+                       if any(a.id == ids["admin"] for a in b.assignees))
+        assert assigned == 2, assigned
+    finally:
+        db.close()
+
+
+def _add_mixed_types(db, proj_id, admin_id):
+    """Add one Requirement + one Task next to the seeded 3 Bugs. Returns
+    (requirement_id, task_id)."""
+    req = models.Bug(title="Req A", description="d", status="New", priority="Medium",
+                     environment="DEV", project_id=proj_id, reporter_id=admin_id,
+                     item_type="Requirement")
+    task = models.Bug(title="Task A", description="d", status="New", priority="Medium",
+                      environment="DEV", project_id=proj_id, reporter_id=admin_id,
+                      item_type="Task")
+    db.add_all([req, task])
+    db.commit()
+    return req.id, task.id
+
+
+def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
+    """THE fix: "assign all the bugs" must touch ONLY Bugs — never the
+    Requirements and Tasks that share the same table."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        proj_id = db.query(models.Project).first().id
+        req_id, task_id = _add_mixed_types(db, proj_id, ids["admin"])
+
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("assign all the bugs to Saikat Aich", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        # The confirmation states the TYPED scope so the user can't be surprised.
+        text = staged.blocks[0].payload["text"]
+        assert "3 Bug" in text, text
+
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+
+        db.expire_all()
+        req2 = db.get(models.Bug, req_id)
+        task2 = db.get(models.Bug, task_id)
+        assert all(a.id != ids["admin"] for a in req2.assignees), "requirement wrongly assigned"
+        assert all(a.id != ids["admin"] for a in task2.assignees), "task wrongly assigned"
+        bugs_assigned = sum(
+            1 for b in db.query(models.Bug).filter_by(item_type="Bug").all()
+            if any(a.id == ids["admin"] for a in b.assignees)
+        )
+        assert bugs_assigned == 3, bugs_assigned
+    finally:
+        db.close()
+
+
+def test_bulk_assign_all_items_covers_every_type_with_breakdown():
+    """"assign all ITEMS" sweeps every type — and the confirmation spells out
+    the Bug/Requirement/Task breakdown so nothing is hidden."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        proj_id = db.query(models.Project).first().id
+        _add_mixed_types(db, proj_id, ids["admin"])
+
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("assign all items to Saikat Aich", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        text = staged.blocks[0].payload["text"]
+        assert "5" in text and "Bug" in text and "Requirement" in text and "Task" in text, text
+
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        assigned = sum(1 for b in db.query(models.Bug).all()
+                       if any(a.id == ids["admin"] for a in b.assignees))
+        assert assigned == 5, assigned
+    finally:
+        db.close()
+
+
+def test_bulk_close_all_tasks_only_targets_tasks():
+    """Type scoping also applies to status changes: "close all tasks" leaves
+    Bugs and Requirements alone."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        proj_id = db.query(models.Project).first().id
+        _req_id, task_id = _add_mixed_types(db, proj_id, ids["admin"])
+
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("close all tasks", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        assert "1 Task" in staged.blocks[0].payload["text"], staged.blocks[0].payload["text"]
+        executor.execute("yes", db, admin)
+
+        db.expire_all()
+        assert db.get(models.Bug, task_id).status == "Closed"
+        # The 3 Bugs stay New.
+        assert all(b.status == "New"
+                   for b in db.query(models.Bug).filter_by(item_type="Bug").all())
+    finally:
+        db.close()
+
+
+def test_bulk_assign_with_project_filter():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        staged = executor.execute(
+            "assign all bugs in project General to Saikat Aich", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        assert "3" in staged.blocks[0].payload["text"]
+    finally:
+        db.close()
+
+
+def test_bulk_no_matching_items():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        # No Critical bugs exist → the filtered set is empty.
+        r = executor.execute("assign all critical bugs to Saikat Aich", db, admin)
+        assert r.intent == "action_invalid", r.intent
+        assert "matching" in r.blocks[0].payload["text"].lower()
+    finally:
+        db.close()
+
+
+def test_bulk_skips_missing_ids():
+    """_apply_bulk counts a vanished id as skipped, not a crash."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        plan = actions.ActionPlan(
+            kind="set_status", actor_user_id=admin.id,
+            bug_ids=[ids["bugs"][0], 999999], new_value="Closed",
+            summary_human="Set status of all 2 items to Closed",
+        )
+        resp = actions.execute_plan(plan, db, admin)
+        assert resp.intent == "action_done", resp.intent
+        assert "1 skipped" in resp.blocks[0].payload["text"]
+    finally:
+        db.close()
+
+
+def test_every_sleuth_op_notifies():
+    """Each Sleuth write surfaces in the bell — status, comment, create bug,
+    create project — not just assignment."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+
+        def ncount():
+            db.expire_all()
+            return db.query(models.Notification).filter_by(user_id=ids["admin"]).count()
+
+        base = ncount()
+        executor.execute(f"close bug {ids['bugs'][0]}", db, admin)
+        executor.execute("yes", db, admin)
+        assert ncount() == base + 1
+
+        executor.execute(f"comment on #{ids['bugs'][0]}: investigating", db, admin)
+        executor.execute("yes", db, admin)
+        assert ncount() == base + 2
+
+        executor.execute('create a bug titled "Brand new"', db, admin)
+        executor.execute("yes", db, admin)
+        assert ncount() == base + 3
+
+        executor.execute("create project Mercury", db, admin)
+        executor.execute("yes", db, admin)
+        assert ncount() == base + 4
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------
+# Role policy — managers / users are read-only via Sleuth
+# --------------------------------------------------------------------------
+def test_sleuth_write_denied_helper():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        assert actions.sleuth_write_denied(_user(db, ids["admin"])) is None
+        assert actions.sleuth_write_denied(_user(db, ids["mgr"])) is not None
+        assert actions.sleuth_write_denied(_user(db, ids["usr"])) is not None
+    finally:
+        db.close()
+
+
+def test_manager_single_write_denied():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        mgr = _user(db, ids["mgr"])
+        r = executor.execute(f"assign bug {ids['bugs'][0]} to Mark Manager", db, mgr)
+        assert r.intent == "action_denied", r.intent
+        # And nothing was staged.
+        sess = memstore.get(ids["mgr"])
+        assert sess is None or sess.pending_action is None
+    finally:
+        db.close()
+
+
+def test_user_bulk_write_denied():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        usr = _user(db, ids["usr"])
+        r = executor.execute("assign all the bugs to Uma User", db, usr)
+        assert r.intent == "action_denied", r.intent
+        db.expire_all()
+        assigned = sum(1 for b in db.query(models.Bug).all() if b.assignees)
+        assert assigned == 0
+    finally:
+        db.close()
+
+
+def test_manager_write_never_stages_then_confirm_is_idle():
+    """A blocked non-admin write stages nothing, so a follow-up 'yes' has
+    nothing to execute — there is no way to smuggle a change through."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        mgr = _user(db, ids["mgr"])
+        denied = executor.execute("close all bugs", db, mgr)
+        assert denied.intent == "action_denied", denied.intent
+        follow = executor.execute("yes", db, mgr)
+        assert follow.intent == "confirm_idle", follow.intent
+        db.expire_all()
+        assert all(b.status == "New" for b in db.query(models.Bug).all())
+    finally:
+        db.close()
+
+
+def test_manager_read_lookup_still_works():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        mgr = _user(db, ids["mgr"])
+        r = executor.execute("show all bugs", db, mgr)
+        assert r.intent in ("list_bugs", "count_bugs"), r.intent
+        r2 = executor.execute("how many bugs are there", db, mgr)
+        assert r2.intent in ("list_bugs", "count_bugs"), r2.intent
+    finally:
+        db.close()

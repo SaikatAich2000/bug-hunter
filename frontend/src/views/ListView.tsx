@@ -1,28 +1,22 @@
 /**
- * ListView — the work-items table. Port of the vanilla list rendering:
- *
- *  - TAB_COLUMNS / COL_HEAD_LABEL / _renderCell / _renderTableHead /
- *    renderBugTable / renderPagination       (app/static/app.js L1932-2061)
- *  - row click → openBugDetail, admin delete (L4530-4539)
- *  - handleDeleteBug                          (L3540-3559)
- *  - markup: #viewList in app/static/index.html (table / #emptyState /
- *    #paginationBar) — ids/classes preserved exactly.
+ * ListView — the work-items table.
  *
  * Data, paging and the implicit tab filter all live in AppContext; this
- * component only renders STATE.bugs for the active tab.
+ * component only renders the bugs for the active tab.
  */
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useApp, type TabName } from "../state/AppContext";
 import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
 import { withLoader } from "../lib/loader";
 import { formatDate, initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
+import BhSelect from "../components/BhSelect";
 import { itemTypeEmoji } from "../modals/bug/helpers";
-import type { BugOut } from "../types";
+import type { BugOut, BulkActionResult } from "../types";
 
 // ---------------------------------------------------------------------------
-// Column tables (ports of TAB_COLUMNS / COL_HEAD_LABEL, L1932-1960)
+// Column tables — column set and header label per active type tab
 // ---------------------------------------------------------------------------
 
 type ColKey =
@@ -71,6 +65,14 @@ const COL_HEAD_LABEL: Record<ColKey, string> = {
 
 const MUTED_DASH = <span className="muted">—</span>;
 
+/** Panel-header label per active type tab. */
+const PANEL_LABEL: Record<TabName, string> = {
+  all: "All work items",
+  Bug: "Bugs",
+  Requirement: "Requirements",
+  Task: "Tasks",
+};
+
 export default function ListView() {
   const {
     bugs,
@@ -80,6 +82,7 @@ export default function ListView() {
     totalPages,
     activeTab,
     isAdmin,
+    meta,
     openBugDetail,
     refreshAll,
     closeBugModal,
@@ -87,8 +90,77 @@ export default function ListView() {
 
   const cols = TAB_COLUMNS[activeTab] ?? TAB_COLUMNS.all;
 
-  // Port of handleDeleteBug (L3540-3559): noun comes from the cached row so
-  // the confirm prompt + toast say "task"/"requirement"/"bug" correctly.
+  // ----- bulk multi-select -------------------------------------------------
+  // Selection is scoped to the visible page; it clears whenever the page's id
+  // set changes (page turn / filter change / poll that adds-removes a row).
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const pageIds = useMemo(() => bugs.map((b) => b.id), [bugs]);
+  const pageIdKey = pageIds.join(",");
+  // Reset the selection whenever the visible id set changes (page turn / filter
+  // / tab switch). A quiet 10s poll that returns the same ids leaves it intact.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [pageIdKey]);
+  // Keep selection in sync with what's actually on screen (drop ids that left).
+  const visibleSelected = useMemo(
+    () => pageIds.filter((id) => selected.has(id)),
+    [pageIds, selected],
+  );
+  const allSelected = bugs.length > 0 && visibleSelected.length === bugs.length;
+
+  const toggleRow = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelected((prev) => {
+      // If every visible row is already selected, clear the page; else select all.
+      if (pageIds.every((id) => prev.has(id))) {
+        const next = new Set(prev);
+        pageIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...pageIds]);
+    });
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  const applyBulk = async (action: string, value?: string): Promise<void> => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    try {
+      const res = await withLoader(
+        () =>
+          api<BulkActionResult>("/bugs/bulk", {
+            method: "POST",
+            json: { action, ids, value },
+          }),
+        "Applying to selection…",
+      );
+      toast(res.message || "Done", res.updated ? "success" : "info");
+      clearSelection();
+      closeBugModal();
+      await refreshAll();
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
+  const bulkDelete = async (): Promise<void> => {
+    const n = selected.size;
+    const ok = await confirmDialog(
+      `Delete ${n} selected item${n === 1 ? "" : "s"}? This also deletes their comments and attachments. Cannot be undone`,
+    );
+    if (!ok) return;
+    await applyBulk("delete");
+  };
+
+  // The noun comes from the cached row so the confirm prompt and toast say
+  // "task"/"requirement"/"bug" correctly.
   const handleDeleteBug = async (bugId: number) => {
     const cached = bugs.find((b) => b.id === bugId);
     const itype = cached?.item_type || "Bug";
@@ -109,7 +181,6 @@ export default function ListView() {
     }
   };
 
-  // Port of _renderCell (L1962-2027) — same classes / data-attrs per cell.
   const renderCell = (col: ColKey, bug: BugOut): ReactNode => {
     switch (col) {
       case "id":
@@ -227,10 +298,74 @@ export default function ListView() {
 
   return (
     <section className="view" id="viewList">
-      <div className="table-scroll">
+      <div className="panel">
+        <div className="panel-h">
+          <span>{PANEL_LABEL[activeTab] ?? "Work items"}</span>
+          <span className="count">showing {bugs.length} of {total}</span>
+        </div>
+
+        {/* Bulk action bar — appears once one or more rows are ticked. Each
+            control reuses the /api/bugs/bulk endpoint; items the user can't
+            action are skipped server-side and reported in the toast. */}
+        {selected.size > 0 && (
+          <section className="bulk-bar" id="bulkBar" aria-label="Bulk actions">
+            <span className="bulk-count">{selected.size} selected</span>
+            {/* Themed action pickers. Each fires a bulk op then snaps back to
+                its label — value is never stored, so BhSelect always re-renders
+                showing the placeholder. */}
+            <div className="bulk-select-wrap">
+              <BhSelect
+                value=""
+                ariaLabel="Set status for selected"
+                options={[{ value: "", label: "Status…" },
+                          ...meta.statuses.map((s) => ({ value: s, label: s }))]}
+                onChange={(v) => { if (v) void applyBulk("set_status", v); }}
+              />
+            </div>
+            <div className="bulk-select-wrap">
+              <BhSelect
+                value=""
+                ariaLabel="Set priority for selected"
+                options={[{ value: "", label: "Priority…" },
+                          ...meta.priorities.map((s) => ({ value: s, label: s }))]}
+                onChange={(v) => { if (v) void applyBulk("set_priority", v); }}
+              />
+            </div>
+            <div className="bulk-select-wrap">
+              <BhSelect
+                value=""
+                ariaLabel="Set environment for selected"
+                options={[{ value: "", label: "Env…" },
+                          ...meta.environments.map((s) => ({ value: s, label: s }))]}
+                onChange={(v) => { if (v) void applyBulk("set_environment", v); }}
+              />
+            </div>
+            {isAdmin && (
+              <button type="button" className="btn danger bulk-delete" onClick={() => void bulkDelete()}>
+                🗑 Delete
+              </button>
+            )}
+            <button type="button" className="btn ghost bulk-clear" onClick={clearSelection}>
+              Clear
+            </button>
+          </section>
+        )}
+
+        <div className="table-scroll">
         <table className="bug-table" id="bugTable" aria-label="Work items">
           <thead id="bugTableHead">
             <tr>
+              <th className="col-select">
+                <input
+                  type="checkbox"
+                  aria-label="Select all on this page"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !allSelected && visibleSelected.length > 0;
+                  }}
+                  onChange={toggleAll}
+                />
+              </th>
               {cols.map((c) => (
                 <th key={c} className={`col-${c === "title-with-type" ? "title" : c}`}>
                   {COL_HEAD_LABEL[c] ?? ""}
@@ -242,7 +377,21 @@ export default function ListView() {
             {bugs.map((bug) => (
               // Row click opens the unified modal in edit/view mode — the
               // pencil edit button is gone; the row itself is the way in.
-              <tr key={bug.id} data-bug-id={bug.id} onClick={() => void openBugDetail(bug.id)}>
+              <tr
+                key={bug.id}
+                data-bug-id={bug.id}
+                className={selected.has(bug.id) ? "row-selected" : undefined}
+                onClick={() => void openBugDetail(bug.id)}
+              >
+                {/* Checkbox cell — stops propagation so ticking doesn't open the bug. */}
+                <td className="col-select" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select item #${bug.id}`}
+                    checked={selected.has(bug.id)}
+                    onChange={() => toggleRow(bug.id)}
+                  />
+                </td>
                 {cols.map((c) => renderCell(c, bug))}
               </tr>
             ))}
@@ -253,7 +402,7 @@ export default function ListView() {
         <p>No items match your filters</p>
       </div>
       <div className="pagination" id="paginationBar">
-        {/* Port of renderPagination (L2052-2061): empty when 1 page. */}
+        {/* Empty when there's only one page. */}
         {totalPages > 1 && (
           <>
             <button id="pgPrev" disabled={page <= 1} onClick={() => setPage(page - 1)}>
@@ -267,6 +416,7 @@ export default function ListView() {
             </button>
           </>
         )}
+      </div>
       </div>
     </section>
   );

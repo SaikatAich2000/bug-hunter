@@ -1,29 +1,25 @@
 /**
- * Filter bar — port of #filterBar (index.html L150-188) driven by six
- * MsFilter multi-selects (option sources: _msOptions, app.js L2182-2196;
- * labels/nouns: MS_LABELS / MS_NOUNS, L2168-2180) plus the Clear button
- * (L4484-4495).
+ * Filter bar — six MsFilter multi-selects plus the Clear button.
  *
  * Visibility rules:
- *  - whole bar only on the list view (_toggleViewPanels, L2336)
- *  - Type multi-select hidden when a specific tab is active; Env hidden
- *    on the Requirement / Task tabs (refreshFilterBarVisibility,
- *    L1920-1926). Vanilla kept the wraps in the DOM with display:none;
- *    here the corresponding MsFilter simply isn't rendered.
+ *  - The whole bar shows only on the list view.
+ *  - The Type multi-select is hidden when a specific tab is active; Env is
+ *    hidden on the Requirement / Task tabs. A hidden filter simply isn't
+ *    rendered.
  */
 import { useCallback, useMemo } from "react";
 import { useApp } from "../state/AppContext";
 import MsFilter from "../components/MsFilter";
 import type { ItemType } from "../types";
 
-/** Per-type emoji marker (port of ITEM_TYPE_EMOJI, app.js L2199). */
+/** Per-type emoji marker. */
 const ITEM_TYPE_EMOJI: Record<ItemType, string> = {
   Bug: "🐞",
   Requirement: "📐",
   Task: "✅",
 };
 
-/** Toggle a value's membership in an array (port of the splice/push). */
+/** Toggle a value's membership in an array. */
 function toggled<T>(list: T[], v: T): T[] {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 }
@@ -31,7 +27,7 @@ function toggled<T>(list: T[], v: T): T[] {
 export default function FilterBar() {
   const { view, activeTab, meta, projects, users, filters, setFilters, clearFilters } = useApp();
 
-  // ----- option lists (port of _msOptions) ---------------------------------
+  // ----- option lists ------------------------------------------------------
   // Memoized on their sources so the arrays (and the new Set() MsFilter builds
   // from `selected`) aren't rebuilt on every context-driven re-render.
   const projectOptions = useMemo<[string, string][]>(
@@ -63,7 +59,7 @@ export default function FilterBar() {
   const projectSelected = useMemo(() => filters.project_id.map(String), [filters.project_id]);
   const assigneeSelected = useMemo(() => filters.assignee_id.map(String), [filters.assignee_id]);
 
-  // ----- stable per-filter onToggle handlers (port of the splice/push) ------
+  // ----- stable per-filter onToggle handlers -------------------------------
   const onToggleProject = useCallback(
     (v: string) =>
       setFilters((prev) => ({ ...prev, project_id: toggled(prev.project_id, Number(v)) })),
@@ -92,7 +88,7 @@ export default function FilterBar() {
     [setFilters],
   );
 
-  // ----- tab-aware visibility (port of refreshFilterBarVisibility) ---------
+  // ----- tab-aware visibility ----------------------------------------------
   const showTypeFilter = activeTab === "all";
   const showEnvFilter = activeTab !== "Requirement" && activeTab !== "Task";
 

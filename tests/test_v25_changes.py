@@ -1,4 +1,4 @@
-"""Regression tests for the v2.5 changes:
+"""Tests for per-item-type status sets and admin-only comment/attachment edits.
 
   1. Per-item-type status sets — "Not a Bug" / "Resolved" only on Bug;
      "Approved" / "Implemented" only on Requirement; "Done" / "Blocked"
@@ -121,17 +121,17 @@ def test_requirement_can_use_approved_status(admin_client):
 
 
 def test_changing_type_validates_status_against_new_type(admin_client):
-    """If a bug is currently 'Not a Bug' and we try to flip it to a Task
-    in the same PUT, the request must fail — Task can't carry that
-    status. (Flipping the type WITHOUT changing the status is a quiet
-    bug-data scenario we tolerate; this asserts the explicit reject
+    """If a bug is currently 'Not a Bug' and a single PUT tries to flip it
+    to a Task, the request must fail — Task can't carry that status.
+    (Flipping the type WITHOUT changing the status is a quiet bug-data
+    scenario the server tolerates; this asserts the explicit reject
     path.)"""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Not a Bug"})
     assert r.status_code == 200
-    # Now try to flip the type to Task while resetting status to
-    # something invalid for Task → reject.
+    # Flip the type to Task while resetting status to something invalid
+    # for Task → reject.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={
         "item_type": "Task", "status": "Resolved",
     })
@@ -201,7 +201,7 @@ def test_comment_edit_is_admin_only(admin_client):
 
 
 def test_comment_creation_still_open_for_everyone(admin_client):
-    """v2.5 only restricts edit + delete — creating comments must still
+    """Only edit + delete are restricted — creating comments must still
     work for anyone authenticated, otherwise users can't add evidence."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -221,7 +221,7 @@ def test_attachment_delete_is_admin_only(admin_client):
     r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
     assert r.status_code == 201
     att_id = r.json()["id"]
-    # Manager can't delete (used to be allowed pre-v2.5).
+    # Manager can't delete (used to be allowed).
     _make_user(admin_client, "Mgr2", role="manager", email="mgr2@x.test")
     _login(admin_client, "mgr2@x.test", "User12345Aa")
     r = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
@@ -234,7 +234,7 @@ def test_attachment_delete_is_admin_only(admin_client):
 
 
 def test_attachment_upload_open_post_creation(admin_client):
-    """Users can still attach evidence after a bug is filed — the v2.5
+    """Users can still attach evidence after a bug is filed — the
     restriction only applies to delete."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")

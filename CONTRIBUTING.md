@@ -1,16 +1,15 @@
 # Contributing
 
-Thanks for considering a contribution. This project ships as a
-self-hosted internal-use tracker; PRs that keep it that shape (small,
-no external dependencies, runnable on a 1 vCPU / 2 GB box) are easiest
-to land.
+Thanks for considering a contribution. Bug Hunter is a self-hosted tracker
+designed to run on a small box with no external dependencies, so changes that
+keep it small and self-contained are easiest to land.
 
 ## Setup
 
 ```bash
 python -m venv .venv
 # Windows:  .venv\Scripts\Activate.ps1
-# macOS:    source .venv/bin/activate
+# macOS/Linux:  source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env       # edit values you care about
 ```
@@ -18,22 +17,20 @@ cp .env.example .env       # edit values you care about
 Run the app locally:
 
 ```bash
-python -m uvicorn app.main:app --reload
-# browse http://127.0.0.1:8000
+python -m uvicorn app.main:app --reload    # http://127.0.0.1:8000
 ```
 
-Or via Docker (the canonical run path):
+Or via Docker, the canonical run path:
 
 ```bash
-./deploy.sh
-# browse http://localhost:8765
+./deploy.sh                                 # http://localhost:8765
 ```
 
 ### Frontend
 
-The SPA source is in `frontend/` (React + TypeScript + Vite); the build
-emits the static bundle into `app/static/`, which FastAPI serves. After
-changing frontend code, rebuild so the running app picks it up:
+The SPA source is in `frontend/` (React + TypeScript + Vite); the build emits
+the static bundle into `app/static/`, which FastAPI serves. After changing
+frontend code, rebuild so the running app picks it up:
 
 ```bash
 cd frontend
@@ -43,10 +40,10 @@ npm run build
 
 ## Tests
 
-The full suite must stay green for every PR.
+The full suite must stay green for every pull request.
 
 ```bash
-python -m pytest -q
+python -m pytest                            # full suite with coverage
 ```
 
 UI smoke tests use Playwright + Chromium:
@@ -56,35 +53,36 @@ python -m playwright install chromium
 python -m pytest tests/test_ui_smoke.py
 ```
 
+Static analysis is configured in `sonar-project.properties` and run with
+`scripts/sonar-scan.sh` (or `scripts/sonar-scan.ps1`). It reads `coverage.xml`
+and never touches the runtime database.
+
 ## Code style
 
-- Match the surrounding code; this repo has consistent patterns.
-- Default to **no comments** unless the *why* is non-obvious (a hidden
-  constraint, a subtle invariant, a workaround for a specific bug).
+- Match the surrounding code; the repo has consistent patterns.
+- Default to no comments unless the *why* is non-obvious (a hidden constraint, a
+  subtle invariant, or a workaround for a specific bug).
 - New routes get tests; new schemas get validators.
-- Database changes must be **strictly additive** — see *Live-data
-  safety* in [README.md](README.md). No destructive migrations.
-- If you add or change an API route, regenerate the docs:
-  ```bash
-  python scripts/gen-api-docs.py
-  ```
-  (the artifacts under `docs/api/` are gitignored — the live FastAPI
-  app is the source of truth.)
+- Database changes must be strictly additive — see *Live-data safety* in
+  [README.md](README.md). No destructive migrations.
+- If you add or change an API route, regenerate the docs with
+  `python scripts/gen-api-docs.py` (the artifacts under `docs/api/` are
+  gitignored; the live FastAPI app is the source of truth).
 
 ## Pull requests
 
-- One concern per PR.
-- Describe the change in one paragraph; list any DB or config
+- One concern per pull request.
+- Describe the change in a short paragraph and list any DB or config
   implications.
-- CI must pass; SonarQube quality gate must stay green.
-- Reference the related issue if there is one.
+- The test suite must pass and the SonarQube quality gate must stay green.
+- Reference the related issue, if any.
 
 ## Security
 
-Please **don't open a public issue for vulnerabilities** — see
-[SECURITY.md](SECURITY.md) for the disclosure path.
+Do not open a public issue for vulnerabilities — see [SECURITY.md](SECURITY.md)
+for the private disclosure path.
 
 ## License
 
-By submitting a contribution you agree it will be licensed under the
-project's [LICENSE](LICENSE.txt).
+By submitting a contribution you agree it will be licensed under the project's
+[MIT license](LICENSE.txt).

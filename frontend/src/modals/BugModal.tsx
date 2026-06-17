@@ -1,31 +1,14 @@
 /**
- * BugModal — the unified create / edit / view modal (Jira-style single
- * screen). Port of the vanilla bug modal:
+ * BugModal — the unified create / edit / view modal (single-screen, Jira-style).
  *
- *  - markup: the ENTIRE #modalBug block in app/static/index.html (~L528-721)
- *    — every id / class / structure preserved;
- *  - openBugForm / header / select seeding / read-only gating
- *    (app/static/app.js L2534-2804, canEditItem L2735-2740);
- *  - renderBugInlineSections — comments / attachments / activity
- *    (L2809-2915);
- *  - submitBugForm incl. staged-file flush (L2953-3070);
- *  - renderAttachmentCard / activityIcon (L3092-3150, via bug/helpers);
- *  - attachment staging buckets + flushBugAttachStaging (L3152-3311);
- *  - delete bug/attachment/comment + inline comment edit (L3537-3704);
- *  - postComment incl. Ctrl/Cmd+Enter (L3706-3799);
- *  - item_type → status re-derivation with "(legacy)" carry (L2790-2804 +
- *    the change listener at L4735-4740).
+ * Mode is driven by AppContext.bugModal: bug == null means create; bug != null
+ * means edit/view (read-only when a regular user opens a Task / Requirement).
  *
- * Mode is driven by AppContext.bugModal: bug == null → create,
- * bug != null → edit/view (read-only when a regular user opens a
- * Task / Requirement).
- *
- * Test-parity hard points: #bugSubmitBtn lives INSIDE #formBug;
- * select[name="reporter_id"] is DISABLED and shows the current user's
- * name; #bugCommentsSection is NOT hidden in edit/view mode;
- * #commentPostBtn is type="button"; there is NO nested <form> inside
- * #formBug (the comment composer is a <div>, see the long note in
- * index.html).
+ * Structural constraints the tests rely on: #bugSubmitBtn lives inside #formBug;
+ * select[name="reporter_id"] is disabled and shows the current user's name;
+ * #bugCommentsSection is not hidden in edit/view mode; #commentPostBtn is
+ * type="button"; there is no nested <form> inside #formBug (the comment
+ * composer is a <div>, since HTML5 forbids nested forms).
  */
 import {
   useEffect,
@@ -43,6 +26,8 @@ import { confirmDialog } from "../components/ConfirmHost";
 import BhSelect, { type BhSelectOption } from "../components/BhSelect";
 import BhDateInput from "../components/BhDateInput";
 import ChipPicker from "../components/ChipPicker";
+import ItemPicker, { type PickerItem } from "../components/ItemPicker";
+import { useFileDrop } from "../lib/useFileDrop";
 import RichEditor, { type RichEditorHandle } from "../components/RichEditor";
 import {
   ActivityRow,
@@ -61,9 +46,15 @@ import type { BugOut, CommentOut, EventOut, ItemType } from "../types";
 const NO_EVENT_OPTION: BhSelectOption = { value: "", label: "— No event —" };
 const SELECT_PLACEHOLDER: BhSelectOption = { value: "", label: "— select —" };
 
+/** Item-link relationship kinds (mirror app/schemas.py ALLOWED_LINK_TYPES). */
+const LINK_TYPE_OPTS: BhSelectOption[] = [
+  { value: "relates", label: "relates to" },
+  { value: "blocks", label: "blocks" },
+  { value: "duplicate", label: "duplicates" },
+];
+
 // ---------------------------------------------------------------------------
-// Create-flow helpers (ports of _uploadCreateBugFiles / _toastAfterCreate,
-// app.js L2953-2982)
+// Create-flow helpers
 // ---------------------------------------------------------------------------
 
 async function uploadCreateBugFiles(
@@ -101,7 +92,6 @@ async function toastAfterCreate(
   else toast(`${ctype} created`, "success");
 }
 
-/** Port of _commentSubmitLabel (L3706-3710). */
 function commentSubmitLabel(body: string, fileCount: number): string {
   if (body && fileCount) return "Posting comment and uploading…";
   if (body) return "Posting comment…";
@@ -119,6 +109,7 @@ export default function BugModal() {
     reloadBugModal,
     refreshAll,
     refreshBugs,
+    openBugDetail,
     currentUser,
     meta,
     users,
@@ -126,7 +117,6 @@ export default function BugModal() {
     isAdmin,
     defaultNewType,
     setDefaultNewType,
-    setView,
   } = useApp();
 
   const { open, bug, defaultType, defaultEventId } = bugModal;
@@ -145,26 +135,34 @@ export default function BugModal() {
   const [dueDate, setDueDate] = useState("");
   const [assigneeIds, setAssigneeIds] = useState<number[]>([]);
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  // Add-link form state. linkTargets are the items chosen in the searchable
+  // multi-select picker, not typed numbers.
+  const [linkTargets, setLinkTargets] = useState<PickerItem[]>([]);
+  const [linkType, setLinkType] = useState("relates");
 
   const descRef = useRef<RichEditorHandle>(null);
   const commentRef = useRef<RichEditorHandle>(null);
   const editCommentRef = useRef<RichEditorHandle>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
-  // Staging buckets (port of STATE.stagedFiles, L3163).
+  // Staging buckets.
   const createStaged = useStagedFiles();   // create-mode bug-level attach
   const commentStaged = useStagedFiles();  // comment composer attach
   const bugAttachStaged = useStagedFiles(); // post-creation "Add attachment"
 
-  // Per-role read-only mode (port of canEditItem + applyBugFormReadOnly).
-  // Create mode is never read-only — anyone can file an item. Prefer the
-  // backend per-item can_edit flag (source of truth) and fall back to the
-  // local role heuristic only when the server didn't supply one.
+  // Drag-and-drop file targets for the two attach zones.
+  const createDrop = useFileDrop((files) => createStaged.addFiles(files));
+  const bugAttachDrop = useFileDrop((files) => bugAttachStaged.addFiles(files));
+
+  // Per-role read-only mode. Create mode is never read-only — anyone can file
+  // an item. Prefer the backend per-item can_edit flag (source of truth) and
+  // fall back to the local role heuristic only when the server didn't supply
+  // one.
   const canEditThis = isEdit ? (bug.can_edit ?? canEditItemType(currentUser.role, bug.item_type)) : true;
   const readOnly = isEdit && !canEditThis;
 
-  // ----- seeding (port of openBugForm, L2707-2730) --------------------------
-  // Runs on every open and whenever a DIFFERENT bug is opened. A
+  // ----- seeding -----------------------------------------------------------
+  // Runs on every open and whenever a different bug is opened. A
   // reloadBugModal() refresh keeps the same id, so half-typed form fields
   // survive while the inline sections re-render from the fresh `bug`.
   useEffect(() => {
@@ -175,9 +173,12 @@ export default function BugModal() {
     commentStaged.clear();
     bugAttachStaged.clear();
     commentRef.current?.setHtml("");
+    // Reset the add-link form on every (re)open.
+    setLinkTargets([]);
+    setLinkType("relates");
 
     if (bug) {
-      // ----- edit/view mode (_seedBugFormEditMode + selects) -----
+      // ----- edit/view mode -----
       setTitle(bug.title || "");
       setProjectId(bug.project_id ? String(bug.project_id) : "");
       setItemType(bug.item_type || "Bug");
@@ -189,7 +190,7 @@ export default function BugModal() {
       setAssigneeIds(bug.assignees ? bug.assignees.map((a) => a.id) : []);
       descRef.current?.setHtml(bug.description || "");
     } else {
-      // ----- create mode (_seedBugFormCreateMode + selects) -----
+      // ----- create mode -----
       setTitle("");
       setProjectId("");
       setItemType(defaultType || defaultNewType || "Bug");
@@ -203,8 +204,8 @@ export default function BugModal() {
       descRef.current?.setHtml("");
     }
 
-    // Event select (port of _seedEventField): seed the current event so the
-    // user sees it before /events loads, then swap in the full list.
+    // Event select: seed the current event so the user sees it before /events
+    // loads, then swap in the full list.
     const seed: BhSelectOption[] = [NO_EVENT_OPTION];
     if (bug && bug.event_id && bug.event_name) {
       seed.push({ value: String(bug.event_id), label: bug.event_name });
@@ -239,30 +240,28 @@ export default function BugModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, bugId]);
 
-  // Focus the inline comment editor when it appears (vanilla focused the
-  // surface right after enhanceRichEditor in handleEditComment).
+  // Focus the inline comment editor when it appears.
   useEffect(() => {
     if (editingCommentId != null) editCommentRef.current?.focus();
   }, [editingCommentId]);
 
-  // A closed modal renders nothing — and, crucially, skips ALL the derived
-  // option arrays + the large render tree below. The modal is always mounted
-  // in Shell and re-renders on every context change (the 10s data poll and
-  // 15s session poll both swap the context value), so without this guard a
-  // closed BugModal would recompute statusOpts/projectOpts/assigneeItems
-  // (filtering `users`, mapping `projects`) and rebuild its xxl form +
-  // RichEditors on every tick. Returning null is behaviourally identical to
-  // the `hidden` attribute here: `.modal[hidden]` is display:none, the global
-  // Escape handler only queries `.modal:not([hidden])`, and the enter
-  // animation lives on .modal-card (fires on mount either way). All hooks run
-  // above this point, so the early return never trips the Rules of Hooks.
+  // A closed modal renders nothing, which skips all the derived option arrays
+  // and the large render tree below. The modal is always mounted in Shell and
+  // re-renders on every context change (the data and session polls both swap
+  // the context value), so without this guard a closed BugModal would recompute
+  // statusOpts/projectOpts/assigneeItems (filtering `users`, mapping
+  // `projects`) and rebuild its xxl form + RichEditors on every tick. Returning
+  // null is behaviourally identical to the `hidden` attribute here:
+  // `.modal[hidden]` is display:none, the global Escape handler only queries
+  // `.modal:not([hidden])`, and the enter animation lives on .modal-card (fires
+  // on mount either way). All hooks run above this point, so the early return
+  // never trips the Rules of Hooks.
   if (!open) return null;
 
   // ----- derived select options ---------------------------------------------
 
-  // Status options for the current type with the "(legacy)" carry-forward
-  // (port of _renderStatusSelect, L2794-2804 — re-derives automatically when
-  // item_type changes, mirroring the change listener at L4735-4740).
+  // Status options for the current type with the "(legacy)" carry-forward.
+  // Re-derives automatically when item_type changes.
   const validStatuses = statusesForType(meta, itemType);
   const statusOpts: BhSelectOption[] = [
     SELECT_PLACEHOLDER,
@@ -296,8 +295,8 @@ export default function BugModal() {
       ? [...eventOptions, { value: eventId, label: bug.event_name }]
       : eventOptions;
 
-  // Reporter is fixed (port of _seedReporterField, L2570-2585): inject the
-  // original reporter as the only option when someone else opens the bug.
+  // Reporter is fixed: inject the original reporter as the only option when
+  // someone else opens the bug.
   const me = currentUser;
   const reporterOption =
     isEdit && bug.reporter && bug.reporter.id !== me.id
@@ -309,7 +308,7 @@ export default function BugModal() {
     .filter((u) => u.is_active)
     .map((u) => ({ id: u.id, label: u.name, title: u.role }));
 
-  // Header (port of _setBugFormHeader, L2547-2559).
+  // Header.
   const headType = isEdit ? bug.item_type || "Bug" : defaultType || defaultNewType || "Bug";
   const headTitle = isEdit
     ? `${itemTypeEmoji(headType)} ${headType} #${bug.id}`
@@ -318,9 +317,9 @@ export default function BugModal() {
 
   // ----- handlers ------------------------------------------------------------
 
-  // Description paste (v2.6): edit → upload immediately as a bug-level
-  // attachment + refresh the inline sections; create → stage in the
-  // createBug bucket, uploaded after the bug is created.
+  // Description paste: edit → upload immediately as a bug-level attachment +
+  // refresh the inline sections; create → stage in the createBug bucket,
+  // uploaded after the bug is created.
   const onDescPaste = async (f: File): Promise<void> => {
     if (bugId) {
       const fd = new FormData();
@@ -335,14 +334,14 @@ export default function BugModal() {
   };
 
   // Comment composer paste stages in the comment bucket — files upload with
-  // comment_id linkage after the comment row is created (vanilla L1636-1644).
+  // comment_id linkage after the comment row is created.
   const onComposerPaste = (f: File): void => {
     commentStaged.addFiles([f]);
     toast(`Staged: ${f.name || "pasted file"}`, "info");
   };
 
-  // Paste in the INLINE comment editor uploads bug-level — the comment's
-  // already saved, so we can't backfill its comment_id linkage (L3663-3671).
+  // Paste in the inline comment editor uploads bug-level — the comment is
+  // already saved, so its comment_id linkage can't be backfilled.
   const onEditCommentPaste = async (f: File): Promise<void> => {
     if (!bugId) return;
     const fd = new FormData();
@@ -351,7 +350,6 @@ export default function BugModal() {
     toast(`Attached: ${f.name || "pasted file"}`, "success");
   };
 
-  // Port of handleDeleteBug (L3540-3559).
   const onDeleteBug = async (): Promise<void> => {
     if (!bugId) return;
     const itype = bug?.item_type || "Bug";
@@ -372,7 +370,6 @@ export default function BugModal() {
     }
   };
 
-  // Port of handleDeleteAttachment (L3607-3619).
   const onDeleteAttachment = async (attId: number): Promise<void> => {
     const ok = await confirmDialog("Delete this attachment?");
     if (!ok || !bugId) return;
@@ -388,7 +385,6 @@ export default function BugModal() {
     }
   };
 
-  // Port of handleDeleteComment (L3624-3636).
   const onDeleteComment = async (commentId: number): Promise<void> => {
     const ok = await confirmDialog(
       "Delete this comment? Its attachments will be removed too. Cannot be undone",
@@ -406,7 +402,6 @@ export default function BugModal() {
     }
   };
 
-  // Port of handleSaveEditComment (L3677-3694).
   const onSaveEditComment = async (commentId: number): Promise<void> => {
     if (!bugId) return;
     const body = (editCommentRef.current?.getHtml() ?? "").trim();
@@ -426,15 +421,14 @@ export default function BugModal() {
     }
   };
 
-  // Port of handleCancelEditComment (L3696-3704): the editor goes away and
-  // the original body re-appears from a fresh fetch.
+  // The editor goes away and the original body re-appears from a fresh fetch.
   const onCancelEditComment = (): void => {
     setEditingCommentId(null);
     void reloadBugModal();
   };
 
-  // Port of postComment (L3746-3799). Strict separation (v2.9): the comment
-  // composer ALWAYS produces comment attachments.
+  // The comment composer always produces comment attachments (never bug-level
+  // ones).
   const onPostComment = async (): Promise<void> => {
     if (!bugId) return;
     const body = (commentRef.current?.getHtml() ?? "").trim();
@@ -488,8 +482,8 @@ export default function BugModal() {
     }
   };
 
-  // Port of flushBugAttachStaging (L3288-3311) — runs off the inline
-  // "Upload N file(s)" button rendered while files are staged.
+  // Runs off the inline "Upload N file(s)" button rendered while files are
+  // staged.
   const flushBugAttach = async (): Promise<void> => {
     if (!bugId) return;
     const files = bugAttachStaged.files;
@@ -513,7 +507,56 @@ export default function BugModal() {
     await refreshBugs();
   };
 
-  // Port of submitBugForm (L2984-3070).
+  // Link this item to every item chosen in the multi-select picker.
+  const onAddLink = async (): Promise<void> => {
+    if (!bugId) return;
+    if (linkTargets.length === 0) {
+      toast("Pick one or more items to link", "error");
+      return;
+    }
+    try {
+      await withLoader(async () => {
+        let done = 0;
+        let failed = 0;
+        for (const t of linkTargets) {
+          try {
+            await api(`/bugs/${bugId}/links`, {
+              method: "POST",
+              json: { target_bug_id: t.id, link_type: linkType },
+            });
+            done++;
+          } catch (err) {
+            failed++;
+            toast(`Link to #${t.id}: ${errorMessage(err)}`, "error");
+          }
+        }
+        setLinkTargets([]);
+        await reloadBugModal();
+        if (done) {
+          toast(
+            `Linked ${done} item${done > 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`,
+            "success",
+          );
+        }
+      }, linkTargets.length > 1 ? "Linking items…" : "Linking…");
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
+  const onRemoveLink = async (linkId: number): Promise<void> => {
+    if (!bugId) return;
+    try {
+      await withLoader(async () => {
+        await api(`/bugs/${bugId}/links/${linkId}`, { method: "DELETE" });
+        await reloadBugModal();
+      }, "Removing link…");
+      toast("Link removed", "success");
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
   const onSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     const id = bugId;
@@ -551,13 +594,19 @@ export default function BugModal() {
       return;
     }
 
+    // Saving must NOT navigate the user away from where they are. Closing the
+    // modal returns them to the underlying view, which refreshes itself: the
+    // Work Items list reflects the change via refreshAll(); the Events detail
+    // refetches via its own bugModal.open effect (so "+ Add Task" stays inside
+    // the event); Analytics keeps its charts. A forced setView("list") here was
+    // the cause of the "creating a task inside an event jumps to Work Items" bug
+    // (and the same surprise on every other view).
     try {
       if (id) {
-        // EDIT — save, then close the modal and return to the list.
+        // EDIT — save, then close the modal; the underlying view stays put.
         const result = await withLoader(async () => {
           const updated = await api<BugOut>(`/bugs/${id}`, { method: "PUT", json: payload });
           closeBugModal();
-          setView("list");
           await refreshAll();
           return updated;
         }, "Saving changes…");
@@ -574,7 +623,6 @@ export default function BugModal() {
           await toastAfterCreate(created, ctype, files);
           createStaged.clear();
           closeBugModal();
-          setView("list");
           await refreshAll();
         }, "Creating item…");
       }
@@ -583,7 +631,7 @@ export default function BugModal() {
     }
   };
 
-  // Ctrl/Cmd+Enter posts from the composer (vanilla bound on #commentBody).
+  // Ctrl/Cmd+Enter posts from the composer.
   const onComposerKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
@@ -591,8 +639,7 @@ export default function BugModal() {
     }
   };
 
-  // Ctrl/Cmd+Enter inside the inline comment editor saves (vanilla bound
-  // on #bugCommentsList).
+  // Ctrl/Cmd+Enter inside the inline comment editor saves.
   const onCommentsListKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && editingCommentId != null) {
       e.preventDefault();
@@ -602,8 +649,6 @@ export default function BugModal() {
 
   // ----- inline section renderers --------------------------------------------
 
-  // Port of the per-comment markup in renderBugInlineSections (L2822-2859)
-  // + the inline edit row from handleEditComment (L3648-3655).
   const renderComment = (c: CommentOut) => {
     const hasBody = (c.body || "").trim().length > 0;
     const isEditing = editingCommentId === c.id;
@@ -676,9 +721,8 @@ export default function BugModal() {
           </div>
         ) : hasBody ? (
           // Comment body is sanitized rich HTML from the backend —
-          // sanitize_html() in app/schemas.py strips every dangerous
-          // tag/attr before it ever hits the DB (mirrors the vanilla
-          // innerHTML render).
+          // sanitize_html() in app/schemas.py strips every dangerous tag/attr
+          // before it ever hits the DB.
           <div
             className="comment-body bh-rich-content"
             data-comment-body={c.id}
@@ -745,8 +789,7 @@ export default function BugModal() {
           data-read-only={readOnly ? "1" : ""}
           onSubmit={(e) => void onSubmit(e)}
         >
-          {/* Read-only banner so the user understands what they're seeing
-              (port of applyBugFormReadOnly, L2778-2787). */}
+          {/* Read-only banner so the user understands what they're seeing. */}
           {readOnly && (
             <div className="bug-readonly-banner">
               {`Read-only — only admins and managers can edit ${(bug?.item_type || "item").toLowerCase()}s.`}
@@ -776,10 +819,9 @@ export default function BugModal() {
             {/* Main column: description + comments + attachments + activity */}
             <div className="bug-modal-main">
               {/* div, not label: the editor carries a visually-hidden native
-                  textarea, and a wrapping <label> would route label-clicks
-                  to it instead of the contenteditable surface — the exact
-                  focus-steal bug vanilla fixed by swapping label→div after
-                  enhancement (app.js L640-ish). */}
+                  textarea, and a wrapping <label> would route label-clicks to
+                  it instead of the contenteditable surface — stealing focus
+                  from where the user clicked. */}
               <div className="field">
                 <span>Description</span>
                 <RichEditor
@@ -798,7 +840,11 @@ export default function BugModal() {
                 id="bugCreateAttachSection"
                 hidden={isEdit}
               >
-                <div className="comment-form">
+                <div
+                  className={`comment-form attach-dropzone${createDrop.dragging ? " is-dragging" : ""}`}
+                  {...createDrop.dropProps}
+                >
+                  <div className="attach-drop-hint">Drop files to attach</div>
                   <div className="comment-form-row">
                     <label className="comment-attach-btn" title="Attach files">
                       📎 <span id="createFileLabel">{stagedLabel(createStaged.files.length, "Attach files")}</span>
@@ -833,8 +879,15 @@ export default function BugModal() {
                 </div>
               </section>
 
-              {/* Bug-level attachments — always visible in edit mode. */}
-              <section className="bug-section" id="bugAttachmentsSection" hidden={!isEdit}>
+              {/* Bug-level attachments — always visible in edit mode. Drop
+                  files anywhere in this section to stage them for upload. */}
+              <section
+                className={`bug-section${canEditThis && bugAttachDrop.dragging ? " attach-dropzone is-dragging" : ""}`}
+                id="bugAttachmentsSection"
+                hidden={!isEdit}
+                {...(canEditThis ? bugAttachDrop.dropProps : {})}
+              >
+                {canEditThis && <div className="attach-drop-hint">Drop files to attach</div>}
                 <div className="bug-section-head">
                   <h3>
                     Attachments{" "}
@@ -872,8 +925,7 @@ export default function BugModal() {
                     />
                   ))}
                   {bugAttachStaged.files.length > 0 && (
-                    // Stage multiple, review, then confirm (vanilla
-                    // _ensureUploadBtn, L4711-4727).
+                    // Stage multiple, review, then confirm.
                     <button
                       type="button"
                       className="btn primary attach-staged-upload"
@@ -907,9 +959,9 @@ export default function BugModal() {
               </section>
 
               {/* Comments + their inline attachments. Visible whenever an
-                  existing item is open (edit AND read-only view). The
-                  composer is a <div>, NOT a nested <form> — HTML5 forbids
-                  nested forms (see the long note in index.html). */}
+                  existing item is open (edit and read-only view). The composer
+                  is a <div>, not a nested <form> — HTML5 forbids nested
+                  forms. */}
               <section className="bug-section" id="bugCommentsSection" hidden={!isEdit}>
                 <h3>
                   Comments{" "}
@@ -967,6 +1019,83 @@ export default function BugModal() {
                     </button>
                   </div>
                 </div>
+              </section>
+
+              {/* Linked items — both directions, with the inverse phrasing
+                  computed server-side. Editors can add/remove links. */}
+              <section className="bug-section bug-links-section" id="bugLinksSection" hidden={!isEdit}>
+                <h3>
+                  Linked items{" "}
+                  <span className="muted small" id="linksCount">
+                    {bug ? `(${bug.links.length})` : ""}
+                  </span>
+                </h3>
+                {bug && bug.links.length > 0 ? (
+                  <div className="bug-links-list" id="bugLinksList">
+                    {bug.links.map((link) => (
+                      <div className="bug-link-row" data-link-id={link.id} key={link.id}>
+                        <span className="bug-link-rel">{link.label}</span>
+                        <button
+                          type="button"
+                          className="bug-link-target"
+                          title={`Open #${link.other_bug_id}`}
+                          onClick={() => void openBugDetail(link.other_bug_id)}
+                        >
+                          <span className="inline-type" data-type={link.other_bug_item_type}>
+                            {itemTypeEmoji(link.other_bug_item_type)}
+                          </span>{" "}
+                          #{link.other_bug_id} {link.other_bug_title}
+                        </button>
+                        <span className="badge" data-status={link.other_bug_status}>
+                          {link.other_bug_status}
+                        </span>
+                        {canEditThis && (
+                          <button
+                            type="button"
+                            className="icon-btn danger bug-link-remove"
+                            title="Remove link"
+                            aria-label="Remove link"
+                            onClick={() => void onRemoveLink(link.id)}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="no-content">No linked items yet</p>
+                )}
+                {canEditThis && (
+                  <div className="bug-link-add" id="bugLinkAdd">
+                    <div className="bug-link-add-type">
+                      <BhSelect
+                        name="link_type"
+                        value={linkType}
+                        onChange={setLinkType}
+                        options={LINK_TYPE_OPTS}
+                      />
+                    </div>
+                    <div className="bug-link-add-target">
+                      <ItemPicker
+                        selected={linkTargets}
+                        onChange={setLinkTargets}
+                        excludeIds={[
+                          ...(bugId != null ? [bugId] : []),
+                          ...(bug?.links.map((l) => l.other_bug_id) ?? []),
+                        ]}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      disabled={linkTargets.length === 0}
+                      onClick={() => void onAddLink()}
+                    >
+                      Link{linkTargets.length > 1 ? ` ${linkTargets.length}` : ""}
+                    </button>
+                  </div>
+                )}
               </section>
 
               {/* Activity (collapsible) */}
@@ -1138,7 +1267,7 @@ export default function BugModal() {
             <button type="button" className="btn ghost" data-close-modal onClick={closeBugModal}>
               Cancel
             </button>
-            {/* Submit lives INSIDE #formBug (test-parity requirement). */}
+            {/* Submit lives inside #formBug (tests rely on this). */}
             <button type="submit" className="btn primary" id="bugSubmitBtn" hidden={readOnly}>
               {isEdit ? "Save changes" : "Create"}
             </button>

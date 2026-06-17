@@ -1,12 +1,10 @@
 /**
- * Promise-based confirm dialog — port of vanilla confirmDialog() (L249-284).
+ * Promise-based confirm dialog.
  *
  * Usage anywhere: `if (await confirmDialog("Delete bug #5?", {...})) ...`
  * The App shell renders <ConfirmHost/> once; it subscribes to a module-level
- * queue. Same DOM ids/classes as vanilla (#modalConfirm, #confirmTitle,
- * #confirmMessage, #confirmOk, #confirmCancel, #confirmClose) so styles and
- * tests keep working. Escape resolves false (wired in App's key handler via
- * the data-bh-modal close path calling onClose → settle(false)).
+ * queue. Escape resolves false (wired in App's key handler via the
+ * data-bh-modal close path calling onClose, which settles false).
  */
 import { useEffect, useState } from "react";
 
@@ -48,8 +46,7 @@ export default function ConfirmHost() {
   useEffect(() => {
     push = (p: Pending) => {
       setCurrent((prev) => {
-        // A second confirm while one is open cancels the first (vanilla
-        // prevented stacking by removing listeners; we keep it simple).
+        // A second confirm while one is open cancels the first.
         prev?.resolve(false);
         return p;
       });
@@ -64,8 +61,7 @@ export default function ConfirmHost() {
     setCurrent(null);
   };
 
-  // Escape closes (capture phase to beat the global modal-Escape handler,
-  // mirroring the vanilla capture listener).
+  // Escape closes (capture phase to beat the global modal-Escape handler).
   useEffect(() => {
     if (!current) return;
     const onKey = (e: KeyboardEvent) => {

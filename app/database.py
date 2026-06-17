@@ -38,6 +38,17 @@ def _build_engine(url: str) -> Engine:
         def _enable_sqlite_fk(dbapi_conn, _):
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA foreign_keys = ON")
+            # WAL lets readers and a writer proceed concurrently (the default
+            # rollback journal serializes them and a second writer fails fast
+            # with "database is locked"); busy_timeout makes a contended write
+            # wait briefly instead of erroring. Both are per-connection-safe and
+            # only affect SQLite (dev/test) — prod is Postgres, untouched.
+            cursor.execute("PRAGMA journal_mode = WAL")
+            cursor.execute("PRAGMA busy_timeout = 5000")
+            # NORMAL is the recommended durability level under WAL: safe across
+            # application crashes, materially faster on writes, and only weaker
+            # than FULL in a power-loss/OS-crash window. SQLite-only (dev/test).
+            cursor.execute("PRAGMA synchronous = NORMAL")
             cursor.close()
 
         return eng
@@ -49,6 +60,11 @@ def _build_engine(url: str) -> Engine:
         pool_pre_ping=True,
         pool_size=5,
         max_overflow=10,
+        # Recycle connections older than 30 min so a proxy/load-balancer/Postgres
+        # idle timeout can't hand a reaped connection back to the app, and fail
+        # fast instead of blocking forever once the pool is exhausted.
+        pool_recycle=1800,
+        pool_timeout=30,
         future=True,
     )
 

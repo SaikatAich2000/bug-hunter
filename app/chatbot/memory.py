@@ -22,7 +22,7 @@ The state stored is intentionally minimal:
 - last_user_id         — for "her", "him" after listing/mentioning a user
 - last_filter          — the most recent ParsedQuery filter dict
                          (so "and only the criticals" can refine it)
-- pending_action       — a serialised ActionPlan awaiting "yes"/"confirm"
+- pending_action       — a serialized ActionPlan awaiting "yes"/"confirm"
 """
 from __future__ import annotations
 
@@ -45,6 +45,10 @@ class _Session:
     last_user_name: Optional[str] = None
     last_filter: dict[str, Any] = field(default_factory=dict)
     pending_action: Optional[dict[str, Any]] = None
+    # A document an admin uploaded to Sleuth, parsed into candidate bug specs
+    # and parked here awaiting an explicit "create them" — Sleuth never creates
+    # on upload alone, only when the admin says so.
+    pending_ingest: Optional[dict[str, Any]] = None
     last_seen: float = 0.0   # epoch seconds, for TTL eviction
 
 
@@ -160,6 +164,35 @@ class _Store:
             if s is not None:
                 s.pending_action = None
                 s.last_seen = time.time()
+
+    def stage_ingest(self, user_id: int, data: dict[str, Any]) -> None:
+        """Park a parsed document's candidate specs awaiting 'create them'."""
+        now = time.time()
+        with self._lock:
+            s = self._get_or_create_locked(user_id, now)
+            s.pending_ingest = dict(data)
+            s.last_seen = now
+
+    def peek_ingest(self, user_id: int) -> Optional[dict[str, Any]]:
+        """Return the staged ingest WITHOUT consuming it (None if none/expired)."""
+        now = time.time()
+        with self._lock:
+            self._evict_expired_locked(now)
+            s = self._sessions.get(user_id)
+            return s.pending_ingest if s is not None else None
+
+    def take_ingest(self, user_id: int) -> Optional[dict[str, Any]]:
+        """Pop and return the staged ingest (single-use)."""
+        now = time.time()
+        with self._lock:
+            self._evict_expired_locked(now)
+            s = self._sessions.get(user_id)
+            if s is None or s.pending_ingest is None:
+                return None
+            data = s.pending_ingest
+            s.pending_ingest = None
+            s.last_seen = now
+            return data
 
     def reset(self, user_id: int) -> None:
         """Wipe a user's entire session — used when they 'clear' the chat."""

@@ -39,7 +39,7 @@ fi
 # This script does NOT touch the named volume `bugtracker_pgdata` that holds
 # your Postgres data. The schema migration on startup is additive only:
 # init_db() -> Base.metadata.create_all() creates any tables that don't yet
-# exist (in v3.1, the new `sessions` table) and leaves everything else alone.
+# exist and leaves everything else alone.
 # Existing rows are not modified. Existing session cookies stay valid.
 info "Live-data safety: bugtracker_pgdata volume will NOT be touched by this script."
 

@@ -1,9 +1,5 @@
 /**
- * ChipPicker — React port of renderChips/readChips
- * (app/static/app.js L2930-L2951; host markup `<div class="chip-picker">`
- * in app/static/index.html — #assigneePicker / #eventManagerPicker).
- *
- * DOM (class names must match styles.css exactly):
+ * ChipPicker — a selectable chip list. Class names must match styles.css:
  *
  *   <div class="chip-picker [locked]" id="…">
  *     <span class="chip [selected]" data-id="…">
@@ -12,16 +8,15 @@
  *     — or — <span class="chip-empty">— none available —</span>
  *   </div>
  *
- * Selection is controlled: clicking a chip calls onToggle(id) and the
- * parent flips membership in `selected` (replaces the vanilla
- * classList.toggle + readChips scrape). `disabled` applies the vanilla
- * `.locked` read-only treatment (pointer-events: none via styles.css).
+ * Selection is controlled: clicking a chip calls onToggle(id) and the parent
+ * flips membership in `selected`. `disabled` applies the `.locked` read-only
+ * treatment (pointer-events: none via styles.css).
  */
 
 export interface ChipItem {
   id: number;
   label: string;
-  /** Secondary text rendered as the `.chip-sub` span (vanilla mapFn's `sub`, e.g. the user's role). */
+  /** Secondary text rendered as the `.chip-sub` span (e.g. the user's role). */
   title?: string;
 }
 

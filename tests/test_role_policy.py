@@ -1,7 +1,7 @@
-"""Bug Hunter v3.1 — tests for the new role policy + sessions feature.
+"""Tests for the role-policy rules and the sessions admin feature.
 
 What's covered:
-  - Bug deletion is admin-only (managers used to be allowed; now blocked)
+  - Bug deletion is admin-only (managers are blocked)
   - Regular users CAN edit any bug (was reporter/assignee-only) and
     reassign it (assignee changes), but can't change the reporter
     (kept restricted to admin/manager) and can't delete.

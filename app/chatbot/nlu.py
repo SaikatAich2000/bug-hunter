@@ -39,7 +39,7 @@ from typing import Optional
 # validates against the live schema constants when it builds the query).
 # ---------------------------------------------------------------------------
 # Canonical status labels — extracted into individual constants so the
-# synonym table below doesn't re-spell each one (Sonar S1192).
+# synonym table below doesn't re-spell each one.
 _S_NEW = "New"
 _S_IN_PROGRESS = "In Progress"
 _S_RESOLVED = "Resolved"
@@ -319,7 +319,7 @@ _PROJECT_CUE_RE = re.compile(
 # strict pattern misses and we have a 1-token project candidate.
 _PROJECT_LOOSE_CUE_RE = re.compile(
     # The IGNORECASE flag folds A-Z onto a-z, so listing both would be
-    # a redundant char-class entry (Sonar S5869).
+    # a redundant char-class entry.
     r"\bproject\s+([a-z0-9_-]+)\b",
     re.IGNORECASE,
 )
@@ -332,7 +332,6 @@ _ROLE_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# v3.2.1 additions ---------------------------------------------------------
 # Unassigned / no-assignee. Matches phrasings like:
 #   "unassigned bugs", "bugs with no assignee", "bugs without an assignee",
 #   "nobody assigned", "no one is assigned"
@@ -423,12 +422,11 @@ class ParsedQuery:
     wants_count: bool = False
     limit: int = 100              # default cap on rows shown in chat
 
-    # v3.2.1 additions — common workflow filters that didn't have rule
-    # coverage before. The executor consumes these alongside the
+    # Common workflow filters. The executor consumes these alongside the
     # existing filter fields. All default off; if set, they're ANDed
     # with the other filters (e.g. "my unassigned bugs" is "assignee
-    # = me AND unassigned" — which is empty by construction, and we
-    # report so).
+    # = me AND unassigned" — which is empty by construction, and reported
+    # as such).
     unassigned: bool = False         # "unassigned bugs", "no assignee"
     sort_oldest: bool = False        # "oldest open bugs", "longest open"
     sort_newest: bool = False        # "newest", "latest"
@@ -606,8 +604,8 @@ def _parse_time_window(message: str, now: Optional[datetime] = None) -> Optional
     if weekday_match:
         return _since_weekday_window(weekday_match, today_start, now)
 
-    # Group indices: 3/4=past, 5/6=last, 7/8=in-the-last (shifted from
-    # the old regex by one for the new "since <weekday>" group at idx 2).
+    # Group indices: 2="since <weekday>", 3/4=past, 5/6=last,
+    # 7/8=in-the-last.
     qty = _first_int_match((m.group(3), m.group(5), m.group(7)))
     unit = _first_str_match((m.group(4), m.group(6), m.group(8)))
     if qty is not None and unit:
@@ -639,8 +637,8 @@ def _append_unique(out: list, value) -> None:
 
 
 def _typo_fallback(text: str, synonyms: dict, out: list[str]) -> None:
-    """v3.2.1 — token-level fuzzy match. Only runs if `out` is empty (the
-    exact extractor didn't find anything)."""
+    """Token-level fuzzy match. Only runs if `out` is empty (the exact
+    extractor didn't find anything)."""
     if out:
         return
     for tok in _tokenize(text):
@@ -661,8 +659,8 @@ def _extract_priorities(text: str) -> list[str]:
 
 
 def _typo_match(token: str, candidates: dict, min_len: int = 4) -> Optional[str]:
-    """v3.2.1 — return the canonical key in `candidates` for `token` if
-    `token` is a close (edit-distance) match to one of the synonyms.
+    """Return the canonical key in `candidates` for `token` if `token` is
+    a close (edit-distance) match to one of the synonyms.
 
     Uses difflib (stdlib, no dependency added). Only triggers for tokens
     >= `min_len` to avoid "low" → "log" style noise on short words.
@@ -685,8 +683,8 @@ def _extract_environments(text: str) -> list[str]:
     for syn, canon in _ENVIRONMENT_SYNONYMS.items():
         if re.search(rf"\b{re.escape(syn)}\b", text, re.IGNORECASE):
             _append_unique(out, canon)
-    # v3.2.1 typo-tolerant fallback. Only runs if the exact extractor
-    # found nothing — protects an exact "prod" match from getting blurred
+    # Typo-tolerant fallback. Only runs if the exact extractor found
+    # nothing — protects an exact "prod" match from getting blurred
     # by a fuzzy "rod" / "prod" tie.
     _typo_fallback(text, _ENVIRONMENT_SYNONYMS, out)
     return out
@@ -885,7 +883,7 @@ def _extract_bug_id(message: str) -> Optional[int]:
 _QUOTED_RE = re.compile(r'"([^"]{2,})"')
 
 
-# v3.0: bare (unquoted) free-text after an explicit topic cue, so users don't
+# Bare (unquoted) free-text after an explicit topic cue, so users don't
 # have to remember quotes — "bugs about login crash" -> search "login crash".
 # The cue words almost always precede a topic rather than a filter clause.
 # ReDoS-safe: the trailing `\s+(.+)` had two overlapping quantifiers (`.`
@@ -1474,8 +1472,8 @@ def describe_filters(pq: ParsedQuery) -> str:
         parts.append("assigned to " + " or ".join(pq.assignee_names))
     if pq.reporter_names:
         parts.append("reported by " + " or ".join(pq.reporter_names))
-    # v3.2.1 — surface the new filter / sort hints so the reply text
-    # echoes back what the bot understood.
+    # Surface the filter / sort hints so the reply text echoes back what
+    # the bot understood.
     if pq.unassigned:
         parts.append("with no assignee")
     if pq.text_search:

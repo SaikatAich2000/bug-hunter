@@ -20,12 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Keep Sleuth's cloud layer OFF during tests, even if a developer's local
-# .env enables it (config.py auto-loads .env). Tests that exercise the
-# cloud path opt in explicitly by monkeypatching the settings object, so
-# the suite never makes a real network call. setdefault lets an explicit
-# environment override still win when intended.
-os.environ.setdefault("SLEUTH_CLOUD_ENABLED", "0")
+# Force Sleuth's cloud layer OFF for the whole suite, even if a developer's
+# local .env enables it (config.py auto-loads .env). Tests that exercise the
+# cloud path opt in by monkeypatching the settings object, so the suite never
+# makes a real network call. Hard-set (not setdefault) so a stray .env can't
+# turn it on in CI.
+os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
 
 BOOTSTRAP_EMAIL = "admin@test.local"
@@ -42,10 +42,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", BOOTSTRAP_EMAIL)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "Test Admin")
-    # T4 (v2.7-security): disable the HaveIBeenPwned API call in tests
-    # by default so the suite stays hermetic. The test_security.py cases
-    # that exercise the breach path monkeypatch app.password_breach
-    # directly instead of relying on real network calls.
+    # Disable the HaveIBeenPwned API call so the suite stays hermetic. The
+    # test_security.py cases that exercise the breach path monkeypatch
+    # app.password_breach directly instead of making real network calls.
     monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
     # Web push off by default so the suite is hermetic regardless of the
     # deployment .env (which may have WEB_PUSH_ENABLED=true) and never makes a

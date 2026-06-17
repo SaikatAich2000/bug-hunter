@@ -1,13 +1,10 @@
 /**
- * User create/edit modal — port of #modalUser (index.html L752-793)
- * + openUserForm()/submitUserForm()/_applyUserPasswordHints()
- * (app.js L3445-3535).
+ * User create/edit modal.
  *
- * Driven by `userModal` in AppContext: `user == null` means create,
- * otherwise edit. Password is required on create and optional on edit
- * (blank = keep current), with the placeholder/hint/required-mark swap
- * the vanilla helper applied. On success: close, reload users, refresh
- * bugs/stats, toast.
+ * Driven by `userModal` in AppContext: `user == null` means create, otherwise
+ * edit. Password is required on create and optional on edit (blank = keep
+ * current), with the placeholder/hint/required-mark swapping accordingly. On
+ * success: close, reload users, refresh bugs/stats, toast.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -17,8 +14,8 @@ import { toast, toastError } from "../lib/toast";
 import { useApp } from "../state/AppContext";
 import type { Role } from "../types";
 
-// UI placeholder strings — not credentials (see the vanilla comment at
-// app.js L3445-3456; key names intentionally avoid the word "password").
+// UI placeholder strings — not credentials (key names intentionally avoid the
+// word "password").
 const HINTS = {
   editPlaceholder: "Leave blank to keep current",
   editHint: "Leave blank to keep current",
@@ -38,7 +35,7 @@ export default function UserModal() {
   const [password, setPassword] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Port of openUserForm(): reset + prefill on every open, focus name.
+  // Reset and prefill on every open, then focus the name input.
   useEffect(() => {
     if (!open) return;
     setName(user ? user.name : "");
@@ -55,7 +52,6 @@ export default function UserModal() {
   // (require_manager_or_admin); this keeps the form from rendering at all.
   if (!open || !canManage) return null;
 
-  // Port of submitUserForm().
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     const id = user?.id;

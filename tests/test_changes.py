@@ -1,7 +1,7 @@
-"""Tests for the changes made in this release:
+"""Tests for the status, KPI, filtering, and listing behavior:
 
-  1. Two new statuses: "Not a Bug" and "Resolve Later"
-  2. KPI strip switched to: total / open / resolved / closed / resolve_later
+  1. Two statuses: "Not a Bug" and "Resolve Later"
+  2. KPI strip of total / open / resolved / closed / resolve_later
      (with `users` and `projects` kept for backward compat).
   3. Multi-select filters via repeated query params (?status=A&status=B).
   4. "Not a Bug" rows are EXCLUDED from the `bugs` total.
@@ -69,7 +69,8 @@ class TestNewStatuses:
     def test_status_filter_case_insensitive_for_new_statuses(self, admin_client):
         p = _make_project(admin_client, "NS-4")
         _make_bug(admin_client, p["id"], status="Not a Bug", title="oops")
-        # Passing lowercase still matches because we normalize-then-validate.
+        # Passing lowercase still matches because the value is normalized
+        # before validation.
         r = admin_client.get("/api/bugs?status=not%20a%20bug")
         items = r.json()["items"]
         assert any(b["title"] == "oops" for b in items)
@@ -106,9 +107,9 @@ class TestStatsShape:
         assert after == before + 1
 
     def test_not_a_bug_excluded_from_total(self, admin_client):
-        """The product clarified: 'Not a Bug' shouldn't count toward the
-        Total KPI. We still keep the row in the DB (audit trail), we just
-        omit it from the headline number."""
+        """'Not a Bug' shouldn't count toward the Total KPI. The row stays
+        in the DB (audit trail); it is just omitted from the headline
+        number."""
         before = admin_client.get("/api/stats").json()["bugs"]
         p = _make_project(admin_client, "KP-NB")
         _make_bug(admin_client, p["id"], status="Not a Bug", title="nope")
@@ -125,8 +126,7 @@ class TestStatsShape:
         assert body["by_status"].get("Not a Bug", 0) >= 1
 
     def test_resolved_kpi_is_just_resolved_status(self, admin_client):
-        """`resolved` used to mean (Resolved + Closed). New contract:
-        `resolved` is JUST the Resolved status; Closed has its own KPI."""
+        """`resolved` is JUST the Resolved status; Closed has its own KPI."""
         p = _make_project(admin_client, "KP-RES")
         _make_bug(admin_client, p["id"], status="Resolved", title="resolved-1")
         _make_bug(admin_client, p["id"], status="Closed", title="closed-1")
@@ -200,8 +200,8 @@ class TestMultiSelectFilters:
         assert "single-new" in titles
 
     def test_invalid_value_in_multi_returns_400(self, admin_client):
-        # Even one bogus value in the list should fail the request — we
-        # don't want to silently drop garbage.
+        # Even one bogus value in the list should fail the request rather
+        # than silently dropping garbage.
         r = admin_client.get("/api/bugs?status=New&status=Bogus")
         assert r.status_code == 400
 
@@ -263,13 +263,13 @@ class TestAttachmentCountPerf:
         assert items["no-att-bug"]["attachment_count"] == 0
 
     def test_list_bugs_uses_single_count_query(self, admin_client):
-        """Belt-and-braces perf assertion: the listing endpoint should
-        execute roughly a constant number of queries regardless of how
-        many bugs are returned. We instrument the SQLAlchemy engine,
-        list 10 bugs, and check the query count is reasonable.
+        """The listing endpoint should execute roughly a constant number of
+        queries regardless of how many bugs are returned. Instrument the
+        SQLAlchemy engine, list 10 bugs, and check the query count is
+        reasonable.
 
-        Threshold is generous (< 15) — we just want to fail loudly if the
-        N+1 pattern accidentally comes back for attachment counts."""
+        Threshold is generous (< 15) — it fails loudly if the N+1 pattern
+        accidentally comes back for attachment counts."""
         from sqlalchemy import event
         from app.database import engine
 

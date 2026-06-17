@@ -14,7 +14,7 @@ every create/update/delete on the event itself plus, separately, every
 item-side change of event_id (which routes/bugs.py picks up as a normal
 field change).
 
-Permissions (v2.3):
+Permissions:
   - create / edit: admin or manager
   - delete:        admin only
   - regular user:  read-only
@@ -52,7 +52,7 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 
 
 
-# S1192: extract duplicated detail string into a module constant.
+# Extracted to a module constant to avoid duplicating the literal.
 _DETAIL_EVENT_NOT_FOUND = "Event not found"
 
 # ---------------------------------------------------------------------------
@@ -273,8 +273,8 @@ def get_event(
         selectinload(Bug.reporter),
         selectinload(Bug.assignees),
         selectinload(Bug.event),
-    # v2.6: newest task at the top so the most recently updated item
-    # is what the user sees first when they open an event.
+    # Newest task at the top so the most recently updated item is what the user
+    # sees first when they open an event.
     ).where(Bug.event_id == event_id).order_by(
         Bug.updated_at.desc(), Bug.id.desc(),
     )
@@ -322,14 +322,16 @@ def create_event(
     _log(db, ev.id, actor, "event_created",
          f"Event created: {ev.name}"
          + (f" (scheduled for {ev.scheduled_for})" if ev.scheduled_for else ""))
-    # v3.0 in-app notifications — same recipients as the event email (managers
-    # minus the actor). Written on this session so they commit with the event.
+    # In-app notifications to the managers. No exclude=actor: being made a
+    # manager is meaningful even for a creator who added themselves (same rule
+    # as a bug self-assignment), so the creator's own bell lights up too if
+    # they're in the manager list.
     if managers:
         notification_service.notify(
             db, [m.id for m in managers], kind="event", background=background,
             title=f"Added as manager on “{ev.name}”",
-            body=f"{actor.name} created the event and made you a manager.",
-            event_id=ev.id, actor_name=actor.name, exclude=actor.id,
+            body=f"You're a manager on the event “{ev.name}” created by {actor.name}.",
+            event_id=ev.id, actor_name=actor.name,
         )
     db.commit()
     db.refresh(ev)

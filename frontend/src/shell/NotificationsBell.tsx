@@ -1,5 +1,5 @@
 /**
- * NotificationsBell — the top-bar bell + unread badge + dropdown panel (v3.0).
+ * NotificationsBell — the top-bar bell + unread badge + dropdown panel.
  *
  * Per-user only: every row comes from GET /api/notifications, which is scoped
  * to the current session's user server-side (no cross-user leak). The badge
@@ -38,10 +38,10 @@ export default function NotificationsBell() {
     if (open) void loadNotifications();
   }, [open, loadNotifications]);
 
-  // AUTO-06: while the panel is OPEN, re-fetch the list every 15s (matching the
-  // badge cadence) so new notifications appear without reopening. Only runs
-  // while open; the open-load effect already does the first fetch. Skips when
-  // the tab is hidden.
+  // While the panel is open, re-fetch the list every 15s (matching the badge
+  // cadence) so new notifications appear without reopening. Only runs while
+  // open; the open-load effect already does the first fetch. Skips when the
+  // tab is hidden.
   useEffect(() => {
     if (!open) return;
     const id = setInterval(() => { if (!document.hidden) void loadNotifications(); }, 15_000);

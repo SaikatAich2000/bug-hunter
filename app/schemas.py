@@ -10,26 +10,23 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 # ---------------------------------------------------------------------------
-# v2.6 — HTML sanitizer for rich-text fields (description, comment body)
+# HTML sanitizer for rich-text fields (description, comment body)
 #
-# The v2.6 frontend swapped plain textareas for a contenteditable
-# rich-text editor that emits HTML (bold/italic/underline/lists/quotes
-# /code/images). Storing the HTML lets us preserve the formatting on
-# read, but a naïve `innerHTML = body` would be a stored-XSS bug — a
-# user could paste `<script>` or an `onerror` attribute and trigger
-# arbitrary JS for every viewer.
+# The contenteditable rich-text editor emits HTML (bold/italic/underline/
+# lists/quotes/code/images). Storing the HTML preserves formatting on read,
+# but a naive `innerHTML = body` would be a stored-XSS bug — a user could
+# paste `<script>` or an `onerror` attribute and trigger arbitrary JS for
+# every viewer.
 #
-# We sanitize on the server before storing so the database holds clean
-# HTML. The allowlist is tight: only the formatting tags the editor
-# actually produces, plus inline `<img>` so pasted screenshots survive
-# the round-trip (the editor base64-encodes pastes; that's a `data:`
-# URL on src, which we whitelist).
+# Sanitizing on the server before storing keeps the database holding clean
+# HTML. The allowlist is tight: only the formatting tags the editor produces,
+# plus inline `<img>` so pasted screenshots survive the round-trip (the editor
+# base64-encodes pastes into a `data:` URL on src, which is whitelisted).
 #
-# Why an in-house sanitizer rather than `bleach`? Bleach pulls in
-# `html5lib` and adds 200 KB of dependency surface. For the
-# constrained tag set we ship from the editor, a 60-line allowlist
-# parser is plenty. If the formatting grows past this, swap in bleach
-# behind the same `sanitize_html()` interface.
+# An in-house sanitizer is used rather than `bleach` because bleach pulls in
+# `html5lib` and ~200 KB of dependency surface; for this constrained tag set a
+# small allowlist parser is enough. If the formatting grows past this, swap in
+# bleach behind the same `sanitize_html()` interface.
 # ---------------------------------------------------------------------------
 _ALLOWED_TAGS = {
     "p", "br", "div", "span",
@@ -40,9 +37,8 @@ _ALLOWED_TAGS = {
     "a", "img",
 }
 _ALLOWED_ATTRS = {
-    # Per-tag attr allowlist. Anything missing here is stripped, even
-    # for whitelisted tags — that's how we avoid `<img onerror=...>` and
-    # the like.
+    # Per-tag attr allowlist. Anything missing here is stripped, even for
+    # whitelisted tags — this is what blocks `<img onerror=...>` and the like.
     "a":   {"href", "title", "rel"},
     "img": {"src", "alt", "title", "width", "height"},
     "code": {"class"},   # editor sometimes emits `<code class="language-X">`
@@ -55,11 +51,11 @@ _ALLOWED_URL_SCHEMES = ("http:", "https:", "mailto:", "/", "#")
 
 class _HTMLAllowlistSanitizer(HTMLParser):
     """Drops every tag/attr that isn't on the allowlist. Output is the
-    surviving HTML — text content always survives even when the parent
-    tag is stripped."""
-    # convert_charrefs=False so we re-emit `&amp;` / `&lt;` faithfully
-    # rather than collapsing them into raw characters that the next
-    # serialiser would have to re-escape.
+    surviving HTML; text content always survives even when the parent tag is
+    stripped."""
+    # convert_charrefs=False to re-emit `&amp;` / `&lt;` faithfully rather than
+    # collapsing them into raw characters the next serialiser would have to
+    # re-escape.
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self.out: list[str] = []
@@ -69,10 +65,9 @@ class _HTMLAllowlistSanitizer(HTMLParser):
             return None
         s = raw.strip()
         low = s.lower()
-        # Explicit data:image/* (pasted screenshot) — capped here at
-        # ~10 MB after base64 to avoid runaway storage. Real upload-
-        # based attachments don't go through this path; this is for
-        # inline pastes only.
+        # Explicit data:image/* (pasted screenshot), capped here to avoid
+        # runaway storage. Upload-based attachments don't go through this
+        # path; this is for inline pastes only.
         if low.startswith("data:image/"):
             if len(s) > 14 * 1024 * 1024:
                 return None
@@ -99,8 +94,8 @@ class _HTMLAllowlistSanitizer(HTMLParser):
                 if not clean:
                     continue
                 v = clean
-            # Escape attribute value for HTML embedding. We never let
-            # the value contain quotes / angles.
+            # Escape the attribute value for HTML embedding so it can't
+            # contain quotes or angle brackets.
             v_safe = (v.replace("&", "&amp;").replace("<", "&lt;")
                        .replace(">", "&gt;").replace('"', "&quot;"))
             kept.append(f'{k}="{v_safe}"')
@@ -150,21 +145,19 @@ def sanitize_html(value: Optional[str]) -> str:
     return "".join(p.out)
 
 
-# Statuses — v2.5 makes the status set PER-ITEM-TYPE so a workflow term
-# only applies to the work flavor where it makes sense ("Not a Bug" is a
-# Bug-only verdict; "Blocked" / "Done" are Task-only; "Approved" /
-# "Implemented" are Requirement-only). The single shared status — present
-# in every list — is "New", so any pre-v2.5 row in the database (which
-# defaults to "New" on create) stays valid for its item_type without any
-# data fix-up. Existing rows holding a status that's no longer valid for
-# their current item_type aren't rejected on read; they're displayed as-is
-# and can be UPDATED to a valid value — but updates that try to MOVE to an
-# invalid value are rejected by the route layer.
+# The status set is per-item-type so a workflow term only applies to the work
+# flavor where it makes sense ("Not a Bug" is a Bug-only verdict; "Blocked" /
+# "Done" are Task-only; "Approved" / "Implemented" are Requirement-only). The
+# single shared status, present in every list, is "New", so any row that
+# defaults to "New" on create stays valid for its item_type without a data
+# fix-up. Existing rows holding a status no longer valid for their current
+# item_type aren't rejected on read — they're displayed as-is and can be
+# updated to a valid value — but updates that try to move to an invalid value
+# are rejected by the route layer.
 #
-# ALLOWED_STATUSES is the UNION (kept for backwards compatibility with the
-# filter endpoints and any external client that still POSTs a status
-# without an item_type). The per-type sets below are the source of truth
-# for create/update validation.
+# ALLOWED_STATUSES is the union, kept for the filter endpoints and any client
+# that POSTs a status without an item_type. The per-type sets below are the
+# source of truth for create/update validation.
 STATUSES_BY_TYPE = {
     "Bug": [
         "New", "In Progress", "Resolved", "Closed", "Reopened",
@@ -183,10 +176,9 @@ STATUSES_BY_TYPE = {
 ALLOWED_STATUSES = list(
     dict.fromkeys(s for sts in STATUSES_BY_TYPE.values() for s in sts)
 )
-# Statuses excluded from the "Total bugs" KPI because the user explicitly
-# said "Not a Bug means it isn't really a bug, don't count it". Only Bugs
-# can carry this status now, so the exclusion still works exactly as
-# before for Bug-tab analytics.
+# Statuses excluded from the "Total bugs" KPI: a "Not a Bug" verdict means the
+# report isn't really a bug and shouldn't be counted. Only Bugs can carry this
+# status, so the exclusion applies cleanly to Bug-tab analytics.
 EXCLUDED_FROM_TOTAL_STATUSES = ["Not a Bug"]
 
 
@@ -205,6 +197,14 @@ ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
 # is purely a classifier that drives filtering, badges and the standup view.
 ALLOWED_ITEM_TYPES = ["Bug", "Requirement", "Task"]
 ALLOWED_ROLES = ["admin", "manager", "user"]
+# Item-linking relationship kinds. Stored on the directed source->target edge;
+# the route layer renders the inverse label for the target's view.
+ALLOWED_LINK_TYPES = ["relates", "blocks", "duplicate"]
+# Bulk operations the multi-select toolbar can request. Each reuses the same
+# permission + audit + notification path as its single-item endpoint.
+ALLOWED_BULK_ACTIONS = [
+    "set_status", "set_priority", "set_environment", "delete",
+]
 MIN_PASSWORD_LENGTH = 8
 MIN_TITLE_LENGTH = 3
 MIN_NAME_LENGTH = 2
@@ -472,8 +472,8 @@ class ProjectOut(BaseModel):
 class BugCreate(BaseModel):
     project_id: int
     title: str = Field(max_length=200)
-    # v2.6: description is rich HTML; up to 1 MB so multiple inline
-    # pasted screenshots (base64 data URLs) fit. Sanitized below.
+    # Description is rich HTML; up to 1 MB so multiple inline pasted
+    # screenshots (base64 data URLs) fit. Sanitized below.
     description: str = Field(default="", max_length=1_000_000)
     reporter_id: Optional[int] = None
     assignee_ids: list[int] = Field(default_factory=list, max_length=200)
@@ -493,10 +493,10 @@ class BugCreate(BaseModel):
     @field_validator("description")
     @classmethod
     def _strip_desc(cls, v: str) -> str:
-        # v2.6: description is now rich HTML emitted by the SPA editor.
-        # Sanitize against the allowlist before storage; strip surrounding
-        # whitespace so an "empty" HTML body (e.g. "<p><br></p>") still
-        # round-trips as effectively-empty for length checks downstream.
+        # Description is rich HTML emitted by the SPA editor. Sanitize against
+        # the allowlist before storage; strip surrounding whitespace so an
+        # "empty" HTML body (e.g. "<p><br></p>") still round-trips as
+        # effectively-empty for length checks downstream.
         if not isinstance(v, str): return v
         return sanitize_html(v.strip())
 
@@ -508,9 +508,9 @@ class BugCreate(BaseModel):
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: str) -> str:
-        # Type-aware status validation happens in model_validator below
-        # (this field-level check just confirms the value is at least in
-        # the global union).
+        # Type-aware status validation happens in the model_validator below;
+        # this field-level check just confirms the value is in the global
+        # union.
         return _normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
@@ -680,10 +680,10 @@ class CommentIn(BaseModel):
     @field_validator("body")
     @classmethod
     def _strip(cls, v: str) -> str:
-        # v2.6: comments are now rich HTML. We sanitize on the server
-        # to block stored-XSS regardless of the SPA editor's behaviour,
-        # then verify the visible-text length is at least 1 char so a
-        # whitespace-only post still gets rejected.
+        # Comments are rich HTML. Sanitize on the server to block stored-XSS
+        # regardless of the SPA editor's behaviour, then verify the visible-
+        # text length is at least 1 char so a whitespace-only post is
+        # rejected.
         if not isinstance(v, str):
             raise ValueError("Comment body must be a string")
         cleaned = sanitize_html(v.strip())
@@ -717,10 +717,74 @@ class ActivityOut(BaseModel):
     created_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Item linking
+# ---------------------------------------------------------------------------
+class BugLinkIn(BaseModel):
+    target_bug_id: int
+    link_type: str = "relates"
+
+    @field_validator("link_type")
+    @classmethod
+    def _check_type(cls, v: str) -> str:
+        return _normalize_choice(v, ALLOWED_LINK_TYPES, "link_type")
+
+
+class BugLinkOut(BaseModel):
+    """One link as seen FROM a given bug. `direction` is outgoing when this bug
+    is the source, incoming when it's the target; `label` is the human phrasing
+    from this bug's perspective (e.g. stored 'blocks' reads as 'is blocked by'
+    on the target side)."""
+    id: int
+    link_type: str
+    direction: str          # "outgoing" | "incoming"
+    label: str
+    other_bug_id: int
+    other_bug_title: str
+    other_bug_status: str
+    other_bug_item_type: str
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Bulk actions — the multi-select toolbar on the list view.
+# ---------------------------------------------------------------------------
+class BulkActionIn(BaseModel):
+    action: str
+    ids: list[int] = Field(min_length=1, max_length=500)
+    # status / priority / environment value for the set_* actions.
+    value: Optional[str] = None
+
+    @field_validator("action")
+    @classmethod
+    def _check_action(cls, v: str) -> str:
+        if v not in ALLOWED_BULK_ACTIONS:
+            raise ValueError(f"Invalid action. Allowed: {', '.join(ALLOWED_BULK_ACTIONS)}")
+        return v
+
+    @field_validator("ids")
+    @classmethod
+    def _dedup_ids(cls, v: list[int]) -> list[int]:
+        seen: list[int] = []
+        for x in v or []:
+            if x not in seen:
+                seen.append(x)
+        return seen
+
+
+class BulkActionResult(BaseModel):
+    updated: int = 0
+    skipped: int = 0
+    failed: int = 0
+    message: str = ""
+
+
 class BugDetail(BugOut):
     comments: list[CommentOut] = Field(default_factory=list)
     activities: list[ActivityOut] = Field(default_factory=list)
     attachments: list[AttachmentBrief] = Field(default_factory=list)
+    # Item links (both directions), rendered from this bug's perspective.
+    links: list[BugLinkOut] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -758,9 +822,9 @@ class StatsOut(BaseModel):
     resolved: int
     closed: int
     resolve_later: int
-    # Kept for backward compatibility with any external integrations or
-    # cached frontends that haven't reloaded yet. The UI no longer renders
-    # them, but removing them outright would break out-of-date clients.
+    # Kept for backward compatibility with external integrations or cached
+    # frontends that haven't reloaded yet. The UI no longer renders them, but
+    # removing them outright would break out-of-date clients.
     projects: int = 0
     users: int = 0
     by_status: dict[str, int]
@@ -875,7 +939,7 @@ class EventDetail(EventOut):
 
 
 # ---------------------------------------------------------------------------
-# Notification (v3.0) — per-user in-app notification row.
+# Notification — per-user in-app notification row.
 # ---------------------------------------------------------------------------
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

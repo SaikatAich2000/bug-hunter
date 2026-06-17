@@ -28,8 +28,8 @@ from app.database import SessionLocal, init_db
 from app.models import Project, Session as SessionRow, User
 from app.chatbot.router import router as chatbot_router
 from app.routes import (
-    audit, auth, bugs, events, notifications, projects, push, reports, sessions,
-    stats, users,
+    audit, auth, bugs, events, notifications, projects, push, reports,
+    sessions, stats, users,
 )
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
@@ -46,11 +46,10 @@ logging.basicConfig(level=get_settings().LOG_LEVEL)
 # ---------------------------------------------------------------------------
 # Asset version — recomputed on every server start.
 #
-# This is what makes redeploys "just work" without users needing to hard-
-# refresh. We hash the real bytes of every static asset, then inject that
-# hash into the HTML wherever a placeholder appears. Browsers see a brand-
-# new URL for each asset every time we redeploy, so they never serve a
-# stale cached copy.
+# Lets redeploys take effect without a hard refresh. Hashing the real bytes
+# of every static asset and injecting that hash into the HTML wherever a
+# placeholder appears gives each asset a fresh URL on every redeploy, so
+# browsers never serve a stale cached copy.
 # ---------------------------------------------------------------------------
 ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
 APP_VERSION_PLACEHOLDER = "__APP_VERSION__"
@@ -83,9 +82,9 @@ def _bootstrap() -> None:
                 color="#c9764f",
             ))
 
-        # First-run admin. If you wipe the DB, this lets you log in
-        # immediately without poking at SQL. After first login, the admin
-        # should change the password (settings menu → Change password).
+        # First-run admin. After wiping the DB, this allows an immediate
+        # login without touching SQL. The admin should change the password
+        # after first login (settings menu, Change password).
         if db.query(User).count() == 0:
             if s.COOKIE_SECURE and s.BOOTSTRAP_ADMIN_PASSWORD == "ChangeMe123!":
                 # Don't stand up a live admin with a publicly-known password on
@@ -163,27 +162,25 @@ app.state.asset_version = _compute_asset_version(settings.STATIC_DIR)
 # ---------------------------------------------------------------------------
 # CORS
 #
-# Important nuance: the CORS spec forbids `Access-Control-Allow-Origin: *`
-# together with `Allow-Credentials: true`. Browsers reject this combo
-# silently. Our SPA uses cookies (credentials=true), so we must NOT echo
-# back "*" — we must echo the request's actual Origin (only if it's in our
-# allowlist). Starlette's CORSMiddleware does that when given a concrete
-# origin list, but if `*` is the only entry it breaks credentialed
-# requests. Detect that combination and disable credentials in that case
-# rather than silently breaking auth from non-same-origin clients.
+# The CORS spec forbids `Access-Control-Allow-Origin: *` together with
+# `Allow-Credentials: true`, and browsers reject this combination silently.
+# The SPA uses cookies (credentials=true), so the response must echo the
+# request's actual Origin (only when it is in the allowlist), never "*".
+# Starlette's CORSMiddleware does that when given a concrete origin list, but
+# a sole "*" entry breaks credentialed requests; detect that case and disable
+# credentials rather than silently breaking auth from non-same-origin clients.
 # ---------------------------------------------------------------------------
 _origins = list(settings.CORS_ORIGINS)
 _allow_credentials = True
 if not _origins:
-    # Empty list = same-origin only. We don't register a wildcard fallback
-    # because that would let any site read authenticated responses.
-    # Same-origin SPA usage doesn't go through CORS middleware, so this is
-    # the safe default.
+    # Empty list = same-origin only. A wildcard fallback would let any site
+    # read authenticated responses; same-origin SPA usage doesn't pass through
+    # CORS middleware anyway, so this is the safe default.
     _allow_credentials = False
 elif "*" in _origins:
-    # Wildcard + credentials is forbidden by the CORS spec and silently
-    # broken by browsers — fall back to no-credentials so the OPTIONS
-    # preflight at least succeeds.
+    # Wildcard + credentials is forbidden by the CORS spec and silently broken
+    # by browsers — fall back to no-credentials so the OPTIONS preflight at
+    # least succeeds.
     _allow_credentials = False
     logger.warning(
         "CORS_ORIGINS contains '*' which disables credentialed CORS. Set "
@@ -191,45 +188,44 @@ elif "*" in _origins:
         "https://bugs.example.com) to allow cross-origin browser sessions."
     )
 
-# NOTE: CORSMiddleware is added LAST in this file (after every other
-# middleware) so it runs OUTERMOST in the ASGI chain. Starlette stacks
-# middleware in reverse-registration order, so the last add_middleware()
-# call wraps the outside — which is what CORS needs to correctly handle
-# preflight OPTIONS without other middleware (rate-limit, CSP) firing
-# first and short-circuiting the preflight.
+# CORSMiddleware is added LAST in this file (after every other middleware) so
+# it runs OUTERMOST in the ASGI chain. Starlette stacks middleware in
+# reverse-registration order, so the last add_middleware() call wraps the
+# outside — which is what CORS needs to handle preflight OPTIONS without other
+# middleware (rate-limit, CSP) firing first and short-circuiting the preflight.
 
 # ---------------------------------------------------------------------------
 # Gzip compression
 #
-# Performance win for low-resource VMs: shrinks JSON / HTML / JS / CSS
-# responses by ~70-90% over the wire so the small server spends less time
-# pushing bytes. Skips bodies smaller than 1 KB (the CPU cost of compression
-# isn't worth it for tiny payloads) and naturally skips already-compressed
-# binary types (images / video) because Starlette's GZipMiddleware checks
-# the Accept-Encoding header rather than blindly compressing.
+# Shrinks JSON / HTML / JS / CSS responses by ~70-90% over the wire so a
+# low-resource server spends less time pushing bytes. Skips bodies smaller
+# than 1 KB (compression CPU cost isn't worth it for tiny payloads) and skips
+# already-compressed binary types (images / video) because Starlette's
+# GZipMiddleware checks the Accept-Encoding header rather than blindly
+# compressing.
 #
 # Attachment downloads are unaffected — they ship their own Cache-Control
-# header which exits the cache middleware early; gzip is also typically
-# unhelpful for already-compressed media (PDFs, JPEGs, MP4s, etc.).
+# header which exits the cache middleware early, and gzip is unhelpful for
+# already-compressed media (PDFs, JPEGs, MP4s, etc.).
 # ---------------------------------------------------------------------------
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 # ---------------------------------------------------------------------------
-# G3 — Request body size limit
+# Request body size limit
 #
 # Pydantic caps individual string fields (description = 1 MB, comment body
-# = 200 KB) and the attachment endpoint streams + aborts at 50 MB. But a
+# = 200 KB) and the attachment endpoint streams and aborts at 50 MB. But a
 # request that arrives with a 5 GB Content-Length and no body fields the
 # schema cares about — or a multipart upload to an unexpected endpoint —
 # would still buffer body bytes into RAM before validation fails.
 #
-# This middleware rejects with 413 (Payload Too Large) BEFORE the body is
-# read whenever Content-Length exceeds MAX_REQUEST_BODY_BYTES. It's a
-# coarse second-line defense; the per-endpoint limits remain.
+# This middleware rejects with 413 (Payload Too Large) before the body is
+# read whenever Content-Length exceeds MAX_REQUEST_BODY_BYTES — a coarse
+# second-line defense alongside the per-endpoint limits.
 #
-# Requests without a Content-Length (chunked transfer) are allowed
-# through — the per-endpoint streamed reads still bound them.
+# Requests without a Content-Length (chunked transfer) are allowed through;
+# the per-endpoint streamed reads still bound them.
 # ---------------------------------------------------------------------------
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -261,14 +257,13 @@ app.add_middleware(BodySizeLimitMiddleware)
 # ---------------------------------------------------------------------------
 # Cache-Control middleware
 #
-# The deployment bug we're fixing: when the server is redeployed but the
-# browser already has cached HTML pointing at old asset URLs, the user sees
-# a broken page until they hard-refresh.
+# Prevents the stale-HTML problem on redeploy: when the browser has cached
+# HTML pointing at old asset URLs, the user would otherwise see a broken page
+# until a hard refresh.
 #
-# Strategy:
 #   - HTML       → no-store, must-revalidate. Tiny payload, cheap to refetch.
 #   - /static/*  → public, max-age=1 year, immutable. Safe because the URL
-#                  changes on every deploy via the asset_version we inject.
+#                  changes on every deploy via the injected asset_version.
 #   - /api/*     → no-store (API responses must never be cached anywhere).
 # ---------------------------------------------------------------------------
 class CacheControlMiddleware(BaseHTTPMiddleware):
@@ -296,34 +291,34 @@ app.add_middleware(CacheControlMiddleware)
 
 
 # ---------------------------------------------------------------------------
-# Security headers (v3.2)
+# Security headers
 #
 # Set on every response so even cached HTML and 304s get the same protections.
 #
 # CSP notes:
-#   - script-src 'self'         no inline <script> in our HTML, so no
+#   - script-src 'self'         no inline <script> in the HTML, so no
 #                               'unsafe-inline' or hash juggling needed.
 #   - style-src 'self' 'unsafe-inline'
-#                               app.js sets a few inline styles via DOM
+#                               the app sets a few inline styles via the DOM
 #                               (.style.x = …) which CSP treats as inline
 #                               styles. 'unsafe-inline' is the practical
-#                               escape; switching to a nonce strategy would
-#                               require touching every dynamic-style site.
+#                               escape; a nonce strategy would require
+#                               touching every dynamic-style site.
 #   - img-src 'self' data: blob:
-#                               attachments and JS-generated avatars use
-#                               data: URLs; downloaded blobs use blob:.
+#                               attachments and generated avatars use data:
+#                               URLs; downloaded blobs use blob:.
 #   - frame-ancestors 'none'    refuses iframe embedding (modern X-Frame-Options).
 #   - base-uri 'self'           prevents <base href=…> hijack.
 #   - object-src 'none'         no plugins.
-#   - form-action 'self'        forms can only post to us.
+#   - form-action 'self'        forms can only post to this origin.
 #
-# HSTS is conditional on COOKIE_SECURE so we don't accidentally emit it
-# behind an HTTP-only dev proxy and lock the browser into https://.
+# HSTS is conditional on COOKIE_SECURE to avoid emitting it behind an
+# HTTP-only dev proxy and locking the browser into https://.
 # ---------------------------------------------------------------------------
-# When web push is ON, the browser's Firebase Messaging SDK (self-hosted —
+# When web push is on, the browser's Firebase Messaging SDK (self-hosted —
 # script-src stays 'self') talks to these Google endpoints to mint/refresh the
-# device token. They're added to connect-src ONLY then, so the default posture
-# stays locked to 'self' when push is off. Firebase scripts are bundled/vendored
+# device token. They are added to connect-src only then, so the default posture
+# stays locked to 'self' when push is off. Firebase scripts are vendored
 # locally, so script-src never needs to be relaxed.
 _FCM_CONNECT_SRC = (
     " https://fcm.googleapis.com https://fcmregistrations.googleapis.com"
@@ -388,14 +383,14 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ---------------------------------------------------------------------------
-# Rate limiting on auth-sensitive endpoints (v3.2)
+# Rate limiting on auth-sensitive endpoints
 #
-# A small in-memory sliding-window limiter — no Redis dependency. Per-IP
+# A small in-memory sliding-window limiter with no Redis dependency. Per-IP
 # buckets so one bad actor doesn't lock out everyone. Keys are kept tiny
 # (<200 bytes/IP) and time-pruned on every check, so memory stays bounded
-# under typical load. Multi-worker deployments get per-worker buckets,
-# which means a determined attacker could still get N×limit attempts; the
-# right fix at scale is to put nginx in front (it has its own limit_req).
+# under typical load. Multi-worker deployments get per-worker buckets, so a
+# determined attacker could still get N×limit attempts; the fix at scale is to
+# put nginx in front (it has its own limit_req).
 #
 # Limits chosen for human users with occasional typos but tight enough to
 # meaningfully slow credential-stuffing scripts:
@@ -419,7 +414,7 @@ _RATE_BUCKETS_MAX = 10_000
 
 
 def _client_ip(request: Request) -> str:
-    """Best-effort client IP. We don't trust X-Forwarded-For by default
+    """Resolve the client IP. X-Forwarded-For is not trusted by default
     because spoofing it bypasses the limit; deploys behind a reverse proxy
     can opt into trusting it via TRUST_PROXY_FORWARDED_FOR."""
     if settings.TRUST_PROXY_FORWARDED_FOR:
@@ -472,31 +467,29 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
-# CSRF defense-in-depth (v3.2.1)
+# CSRF defense-in-depth
 #
-# The session cookie is already SameSite=Lax which blocks most cross-site
+# The session cookie is already SameSite=Lax, which blocks most cross-site
 # CSRF, but Lax has known gaps:
 #   - it doesn't apply to subdomain attackers (if an attacker controls
 #     evil.example.com and the app is at app.example.com, they're "same
 #     site").
 #   - older / non-standard browser behaviour for some top-level POSTs.
 #
-# We add a second, simple check: for state-changing requests (POST / PUT /
-# PATCH / DELETE) to our JSON API, the Origin (or Referer) header must
-# match one of the allowed origins. Same-origin SPA requests always
-# satisfy this — fetch() includes Origin automatically. Server-to-server
-# clients that don't send Origin or Referer (e.g. curl with an API key,
-# python httpx without a Host) get a free pass since CSRF only matters
-# when a browser is being abused as a deputy.
+# A second check covers this: for state-changing requests (POST / PUT /
+# PATCH / DELETE) to the JSON API, the Origin (or Referer) header must match
+# one of the allowed origins. Same-origin SPA requests always satisfy this —
+# fetch() includes Origin automatically. Server-to-server clients that send
+# neither Origin nor Referer (e.g. curl with an API key, httpx without a Host)
+# pass, since CSRF only matters when a browser is abused as a deputy.
 #
-# /api/auth/login is exempted because cross-origin login from a trusted
-# admin tool is a legitimate flow some operators want. The login itself
-# is rate-limited and credential-checked.
+# /api/auth/login is exempted because cross-origin login from a trusted admin
+# tool is a legitimate flow some operators want; the login itself is
+# rate-limited and credential-checked.
 #
 # Allowed origins: settings.CORS_ORIGINS (when not "*"). The request's own
-# Host is always implicitly allowed — Origin scheme is checked against
-# the cookie-secure mode to avoid http→https confusion behind a reverse
-# proxy.
+# Host is always implicitly allowed; the Origin scheme is checked against the
+# cookie-secure mode to avoid http→https confusion behind a reverse proxy.
 # ---------------------------------------------------------------------------
 def _allowed_origins() -> set[str]:
     """Build the set of allowed origins for the CSRF check.
@@ -542,13 +535,13 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Build the expected same-origin URLs from the request itself,
-        # accepting BOTH schemes. Behind a reverse proxy that terminates
-        # TLS, request.url.scheme is whatever the proxy claims it is;
-        # trusting that here is fine because if the proxy is compromised
-        # CSRF is the least of our worries. Schemes are concatenated
-        # rather than written as inline literals so static analyzers
-        # don't flag "http://" as an insecure protocol choice — the user
-        # is the one connecting, not us.
+        # accepting both schemes. Behind a reverse proxy that terminates TLS,
+        # request.url.scheme is whatever the proxy claims it is; trusting that
+        # here is fine because a compromised proxy makes CSRF the least of the
+        # concerns. Schemes are concatenated rather than written as inline
+        # literals so static analyzers don't flag "http://" as an insecure
+        # protocol choice — it describes the client connection, not an
+        # outbound one.
         host = request.headers.get("host", "")
         allowed = _allowed_origins()
         if host:
@@ -579,7 +572,7 @@ app.add_middleware(CsrfOriginMiddleware)
 # CORS is registered LAST so it sits OUTERMOST in the ASGI chain — see the
 # block near _origins above for why. Skip registration entirely when no
 # origins are configured: same-origin traffic never hits CORSMiddleware
-# anyway, so adding it would just be dead code that Sonar flags.
+# anyway, so adding it would just be dead code.
 if _origins:
     app.add_middleware(
         CORSMiddleware,
@@ -603,14 +596,13 @@ _html_cache: dict[tuple[str, str], str] = {}
 
 
 def _serve_html(filename: str) -> HTMLResponse:
-    """Render an HTML file with the asset-version + app-version
+    """Render an HTML file with the asset-version and app-version
     placeholders replaced, caching the result per (file, asset_version).
 
-    __ASSET_VERSION__ → 12-char hash of the static bundle (used for
-                       cache-busting).
-    __APP_VERSION__   → settings.APP_VERSION (e.g. "2.9"). Lets the
-                       login page show the running version without an
-                       extra round trip to /api/health.
+    __ASSET_VERSION__ → 12-char hash of the static bundle, for cache-busting.
+    __APP_VERSION__   → settings.APP_VERSION. Lets the login page show the
+                       running version without an extra round trip to
+                       /api/health.
     """
     key = (filename, app.state.asset_version)
     body = _html_cache.get(key)
@@ -627,23 +619,17 @@ def _serve_html(filename: str) -> HTMLResponse:
 def _has_valid_session(request: Request) -> bool:
     """Check whether the request has a valid, non-revoked session cookie.
 
-    BUG FIX (v3.1.1): the original implementation only verified the cookie's
-    cryptographic signature. That meant a revoked session — where the
-    server-side sessions row had been deleted but the user's browser still
-    held the signed cookie — passed this check, and the / and /login.html
-    HTML handlers couldn't tell the cookie was dead. The SPA's API calls
-    correctly returned 401 (those go through _user_from_request which
-    checks the sessions table), so the SPA fired location.replace('/login.html'),
-    but the /login.html handler bounced them back to / because this
-    function returned True. Result: infinite redirect loop, exactly the
-    "behaving strangely after refresh" symptom the user reported.
+    The HTML page handlers (/ and /login.html) must reject a revoked session
+    — one whose server-side sessions row was deleted while the browser still
+    holds the signed cookie — not just verify the signature. Otherwise the
+    SPA's API calls return 401 and redirect to /login.html, while this
+    function still reports the cookie valid and bounces the user back to /,
+    producing an infinite redirect loop.
 
-    The fix: when the cookie carries a jti, look it up in the sessions
-    table and only return True if the row exists and is not expired.
-    Tokens without a jti (legacy) keep the cookie-only check for backward
-    compat — they predate the sessions table, so there's nothing to look
-    up. Those tokens still get the proper API-side check on /api/auth/me;
-    we're just using a slightly looser HTML-routing decision for them.
+    When the cookie carries a jti, look it up in the sessions table and only
+    return True if the row exists and is not expired. Legacy tokens without a
+    jti predate the sessions table, so they keep the cookie-only check here;
+    they still get the full API-side check on /api/auth/me.
     """
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
@@ -770,8 +756,8 @@ def health() -> dict[str, str]:
 
 @app.get("/api/meta", tags=["meta"])
 def meta() -> dict[str, object]:
-    """Expose static enums + the v2.5 per-item-type status sets so the
-    frontend can swap the status dropdown when the user changes type."""
+    """Expose static enums and the per-item-type status sets so the frontend
+    can swap the status dropdown when the user changes type."""
     return {
         "statuses": ALLOWED_STATUSES,
         "statuses_by_type": STATUSES_BY_TYPE,

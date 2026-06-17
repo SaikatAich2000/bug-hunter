@@ -138,11 +138,34 @@ export interface BugOut {
   can_edit: boolean;
 }
 
+/** Mirrors app/schemas.py BugLinkOut — one link seen from a given bug's side. */
+export interface BugLinkOut {
+  id: number;
+  link_type: string;
+  direction: "outgoing" | "incoming";
+  label: string;
+  other_bug_id: number;
+  other_bug_title: string;
+  other_bug_status: string;
+  other_bug_item_type: string;
+  created_at: string;
+}
+
 /** Mirrors app/schemas.py BugDetail (GET /api/bugs/{id}: BugOut + detail arrays). */
 export interface BugDetail extends BugOut {
   comments: CommentOut[];
   activities: ActivityOut[];
   attachments: AttachmentOut[];
+  /** Item links (both directions), rendered from this bug's perspective. */
+  links: BugLinkOut[];
+}
+
+/** Mirrors app/schemas.py BulkActionResult (POST /api/bugs/bulk). */
+export interface BulkActionResult {
+  updated: number;
+  skipped: number;
+  failed: number;
+  message: string;
 }
 
 /** Mirrors app/schemas.py BugListResponse (GET /api/bugs). */
@@ -316,7 +339,7 @@ export interface ReportRunResult {
 }
 
 // ---------------------------------------------------------------------------
-// Notifications (per-user, v3.0)
+// Notifications (per-user)
 // ---------------------------------------------------------------------------
 
 /** Notification kind — mirrors the `kind` strings written by app/notification_service.py callers. */

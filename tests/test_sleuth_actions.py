@@ -25,6 +25,15 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 
+# Force a fresh app import bound to THIS file's dedicated DB. Without this, an
+# earlier-collected test module that already imported app.database leaves the
+# engine bound to a different (often torn-down) DB, so our seed()'s create_all
+# fails with "no such table" in the full-suite collection order.
+import sys as _sys_purge
+for _m in list(_sys_purge.modules):
+    if _m == "app" or _m.startswith("app."):
+        del _sys_purge.modules[_m]
+
 from app.database import Base, engine, SessionLocal
 from app import models
 from app.auth import hash_password

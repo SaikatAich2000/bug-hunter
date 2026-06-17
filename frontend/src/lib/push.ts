@@ -6,8 +6,8 @@
  * the user turns push on. The background service worker lives at
  * /firebase-messaging-sw.js (served by the backend with the config injected).
  *
- * Everything here is best-effort: push must NEVER break the app, so every path
- * is guarded and degrades to "no push" (the in-app bell + email still work).
+ * Push must never break the app, so every path is guarded and degrades to
+ * "no push" (the in-app bell and email still work).
  */
 import { api } from "./api";
 import { toast } from "./toast";

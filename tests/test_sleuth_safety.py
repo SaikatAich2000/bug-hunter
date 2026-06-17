@@ -39,6 +39,15 @@ os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"   # never call the cloud in tests
 
 from sqlalchemy import inspect, text
+
+# Force a fresh app import bound to THIS file's dedicated DB (see the long note
+# in test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
+# engine bound to an earlier-collected module's torn-down DB.
+import sys as _sys_purge
+for _m in list(_sys_purge.modules):
+    if _m == "app" or _m.startswith("app."):
+        del _sys_purge.modules[_m]
+
 from app.database import Base, engine, SessionLocal
 from app import models
 from app.auth import hash_password
@@ -171,8 +180,8 @@ def test_schema_unchanged() -> None:
             "bug_assignees", "comments", "activity_log",
             "attachments", "sessions",
         }
-        # The cloud-assistant work (v2.10+) adds TWO durable conversation
-        # tables. They are strictly ADDITIVE (new tables, created by
+        # The cloud assistant adds two durable conversation tables. They are
+        # strictly additive (new tables, created by
         # create_all; existing tables/data untouched) and are an explicit,
         # approved design decision — so they are allow-listed here. The
         # property this test still guards is that Sleuth's OPERATIONS never

@@ -1,13 +1,13 @@
 /**
- * Main SPA entry — port of the vanilla boot() auth gate (app.js L1572-1599).
+ * Main SPA entry — the auth gate.
  *
- * Theme is applied BEFORE first paint (no inline script allowed by CSP, so
- * it happens here at module top — the bundle is loaded with <script
- * type="module"> which executes before first render anyway).
+ * Theme is applied before first paint (no inline script allowed by CSP, so it
+ * happens here at module top — the bundle loads with <script type="module">,
+ * which executes before first render anyway).
  *
  * The server already redirects unauthenticated requests for "/" to
- * /login.html; the client-side check below is the belt-and-braces port of
- * the vanilla behavior (covers cached pages and revoked sessions).
+ * /login.html; the client-side check below is belt-and-braces, covering cached
+ * pages and revoked sessions.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

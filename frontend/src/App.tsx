@@ -1,8 +1,7 @@
 /**
- * App root: global chrome (blocking loader, toast slot, confirm dialog),
- * the Sleuth chat panel, the shell (sidebar + topbar + views + modals),
- * and the global Escape handler (port of closeTopModal, app.js L244-247 +
- * the keydown delegation at L4751-4769).
+ * App root: global chrome (blocking loader, toast slot, confirm dialog), the
+ * Sleuth chat panel, the shell (sidebar + topbar + views + modals), and the
+ * global Escape handler.
  */
 import { lazy, Suspense, useEffect } from "react";
 import Shell from "./shell/Shell";
@@ -12,9 +11,8 @@ import ConfirmHost from "./components/ConfirmHost";
 const SleuthPanel = lazy(() => import("./sleuth/SleuthPanel"));
 
 export default function App() {
-  // Escape closes the top-most open modal — DOM-driven exactly like the
-  // vanilla helper so it works uniformly for every modal (and skips when
-  // focus is in a text field, matching the original guard).
+  // Escape closes the top-most open modal — DOM-driven so it works uniformly
+  // for every modal, and skips when focus is in a text field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -40,7 +38,7 @@ export default function App() {
 
   return (
     <>
-      {/* Global blocking loader — markup mirrors vanilla index.html L18-23 */}
+      {/* Global blocking loader */}
       <div
         id="globalLoader"
         className="global-loader"
@@ -58,7 +56,7 @@ export default function App() {
 
       <Shell />
 
-      {/* Single toast element — vanilla index.html L879 */}
+      {/* Single toast element */}
       <div id="toast" className="toast" hidden></div>
 
       <ConfirmHost />

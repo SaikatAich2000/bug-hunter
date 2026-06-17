@@ -1,11 +1,9 @@
 /**
- * Change-password modal — port of #modalChangePassword (index.html
- * L795-822) + the #formChangePassword handlers (app.js L4422-4454).
+ * Change-password modal.
  *
- * Driven by `changePasswordOpen` in AppContext. Validates match first,
- * then min length (same order as vanilla), then POSTs
- * /api/auth/change-password with {current_password, new_password}
- * (app/routes/auth.py change_password(), 204 on success).
+ * Driven by `changePasswordOpen` in AppContext. Validates match first, then
+ * min length, then POSTs /api/auth/change-password with {current_password,
+ * new_password} (204 on success).
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -24,8 +22,7 @@ export default function ChangePasswordModal() {
 
   const close = () => setChangePasswordOpen(false);
 
-  // Port of the #changePasswordBtn click handler: form.reset() on open,
-  // then focus the current-password input (vanilla 50ms timeout).
+  // Reset the form on open, then focus the current-password input.
   useEffect(() => {
     if (!changePasswordOpen) return;
     setCurrent("");
@@ -35,7 +32,6 @@ export default function ChangePasswordModal() {
     return () => clearTimeout(t);
   }, [changePasswordOpen]);
 
-  // Port of the #formChangePassword submit handler.
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     if (next !== confirm) {

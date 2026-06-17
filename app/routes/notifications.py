@@ -1,4 +1,4 @@
-"""Per-user in-app notifications API (v3.0).
+"""Per-user in-app notifications API.
 
 Every endpoint is scoped to the authenticated user: you can only ever list,
 read, or delete YOUR OWN notifications. There is deliberately no admin path to

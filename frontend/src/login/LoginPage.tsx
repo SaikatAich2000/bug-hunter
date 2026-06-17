@@ -1,15 +1,12 @@
-// Login page — React port of app/static/login.html + app/static/login.js.
+// Login page.
 //
-// Fidelity rules:
-//  - All ids, classes and user-visible text match the vanilla page
-//    exactly (Playwright logs in via input[name="email"],
-//    input[name="password"] and the submit button).
+//  - Playwright logs in via input[name="email"], input[name="password"] and
+//    the submit button, so those names and the submit control are load-bearing.
 //  - "Version __APP_VERSION__" is a literal placeholder the backend
-//    substitutes when serving the page (see app/main.py _serve_html);
-//    it must stay verbatim in the rendered output.
-//  - No inline scripts/styles anywhere: the app ships a strict CSP
-//    (script-src 'self', no 'unsafe-inline'). The theme bootstrap lives
-//    in main.tsx.
+//    substitutes when serving the page (see app/main.py _serve_html); it must
+//    stay verbatim in the rendered output.
+//  - No inline scripts/styles anywhere: the app ships a strict CSP (script-src
+//    'self', no 'unsafe-inline'). The theme bootstrap lives in main.tsx.
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, MouseEvent as ReactMouseEvent } from "react";
 
@@ -20,8 +17,8 @@ interface AlertState {
   kind: AlertKind;
 }
 
-// Mirrors login.js's error parsing: {detail} may be a plain string or a
-// Pydantic validation-error array of objects carrying a `msg` field.
+// Error parsing: {detail} may be a plain string or a Pydantic
+// validation-error array of objects carrying a `msg` field.
 function detailMessage(data: unknown, fallback: string): string {
   if (typeof data === "object" && data !== null && "detail" in data) {
     const detail: unknown = (data as { detail: unknown }).detail;
@@ -45,8 +42,8 @@ export default function LoginPage() {
   const forgotEmailRef = useRef<HTMLInputElement>(null);
   const mountedRef = useRef(false);
 
-  // Vanilla login.js focuses the revealed form's email input when the
-  // user toggles between forms. Initial focus comes from autoFocus.
+  // Focus the revealed form's email input when the user toggles between forms.
+  // Initial focus comes from autoFocus.
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -291,11 +288,11 @@ export default function LoginPage() {
           </div>
         </form>
       </div>
-      {/* The "Version X.Y" line is NOT rendered here: __APP_VERSION__ is a
+      {/* The "Version X.Y" line is not rendered here: __APP_VERSION__ is a
           placeholder the backend substitutes into served HTML files only —
-          inside this JS bundle it would reach users verbatim. The line
-          lives in frontend/login.html (after #root), where _serve_html()
-          replaces it server-side, exactly like the vanilla page. */}
+          inside this JS bundle it would reach users verbatim. The line lives in
+          frontend/login.html (after #root), where _serve_html() replaces it
+          server-side. */}
     </main>
   );
 }

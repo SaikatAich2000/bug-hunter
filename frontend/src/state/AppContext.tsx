@@ -1,11 +1,10 @@
 /**
- * Global app state — port of the vanilla `STATE` object + boot()/refresh*()
- * functions (app.js L10-75, L1572-1800, L1806-1930).
+ * Global app state.
  *
- * Everything cross-view lives here: current user, meta enums, users,
- * projects, stats, the bug list + filters + pagination, the active view,
- * and the shared modals. View-local state (events list, audit rows,
- * report results, sessions) stays inside the view components.
+ * Everything cross-view lives here: current user, meta enums, users, projects,
+ * stats, the bug list + filters + pagination, the active view, and the shared
+ * modals. View-local state (events list, audit rows, report results, sessions)
+ * stays inside the view components.
  */
 import {
   createContext,
@@ -37,12 +36,12 @@ import type {
 } from "../types";
 
 // ---------------------------------------------------------------------------
-// Constants (ports of the vanilla tables)
+// Constants
 // ---------------------------------------------------------------------------
 
 export type TabName = "all" | ItemType;
 
-/** KPI → status-filter mapping (port of KPI_FILTER_MAP, L2366-2372). */
+/** KPI → status-filter mapping. */
 export const KPI_FILTER_MAP: Record<string, string[]> = {
   total: [],
   open: ["New", "In Progress", "Reopened"],
@@ -131,7 +130,7 @@ export interface AppState {
   sidebarCollapsed: boolean;
   toggleSidebarCollapsed: () => void;
 
-  // Data refreshers (ports of refreshBugs/refreshStats/refreshAll/load*)
+  // Data refreshers
   refreshBugs: () => Promise<void>;
   refreshStats: () => Promise<void>;
   refreshAll: () => Promise<void>;
@@ -156,7 +155,7 @@ export interface AppState {
   changePasswordOpen: boolean;
   setChangePasswordOpen: (open: boolean) => void;
 
-  // Per-user notifications (v3.0)
+  // Per-user notifications
   notifications: NotificationOut[];
   unreadCount: number;
   loadNotifications: () => Promise<void>;
@@ -272,8 +271,13 @@ export function AppProvider({
   // data — the common idle case.
   const lastBugsSig = useRef("");
   const lastStatsSig = useRef("");
+  // Same guard for the directory poll: users/projects change rarely, so an
+  // unchanged 10s tick must NOT hand back fresh array identities (that busts
+  // the memoized context value and re-renders every consumer).
+  const lastUsersSig = useRef("");
+  const lastProjectsSig = useRef("");
 
-  // ----- query-param builders (ports of _applyFilterToParams etc.) --------
+  // ----- query-param builders ----------------------------------------------
   const buildBugParams = useCallback((): URLSearchParams => {
     const f = filtersRef.current;
     const params = new URLSearchParams();
@@ -287,7 +291,7 @@ export function AppProvider({
     for (const t of f.item_type) params.append("item_type", t);
     if (f.reporter_id != null) params.set("reporter_id", String(f.reporter_id));
     if (f.q.trim()) params.set("q", f.q.trim());
-    // Implicit tab filter on top (port of _applyTabFilterToParams).
+    // Implicit tab filter on top.
     const tab = tabRef.current;
     if (tab !== "all" && !f.item_type.includes(tab)) {
       params.append("item_type", tab);
@@ -313,8 +317,14 @@ export function AppProvider({
   const refreshStats = useCallback(async () => {
     try {
       const tab = tabRef.current;
-      const qs = tab !== "all" ? `?item_type=${encodeURIComponent(tab)}` : "";
-      const res = await api<StatsOut>(`/stats${qs}`);
+      const params = new URLSearchParams();
+      if (tab !== "all") params.set("item_type", tab);
+      // Pass the active status filter so the Analytics charts react to a KPI
+      // tile click (the headline KPI counts stay global server-side). The
+      // signature guard below still skips a no-op commit when nothing changed.
+      for (const s of filtersRef.current.status) params.append("status", s);
+      const qs = params.toString();
+      const res = await api<StatsOut>(`/stats${qs ? `?${qs}` : ""}`);
       const sig = JSON.stringify(res);
       if (sig === lastStatsSig.current) return; // unchanged poll → no re-render
       lastStatsSig.current = sig;
@@ -324,13 +334,31 @@ export function AppProvider({
     }
   }, []);
 
+  // Cheap unread-badge refresh (a single SQL COUNT). setUnreadCount with an
+  // unchanged number is a no-op in React, so this is safe to call often.
+  const refreshUnread = useCallback(async () => {
+    try {
+      const c = await api<UnreadCountOut>("/notifications/unread_count");
+      setUnreadCount(c.unread);
+    } catch {
+      /* transient — keep the last known count */
+    }
+  }, []);
+
   const refreshAll = useCallback(async () => {
-    await Promise.all([refreshBugs(), refreshStats()]);
-  }, [refreshBugs, refreshStats]);
+    // Fold the unread badge into the shared refresh: every mutation site already
+    // calls refreshAll, so the bell now updates within ~1s of an action (and on
+    // the 10s data tick) instead of waiting up to 15s for the session poll.
+    await Promise.all([refreshBugs(), refreshStats(), refreshUnread()]);
+  }, [refreshBugs, refreshStats, refreshUnread]);
 
   const loadUsers = useCallback(async () => {
     try {
-      setUsers(await api<UserOut[]>("/users"));
+      const res = await api<UserOut[]>("/users");
+      const sig = JSON.stringify(res);
+      if (sig === lastUsersSig.current) return; // unchanged → no re-render
+      lastUsersSig.current = sig;
+      setUsers(res);
     } catch (err) {
       toastError(err);
     }
@@ -338,7 +366,11 @@ export function AppProvider({
 
   const loadProjects = useCallback(async () => {
     try {
-      setProjects(await api<ProjectOut[]>("/projects"));
+      const res = await api<ProjectOut[]>("/projects");
+      const sig = JSON.stringify(res);
+      if (sig === lastProjectsSig.current) return; // unchanged → no re-render
+      lastProjectsSig.current = sig;
+      setProjects(res);
     } catch (err) {
       toastError(err);
     }
@@ -357,7 +389,7 @@ export function AppProvider({
     }
   }, []);
 
-  // ----- boot (port of boot(), minus the auth gate done in main.tsx) ------
+  // ----- boot (the auth gate itself is done in main.tsx) -------------------
   const bootedRef = useRef(false);
   useEffect(() => {
     if (bootedRef.current) return;
@@ -380,9 +412,8 @@ export function AppProvider({
     })();
   }, [loadUsers, loadProjects, refreshAll, loadNotifications]);
 
-  // Re-fetch the list whenever page / filters / tab change (the vanilla app
-  // called refreshBugs() inline at each mutation site; an effect is the
-  // React-idiomatic equivalent and keeps every mutation path covered).
+  // Re-fetch the list whenever page / filters / tab change. An effect keeps
+  // every mutation path covered without inlining a refresh at each site.
   const firstListEffect = useRef(true);
   useEffect(() => {
     if (firstListEffect.current) {
@@ -393,7 +424,7 @@ export function AppProvider({
     void refreshBugs();
   }, [page, filters, activeTab, refreshBugs]);
 
-  // Tab change additionally refreshes stats (port of setActiveTab).
+  // Tab change additionally refreshes stats.
   const firstTabEffect = useRef(true);
   useEffect(() => {
     if (firstTabEffect.current) {
@@ -405,10 +436,9 @@ export function AppProvider({
 
   // ----- pollers -----------------------------------------------------------
   useEffect(() => {
-    // Session poll (port of scheduleSessionPoll, L1719-1764): /auth/me every
-    // 15s + on tab focus; 401 inside api() handles the bounce. The unread
-    // notification count rides on the same tick (cheap COUNT query) so the
-    // bell badge stays live without a second timer.
+    // Session poll: /auth/me every 15s + on tab focus; 401 inside api()
+    // handles the bounce. The unread notification count rides on the same tick
+    // (cheap COUNT query) so the bell badge stays live without a second timer.
     const tick = async () => {
       try {
         const m = await api<MeOut>("/auth/me", { cache: "no-store" });
@@ -442,9 +472,9 @@ export function AppProvider({
 
   useEffect(() => {
     // Live data poll: refetch the bug list + KPI stats on a fixed cadence so
-    // items created/edited by OTHER users (or on another device) appear
-    // without a manual browser reload. Mirrors the session poll — paused
-    // while the tab is hidden, fires immediately on refocus to feel instant.
+    // items created/edited by other users (or on another device) appear
+    // without a manual browser reload. Paused while the tab is hidden; fires
+    // immediately on refocus to feel instant.
     const refresh = () => {
       if (!document.hidden) void refreshAllRef.current();
     };
@@ -478,7 +508,7 @@ export function AppProvider({
   }, []);
 
   useEffect(() => {
-    // Version drift poll (port of scheduleVersionCheck, L1693-1708).
+    // Version drift poll.
     let warned = false;
     const boot = health?.asset_version;
     if (!boot) return;
@@ -680,7 +710,7 @@ export function AppProvider({
     [markNotificationRead, openBugDetail, setView],
   );
 
-  // Sleuth chat "open bug" deep-link (same CustomEvent as vanilla, L4771-79).
+  // Sleuth chat "open bug" deep-link.
   useEffect(() => {
     const onOpen = (e: Event) => {
       const id = (e as CustomEvent<{ bugId?: number }>).detail?.bugId;

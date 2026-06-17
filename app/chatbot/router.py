@@ -23,16 +23,16 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from datetime import timedelta
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 from app.config import get_settings
 from app.database import get_db
 from app.models import ChatConversation, ChatMessage, User, _utcnow
@@ -41,10 +41,12 @@ from . import excel, executor
 
 logger = logging.getLogger("bug_hunter.chatbot")
 
-# FastAPI dependency aliases (Annotated form is the documented, S8410-clean
-# idiom — keeps the injection out of the parameter default).
+# FastAPI dependency aliases. The Annotated form is the documented idiom —
+# it keeps the injection out of the parameter default.
 DbDep = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+# The document-ingest endpoint is the ONE admin-only write surface in Sleuth.
+AdminUser = Annotated[User, Depends(require_admin)]
 
 
 def _persist_turn(db: Session, actor: User, user_msg: str,
@@ -193,6 +195,115 @@ def ask(
         summary=resp.summary,
         intent=resp.intent,
     )
+
+
+# ---------------------------------------------------------------------------
+# /api/chat/ingest  — admin uploads a document; Sleuth turns it into bugs.
+#
+# This is Sleuth's single deliberate WRITE surface and it is ADMIN-ONLY (the
+# AdminUser dependency 403s everyone else). The heavy lifting — AI / parser
+# extraction and item creation — lives in app/chatbot/ingest.py; this endpoint
+# is just upload plumbing + a chat-shaped reply the panel renders inline.
+# ---------------------------------------------------------------------------
+_INGEST_CHUNK = 256 * 1024
+
+
+async def _read_upload_limited(file: UploadFile, limit: int) -> bytes:
+    """Stream the upload, aborting with 413 before it can exceed `limit`."""
+    buf = bytearray()
+    while True:
+        chunk = await file.read(_INGEST_CHUNK)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Document too large. Max {limit // (1024 * 1024)} MB.",
+            )
+    return bytes(buf)
+
+
+def _ingest_text_reply(text: str, intent: str) -> ChatOut:
+    return ChatOut(
+        blocks=[_BlockOut(kind="text", payload={"text": text})],
+        summary=text[:80], intent=intent,
+    )
+
+
+def _ingest_preview_reply(specs: list, method: str, filename: str, project_name: str) -> ChatOut:
+    """Conversational preview — Sleuth shows what it READ and asks before
+    creating anything. The actual creation happens later, when the admin replies
+    'create them' (handled by the executor)."""
+    n = len(specs)
+    how = "read it with AI" if method == "ai" else "parsed it"
+    head = (
+        f"📄 I {how} and found **{n}** work item{'' if n == 1 else 's'} in "
+        f"**{filename}**. If you want, I'll add them to project "
+        f"**{project_name}** — just reply **create them** (or **cancel**)."
+    )
+    rows = [[s["title"], s.get("priority", "Medium"), s.get("item_type", "Bug")]
+            for s in specs[:50]]
+    blocks = [
+        _BlockOut(kind="text", payload={"text": head}),
+        _BlockOut(kind="table", payload={"headers": ["Title", "Priority", "Type"], "rows": rows}),
+    ]
+    if n > len(rows):
+        blocks.append(_BlockOut(kind="text", payload={"text": f"…and {n - len(rows)} more."}))
+    blocks.append(_BlockOut(kind="suggestions", payload={"items": [
+        {"label": f"✓ Create all {n}", "send": "create them"},
+        {"label": "Cancel", "send": "cancel"},
+    ]}))
+    return ChatOut(blocks=blocks, summary=f"Found {n} items — awaiting confirmation",
+                   intent="ingest_preview")
+
+
+@router.post(
+    "/ingest",
+    responses={
+        400: {"description": "No project to file the imported items under."},
+        403: {"description": "Document ingest is admin-only."},
+        413: {"description": "Uploaded document is too large."},
+        429: {"description": "Rate limit exceeded — too many requests."},
+    },
+)
+async def ingest_document(
+    db: DbDep,
+    actor: AdminUser,
+    file: Annotated[UploadFile, File()],
+    project_id: Annotated[Optional[int], Form()] = None,
+) -> ChatOut:
+    """Admin-only: READ an uploaded document (xlsx / CSV / JSON / text) and tell
+    the admin what work items it contains. Nothing is created here — Sleuth
+    stages the candidates and only creates them when the admin replies
+    'create them' in the chat (see the executor's ingest-create handler)."""
+    _check_rate(actor.id)
+    from app.chatbot import ingest as _ingest
+    from app.chatbot.memory import store as _mem
+
+    data = await _read_upload_limited(file, _ingest.MAX_DOC_BYTES)
+    if not data:
+        return _ingest_text_reply("That file was empty — there was nothing to read.", "ingest_empty")
+
+    specs, method = _ingest.extract_specs(file.filename or "", data)
+    if not specs:
+        return _ingest_text_reply(
+            "I read that document but couldn't find any work items in it. I work "
+            "best with a list (one item per line), a CSV / Excel sheet with a "
+            "**Title** column, or a JSON array of `{title, priority, ...}` objects.",
+            "ingest_empty",
+        )
+    project = _ingest.resolve_project_for_preview(db, project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=400,
+            detail="There's no project to file these into yet — create one first.",
+        )
+    _mem.stage_ingest(actor.id, {
+        "specs": specs, "filename": file.filename or "document",
+        "project_id": project.id, "project_name": project.name, "method": method,
+    })
+    return _ingest_preview_reply(specs, method, file.filename or "document", project.name)
 
 
 # ---------------------------------------------------------------------------

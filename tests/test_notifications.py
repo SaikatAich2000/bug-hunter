@@ -83,14 +83,31 @@ def test_assignment_creates_notification_for_assignee(client):
     assert bobc.get(f"{_NOTIFS}/unread_count").json()["unread"] >= 1
 
 
-def test_actor_is_not_notified_of_own_action(client):
-    """Admin files a bug assigned to themselves — no self-notification."""
+def test_self_assignment_notifies_actor(client):
+    """Assigning a work item to yourself still lands in your own bell — being
+    put on the hook is meaningful even when self-initiated."""
     _admin(client)
     proj = _mk_project(client, "Self Proj")
     me = client.get("/api/auth/me").json()
     bug = _mk_bug(client, proj["id"], title="Self bug", assignee_ids=[me["id"]])
     notifs = client.get(_NOTIFS).json()
-    assert not any(n["bug_id"] == bug["id"] for n in notifs), notifs
+    assert any(n["bug_id"] == bug["id"] and n["kind"] == "assigned"
+               for n in notifs), notifs
+
+
+def test_actor_is_not_notified_of_own_update(client):
+    """A self-made change that is NOT an assignment (e.g. a status edit) does
+    not notify the actor — only the assignment itself pings you."""
+    _admin(client)
+    proj = _mk_project(client, "Own Update Proj")
+    me = client.get("/api/auth/me").json()
+    bug = _mk_bug(client, proj["id"], title="Own update", assignee_ids=[me["id"]])
+    client.get(f"{_NOTIFS}/read-all")  # clear the self-assignment notification
+    r = client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
+    assert r.status_code == 200, r.text
+    own = [n for n in client.get(_NOTIFS).json()
+           if n["bug_id"] == bug["id"] and n["kind"] == "updated"]
+    assert not own, own
 
 
 def test_comment_notifies_reporter_not_author(client):
@@ -153,6 +170,17 @@ def test_event_create_notifies_managers_not_actor(client):
     assert any(n["kind"] == "event" and n["event_id"] == ev["id"] for n in notifs), notifs
     # The admin actor is not notified of their own event.
     assert not any(n["event_id"] == ev["id"] for n in client.get(_NOTIFS).json())
+
+
+def test_event_create_notifies_self_when_self_managed(client):
+    """Making YOURSELF a manager while creating an event still lights up your
+    own bell — being on the hook is meaningful even when self-assigned (mirrors
+    a bug self-assignment)."""
+    _admin(client)
+    me = client.get("/api/auth/me").json()
+    ev = _mk_event(client, "My Own Standup", [me["id"]])
+    notifs = client.get(_NOTIFS).json()
+    assert any(n["kind"] == "event" and n["event_id"] == ev["id"] for n in notifs), notifs
 
 
 def test_event_update_notifies_managers(client):

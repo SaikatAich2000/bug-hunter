@@ -1,7 +1,6 @@
 """Bugs API + comments + attachments + activity (per-bug)."""
 from __future__ import annotations
 
-import io
 import re
 import threading
 import time
@@ -11,9 +10,9 @@ from urllib.parse import quote
 
 from fastapi import (
     APIRouter, BackgroundTasks, Depends, File, Form, HTTPException,
-    Query, UploadFile, status,
+    Query, Request, UploadFile, status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
@@ -25,19 +24,21 @@ from app.email_service import (
 )
 from app import notification_service
 from app.image_strip import strip_image_metadata
-from app.models import Activity, Attachment, Bug, Comment, Event, Project, User
+from app.models import (
+    Activity, Attachment, Bug, BugLink, Comment, Event, Project, User,
+)
 from app.schemas import (
     ALLOWED_ENVIRONMENTS, ALLOWED_ITEM_TYPES, ALLOWED_PRIORITIES,
     ALLOWED_STATUSES, ActivityOut, AttachmentBrief, BugCreate, BugDetail,
-    BugListResponse, BugOut, BugUpdate, CommentIn, CommentOut,
-    normalize_choice, statuses_for_type,
+    BugLinkIn, BugLinkOut, BugListResponse, BugOut, BugUpdate, BulkActionIn,
+    BulkActionResult, CommentIn, CommentOut, normalize_choice,
+    statuses_for_type,
 )
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 
-# Repeated HTTPException detail strings — extracted so Sonar's S1192
-# duplicate-string-literal rule stays quiet and so the wording stays
-# consistent across endpoints.
+# Repeated HTTPException detail strings, extracted so the wording stays
+# consistent across endpoints and the literal isn't duplicated.
 _DETAIL_BUG_NOT_FOUND = "Bug not found"
 _DEFAULT_MIME = "application/octet-stream"
 
@@ -49,10 +50,10 @@ MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
 # they consume RAM. Anything above MAX_FILE_BYTES is rejected mid-stream.
 _UPLOAD_CHUNK = 1024 * 1024
 
-# Per-user rate limit on attachment uploads (v3.2.1). Without this, an
-# authenticated user (or a stolen session) can chain 50 MB POSTs and
-# bloat the DB by tens of GB in minutes. 20/min is generous for humans
-# attaching screenshots and tight enough to make automated abuse obvious.
+# Per-user rate limit on attachment uploads. Without this, an authenticated
+# user (or a stolen session) can chain 50 MB POSTs and bloat the DB by tens of
+# GB in minutes. 20/min is generous for humans attaching screenshots and tight
+# enough to make automated abuse obvious.
 _UPLOAD_RATE_WINDOW_SECONDS = 60
 _UPLOAD_RATE_MAX = 20
 _upload_buckets: dict[int, deque] = {}
@@ -60,7 +61,7 @@ _upload_rate_lock = threading.Lock()
 # Bound the dict so a churn of test users doesn't grow memory forever.
 _UPLOAD_BUCKETS_MAX = 5_000
 
-# Per-user comment rate limit (v3.0). Each comment writes a row AND fans out
+# Per-user comment rate limit. Each comment writes a row and fans out
 # notifications + emails to the reporter and every assignee, so unbounded
 # commenting is a notification/email-amplification vector. 30/min is generous
 # for a human discussion and tight enough to make a script obvious.
@@ -239,6 +240,53 @@ def _resolve_user(db: Session, user_id: int | None) -> User | None:
     return user
 
 
+# Human phrasing for a stored link_type, per direction. Outgoing is the
+# source's view of its own row; incoming is the target's (inverse) view.
+_LINK_LABELS: dict[str, tuple[str, str]] = {
+    # link_type: (outgoing label, incoming label)
+    "relates": ("relates to", "relates to"),
+    "blocks": ("blocks", "is blocked by"),
+    "duplicate": ("duplicates", "is duplicated by"),
+}
+
+
+def _link_phrase(link_type: str, direction: str) -> str:
+    out_label, in_label = _LINK_LABELS.get(link_type, (link_type, link_type))
+    return out_label if direction == "outgoing" else in_label
+
+
+def _serialize_link(link: BugLink, from_bug_id: int) -> dict:
+    """Render a BugLink from the perspective of `from_bug_id` — picks the other
+    end of the edge and the direction-appropriate human label. Both FKs are
+    NOT NULL and cascade-delete, so `other` is always present."""
+    outgoing = link.source_bug_id == from_bug_id
+    other = link.target if outgoing else link.source
+    direction = "outgoing" if outgoing else "incoming"
+    return {
+        "id": link.id,
+        "link_type": link.link_type,
+        "direction": direction,
+        "label": _link_phrase(link.link_type, direction),
+        "other_bug_id": other.id,
+        "other_bug_title": other.title,
+        "other_bug_status": other.status,
+        "other_bug_item_type": _item_type(other),
+        "created_at": link.created_at,
+    }
+
+
+def _bug_links(db: Session, bug_id: int) -> list[dict]:
+    """All links touching this bug (either direction), newest first, serialised
+    from this bug's perspective."""
+    rows = list(db.scalars(
+        select(BugLink)
+        .options(selectinload(BugLink.source), selectinload(BugLink.target))
+        .where(or_(BugLink.source_bug_id == bug_id, BugLink.target_bug_id == bug_id))
+        .order_by(BugLink.created_at.desc(), BugLink.id.desc())
+    ).all())
+    return [_serialize_link(link, bug_id) for link in rows]
+
+
 def _log(
     db: Session, bug_id: int | None, actor: User | None, action: str, detail: str,
     entity_type: str = "bug", entity_id: int | None = None,
@@ -310,9 +358,8 @@ def _apply_q_filter(stmt, count_stmt, q: str):
         return _apply_where_both(stmt, count_stmt, Bug.id == int(q_clean))
     if not q_clean:
         return stmt, count_stmt
-    # Use the cleaned query — old code used the un-stripped `q`, which made
-    # `?q=  needle  ` never match anything because the LIKE pattern itself
-    # contained the leading/trailing spaces.
+    # Match on the cleaned query: building the LIKE pattern from the raw `q`
+    # would embed leading/trailing spaces and make `?q=  needle  ` never match.
     like = f"%{_like_escape(q_clean.lower())}%"
     clause = or_(
         func.lower(Bug.title).like(like, escape="\\"),
@@ -450,9 +497,9 @@ def get_bug(
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
 
-    # Pull all attachments (bug-level + comment-level), grouped per-comment.
-    # v2.6: newest attachment first so the most recent evidence is at
-    # the top of each bucket on the modal.
+    # Pull all attachments (bug-level + comment-level), grouped per-comment,
+    # newest first so the most recent evidence is at the top of each bucket on
+    # the modal.
     all_atts = list(db.scalars(
         select(Attachment).where(Attachment.bug_id == bug_id)
         .order_by(Attachment.created_at.desc(), Attachment.id.desc())
@@ -472,6 +519,7 @@ def get_bug(
                      item_type=_item_type(bug)),
     )
     payload["attachments"] = [_attachment_brief(a) for a in bug_level]
+    payload["links"] = _bug_links(db, bug_id)
     payload["comments"] = []
     for c in bug.comments:
         payload["comments"].append({
@@ -550,15 +598,17 @@ def create_bug(
             db, bug.id, actor, "assignees_added",
             f"Bug #{bug.id} '{bug.title}' assigned to: {names}",
         )
-    # v3.0 in-app notifications — same recipients the emails target. Written on
-    # this session so they commit transactionally with the bug.
+    # In-app notifications — same recipients the emails target. Written on this
+    # session so they commit transactionally with the bug.
     _itype = _item_type(bug).lower()
     assignee_ids = [a.id for a in assignees]
+    # No ``exclude`` here: being assigned is meaningful even when you assign
+    # yourself, so a self-assignment still lands in your own bell.
     notification_service.notify(
         db, assignee_ids, kind="assigned", background=background,
         title=f"Assigned to {_itype} #{bug.id}",
         body=f"{actor.name} assigned you to “{bug.title}”.",
-        bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
+        bug_id=bug.id, actor_name=actor.name,
     )
     if reporter.id != actor.id and reporter.id not in assignee_ids:
         notification_service.notify(
@@ -599,7 +649,7 @@ _UPDATE_TRACKED_FIELDS = [
 def _validate_update_authorization(bug: Bug, actor: User) -> None:
     if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
                         item_type=_item_type(bug)):
-        # v2.3: regular users can no longer edit Tasks or Requirements.
+        # Regular users cannot edit Tasks or Requirements.
         noun = _item_type(bug).lower()
         raise HTTPException(
             status_code=403,
@@ -637,8 +687,8 @@ def _normalize_update_event_id(fields: dict, db: Session) -> None:
 
 
 def _validate_update_status(fields: dict, bug: Bug) -> None:
-    """v2.5: per-type status validation. Pydantic only checks the union;
-    here we check the per-type set against the (possibly changing) type."""
+    """Per-type status validation. Pydantic only checks the union; this checks
+    the per-type set against the (possibly changing) type."""
     if "status" not in fields or fields["status"] is None:
         return
     effective_type = fields.get("item_type") or _item_type(bug)
@@ -765,7 +815,7 @@ def update_bug(
     has_reporter_in_payload = "reporter_id" in fields
     new_reporter_id = fields.pop("reporter_id", None)
 
-    # BUG-2 fix: only run the reporter-change gate when it actually CHANGES.
+    # Only run the reporter-change gate when the reporter actually changes.
     reporter_actually_changes = (
         has_reporter_in_payload and new_reporter_id != bug.reporter_id
     )
@@ -785,9 +835,9 @@ def update_bug(
 
     _persist_update(db, bug, actor, changes)
 
-    # v3.0 in-app notifications mirror the update emails. Newly-assigned users
-    # get a single "assigned" notification (not also "updated"), so each
-    # recipient gets exactly one per change set.
+    # In-app notifications mirror the update emails. Newly-assigned users get a
+    # single "assigned" notification (not also "updated"), so each recipient
+    # gets exactly one per change set.
     if changes or newly_assigned:
         new_ids = {u.id for u in newly_assigned}
         _itype = _item_type(bug).lower()
@@ -803,11 +853,13 @@ def update_bug(
                 bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
             )
         if newly_assigned:
+            # No ``exclude``: a self-assignment should still notify you (you
+            # were just put on the hook for this item).
             notification_service.notify(
                 db, list(new_ids), kind="assigned", background=background,
                 title=f"Assigned to {_itype} #{bug.id}",
                 body=f"{actor.name} assigned you to “{bug.title}”.",
-                bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
+                bug_id=bug.id, actor_name=actor.name,
             )
         db.commit()
 
@@ -823,19 +875,46 @@ def update_bug(
 
 
 # ---------------------------------------------------------------------------
+# Shared stakeholder notification for the "secondary" operations (delete,
+# attachments, comment edit/delete, links). The primary create/update/assign
+# paths above build their own tailored notifications; these reuse one helper so
+# EVERY mutating operation on an item lands in its reporter + assignees' bells
+# and — when EMAIL_DIGEST_ENABLED — is batched into the cron digest email
+# (notify() leaves emailed_at NULL, so the digest job picks it up once).
+# ---------------------------------------------------------------------------
+def _notify_item_stakeholders(
+    db: Session, bug: Bug, actor: User, *, kind: str, title: str, body: str,
+    background: "BackgroundTasks | None" = None, link_bug: bool = True,
+) -> None:
+    """In-app notify a work item's reporter + assignees (minus the actor).
+    Written on the caller's session — the caller commits.
+
+    link_bug=False omits the bug deep-link, used by delete: the bug_id FK is
+    ON DELETE CASCADE, so a notification pointing at the about-to-be-deleted bug
+    would be cascaded away before the digest could mail it."""
+    notification_service.notify(
+        db, [bug.reporter_id, *[a.id for a in bug.assignees]],
+        kind=kind, background=background, title=title, body=body,
+        bug_id=bug.id if link_bug else None,
+        actor_name=actor.name, exclude=actor.id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Delete
 # ---------------------------------------------------------------------------
 @router.delete("/{bug_id}")
 def delete_bug(
     bug_id: int,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict[str, str]:
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # v3.1 spec: item deletion is admin-only across every type — managers
-    # can edit, never delete. Reporters and assignees never could.
+    # Item deletion is admin-only across every type — managers can edit, never
+    # delete. Reporters and assignees never could.
     if not can_delete_bug(actor, item_type=_item_type(bug)):
         raise HTTPException(
             status_code=403,
@@ -843,6 +922,13 @@ def delete_bug(
         )
     title = bug.title
     itype = _item_type(bug)
+    # Tell the reporter + assignees their item is gone BEFORE the delete: the
+    # notification can't carry a bug deep-link (FK cascade), so link_bug=False.
+    _notify_item_stakeholders(
+        db, bug, actor, kind="updated", background=background, link_bug=False,
+        title=f"{itype} #{bug_id} deleted",
+        body=f"{actor.name} deleted “{title}”.",
+    )
     # Detach the bug's audit history BEFORE deleting the bug so the trail
     # survives. Two-step on purpose:
     #   1. UPDATE activity_log SET bug_id = NULL WHERE bug_id = <id>
@@ -882,8 +968,8 @@ def list_comments(
 ) -> list[dict]:
     if db.get(Bug, bug_id) is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # v2.6: newest comments first (matches Bug.comments relationship
-    # ordering used by the detail endpoint).
+    # Newest comments first (matches the Bug.comments relationship ordering
+    # used by the detail endpoint).
     comments = list(db.scalars(
         select(Comment).where(Comment.bug_id == bug_id)
         .order_by(Comment.created_at.desc(), Comment.id.desc())
@@ -928,7 +1014,7 @@ def add_comment(
     db.flush()
     _log(db, bug_id, author, "comment_added",
          f"#{bug.id} '{bug.title}' — comment by {author.name}: {payload.body[:80]}")
-    # v3.0 in-app notification — reporter + assignees, minus the author.
+    # In-app notification — reporter + assignees, minus the author.
     notification_service.notify(
         db, [bug.reporter_id, *[a.id for a in bug.assignees]],
         kind="comment", background=background,
@@ -975,6 +1061,7 @@ async def _read_upload_with_limit(file: UploadFile, limit: int) -> bytes:
 @router.post("/{bug_id}/attachments", response_model=AttachmentBrief, status_code=status.HTTP_201_CREATED)
 async def upload_attachment(
     bug_id: int,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     comment_id: Optional[int] = Form(default=None),
     db: Session = Depends(get_db),
@@ -997,9 +1084,9 @@ async def upload_attachment(
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # T6: strip EXIF / GPS / camera-serial / XMP / ICC from raster image
-    # uploads. No-op for non-images and fail-open on errors so an exotic
-    # image format never blocks the upload.
+    # Strip EXIF / GPS / camera-serial / XMP / ICC from raster image uploads.
+    # No-op for non-images and fail-open on errors so an exotic image format
+    # never blocks the upload.
     data = strip_image_metadata(data, file.content_type)
 
     att = Attachment(
@@ -1020,14 +1107,52 @@ async def upload_attachment(
         + (f" on comment #{comment_id}" if comment_id else ""),
         entity_type="attachment", entity_id=att.id,
     )
+    _notify_item_stakeholders(
+        db, bug, uploader, kind="updated", background=background,
+        title=f"Attachment added on #{bug_id}",
+        body=f"{uploader.name} attached “{att.filename}” to “{bug.title}”.",
+    )
     db.commit()
     db.refresh(att)
     return _attachment_brief(att)
 
 
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+
+
+def _parse_range(header: str | None, size: int) -> Optional[tuple[int, int]]:
+    """Parse a single-range ``Range: bytes=start-end`` header.
+
+    Returns an inclusive ``(start, end)`` byte span clamped to ``[0, size-1]``,
+    or ``None`` when the header is absent/empty/unsatisfiable/multi-range (so the
+    caller falls back to serving the full body). Browsers need this to seek a
+    ``<video>``: without a 206 reply, setting ``currentTime`` snaps back to 0.
+    """
+    if not header or size <= 0:
+        return None
+    m = _RANGE_RE.match(header.strip())
+    if not m:
+        return None  # malformed or multi-range — serve whole body
+    start_s, end_s = m.group(1), m.group(2)
+    if not start_s and not end_s:
+        return None
+    if not start_s:
+        # suffix range: last N bytes
+        length = min(int(end_s), size)
+        start, end = size - length, size - 1
+    else:
+        start = int(start_s)
+        end = int(end_s) if end_s else size - 1
+    end = min(end, size - 1)
+    if start > end or start >= size:
+        return None  # unsatisfiable — fall back to full body (200)
+    return start, end
+
+
 @router.get("/{bug_id}/attachments/{att_id}/download")
 def download_attachment(
     bug_id: int, att_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
@@ -1058,38 +1183,58 @@ def download_attachment(
         f"filename*=UTF-8''{quote(a.filename, safe='')}"
     )
 
-    return StreamingResponse(
-        io.BytesIO(a.data),
-        media_type=safe_ct,
-        headers={
-            "Content-Disposition": cd,
-            "Content-Length": str(a.size_bytes),
-            # Defense-in-depth: even if some future code path ends up
-            # serving HTML inline, these headers make it harder to weaponize.
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; sandbox",
-            "X-Frame-Options": "DENY",
-            # Keep a Cache-Control here so the global middleware doesn't
-            # try to override us — attachments may be private.
-            "Cache-Control": "private, max-age=0, no-cache",
-        },
-    )
+    headers = {
+        "Content-Disposition": cd,
+        # Browsers only attempt to seek <video>/<audio> when the server
+        # advertises byte-range support; without it currentTime resets to 0.
+        "Accept-Ranges": "bytes",
+        # Opt this response out of GZipMiddleware: attachments are already
+        # compressed media, and gzipping a 206 partial body corrupts the
+        # byte-range math the player relies on to seek. An explicit
+        # Content-Encoding makes Starlette's GZip responder pass us through.
+        "Content-Encoding": "identity",
+        # Defense-in-depth: even if some future code path ends up
+        # serving HTML inline, these headers make it harder to weaponize.
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "X-Frame-Options": "DENY",
+        # Keep a Cache-Control here so the global middleware doesn't
+        # try to override us — attachments may be private.
+        "Cache-Control": "private, max-age=0, no-cache",
+    }
+
+    span = _parse_range(request.headers.get("range"), a.size_bytes)
+    if span is not None:
+        start, end = span
+        chunk = a.data[start : end + 1]
+        headers["Content-Range"] = f"bytes {start}-{end}/{a.size_bytes}"
+        headers["Content-Length"] = str(len(chunk))
+        return Response(
+            content=chunk,
+            status_code=status.HTTP_206_PARTIAL_CONTENT,
+            media_type=safe_ct,
+            headers=headers,
+        )
+
+    # Body is already in memory, so a plain Response is simplest and sets an
+    # accurate Content-Length (StreamingResponse drops the explicit one).
+    return Response(content=a.data, media_type=safe_ct, headers=headers)
 
 
 @router.delete("/{bug_id}/attachments/{att_id}")
 def delete_attachment(
     bug_id: int, att_id: int,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:
     a = db.get(Attachment, att_id)
     if a is None or a.bug_id != bug_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    # v2.5: attachment deletion is admin-only across the board (both
-    # bug-level and comment-level). The product spec is "Comments and
-    # Attachments must not be editable or deletable by anyone except the
-    # admin." Uploaders and managers can no longer remove their own files
-    # — admins curate the evidence.
+    # Attachment deletion is admin-only across the board (both bug-level and
+    # comment-level): comments and attachments must not be editable or
+    # deletable by anyone except an admin. Uploaders and managers cannot
+    # remove their own files — admins curate the evidence.
     if actor.role != "admin":
         raise HTTPException(
             status_code=403,
@@ -1102,17 +1247,26 @@ def delete_attachment(
         f"Deleted attachment '{fname}'",
         entity_type="attachment", entity_id=att_id,
     )
+    # The attachment's FK guarantees its bug exists (a cascade would have
+    # removed the attachment otherwise), so no None-guard is needed here.
+    bug = db.get(Bug, bug_id)
+    _notify_item_stakeholders(
+        db, bug, actor, kind="updated", background=background,
+        title=f"Attachment removed on #{bug_id}",
+        body=f"{actor.name} deleted attachment “{fname}” from “{bug.title}”.",
+    )
     db.commit()
     return {"message": "Attachment deleted"}
 
 
 # ---------------------------------------------------------------------------
-# Comment edit / delete — admin only (v2.5)
+# Comment edit / delete — admin only
 # ---------------------------------------------------------------------------
 @router.put("/{bug_id}/comments/{comment_id}", response_model=CommentOut)
 def update_comment(
     bug_id: int, comment_id: int,
     payload: CommentIn,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:
@@ -1134,6 +1288,13 @@ def update_comment(
         f"Comment #{c.id} edited by {actor.name}: {payload.body[:80]}",
         entity_type="comment", entity_id=c.id,
     )
+    # The comment's FK guarantees its bug exists, so use it directly.
+    bug = db.get(Bug, bug_id)
+    _notify_item_stakeholders(
+        db, bug, actor, kind="comment", background=background,
+        title=f"Comment edited on #{bug_id}",
+        body=f"{actor.name} edited a comment on “{bug.title}”.",
+    )
     db.commit()
     db.refresh(c)
     atts = list(db.scalars(
@@ -1150,6 +1311,7 @@ def update_comment(
 @router.delete("/{bug_id}/comments/{comment_id}")
 def delete_comment(
     bug_id: int, comment_id: int,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:
@@ -1165,11 +1327,19 @@ def delete_comment(
     if c is None or c.bug_id != bug_id:
         raise HTTPException(status_code=404, detail="Comment not found")
     preview = (c.body or "")[:80]
+    author_name = c.author_name
     db.delete(c)
     _log(
         db, bug_id, actor, "comment_deleted",
-        f"Comment #{comment_id} by {c.author_name} deleted: {preview}",
+        f"Comment #{comment_id} by {author_name} deleted: {preview}",
         entity_type="comment", entity_id=comment_id,
+    )
+    # The comment's FK guarantees its bug exists, so use it directly.
+    bug = db.get(Bug, bug_id)
+    _notify_item_stakeholders(
+        db, bug, actor, kind="comment", background=background,
+        title=f"Comment deleted on #{bug_id}",
+        body=f"{actor.name} deleted a comment by {author_name} on “{bug.title}”.",
     )
     db.commit()
     return {"message": "Comment deleted"}
@@ -1190,3 +1360,251 @@ def list_activity(
         select(Activity).where(Activity.bug_id == bug_id)
         .order_by(Activity.created_at.desc(), Activity.id.desc())
     ).all())
+
+
+# ---------------------------------------------------------------------------
+# Item links
+# ---------------------------------------------------------------------------
+@router.get("/{bug_id}/links", response_model=list[BugLinkOut])
+def list_links(
+    bug_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> list[dict]:
+    if db.get(Bug, bug_id) is None:
+        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    return _bug_links(db, bug_id)
+
+
+def _reload_link(db: Session, link_id: int) -> BugLink:
+    return db.scalar(
+        select(BugLink)
+        .options(selectinload(BugLink.source), selectinload(BugLink.target))
+        .where(BugLink.id == link_id)
+    )
+
+
+@router.post("/{bug_id}/links", response_model=BugLinkOut, status_code=status.HTTP_201_CREATED)
+def add_link(
+    bug_id: int,
+    payload: BugLinkIn,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> dict:
+    """Create a directed link from this bug to another. Requires edit rights on
+    the SOURCE item (linking changes that item's relationships). Idempotent on
+    (source, target, type) — re-linking returns the existing edge."""
+    bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
+    if bug is None:
+        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    _validate_update_authorization(bug, actor)
+    if payload.target_bug_id == bug_id:
+        raise HTTPException(status_code=400, detail="An item can't be linked to itself")
+    target = db.get(Bug, payload.target_bug_id)
+    if target is None:
+        raise HTTPException(status_code=400, detail="Target item does not exist")
+
+    existing = db.scalar(
+        select(BugLink).where(
+            BugLink.source_bug_id == bug_id,
+            BugLink.target_bug_id == target.id,
+            BugLink.link_type == payload.link_type,
+        )
+    )
+    if existing is None:
+        link = BugLink(
+            source_bug_id=bug_id, target_bug_id=target.id,
+            link_type=payload.link_type, created_by_user_id=actor.id,
+        )
+        db.add(link)
+        db.flush()
+        _log(
+            db, bug_id, actor, "link_added",
+            f"#{bug_id} '{bug.title}' {_link_phrase(payload.link_type, 'outgoing')} "
+            f"#{target.id} '{target.title}'",
+        )
+        _notify_item_stakeholders(
+            db, bug, actor, kind="updated", background=background,
+            title=f"Link added on #{bug_id}",
+            body=(
+                f"{actor.name} linked “{bug.title}” "
+                f"{_link_phrase(payload.link_type, 'outgoing')} "
+                f"#{target.id} “{target.title}”."
+            ),
+        )
+        db.commit()
+        link_id = link.id
+    else:
+        link_id = existing.id
+    return _serialize_link(_reload_link(db, link_id), bug_id)
+
+
+@router.delete("/{bug_id}/links/{link_id}")
+def remove_link(
+    bug_id: int, link_id: int,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Remove a link. The path bug must be one of the two endpoints, and the
+    caller must be able to edit it."""
+    link = db.get(BugLink, link_id)
+    if link is None or bug_id not in (link.source_bug_id, link.target_bug_id):
+        raise HTTPException(status_code=404, detail="Link not found")
+    bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
+    if bug is None:
+        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    _validate_update_authorization(bug, actor)
+    other_id = link.target_bug_id if link.source_bug_id == bug_id else link.source_bug_id
+    db.delete(link)
+    _log(db, bug_id, actor, "link_removed", f"Unlinked #{bug_id} ↔ #{other_id}")
+    _notify_item_stakeholders(
+        db, bug, actor, kind="updated", background=background,
+        title=f"Link removed on #{bug_id}",
+        body=f"{actor.name} unlinked “{bug.title}” from #{other_id}.",
+    )
+    db.commit()
+    return {"message": "Link removed"}
+
+
+# ---------------------------------------------------------------------------
+# Bulk actions — one toolbar request mutates many selected items, each through
+# the same permission + audit + notification path as its single-item endpoint.
+# Items the caller can't action are skipped (not a hard error), so a mixed
+# selection partially succeeds and the response reports the tally.
+# ---------------------------------------------------------------------------
+def _norm_or_400(value: Optional[str], allowed: list[str], label: str) -> str:
+    try:
+        return normalize_choice(value or "", allowed, label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _bulk_resolve_value(payload: BulkActionIn):
+    """Validate the action's value ONCE up front so a bad value is a single 400
+    for the whole request. Returns the canonical status/priority/env string, or
+    None for delete."""
+    action = payload.action
+    if action == "set_status":
+        return _norm_or_400(payload.value, ALLOWED_STATUSES, "status")
+    if action == "set_priority":
+        return _norm_or_400(payload.value, ALLOWED_PRIORITIES, "priority")
+    if action == "set_environment":
+        return _norm_or_400(payload.value, ALLOWED_ENVIRONMENTS, "environment")
+    return None  # delete
+
+
+def _bulk_notify_update(db: Session, bug: Bug, actor: User, what: str,
+                        background: BackgroundTasks) -> None:
+    _itype = _item_type(bug).lower()
+    notification_service.notify(
+        db, [bug.reporter_id, *[a.id for a in bug.assignees]],
+        kind="updated", background=background,
+        title=f"{_itype.capitalize()} #{bug.id} updated",
+        body=f"{actor.name} changed {what} (bulk).",
+        bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
+    )
+
+
+def _bulk_set_status(db: Session, bug: Bug, actor: User, value: str,
+                     background: BackgroundTasks) -> str:
+    # Per-type validity: a status legal for a Bug may be illegal for a Task.
+    if value not in statuses_for_type(_item_type(bug)):
+        return "skipped"
+    if bug.status == value:
+        return "skipped"
+    old = bug.status
+    bug.status = value
+    _log(db, bug.id, actor, "status_changed",
+         f"#{bug.id} '{bug.title}' — status: '{old}' → '{value}' (bulk)")
+    _bulk_notify_update(db, bug, actor, "status", background)
+    return "updated"
+
+
+def _bulk_set_field(db: Session, bug: Bug, actor: User, field_name: str,
+                    value: str, background: BackgroundTasks) -> str:
+    old = getattr(bug, field_name)
+    if old == value:
+        return "skipped"
+    setattr(bug, field_name, value)
+    _log(db, bug.id, actor, f"{field_name}_changed",
+         f"#{bug.id} '{bug.title}' — {field_name}: '{old}' → '{value}' (bulk)")
+    _bulk_notify_update(db, bug, actor, field_name, background)
+    return "updated"
+
+
+def _bulk_delete(db: Session, bug: Bug, actor: User) -> str:
+    # Mirror delete_bug: detach audit history (bug_id → NULL) so the trail
+    # survives, delete the row, then record the delete itself.
+    title, itype, bug_id = bug.title, _item_type(bug), bug.id
+    db.execute(update(Activity).where(Activity.bug_id == bug_id).values(bug_id=None))
+    db.flush()
+    db.delete(bug)
+    db.add(Activity(
+        bug_id=None, entity_type="bug", entity_id=bug_id,
+        actor_user_id=actor.id, actor_name=actor.name, action="bug_deleted",
+        detail=f"Deleted {itype.lower()} #{bug_id}: {title} (bulk)",
+    ))
+    return "updated"
+
+
+def _apply_bulk_to_bug(db: Session, bug: Bug, actor: User, payload: BulkActionIn,
+                       resolved, background: BackgroundTasks) -> str:
+    """Apply one bulk action to one bug. Returns 'updated' / 'skipped'.
+    Permission failures are 'skipped' so a mixed selection partially succeeds."""
+    action = payload.action
+    if action == "delete":
+        if not can_delete_bug(actor, item_type=_item_type(bug)):
+            return "skipped"
+        return _bulk_delete(db, bug, actor)
+    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
+                        item_type=_item_type(bug)):
+        return "skipped"
+    if action == "set_status":
+        return _bulk_set_status(db, bug, actor, resolved, background)
+    if action == "set_priority":
+        return _bulk_set_field(db, bug, actor, "priority", resolved, background)
+    return _bulk_set_field(db, bug, actor, "environment", resolved, background)
+
+
+@router.post("/bulk", response_model=BulkActionResult)
+def bulk_action(
+    payload: BulkActionIn,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> BulkActionResult:
+    """Apply one action to many selected items at once. Each item is gated by
+    the same permission rules as its single-item endpoint; items the caller
+    can't touch are skipped. Returns the updated / skipped / not-found tally."""
+    resolved = _bulk_resolve_value(payload)
+    updated = skipped = failed = 0
+    # Batch-load every selected item in ONE eager query (selectinload then
+    # batches the relationship loads across all of them) instead of a fresh
+    # eager query per id — turns ~4×N round-trips into ~3 total. Iterate the
+    # caller's id order against the map so the not-found tally stays accurate.
+    by_id = {
+        b.id: b
+        for b in db.scalars(_eager_bug().where(Bug.id.in_(payload.ids))).all()
+    }
+    for bug_id in payload.ids:
+        bug = by_id.get(bug_id)
+        if bug is None:
+            failed += 1
+            continue
+        outcome = _apply_bulk_to_bug(db, bug, actor, payload, resolved, background)
+        if outcome == "updated":
+            updated += 1
+        else:
+            skipped += 1
+    db.commit()
+    parts = [f"{updated} updated"]
+    if skipped:
+        parts.append(f"{skipped} skipped")
+    if failed:
+        parts.append(f"{failed} not found")
+    return BulkActionResult(
+        updated=updated, skipped=skipped, failed=failed,
+        message=", ".join(parts),
+    )

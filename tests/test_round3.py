@@ -1,8 +1,7 @@
-"""
-Round-3 — final batch of targeted tests for issues identified by code review.
+"""Targeted tests for issues identified by code review.
 
 Focus:
-  - Activity ordering inconsistency (verified) — explore further
+  - Activity ordering inconsistency between detail and list endpoints
   - LIKE-wildcard injection in user search
   - Project move via update — does a user keep edit rights?
   - Update bug with reporter_id=null (admin/manager only?)
@@ -41,8 +40,8 @@ def _make_bug(c, project_id, title="A bug for tests", **extra):
 
 
 # ===========================================================================
-# Activity order: detail vs list-activity returns reversed order with
-# same-second timestamps. Confirmed by previous round, verify magnitude here.
+# Activity order: detail vs list-activity ordering with same-second
+# timestamps.
 # ===========================================================================
 class TestActivityOrderingDeep:
     def test_activity_detail_and_list_show_reversed_order_when_clock_is_coarse(self, admin_client):

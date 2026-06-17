@@ -24,6 +24,8 @@ omit = [
 ]
 
 [tool.coverage.report]
+# CI gate: fail the run if total coverage falls below this floor.
+fail_under = 99
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
@@ -40,6 +42,12 @@ output = "coverage.xml"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+# Registered markers — run `-m "not ui"` to skip the slow browser E2E suite.
+markers = [
+    "ui: Playwright browser end-to-end tests (slow, requires Chromium)",
+    "slow: long-running tests",
+    "migration: legacy-database re-import tests",
+]
 # Python 3.14 + pytest-cov: gzip-buffered coverage files get finalized
 # after their underlying file is closed, raising ValueError inside
 # __del__. Pytest catches these via sys.unraisablehook and turns them

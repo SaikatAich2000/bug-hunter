@@ -41,7 +41,6 @@ def _logout(c):
 def _create_user(c, name, email, role="user", password="TestUserPwd9X", is_active=True):
     # NOTE: the default password must satisfy the server-side strength
     # check (no common passwords, sufficient length, mix of classes).
-    # "TestUserPwd9X" used to live here but the policy now rejects it.
     if len(name) < 2:                # safety: server requires name>=2
         name = name + "_user"
     r = c.post("/api/users", json={
@@ -88,7 +87,7 @@ class TestAuth:
     def test_login_with_inactive_user_is_unified_401(self, admin_client):
         """A deactivated user cannot log in. Must get the same 401 as a
         wrong password so the response doesn't leak which accounts are
-        disabled (was 403 before v3.2.1)."""
+        disabled (previously returned 403)."""
         u = _create_user(admin_client, "Deact", "deact@x.com",
                          password="DeactivatedZx9Q", is_active=False)
         _logout(admin_client)
@@ -592,7 +591,7 @@ class TestCommentsAttachments:
             assert d.status_code != 500, "header injection from filename crashed server"
 
     def test_uploader_cannot_delete_their_own_attachment_v25(self, admin_client):
-        """v2.5: attachment deletion is admin-only across the board. The
+        """Attachment deletion is admin-only across the board. The
         previous uploader-keeps-rights rule was removed when the spec
         moved to "Comments and Attachments must not be editable or
         deletable by anyone except the admin." Uploads stay open
@@ -798,8 +797,8 @@ class TestSecurity:
         assert d.status_code == 401
 
     def test_audit_endpoint_is_hidden_from_regular_users(self, user_client):
-        """v3.1 spec: audit trail is hidden from regular users — they get
-        403. Managers and admins can read it (covered separately)."""
+        """Audit trail is hidden from regular users — they get 403.
+        Managers and admins can read it (covered separately)."""
         r = user_client.get("/api/audit")
         assert r.status_code == 403
 
@@ -816,13 +815,12 @@ class TestSecurity:
 
 
 # ===========================================================================
-# 8b. v3.2.1 SECURITY ADDITIONS — CSRF origin check, upload rate-limit,
+# 8b. SECURITY ADDITIONS — CSRF origin check, upload rate-limit,
 #     hardened response headers
 # ===========================================================================
 class TestV321Security:
-    """Tests for the v3.2.1 additive security hardening.
-
-    These don't replace any prior behaviour — they layer on top:
+    """Tests for additive security hardening that layers on top of prior
+    behavior:
       - CSRF: state-changing /api/* requests with a foreign Origin are
         rejected with 403 before they hit the route.
       - Upload rate limit: 20 attachments / 60s / user.
@@ -951,7 +949,7 @@ class TestV321Security:
 
 
 # ===========================================================================
-# 8c. v3.2.1 PERFORMANCE GUARANTEES
+# 8c. PERFORMANCE GUARANTEES
 #
 # These tests don't assert wall-clock speed — that's flaky on shared CI.
 # They lock in the *structural* improvements: query-count collapse on the

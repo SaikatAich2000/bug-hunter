@@ -1,8 +1,6 @@
 /**
- * BhSelect — React port of the vanilla custom single-select dropdown
- * (`enhanceCustomSelect`, app/static/app.js L1446-L1570).
- *
- * DOM (class names must match styles.css exactly):
+ * BhSelect — a custom single-select dropdown. Class names must match
+ * styles.css:
  *
  *   <div class="bh-sel-wrap">
  *     <select class="bh-sel-native" …>                  ← form value + keyboard path
@@ -16,16 +14,16 @@
  *     </div>
  *   </div>
  *
- * Differences from vanilla: the popover renders in-place instead of on
- * document.body (still `position: fixed`, placed with the same placePop
- * math incl. the trigger-width min-width), and the value is controlled.
+ * The popover is portaled to <body> (still `position: fixed`, placed by
+ * placePop with the trigger-width min-width), and the value is controlled.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export interface BhSelectOption {
   value: string;
   label: string;
-  /** Optional tooltip — mirrors the title attr fillFormSelect put on <option>. */
+  /** Optional tooltip — rendered as the title attr on <option>. */
   title?: string;
 }
 
@@ -39,7 +37,7 @@ interface Props {
   ariaLabel?: string;
 }
 
-// Placeholder options look like "— select —" (port of the vanilla regex).
+// Placeholder options look like "— select —".
 const PLACEHOLDER_RE = /^—.*—$/;
 
 export default function BhSelect({ value, onChange, options, disabled, id, name, ariaLabel }: Props) {
@@ -48,8 +46,8 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Port of placePop: viewport-anchored fixed positioning with the
-  // flip-above-when-clipped rule; panel min-width matches the trigger.
+  // Viewport-anchored fixed positioning with the flip-above-when-clipped
+  // rule; panel min-width matches the trigger.
   const placePop = useCallback(() => {
     const btn = btnRef.current;
     const pop = popRef.current;
@@ -85,7 +83,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     };
   }, [open, placePop]);
 
-  // Outside click closes (port of the vanilla `outside` containment check).
+  // Outside click closes.
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
@@ -144,33 +142,42 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
           {labelText || "—"}
         </span>
         {/* A disabled select can't be opened, so the caret would mislead —
-            render a plain pill instead (vanilla v2.6 fix). */}
+            render a plain pill instead. */}
         {!disabled && <span className="bh-sel-caret" aria-hidden="true">▾</span>}
       </button>
-      {open && (
-        <div className="bh-sel-pop" role="listbox" ref={popRef}>
-          {options.map((o, i) => {
-            const isSel = i === selectedIndex;
-            return (
-              <button
-                type="button"
-                key={o.value}
-                className={`bh-sel-row${isSel ? " is-selected" : ""}`}
-                role="menuitemcheckbox"
-                aria-checked={isSel}
-                data-bh-sel-i={i}
-                title={o.title}
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                }}
-              >
-                {o.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Portal the popover to <body> so its position:fixed coordinates are
+          always relative to the VIEWPORT. Rendered in-place, any ancestor with
+          a transform / filter / contain (or even a quirky stacking context)
+          becomes the containing block and the panel lands in the wrong spot —
+          which is exactly what misplaced the Reports "Report type" dropdown.
+          popRef still points at the real node, so the outside-click guard and
+          placePop math keep working unchanged. */}
+      {open &&
+        createPortal(
+          <div className="bh-sel-pop" role="listbox" ref={popRef}>
+            {options.map((o, i) => {
+              const isSel = i === selectedIndex;
+              return (
+                <button
+                  type="button"
+                  key={o.value}
+                  className={`bh-sel-row${isSel ? " is-selected" : ""}`}
+                  role="menuitemcheckbox"
+                  aria-checked={isSel}
+                  data-bh-sel-i={i}
+                  title={o.title}
+                  onClick={() => {
+                    onChange(o.value);
+                    setOpen(false);
+                  }}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

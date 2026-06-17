@@ -1,7 +1,7 @@
 /**
- * Global blocking loader — port of showLoader/hideLoader/withLoader
- * (vanilla L185-213). Imperative, counter-based for concurrent operations;
- * drives the #globalLoader overlay the App shell renders.
+ * Global blocking loader. Imperative and counter-based so concurrent
+ * operations can share it; drives the #globalLoader overlay the App shell
+ * renders.
  */
 let pending = 0;
 

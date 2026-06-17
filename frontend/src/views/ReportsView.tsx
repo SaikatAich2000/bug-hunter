@@ -1,23 +1,14 @@
 /**
- * ReportsView — React port of the vanilla REPORTS view
- * (app/static/index.html L374-453 + app.js REPORTS_STATE / initReportsView /
- * runReportNow / downloadReportXlsx block, L5035-5384).
+ * ReportsView — a reporting workbench: pick a type, set filters, Run, then
+ * Download XLSX. Uses the same backend engine that Sleuth uses, so a report
+ * run from this UI and the equivalent chatbot query return identical numbers.
  *
- * Jira-style reporting workbench: pick a type, set filters, Run, then
- * Download XLSX. Same backend engine that Sleuth uses, so "throughput last
- * 7 days" from the chatbot and the Throughput report run from this UI
- * return identical numbers.
- *
- * Parity notes:
- *  - All ids/classes match index.html exactly so styles.css applies as-is.
- *  - The catalog (GET /api/reports/types) loads once on first mount
- *    (vanilla `REPORTS_STATE.initialized` guard).
+ *  - The catalog (GET /api/reports/types) loads once on first mount.
  *  - Filters are gathered on demand each time Run is clicked, so editing a
- *    chip and not pressing Run never silently affects the next download —
- *    the XLSX export reuses the exact filter blob of the last successful
- *    run (vanilla `currentFilters`).
- *  - The inline table is capped server-side at 1000 rows; the truncation
- *    banner mirrors `truncated` / `truncated_cap` from POST /api/reports/run.
+ *    chip without pressing Run never silently affects the next download — the
+ *    XLSX export reuses the exact filter blob of the last successful run.
+ *  - The inline table is capped server-side; the truncation banner mirrors
+ *    `truncated` / `truncated_cap` from POST /api/reports/run.
  */
 import { useEffect, useRef, useState } from "react";
 import { api, apiBlob } from "../lib/api";
@@ -34,26 +25,25 @@ import type {
 } from "../types";
 
 // ---------------------------------------------------------------------------
-// Constants / helpers (ports of the vanilla module-level bits)
+// Constants / helpers
 // ---------------------------------------------------------------------------
 
-/** Port of REPORTS_DEFAULT_PRESETS (app.js L5044-47). */
 const REPORTS_DEFAULT_PRESETS: Record<string, number> = {
   last_7_days: 7,
   last_30_days: 30,
 };
 
-/** "YYYY-MM-DD" — vanilla used toISOString().slice(0,10) (UTC), kept as-is. */
+/** "YYYY-MM-DD" in UTC. */
 function isoDay(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Port of _colAlign (L5203-05): only "right" is honoured. */
+/** Only "right" alignment is honoured. */
 function colAlign(col: ReportColumn): "left" | "right" {
   return col.align === "right" ? "right" : "left";
 }
 
-/** Port of _reportCellText (L5219-23): 200-char truncation with ellipsis. */
+/** 200-char truncation with ellipsis. */
 function reportCellText(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string" && value.length > 200) return value.slice(0, 197) + "…";
@@ -69,7 +59,7 @@ function toggleVal<T>(list: readonly T[], v: T): T[] {
 // Filter state
 // ---------------------------------------------------------------------------
 
-/** One entry per chip container; keys mirror the vanilla `data-name`s. */
+/** One entry per chip container; keys mirror the chip `data-name`s. */
 interface ChipState {
   item_type: string[];
   status: string[];
@@ -107,7 +97,7 @@ interface ReportFilters {
 }
 
 // ---------------------------------------------------------------------------
-// Chip group (port of _chipNode + _fillChipContainer, L5079-5104)
+// Chip group
 // ---------------------------------------------------------------------------
 
 interface ChipItem<T extends string | number> {
@@ -141,7 +131,7 @@ function ChipGroup<T extends string | number>({
             checked={checked.includes(it.value)}
             onChange={() => onToggle(it.value)}
           />
-          {/* checkmark — only visible when chip is selected (styles.css) */}
+          {/* Checkmark — only visible when the chip is selected (styles.css). */}
           <span className="reports-chip-indicator" aria-hidden="true">✓</span>
           <span className="reports-chip-label">{it.text}</span>
         </label>
@@ -157,16 +147,15 @@ function ChipGroup<T extends string | number>({
 export default function ReportsView() {
   const { projects, users } = useApp();
 
-  // Port of REPORTS_STATE (L5035-42). `lastRun` bundles currentReportKey +
-  // currentFilters: both are set together on a successful run and the
-  // download button keys off their presence.
+  // `lastRun` bundles the report key and filters: both are set together on a
+  // successful run, and the download button keys off their presence.
   const [catalog, setCatalog] = useState<ReportTypesOut | null>(null);
   const [reportKey, setReportKey] = useState("");
   const [result, setResult] = useState<ReportRunResult | null>(null);
   const [lastRun, setLastRun] = useState<{ reportKey: string; filters: ReportFilters } | null>(null);
   const runningRef = useRef(false);
 
-  // Filter inputs (vanilla kept these in the DOM; controlled here).
+  // Filter inputs (controlled).
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [chips, setChips] = useState<ChipState>(EMPTY_CHIPS);
@@ -174,7 +163,7 @@ export default function ReportsView() {
   const [includeNotABug, setIncludeNotABug] = useState(false);
   const [runLabel, setRunLabel] = useState("");
 
-  // ----- per-type defaults (port of _applyReportTypeDefaults, L5137-58) ----
+  // ----- per-type defaults -------------------------------------------------
   const applyTypeDefaults = (meta: ReportTypeMeta | undefined) => {
     const win = meta?.default_window || "all_time";
     const days = REPORTS_DEFAULT_PRESETS[win];
@@ -191,7 +180,7 @@ export default function ReportsView() {
     }
   };
 
-  // ----- catalog load once on first mount (port of initReportsView) -------
+  // ----- catalog load once on first mount ----------------------------------
   const initRef = useRef(false);
   useEffect(() => {
     if (initRef.current) return;
@@ -200,7 +189,7 @@ export default function ReportsView() {
       try {
         const cat = await api<ReportTypesOut>("/reports/types");
         setCatalog(cat);
-        // The native <select> auto-selected its first option in vanilla.
+        // Select the first report type by default.
         const first = cat.types[0];
         setReportKey(first ? first.key : "");
         applyTypeDefaults(first);
@@ -213,10 +202,9 @@ export default function ReportsView() {
   const selectedMeta = catalog?.types.find((t) => t.key === reportKey);
   const vocab = catalog?.vocab;
 
-  // ----- payload builder (port of _buildReportFilters, L5170-85) ----------
+  // ----- payload builder ---------------------------------------------------
   // project/assignee/reporter checks are pruned against the live lists so a
-  // chip whose entity has since disappeared can't leak into the payload
-  // (vanilla got this for free by re-rendering the chip containers).
+  // chip whose entity has since disappeared can't leak into the payload.
   const buildFilters = (): ReportFilters => ({
     date_from: dateFrom || null,
     date_to: dateTo || null,
@@ -232,7 +220,7 @@ export default function ReportsView() {
     label: runLabel.trim() || null,
   });
 
-  // ----- reset (port of _resetReportFilters, L5187-5201) ------------------
+  // ----- reset -------------------------------------------------------------
   const resetFilters = () => {
     setChips(EMPTY_CHIPS);
     setTextSearch("");
@@ -241,7 +229,7 @@ export default function ReportsView() {
     applyTypeDefaults(selectedMeta);
   };
 
-  // ----- presets (port of _setReportDatePreset, L5368-75) -----------------
+  // ----- presets -----------------------------------------------------------
   const setDatePreset = (days: number) => {
     const today = new Date();
     const from = new Date(today);
@@ -250,7 +238,7 @@ export default function ReportsView() {
     setDateTo(isoDay(today));
   };
 
-  // ----- run (port of runReportNow, L5291-5322) ----------------------------
+  // ----- run ---------------------------------------------------------------
   const runReportNow = async () => {
     if (runningRef.current) return;
     if (!reportKey) return;
@@ -272,7 +260,7 @@ export default function ReportsView() {
     }
   };
 
-  // ----- download (port of downloadReportXlsx, L5324-66) ------------------
+  // ----- download ----------------------------------------------------------
   const downloadReportXlsx = async () => {
     if (!lastRun) {
       toast("Run a report first, then download", "info");
@@ -301,7 +289,7 @@ export default function ReportsView() {
   };
 
   // ----- derived render bits ------------------------------------------------
-  // Result-head meta line (run summary, L5307-12).
+  // Result-head meta line (run summary).
   const metaBits = lastRun && result
     ? [
         `${result.total} row${result.total === 1 ? "" : "s"}`,
@@ -315,13 +303,6 @@ export default function ReportsView() {
 
   return (
     <section className="view" id="viewReports">
-      <div className="page-intro reports-intro">
-        <div className="page-intro-icon" aria-hidden="true">📈</div>
-        <div className="page-intro-text">
-          <h2>Reports</h2>
-          <p>Build a report from any combination of filters, view it inline, and download the full data as Excel — including every column, like running a SQL query against the system</p>
-        </div>
-      </div>
       <div className="reports-shell">
         <aside className="reports-side" aria-label="Report configuration">
           <div className="reports-side-scroll">
@@ -334,7 +315,7 @@ export default function ReportsView() {
                   value={reportKey}
                   onChange={(v) => {
                     setReportKey(v);
-                    // Port of the change → _applyReportTypeDefaults wiring.
+                    // Re-apply the per-type defaults when the type changes.
                     applyTypeDefaults(catalog?.types.find((t) => t.key === v));
                   }}
                   options={(catalog?.types ?? []).map((t) => ({
@@ -508,7 +489,7 @@ export default function ReportsView() {
               📥 Download XLSX
             </button>
           </div>
-          {/* Summary cards (port of _renderReportSummary, L5267-89) */}
+          {/* Summary cards */}
           <div className="reports-summary" id="reportSummary" hidden={!summaryEntries.length}>
             {summaryEntries.map(([k, v]) => (
               <div className="reports-summary-card" key={k}>
@@ -519,7 +500,7 @@ export default function ReportsView() {
               </div>
             ))}
           </div>
-          {/* Result table (port of _renderReportTable, L5244-65) */}
+          {/* Result table */}
           <div className="reports-table-scroll">
             <table className="bug-table reports-table" id="reportTable" aria-label="Report results">
               <thead id="reportTableHead">

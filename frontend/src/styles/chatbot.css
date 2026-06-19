@@ -3,9 +3,9 @@
  *
  * - 56px FAB collapsed; 380×560 panel anchored bottom-right when open.
  * - Mobile: full-width capped at 80vh.
- * - Honors the global :root[data-theme] tokens — dark/light Just Work.
- * - z-index < bug-modal so detail modals cover the chat cleanly.
- * - All selectors / IDs / class names preserved (chatbot.js hooks).
+ * - Uses the global :root[data-theme] tokens for dark/light theming.
+ * - z-index below the bug modal so detail modals cover the chat.
+ * - Selector, id, and class names are referenced by chatbot.js.
  * ================================================================== */
 
 .sleuth-host { font-family: inherit; }
@@ -98,6 +98,13 @@
   border: 2px solid var(--bg, #0a0e1a);
   z-index: 1;
   box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+
+/* On phones the FAB is replaced by the "Ask Sleuth" button in the top chrome.
+   It remains in the DOM (the chrome button forwards its click) but is hidden.
+   Declared after the .sleuth-fab base rule so it overrides the base display. */
+@media (max-width: 900px) {
+  .sleuth-fab { display: none; }
 }
 
 /* ---------- Panel ---------- */

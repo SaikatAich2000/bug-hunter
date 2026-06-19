@@ -1030,8 +1030,8 @@ def update_bug(
                 bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
             )
         if newly_assigned:
-            # No ``exclude``: a self-assignment should still notify you (you
-            # were just put on the hook for this item).
+            # No ``exclude``: a self-assignment still notifies the actor, since
+            # they are now assigned to this item.
             notification_service.notify(
                 db, list(new_ids), kind="assigned", background=background,
                 title=f"Assigned to {_itype} #{bug.id}",

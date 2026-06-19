@@ -50,6 +50,9 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     setView,
     roleRank,
     currentUser,
+    sidebarCollapsed,
+    toggleSidebarCollapsed,
+    health,
   } = useApp();
 
   // Same VIEW_MIN_ROLE gate the TopChrome nav uses — the mobile drawer nav and
@@ -135,6 +138,17 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
       id="sidebar"
       aria-label="Projects and team"
     >
+      {/* Mobile-only brand header. On phones the chrome bar shows only the
+          logo, so the drawer carries the wordmark and version. Hidden on
+          desktop via CSS, where the chrome shows the brand. */}
+      <div className="sidebar-brand">
+        <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
+        <div className="wm">
+          <b>BUG<span>HUNTER</span></b>
+          <small>{health ? `Version ${health.version}` : "Version 3.0"}</small>
+        </div>
+      </div>
+
       {/* Mobile-only view nav — on desktop the chrome bar owns the view nav,
           so this is hidden via CSS (≥900px). On phones the chrome nav is
           hidden and this drawer becomes the way to switch views. */}
@@ -314,6 +328,62 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
           </ul>
         </section>
       )}
+
+      {/* Collapse control, pinned to the bottom of the rail. On desktop it
+          narrows the sidebar to an icon strip (the chevron rotates to indicate
+          expand). Hidden on the mobile drawer, where the close button below
+          replaces it. State is held in AppContext, which toggles the
+          body.sidebar-collapsed class and persists the choice to localStorage. */}
+      <button
+        type="button"
+        className="sidebar-collapse-btn"
+        onClick={toggleSidebarCollapsed}
+        aria-controls="sidebar"
+        aria-expanded={!sidebarCollapsed}
+        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        <svg
+          className="collapse-icon"
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M15 18l-6-6 6-6" />
+        </svg>
+        <span className="collapse-label">Collapse sidebar</span>
+      </button>
+
+      {/* Mobile-only counterpart to the collapse control: same footer styling,
+          but it closes the off-canvas drawer via onNavigate. Hidden on desktop,
+          where the collapse button above is shown instead. */}
+      <button
+        type="button"
+        className="sidebar-close-btn"
+        onClick={() => onNavigate?.()}
+        aria-controls="sidebar"
+        title="Close menu"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+        <span>Close menu</span>
+      </button>
     </aside>
   );
 }

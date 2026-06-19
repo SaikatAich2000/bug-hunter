@@ -328,6 +328,15 @@ def test_parser_fuzzy_column_mapping(admin_client):
     assert specs[0]["priority"] == "High"
 
 
+def test_parser_fuzzy_column_skips_empty_cells(admin_client):
+    from app.chatbot import ingest
+    # A leading, non-matching column with an EMPTY value forces the fuzzy
+    # matcher to skip a blank cell (ingest.py:108-109) before it reaches the
+    # word-matching column ("Bug Summary" → title) further along the row.
+    specs = ingest._rows_to_specs([["Notes", "Bug Summary"], ["", "My real title here"]])
+    assert specs[0]["title"] == "My real title here"
+
+
 def test_parser_synonyms_resolve(admin_client):
     from app.chatbot import ingest
     spec = ingest._clean_spec({"title": "synonym bug", "priority": "p1", "type": "story", "env": "staging"})
@@ -379,6 +388,13 @@ def test_parser_xlsx_single_column_list(admin_client):
 def test_parser_xlsx_empty_sheet(admin_client):
     from app.chatbot import ingest
     assert ingest._specs_from_xlsx(_xlsx_bytes([])) == []
+
+
+def test_document_text_empty_xlsx_returns_blank(admin_client):
+    from app.chatbot import ingest
+    # An xlsx with no rows yields no text (ingest.py:347-348), so extract_specs
+    # won't feed an empty document to the AI layer.
+    assert ingest._document_text("x.xlsx", _xlsx_bytes([])) == ""
 
 
 def test_parser_comma_doc_with_no_rows_falls_to_lines(admin_client):

@@ -73,6 +73,13 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Prevent horizontal page scrolling. Decorative aurora blobs (auth pages)
+     and occasional wide children bleed past the right edge; clipping at the
+     root keeps the viewport aligned. Wide content such as tables scrolls
+     inside its own .table-scroll container, and position:fixed overlays
+     (modals, drawer, popovers) are not affected by this clip. */
+  overflow-x: hidden;
+  max-width: 100%;
 }
 
 .kpi-num, .col-id, .att-count, .session-line3,
@@ -385,6 +392,31 @@ body {
 .chrome .spacer { flex: 1; }
 .chrome-right { display: flex; align-items: center; gap: 12px; flex: none; }
 
+/* Mobile-only "Ask Sleuth" chrome button (desktop uses the floating FAB). The
+   ≤900px block below flips it to inline-flex and hides the FAB. */
+.chrome-sleuth-btn {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 13px 0 9px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 999px;
+  background: var(--chrome-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--chrome-fg-strong);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.chrome-sleuth-btn:hover { background: var(--accent-soft); }
+.chrome-sleuth-btn:active { transform: scale(0.97); }
+.chrome-sleuth-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.chrome-sleuth-logo { width: 20px; height: 20px; flex: none; display: block; }
+
 /* ---------- Supernav: work-item type tabs + search ---------- */
 .supernav {
   position: relative;
@@ -427,6 +459,10 @@ body {
   display: grid;
   grid-template-columns: 236px 1fr;
   height: calc(100vh - 98px);
+  /* Animate the rail column width when the sidebar collapses or expands.
+     Browsers interpolate the px track; the global prefers-reduced-motion
+     guard above disables the transition. */
+  transition: grid-template-columns 0.26s var(--ease-out);
 }
 
 /* ---------- Page header ---------- */
@@ -507,12 +543,41 @@ body {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
+  /* Clip horizontally so content is revealed cleanly as the rail animates
+     its width, rather than wrapping during the transition. */
+  overflow-x: hidden;
+  transition: padding 0.26s var(--ease-out);
   z-index: 10;
 }
-/* Mobile drawer view-nav. The desktop chrome bar owns the view nav, so this
-   is collapsed on wide screens and only unfolds inside the phone drawer
-   (see the max-width:900px block, where .chrome .nav hides + this appears). */
+/* Mobile drawer view-nav. The desktop chrome bar owns the view nav, so this is
+   hidden on wide screens and shown only inside the phone drawer (see the
+   max-width:900px block, where .chrome .nav is hidden and this is shown). */
 .sidebar-nav { display: none; }
+
+/* Mobile drawer brand header — wordmark and version at the top of the drawer.
+   Hidden on desktop, where the chrome bar shows the brand; the ≤900px block
+   shows it. */
+.sidebar-brand { display: none; }
+.sidebar-brand .logo { width: 38px; height: 38px; border-radius: 50%; flex: none; }
+.sidebar-brand .wm { line-height: 1.1; }
+.sidebar-brand .wm b {
+  display: block;
+  font-size: 18px;
+  letter-spacing: 0.14em;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.sidebar-brand .wm b span { color: var(--accent); }
+.sidebar-brand .wm small {
+  display: block;
+  font-size: 10px;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-top: 3px;
+  font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-btn {
@@ -552,6 +617,58 @@ body {
   box-shadow: 0 0 10px var(--accent-glow);
 }
 .nav-icon { font-size: 16px; flex-shrink: 0; }
+
+/* ---------- Sidebar collapse toggle (footer control) ----------
+   margin-top:auto pins it to the bottom of the flex-column rail; sticky keeps
+   it visible when the project/team lists scroll beneath it. The collapsed
+   appearance (narrow rail, hidden label, rotated chevron) is driven by the
+   body.sidebar-collapsed class — see the @media (min-width:901px) block. */
+.sidebar-collapse-btn,
+.sidebar-close-btn {
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border: none;
+  border-top: 1px solid var(--border);
+  /* Fade so list rows scrolling beneath the sticky footer stay legible. */
+  background: linear-gradient(180deg, transparent, var(--bg) 45%);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.sidebar-collapse-btn:hover,
+.sidebar-close-btn:hover { color: var(--text); background: var(--accent-soft); }
+.sidebar-collapse-btn:focus-visible,
+.sidebar-close-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.sidebar-collapse-btn .collapse-icon,
+.sidebar-close-btn svg { flex: none; transition: transform 0.2s var(--ease-out); }
+/* Hidden on desktop, where the collapse button is shown instead; the ≤900px
+   block shows the close button and hides the collapse button. */
+.sidebar-close-btn { display: none; }
+/* When collapsed, rotate the chevron to indicate the expand action. */
+body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(180deg); }
+
+/* Desktop only: collapsing narrows the rail to an icon strip and hides the
+   lists. The mobile drawer (≤900px) ignores the collapse state; there the
+   sidebar is off-canvas, controlled by the menu button and backdrop. */
+@media (min-width: 901px) {
+  body.sidebar-collapsed .frame { grid-template-columns: 46px 1fr; }
+  body.sidebar-collapsed .sidebar { padding-left: 0; padding-right: 0; overflow: hidden; }
+  body.sidebar-collapsed .sidebar > .side-section,
+  body.sidebar-collapsed .sidebar > .sidebar-nav { display: none; }
+  body.sidebar-collapsed .sidebar-collapse-btn { justify-content: center; padding: 11px 0; }
+  body.sidebar-collapsed .sidebar-collapse-btn .collapse-label { display: none; }
+}
 
 .side-section { display: flex; flex-direction: column; gap: 4px; }
 .side-section-header {
@@ -736,6 +853,20 @@ body {
 @keyframes notif-pop {
   from { opacity: 0; transform: translateY(-6px) scale(0.985); }
   to { opacity: 1; transform: none; }
+}
+/* On phones the bell is not at the viewport edge, so a 380px panel anchored
+   with right:0 overflows the left side. Anchor it to the viewport instead:
+   a fixed sheet spanning the width with 8px gutters, below the 56px chrome bar. */
+@media (max-width: 600px) {
+  .notif-panel {
+    position: fixed;
+    top: 60px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+    max-height: min(560px, 74vh);
+  }
 }
 .notif-panel-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -1898,9 +2029,9 @@ fieldset.field > legend {
   font-family: inherit;
   outline: none;
   width: 100%;
-  /* Subtle inner shadow + soft outline give fields a visible "you can
-     type here" boundary. The previous design used --bg-elev-2 with the
-     soft --border, which made every field look greyed-out and disabled. */
+  /* Subtle inner shadow and outline give input fields a clear editable
+     boundary, rather than the greyed-out look of the earlier --bg-elev-2
+     plus soft --border combination. */
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02),
               0 1px 2px rgba(0, 0, 0, 0.18);
   transition: border-color 0.15s ease, box-shadow 0.15s ease,
@@ -2661,6 +2792,26 @@ input[type="checkbox"]:checked::after {
 }
 @keyframes toast-rise { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .toast[hidden] { display: none; }
+
+/* On phones the toast spans the viewport (12px gutters) instead of using the
+   centered pill layout: pinning it to both edges conflicts with the base
+   translateX(-50%), so the X transform is reset and a translateY-only entrance
+   is used. Long messages wrap, and the toast clears the bottom safe-area inset. */
+@media (max-width: 600px) {
+  .toast {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    max-width: none;
+    width: auto;
+    text-align: center;
+    white-space: normal;
+    border-radius: 14px;
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    animation-name: toast-rise-m;
+  }
+}
+@keyframes toast-rise-m { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 /* Variants stay fully OPAQUE so the text is always readable — a solid surface
    fallback first, then a subtle opaque tint via color-mix (never a translucent
    soft tint, which washed out over the page background). */
@@ -2699,7 +2850,16 @@ input[type="checkbox"]:checked::after {
 @media (max-width: 900px) {
   /* The frame collapses to a single column; the sidebar becomes an off-canvas
      drawer toggled by the chrome menu button. */
-  .frame { grid-template-columns: 1fr; }
+  .frame {
+    grid-template-columns: 1fr;
+    /* Remove the desktop stacking context. On desktop .frame is
+       position:relative with z-index:5, which contains the off-canvas sidebar
+       (z-index:45). The mobile backdrop sits at the document root (z-index:44),
+       so it would otherwise paint over the entire frame, including the open
+       drawer. z-index:auto lets the fixed sidebar and backdrop stack against
+       the root instead. */
+    z-index: auto;
+  }
   .sidebar {
     position: fixed;
     top: 0; left: 0;
@@ -2713,6 +2873,10 @@ input[type="checkbox"]:checked::after {
     z-index: 45;
   }
   .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-xl); }
+  /* The collapse control is a desktop affordance; on the mobile drawer its
+     twin — the close button — takes over (closes the off-canvas drawer). */
+  .sidebar-collapse-btn { display: none; }
+  .sidebar-close-btn { display: flex; }
   .chrome .menu-btn { display: inline-flex; width: 40px; height: 40px; }
   /* On phones the brand version line is dropped to keep the bar tidy. */
   .brandmark .wm small { display: none; }
@@ -2725,6 +2889,17 @@ input[type="checkbox"]:checked::after {
     gap: 2px;
     margin-bottom: 8px;
     padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  /* Sleuth moves from the bottom-right FAB to a labelled top button. */
+  .chrome-sleuth-btn { display: inline-flex; }
+  /* Full brand (logo + wordmark + version) at the top of the drawer. */
+  .sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 2px 6px 14px;
+    margin-bottom: 6px;
     border-bottom: 1px solid var(--border);
   }
 
@@ -2741,9 +2916,12 @@ input[type="checkbox"]:checked::after {
   .filter-bar { padding: 0 12px 12px; }
   .chrome { padding: 0 12px; gap: 12px; }
   .pagehead { padding: 16px 12px 4px; }
-  /* Compact the right cluster: drop the profile name (avatar stays) so the
-     Ask Sleuth pill + bell + avatar stay on one row. */
+  /* Compact the right cluster: hide the profile name (avatar remains) so the
+     Ask Sleuth button, bell, and avatar fit on one row. The brand wordmark is
+     also hidden (logo only); the wordmark and version are shown in the drawer
+     brand header instead. */
   .chrome-right { gap: 8px; }
+  .brandmark .wm { display: none; }
   .profile-name, .profile-caret { display: none; }
   .profile-btn { padding: 0; }
   .view { padding: 0 12px 24px; }
@@ -2810,6 +2988,24 @@ input[type="checkbox"]:checked::after {
   .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 }
 
+/* The supernav type-tabs plus the search box total roughly 900px on one row,
+   which overflows on tablets and phones. Below 900px the flex spacer is
+   removed, the tab strip scrolls horizontally within its own track, and the
+   search box is given a fixed compact width on the right. */
+@media (max-width: 900px) {
+  .supernav .grow { display: none; }
+  .supernav .type-tabs {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;                 /* Firefox */
+    -ms-overflow-style: none;              /* old Edge */
+  }
+  .supernav .type-tabs::-webkit-scrollbar { display: none; }  /* WebKit */
+  .supernav .search-wrap { flex: 0 0 auto; max-width: 46vw; }
+}
+
 /* Phone landscape & smaller — improve touch targets and modal density. */
 @media (max-width: 600px) {
   /* Bigger comfortable tap targets — Apple HIG / Material both ~44px.
@@ -2843,8 +3039,8 @@ input[type="checkbox"]:checked::after {
   .bug-table { min-width: 360px; }
   .chrome { gap: 8px; }
   .pagehead h1 { font-size: 17px; }
-  /* Toast: avoid clipping at viewport edge. */
-  #toast { left: 12px; right: 12px; max-width: none; }
+  /* Toast responsiveness is handled by the @media (max-width: 600px) .toast
+     rule above (full-width banner, transform reset). */
   /* Login card: tighten padding so the form fits without scrolling on
      small phones (iPhone SE etc.). */
   .auth-card { padding: 24px 18px; border-radius: 11px; }
@@ -3337,6 +3533,7 @@ input[type="checkbox"]:checked::after {
   right: 0;
   z-index: 30;
   min-width: 200px;
+  max-width: calc(100vw - 24px);
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -4112,6 +4309,8 @@ input[type="checkbox"]:checked::after {
   position: fixed;
   z-index: 100000;
   min-width: 180px;
+  /* Never wider than the viewport (the JS placer clamps left, not width). */
+  max-width: calc(100vw - 16px);
   max-height: 320px;
   overflow-y: auto;
   background: var(--bg-elev);

@@ -7,9 +7,9 @@
  *
  * Controlled: `selected` is the array of staged items; toggling a row calls
  * onChange with the next array. `excludeIds` removes the current item and
- * anything already linked so you can't pick a duplicate or self-link. The list
- * is NOT restricted to bugs — GET /bugs returns every item type; the type tabs
- * scope it server-side.
+ * anything already linked, preventing duplicate or self-links. The list is not
+ * restricted to bugs — GET /bugs returns every item type; the type tabs scope
+ * it server-side.
  *
  * Styling: the search input, type tabs and popover all use the shared field /
  * surface tokens so the control matches every other dropdown in light + dark.

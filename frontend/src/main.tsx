@@ -6,8 +6,8 @@
  * which executes before first render anyway).
  *
  * The server already redirects unauthenticated requests for "/" to
- * /login.html; the client-side check below is belt-and-braces, covering cached
- * pages and revoked sessions.
+ * /login.html; the client-side check below is a redundant guard that also
+ * covers cached pages and revoked sessions.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -19,6 +19,13 @@ import "./styles/chatbot.css";
 
 document.documentElement.dataset.theme =
   localStorage.getItem("theme") || "dark";
+
+// Apply the persisted sidebar-collapsed state before first paint so a reload
+// renders the collapsed rail directly rather than animating from the expanded
+// state. AppContext keeps the class in sync thereafter.
+if (localStorage.getItem("sidebarCollapsed") === "1") {
+  document.body.classList.add("sidebar-collapsed");
+}
 
 async function boot(): Promise<void> {
   let me: MeOut;

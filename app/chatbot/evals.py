@@ -6,7 +6,7 @@ faithfulness (does it contradict or invent anything?). A weak verdict only
 appends a short "please verify" caveat — the judge can NEVER rewrite the answer,
 block the reply, or trigger a write, and a judge failure fails open (the answer
 is returned unchanged). It complements the deterministic citation check in
-verify.py, which always runs for free; this catches the subtler unfaithfulness a
+verify.py, which always runs; this catches the subtler unfaithfulness a
 citation match cannot.
 
 Like agent.py, the logic here is pure: the model call is injected, so the judge

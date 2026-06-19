@@ -216,7 +216,7 @@ class Settings:
     # only appends a short "please verify" caveat — the judge can never rewrite
     # an answer, block a reply, or trigger a write, and a judge failure fails
     # open (the answer is returned unchanged). Complements the deterministic
-    # citation check (SLEUTH_VERIFY_ANSWERS), which always runs for free.
+    # citation check (SLEUTH_VERIFY_ANSWERS), which always runs.
     SLEUTH_EVAL_ENABLED: bool = _env_bool("SLEUTH_EVAL_ENABLED", False)
     # Below this confidence (0..1) the answer gets the verify-it-yourself caveat.
     SLEUTH_EVAL_MIN_SCORE: float = _env_float("SLEUTH_EVAL_MIN_SCORE", 0.5, minimum=0.0)

@@ -40,6 +40,8 @@ AUDIT = SRC / "views" / "AuditView.tsx"
 SESSIONS = SRC / "views" / "SessionsView.tsx"
 REPORTS = SRC / "views" / "ReportsView.tsx"
 EVENTS = SRC / "views" / "EventsView.tsx"
+APPCONTEXT = SRC / "state" / "AppContext.tsx"
+MAIN = SRC / "main.tsx"
 
 
 def _read(p: Path) -> str:
@@ -120,13 +122,17 @@ def test_drawer_nav_css_is_desktop_hidden_mobile_shown():
 def test_frame_layout_and_drawer_outranks_chrome():
     """The shipped layout is the two-tier mockup: a full-width chrome (brand +
     nav) and supernav above a fixed 236px library-rail + scrolling main (the
-    `.frame` grid). Sidebar and nav coexist — no collapse. On phones the
-    off-canvas drawer must outrank the chrome (z 20) + backdrop (z 44)."""
+    `.frame` grid). The rail can collapse to a narrow strip via the
+    `body.sidebar-collapsed` class (see the collapse-feature tests), but the
+    earlier `--rail-w` / `.app-shell` collapsible-grid experiment was reverted.
+    On phones the off-canvas drawer must outrank the chrome (z 20) + backdrop
+    (z 44)."""
     css = _read(STYLES)
     assert ".frame {" in css, "the two-tier frame grid must exist"
     assert "grid-template-columns: 236px 1fr" in css, "frame = fixed rail + main"
     assert ".brandmark" in css, "the brand mark lives in the chrome"
-    # The collapsible-rail layout was reverted.
+    # The earlier custom-property-driven collapsible-rail layout was reverted in
+    # favour of the body.sidebar-collapsed approach.
     assert "--rail-w" not in css, "collapsible-rail custom property must be gone"
     assert ".app-shell" not in css, "the app-shell grid wrapper must be gone"
     assert "z-index: 45" in css, "mobile drawer must sit above chrome + backdrop"
@@ -178,11 +184,55 @@ def test_reduced_radius_token_scale_present():
         assert token in css, f"reduced-radius token {token} missing"
 
 
-@pytest.mark.parametrize("dead", [".topbar", ".page-intro", "sidebar-collapsed",
+@pytest.mark.parametrize("dead", [".topbar", ".page-intro",
                                   ".side-footer", ".actor-select"])
 def test_dead_selectors_removed(dead):
     css = _read(STYLES)
     assert dead not in css, f"dead selector {dead!r} should have been removed"
+
+
+# ---------------------------------------------------------------------------
+# 5b. Collapse Sidebar (GitLab-style rail collapse) — a real, persisted feature
+#     keyed off `body.sidebar-collapsed`. These pin the wiring end to end so a
+#     refactor can't silently break the collapse without tripping CI.
+# ---------------------------------------------------------------------------
+def test_collapse_sidebar_button_wired_in_sidebar():
+    """The footer collapse control toggles the shared state and exposes its
+    open/closed status to assistive tech."""
+    src = _read(SIDEBAR)
+    assert 'className="sidebar-collapse-btn"' in src, "collapse control must render"
+    assert "toggleSidebarCollapsed" in src, "the button must call the toggle"
+    assert "sidebarCollapsed" in src, "the button must read the collapsed state"
+    assert "aria-expanded" in src, "collapse control must report expanded state"
+
+
+def test_collapse_state_is_persisted_in_appcontext():
+    """The collapsed flag survives reloads via localStorage and drives the
+    `body.sidebar-collapsed` class the CSS keys off."""
+    src = _read(APPCONTEXT)
+    assert "sidebarCollapsed" in src and "toggleSidebarCollapsed" in src
+    assert 'readLs("sidebarCollapsed"' in src, "initial state must hydrate from storage"
+    assert 'localStorage.setItem("sidebarCollapsed"' in src, "toggle must persist"
+    assert '"sidebar-collapsed"' in src, "the flag must toggle the body class"
+
+
+def test_collapse_class_applied_before_first_paint():
+    """The persisted state is applied in main.tsx before React mounts so a
+    reload doesn't flash the expanded rail."""
+    src = _read(MAIN)
+    assert 'localStorage.getItem("sidebarCollapsed")' in src
+    assert '"sidebar-collapsed"' in src, "main must add the body class pre-paint"
+
+
+def test_collapse_css_is_live_and_animated():
+    """`body.sidebar-collapsed` narrows the rail at the desktop breakpoint and
+    the chevron rotates; the grid width change is transitioned, not abrupt."""
+    css = _read(STYLES)
+    assert "body.sidebar-collapsed" in css, "the collapse selector must be live"
+    assert ".sidebar-collapse-btn" in css, "the collapse control must be styled"
+    assert "body.sidebar-collapsed .frame" in css, "collapsing must narrow the frame grid"
+    assert "transition: grid-template-columns" in css, "the collapse must animate"
+    assert "rotate(180deg)" in css, "the collapse chevron must flip on toggle"
 
 
 # ---------------------------------------------------------------------------

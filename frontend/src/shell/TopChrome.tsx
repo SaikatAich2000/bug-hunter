@@ -61,6 +61,19 @@ export default function TopChrome({ onOpenMobile }: Props) {
       <div className="spacer"></div>
 
       <div className="chrome-right">
+        {/* Mobile-only Sleuth trigger. On phones the bottom-right floating FAB
+            is hidden; this button opens the same panel by forwarding the click
+            to the FAB, keeping the panel's open/close logic in one place. */}
+        <button
+          type="button"
+          className="chrome-sleuth-btn"
+          aria-label="Ask Sleuth"
+          title="Ask Sleuth — the AI assistant"
+          onClick={() => document.getElementById("sleuthFab")?.click()}
+        >
+          <img className="chrome-sleuth-logo" src="/static/sleuth.svg" alt="" draggable={false} />
+          <span>Ask Sleuth</span>
+        </button>
         <NotificationsBell />
         <ProfileMenu />
       </div>

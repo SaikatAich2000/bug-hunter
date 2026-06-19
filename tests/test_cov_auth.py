@@ -418,6 +418,28 @@ def test_cov_client_ip_trust_enabled_uses_leftmost_xff(monkeypatch):
     assert _client_ip(Request(scope)) == "198.51.100.7"
 
 
+def test_cov_client_ip_trust_enabled_garbage_xff_falls_through(monkeypatch):
+    """With TRUST_PROXY_FORWARDED_FOR=True but a non-IP X-Forwarded-For value, a
+    crafted header can't poison the session/audit IP: ip_address() raises
+    ValueError, the except swallows it (routes/auth.py:120-121), and _client_ip
+    falls back to the real transport client host rather than persisting the
+    spoofed label."""
+    import app.config as config
+    monkeypatch.setattr(config.Settings, "TRUST_PROXY_FORWARDED_FOR", True)
+
+    from app.routes.auth import _client_ip
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http", "method": "POST", "path": "/api/auth/login",
+        "headers": [(b"x-forwarded-for", b"not-an-ip-address")],  # crafted, not an IP
+        "query_string": b"", "scheme": "http",
+        "server": ("testserver", 80), "client": ("10.20.30.40", 12345),
+        "raw_path": b"/api/auth/login",
+    }
+    assert _client_ip(Request(scope)) == "10.20.30.40"
+
+
 def test_cov_client_ip_no_client_returns_empty(monkeypatch):
     """When the request has no transport client at all, _client_ip returns ""
     (routes/auth.py:116). TRUST gate left at default False so we go straight to

@@ -46,7 +46,7 @@ app/
 │                # audit · sessions · reports · notifications · push
 ├── chatbot/     # Sleuth: nlu · classifier · llm · cloud_llm · redaction
 │                # rag · retrieval · verify · agent · evals (cloud grounding)
-│                # executor · actions · memory · excel · router
+│                # executor · actions · memory · excel · ingest · router
 ├── jobs/        # email_digest (scheduled digest job)
 └── static/      # built React bundle
 frontend/        # React + TypeScript SPA source (Vite) → builds into app/static

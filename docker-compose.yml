@@ -72,6 +72,12 @@ services:
       # The app talks to Postgres via the internal Docker DNS name `db`,
       # not via the host port mapping above.
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-bugtracker}:${POSTGRES_PASSWORD:-bugtracker_pw}@db:5432/${POSTGRES_DB:-bugtracker}
+      # Postgres pool sizing — lower on a very small VM (see .env.example).
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      # Hard ceiling on request body size (bytes); rejected with 413 before the
+      # body is read. Raise it for larger file uploads.
+      MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-62914560}
       APP_NAME: ${APP_NAME:-Bug Hunter}
       APP_VERSION: ${APP_VERSION:-3.0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -88,11 +94,34 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       SLEUTH_RAG_ENABLED: ${SLEUTH_RAG_ENABLED:-0}
+      # Read-only grounding / agent / evaluation enhancements (all OFF by
+      # default, each independent). Passed through so enabling them in .env
+      # actually reaches the container.
+      SLEUTH_RETRIEVAL_ENABLED: ${SLEUTH_RETRIEVAL_ENABLED:-0}
+      SLEUTH_VERIFY_ANSWERS: ${SLEUTH_VERIFY_ANSWERS:-0}
+      SLEUTH_AGENT_ENABLED: ${SLEUTH_AGENT_ENABLED:-0}
+      SLEUTH_AGENT_MAX_STEPS: ${SLEUTH_AGENT_MAX_STEPS:-4}
+      SLEUTH_EVAL_ENABLED: ${SLEUTH_EVAL_ENABLED:-0}
+      SLEUTH_EVAL_MIN_SCORE: ${SLEUTH_EVAL_MIN_SCORE:-0.5}
+      # Cloud-layer tuning (only relevant when the cloud layer is on).
+      GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-text-embedding-004}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen-2.5-7b-instruct:free}
+      SLEUTH_CLOUD_TIMEOUT_S: ${SLEUTH_CLOUD_TIMEOUT_S:-20}
+      SLEUTH_CLOUD_MAX_TOKENS: ${SLEUTH_CLOUD_MAX_TOKENS:-600}
+      SLEUTH_RAG_TOP_K: ${SLEUTH_RAG_TOP_K:-5}
+      # Persist Sleuth conversations to the additive chat_* tables (safe on).
+      SLEUTH_CHAT_MEMORY_ENABLED: ${SLEUTH_CHAT_MEMORY_ENABLED:-true}
 
       # Authentication.
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Interactive API docs (/docs, /redoc): always on in dev, off once
+      # COOKIE_SECURE=true (prod) unless forced on here.
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-false}
+      # Trust X-Forwarded-For only behind a real reverse proxy, so the rate
+      # limiter buckets per client IP. Leave false on a direct/edge deploy.
+      TRUST_PROXY_FORWARDED_FOR: ${TRUST_PROXY_FORWARDED_FOR:-false}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@bughunter.local}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-ChangeMe123!}
       BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Admin}
@@ -133,8 +162,13 @@ services:
       # host path in .env does not exist inside the container.
       WEB_PUSH_ENABLED: ${WEB_PUSH_ENABLED:-false}
       FCM_CREDENTIALS_FILE: /app/secrets/firebase-admin.json
+      # Public web-app config served to the browser via GET /api/push/config.
+      # All five are required for the client SDK to register for push.
+      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
       FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
+      FIREBASE_APP_ID: ${FIREBASE_APP_ID:-}
       FIREBASE_VAPID_KEY: ${FIREBASE_VAPID_KEY:-}
     volumes:
       # Mount the Firebase service-account JSON into the container (read-only)

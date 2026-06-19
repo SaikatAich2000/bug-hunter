@@ -202,6 +202,29 @@ preserved.
   `activityIcon` keeps the audit and item feeds consistent with stable row keys,
   and the obsolete `interest-cohort` Permissions-Policy token is removed.
 
+### UX polish & hardening — 2026-06-19
+
+Front-end responsiveness plus a fourth security/reliability review. Code/config
+only or additive DB; production data is untouched and the legacy `changeme`
+password exception is preserved.
+
+- **Collapsible sidebar.** A footer control collapses the library rail to a
+  narrow strip; the state persists across reloads and is applied before first
+  paint to avoid a flash, with the chevron and grid width animated.
+- **Full mobile responsiveness.** A pass across every view and overlay so the UI
+  holds at phone widths: the off-canvas drawer carries the brand, version, and a
+  bottom close control, Sleuth moves to a top "Ask Sleuth" button, and toasts,
+  the notifications panel, menus, and modals stay within the viewport.
+- **Reliability.** Bulk actions gained per-row optimistic concurrency (an
+  `expected_versions` map yields a `conflicts` tally), matching single-item
+  edits. Attachment downloads slice ranges in SQL without loading the blob, the
+  daily digest sends outside the row-lock transaction, and `_env_int` /
+  `_env_float` parse crash-safely with clamping.
+- **Security.** Login is no longer CSRF-exempt (a cross-origin login POST is
+  rejected). A regular user cannot create, comment on, or attach to
+  tasks/requirements (per-type edit rules), and a deactivated user can no longer
+  be set as a new reporter or assignee.
+
 ## [2.10] — 2026-06-11
 
 Maintenance and quality pass. No DB schema changes.

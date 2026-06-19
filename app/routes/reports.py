@@ -65,9 +65,9 @@ class FilterIn(BaseModel):
     statuses: list[str] = Field(default_factory=list)
     priorities: list[str] = Field(default_factory=list)
     environments: list[str] = Field(default_factory=list)
-    project_ids: list[int] = Field(default_factory=list)
-    assignee_ids: list[int] = Field(default_factory=list)
-    reporter_ids: list[int] = Field(default_factory=list)
+    project_ids: list[int] = Field(default_factory=list, max_length=1000)
+    assignee_ids: list[int] = Field(default_factory=list, max_length=1000)
+    reporter_ids: list[int] = Field(default_factory=list, max_length=1000)
     event_id: Optional[int] = None
     include_not_a_bug: bool = False
     text_search: Optional[str] = Field(default=None, max_length=400)
@@ -195,20 +195,27 @@ def export_xlsx(
     # `rows`; aggregated reports off the `detail_rows` drill-down).
     settings = get_settings()
     n_rows = max(result.total, len(result.detail_rows))
-    if n_rows > settings.MAX_REPORT_ROWS:
+    # `truncated` covers aggregates (throughput/TTR/timeline) whose visible row
+    # count stays small even when the underlying status-change scan hit the cap —
+    # without it the export would silently ship under-counted totals.
+    if n_rows > settings.MAX_REPORT_ROWS or result.truncated:
         raise HTTPException(
             status_code=413,
             detail=(
-                f"This export matches {n_rows} rows, above the "
-                f"{settings.MAX_REPORT_ROWS}-row limit. Narrow the date range "
-                "or add filters and try again."
+                f"This export exceeds the {settings.MAX_REPORT_ROWS}-row limit. "
+                "Narrow the date range or add filters and try again."
             ),
         )
     try:
         payload_bytes = build_workbook_bytes(result)
     except XlsxBuildError as exc:
+        # Log the specific cause (e.g. "openpyxl not installed") server-side, but
+        # don't echo server config/dependency state back to the client.
         logger.exception("XLSX build failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail="Could not build the report workbook. Please try again or contact an administrator.",
+        ) from exc
     filename = _safe_filename(payload.report_key, filters.label)
     safe_filename = filename.replace('"', "_").replace("\r", "").replace("\n", "")
     return StreamingResponse(

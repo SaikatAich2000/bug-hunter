@@ -34,7 +34,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import notification_service
-from app.auth import can_delete_event, can_edit_event, get_current_user
+from app.auth import can_delete_event, can_edit_bug, can_edit_event, get_current_user
 from app.database import get_db
 from app.email_service import (
     EventSnapshot, UserSnapshot,
@@ -142,7 +142,8 @@ def _event_brief(
     }
 
 
-def _bug_to_brief(bug: Bug, attachment_count: int = 0) -> dict:
+def _bug_to_brief(bug: Bug, actor: User, attachment_count: int = 0) -> dict:
+    item_type = getattr(bug, "item_type", None) or "Bug"
     return {
         "id": bug.id,
         "project_id": bug.project_id,
@@ -151,7 +152,7 @@ def _bug_to_brief(bug: Bug, attachment_count: int = 0) -> dict:
         "description": bug.description,
         "reporter": _user_brief(bug.reporter) if bug.reporter else None,
         "assignees": [_user_brief(a) for a in bug.assignees],
-        "item_type": getattr(bug, "item_type", None) or "Bug",
+        "item_type": item_type,
         "status": bug.status,
         "priority": bug.priority,
         "environment": bug.environment,
@@ -161,7 +162,13 @@ def _bug_to_brief(bug: Bug, attachment_count: int = 0) -> dict:
         "created_at": bug.created_at,
         "updated_at": bug.updated_at,
         "attachment_count": attachment_count,
-        "can_edit": True,
+        # Per-item permission, not a blanket True: a regular user can't edit a
+        # Task/Requirement, so the SPA shouldn't render an edit affordance they
+        # can't use. Matches the bugs endpoint's computed can_edit.
+        "can_edit": can_edit_bug(
+            actor, bug.reporter_id, [a.id for a in bug.assignees],
+            item_type=item_type,
+        ),
     }
 
 
@@ -257,11 +264,19 @@ def list_events(
 # ---------------------------------------------------------------------------
 # Detail (event + its items)
 # ---------------------------------------------------------------------------
+# Hard ceiling on items serialized for one event-detail response. Any user can
+# add an item to an event, so without a cap a large event would stream its
+# entire (eager-loaded) item set into one response — the same row-bound guard
+# every other list endpoint applies. The exact count is still shown via a
+# separate COUNT, so truncation is visible, not silent.
+_EVENT_ITEMS_MAX = 1000
+
+
 @router.get("/{event_id}", response_model=EventDetail)
 def get_event(
     event_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> dict:
     ev = db.scalar(
         select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
@@ -277,8 +292,11 @@ def get_event(
     # sees first when they open an event.
     ).where(Bug.event_id == event_id).order_by(
         Bug.updated_at.desc(), Bug.id.desc(),
-    )
+    ).limit(_EVENT_ITEMS_MAX)
     items = list(db.scalars(items_stmt).all())
+    total_items = db.scalar(
+        select(func.count(Bug.id)).where(Bug.event_id == event_id)
+    ) or 0
     # One aggregate query for attachment counts across every item — avoids
     # an N+1 round-trip when the event has many tasks.
     bug_ids = [b.id for b in items]
@@ -292,8 +310,8 @@ def get_event(
         att_counts = {}
     # We already loaded every item — pass the count so _event_brief doesn't
     # re-issue a COUNT(*) for the detail view (it would otherwise fall back).
-    payload = _event_brief(db, ev, item_count=len(items))
-    payload["items"] = [_bug_to_brief(b, int(att_counts.get(b.id, 0))) for b in items]
+    payload = _event_brief(db, ev, item_count=total_items)
+    payload["items"] = [_bug_to_brief(b, user, int(att_counts.get(b.id, 0))) for b in items]
     return payload
 
 

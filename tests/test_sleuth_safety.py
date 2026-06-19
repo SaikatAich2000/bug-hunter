@@ -54,6 +54,28 @@ from app.auth import hash_password
 from app.chatbot import executor, actions
 from app.chatbot.memory import store as memstore
 
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
+
+@pytest.fixture(autouse=True)
+def _rebind_app_modules():
+    """Re-bind this file's module-level app.* references to the current import
+    generation each test (conftest's `client` fixture purges `app.*` to rebind
+    the engine per test; stale refs would otherwise diverge from execute()'s)."""
+    import importlib
+    g = globals()
+    db_mod = importlib.import_module("app.database")
+    g["Base"], g["engine"], g["SessionLocal"] = (
+        db_mod.Base, db_mod.engine, db_mod.SessionLocal,
+    )
+    g["models"] = importlib.import_module("app.models")
+    g["hash_password"] = importlib.import_module("app.auth").hash_password
+    g["executor"] = importlib.import_module("app.chatbot.executor")
+    g["actions"] = importlib.import_module("app.chatbot.actions")
+    g["memstore"] = importlib.import_module("app.chatbot.memory").store
+    yield
+
+
 PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
 
@@ -64,7 +86,7 @@ def check(name, cond, detail=""):
         print(f"  PASS  {name}")
     else:
         FAILED.append((name, detail))
-        print(f"  FAIL  {name}  {detail}")
+        raise AssertionError(f"{name}: {detail}")
 
 
 def section(t):
@@ -269,18 +291,21 @@ def test_atomic_rollback() -> None:
 # ---------------------------------------------------------------------------
 def test_permission_denial_no_writes() -> None:
     section("Permission denial: regular user blocked AND no audit row")
-    admin_id, _, bob_id = seed()
+    _, _, bob_id = seed()
     db = SessionLocal()
     try:
         bob = db.get(models.User, bob_id)
         before_proj = db.query(models.Project).count()
         before_act = db.query(models.Activity).count()
 
-        # Bob is role=user. Create-project requires manager+.
-        executor.execute("create project Saturn", db, bob)
+        # Bob is role=user. Sleuth writes are admin-only, so the create is
+        # denied UP FRONT and never staged — the follow-up "yes" is then idle.
+        denied = executor.execute("create project Saturn", db, bob)
+        check("perm: regular user's write denied up front",
+              denied.intent == "action_denied", f"got {denied.intent}")
         resp = executor.execute("yes", db, bob)
-        check("perm: regular user creating project — error",
-              resp.intent == "action_error", f"got {resp.intent}")
+        check("perm: bob's 'yes' is idle — nothing was staged",
+              resp.intent == "confirm_idle", f"got {resp.intent}")
         after_proj = db.query(models.Project).count()
         after_act = db.query(models.Activity).count()
         check("perm: project NOT created",
@@ -298,16 +323,16 @@ def test_permission_denial_no_writes() -> None:
 # ---------------------------------------------------------------------------
 def test_concurrent_users_isolated() -> None:
     section("Concurrent users: Bob's 'yes' doesn't fire Alice's plan")
-    admin_id, alice_id, bob_id = seed()
+    admin_id, _, bob_id = seed()
     db = SessionLocal()
     try:
-        alice = db.get(models.User, alice_id)
+        admin = db.get(models.User, admin_id)
         bob = db.get(models.User, bob_id)
 
-        # Alice stages: close bug 1
-        executor.execute("close bug 1", db, alice)
-        sess_a = memstore.get(alice_id)
-        check("isolated: alice has pending",
+        # Admin stages: close bug 1 (Sleuth writes are admin-only).
+        executor.execute("close bug 1", db, admin)
+        sess_a = memstore.get(admin_id)
+        check("isolated: admin has pending",
               sess_a is not None and sess_a.pending_action is not None)
 
         # Bob's session is untouched.
@@ -316,7 +341,7 @@ def test_concurrent_users_isolated() -> None:
               sess_b is None or sess_b.pending_action is None)
 
         # Bob says "yes" — should be a no-op (confirm_idle), NOT execute
-        # Alice's plan.
+        # admin's plan.
         bug_status_before = db.get(models.Bug, 1).status
         resp = executor.execute("yes", db, bob)
         check("isolated: bob's 'yes' is confirm_idle",
@@ -327,14 +352,14 @@ def test_concurrent_users_isolated() -> None:
               bug_status_after == bug_status_before,
               f"before={bug_status_before} after={bug_status_after}")
 
-        # Alice's pending is still there.
-        sess_a2 = memstore.get(alice_id)
-        check("isolated: alice's pending survives bob's 'yes'",
+        # Admin's pending is still there.
+        sess_a2 = memstore.get(admin_id)
+        check("isolated: admin's pending survives bob's 'yes'",
               sess_a2 is not None and sess_a2.pending_action is not None)
 
-        # Now Alice confirms — works as expected.
-        resp_a = executor.execute("yes", db, alice)
-        check("isolated: alice's 'yes' executes",
+        # Now admin confirms — works as expected.
+        resp_a = executor.execute("yes", db, admin)
+        check("isolated: admin's 'yes' executes",
               resp_a.intent == "action_done", f"got {resp_a.intent}")
         db.expire_all()
         check("isolated: bug now Closed",

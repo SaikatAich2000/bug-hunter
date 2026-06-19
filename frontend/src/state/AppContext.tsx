@@ -376,12 +376,19 @@ export function AppProvider({
     }
   }, []);
 
+  // Monotonic token so an out-of-order poll response (or one that started before
+  // an optimistic mark-read) can't overwrite newer state. Bumped by the
+  // optimistic mutations below as well, so a poll in flight when the user reads
+  // a row is discarded instead of resurrecting the unread dot.
+  const notifSeqRef = useRef(0);
   const loadNotifications = useCallback(async () => {
+    const seq = ++notifSeqRef.current;
     try {
       const [list, count] = await Promise.all([
         api<NotificationOut[]>("/notifications?limit=50"),
         api<UnreadCountOut>("/notifications/unread_count"),
       ]);
+      if (seq !== notifSeqRef.current) return;  // superseded by a newer load/mutation
       setNotifications(list);
       setUnreadCount(count.unread);
     } catch (err) {
@@ -658,6 +665,7 @@ export function AppProvider({
   // ----- notification mutations --------------------------------------------
   const markNotificationRead = useCallback(async (id: number) => {
     // Optimistic: stamp read locally, decrement unread, then persist.
+    notifSeqRef.current++;  // discard any poll in flight so it can't un-read this
     setNotifications((prev) =>
       prev.map((n) =>
         n.id === id && !n.read_at ? { ...n, read_at: new Date().toISOString() } : n,
@@ -674,6 +682,7 @@ export function AppProvider({
 
   const markAllNotificationsRead = useCallback(async () => {
     const now = new Date().toISOString();
+    notifSeqRef.current++;
     setNotifications((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: now })));
     setUnreadCount(0);
     try {
@@ -685,6 +694,7 @@ export function AppProvider({
   }, [loadNotifications]);
 
   const deleteNotification = useCallback(async (id: number) => {
+    notifSeqRef.current++;
     setNotifications((prev) => {
       const gone = prev.find((n) => n.id === id);
       if (gone && !gone.read_at) setUnreadCount((c) => Math.max(0, c - 1));

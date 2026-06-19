@@ -39,10 +39,20 @@ export default function ChipPicker({ items, selected, onToggle, disabled, id }: 
         items.map((item) => (
           <span
             key={item.id}
+            role="button"
+            tabIndex={disabled ? -1 : 0}
+            aria-pressed={selectedSet.has(item.id)}
+            aria-disabled={disabled || undefined}
             className={`chip${selectedSet.has(item.id) ? " selected" : ""}`}
             data-id={item.id}
             onClick={() => {
               if (!disabled) onToggle(item.id);
+            }}
+            onKeyDown={(e) => {
+              if (!disabled && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onToggle(item.id);
+              }
             }}
           >
             {item.label}

@@ -5,6 +5,7 @@ and SQLite (tests / local dev fallback).
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, event
@@ -13,6 +14,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
+
+logger = logging.getLogger("bug_hunter.database")
 
 
 class Base(DeclarativeBase):
@@ -55,11 +58,14 @@ def _build_engine(url: str) -> Engine:
 
     # Postgres / others — Postgres enforces FKs natively. Use a small
     # connection pool that respects docker-compose start ordering via pre_ping.
-    return create_engine(
+    # Pool sizing is env-tunable: the defaults (5 + 10) suit a normal box, but a
+    # very small target (0.1 CPU / 512 MB) can lower DB_POOL_SIZE / DB_MAX_OVERFLOW
+    # so a traffic spike can't open 15 connections' worth of RAM at once.
+    eng = create_engine(
         url,
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=_settings.DB_POOL_SIZE,
+        max_overflow=_settings.DB_MAX_OVERFLOW,
         # Recycle connections older than 30 min so a proxy/load-balancer/Postgres
         # idle timeout can't hand a reaped connection back to the app, and fail
         # fast instead of blocking forever once the pool is exhausted.
@@ -68,6 +74,18 @@ def _build_engine(url: str) -> Engine:
         future=True,
     )
 
+    @event.listens_for(eng, "connect")
+    def _pg_utc_session(dbapi_conn, _):  # pragma: no cover - exercised only on PG
+        # Pin the session time zone to UTC so func.date() / date truncation
+        # happen in UTC, consistent with the Python-side .date() (also UTC) the
+        # reports use. Without this, a server TZ != UTC silently shifts the
+        # created-vs-resolved day buckets in the timeline report by a day.
+        cur = dbapi_conn.cursor()
+        cur.execute("SET TIME ZONE 'UTC'")
+        cur.close()
+
+    return eng
+
 
 _settings = get_settings()
 engine: Engine = _build_engine(_settings.DATABASE_URL)
@@ -75,7 +93,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 
 
 def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency that yields a session and always closes it."""
+    """FastAPI dependency that yields a session and always closes it.
+
+    Session.close() rolls back any in-progress (uncommitted) transaction, so an
+    exception on the request path can't hand a half-applied unit of work back to
+    the connection pool — no explicit rollback (and no broad ``except``) needed.
+    """
     db = SessionLocal()
     try:
         yield db
@@ -91,6 +114,20 @@ def _column_names(inspector, table: str) -> set[str]:
         return set()
 
 
+def _add_column_safely(conn, sql: str) -> None:
+    """Run one additive ALTER inside a SAVEPOINT so one table's failure can't
+    roll back the other additive columns (mirrors _create_index_safely). The
+    pass is best-effort and idempotent — a column that already exists or a
+    transient error is logged and skipped, not fatal to boot."""
+    from sqlalchemy import text
+    try:
+        with conn.begin_nested():
+            conn.execute(text(sql))
+    except SQLAlchemyError:
+        logger.warning("Additive column migration skipped (already applied or "
+                       "failed): %s", sql)
+
+
 def _add_missing_columns(conn) -> None:
     """ALTER-ADD any NEW columns the model declares but an existing DB lacks.
 
@@ -102,21 +139,27 @@ def _add_missing_columns(conn) -> None:
     value at the DB level). Runs BEFORE the index pass since new composite
     indexes may reference these columns.
     """
-    from sqlalchemy import inspect, text
+    from sqlalchemy import inspect
     inspector = inspect(engine)
 
     bug_cols = _column_names(inspector, "bugs")
     if bug_cols and "item_type" not in bug_cols:
-        conn.execute(text(
+        _add_column_safely(conn,
             "ALTER TABLE bugs ADD COLUMN item_type VARCHAR(20) "
-            "NOT NULL DEFAULT 'Bug'"
-        ))
+            "NOT NULL DEFAULT 'Bug'")
     if bug_cols and "event_id" not in bug_cols:
         # Nullable + no FK constraint at the ALTER level — SQLite can't add FKs
         # to existing tables with ALTER TABLE anyway, and on Postgres a missing
         # FK constraint is still preferable to a blocking migration. The
         # session-level relationship enforces referential integrity in code.
-        conn.execute(text("ALTER TABLE bugs ADD COLUMN event_id INTEGER"))
+        _add_column_safely(conn, "ALTER TABLE bugs ADD COLUMN event_id INTEGER")
+
+    # bugs.version — optimistic-concurrency counter added in the stale-edit
+    # hardening release. NOT NULL with a DEFAULT so every existing row gets 1 at
+    # the DB level without a backfill pass.
+    if bug_cols and "version" not in bug_cols:
+        _add_column_safely(conn,
+            "ALTER TABLE bugs ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
     # notifications.emailed_at — added in the daily-email-digest release.
     # Nullable timestamp; existing rows get NULL, and the digest job's lookback
@@ -130,9 +173,8 @@ def _add_missing_columns(conn) -> None:
             if engine.dialect.name == "postgresql"
             else "TIMESTAMP"
         )
-        conn.execute(text(
-            f"ALTER TABLE notifications ADD COLUMN emailed_at {tstype}"
-        ))
+        _add_column_safely(conn,
+            f"ALTER TABLE notifications ADD COLUMN emailed_at {tstype}")
 
 
 def _add_missing_indexes(conn) -> None:
@@ -151,8 +193,29 @@ def _add_missing_indexes(conn) -> None:
             continue
         for idx in table.indexes:
             if idx.name and idx.name not in existing:
-                # SQLAlchemy's own DDL emits dialect-correct CREATE INDEX.
-                idx.create(bind=conn, checkfirst=True)
+                _create_index_safely(conn, idx, table.name)
+
+
+def _create_index_safely(conn, idx, table_name: str) -> None:
+    """Create one missing index inside a SAVEPOINT so a single failure can't
+    abort the whole index pass (and crash boot).
+
+    The only realistic additive failure is adding a UNIQUE index to a table that
+    already holds duplicate rows. We don't want that to take the app down on a
+    later release: roll back just this index, log loudly, and keep going. The
+    non-unique queries still work; an operator can dedupe and reboot to get the
+    constraint. SAVEPOINT is honoured by both Postgres and SQLite.
+    """
+    try:
+        with conn.begin_nested():
+            # SQLAlchemy's own DDL emits dialect-correct CREATE INDEX.
+            idx.create(bind=conn, checkfirst=True)
+    except SQLAlchemyError:
+        logger.warning(
+            "Could not create index %s on %s — likely pre-existing duplicate "
+            "data for a unique index. Skipping; resolve the duplicates and "
+            "reboot to add it.", idx.name, table_name,
+        )
 
 
 def init_db() -> None:

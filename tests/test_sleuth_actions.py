@@ -40,6 +40,30 @@ from app.auth import hash_password
 from app.chatbot import executor, nlu
 from app.chatbot.memory import store as memstore
 
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
+
+@pytest.fixture(autouse=True)
+def _rebind_app_modules():
+    """Re-bind this file's module-level app.* references to the current import
+    generation each test. conftest's `client` fixture purges `app.*` from
+    sys.modules to rebind the engine per test; without this our `executor` /
+    `memstore` / `engine` would be stale while execute()'s internal imports
+    resolve to a fresh generation, so staged actions and DB reads would diverge."""
+    import importlib
+    g = globals()
+    db_mod = importlib.import_module("app.database")
+    g["Base"], g["engine"], g["SessionLocal"] = (
+        db_mod.Base, db_mod.engine, db_mod.SessionLocal,
+    )
+    g["models"] = importlib.import_module("app.models")
+    g["hash_password"] = importlib.import_module("app.auth").hash_password
+    g["executor"] = importlib.import_module("app.chatbot.executor")
+    g["nlu"] = importlib.import_module("app.chatbot.nlu")
+    g["memstore"] = importlib.import_module("app.chatbot.memory").store
+    yield
+
+
 PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
 
@@ -50,7 +74,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         print(f"  PASS  {name}")
     else:
         FAILED.append((name, detail))
-        print(f"  FAIL  {name}  {detail}")
+        raise AssertionError(f"{name}: {detail}")
 
 
 def section(title: str) -> None:
@@ -293,11 +317,14 @@ def test_create_project_perm() -> None:
         proj = db.query(models.Project).filter_by(name="Mercury").first()
         check("create_project (admin) — project exists", proj is not None)
 
-        # Regular user path — should be blocked at execute time
-        executor.execute("create project Saturn", db, bob)
+        # Regular user path — Sleuth writes are admin-only, so it's denied up
+        # front and never staged; the follow-up "yes" is then idle.
+        denied = executor.execute("create project Saturn", db, bob)
+        check("create_project (regular) — denied up front",
+              denied.intent == "action_denied", f"got {denied.intent}")
         resp = executor.execute("yes", db, bob)
-        check("create_project (regular) — blocked",
-              resp.intent == "action_error", f"got {resp.intent}")
+        check("create_project (regular) — 'yes' is idle",
+              resp.intent == "confirm_idle", f"got {resp.intent}")
         proj2 = db.query(models.Project).filter_by(name="Saturn").first()
         check("create_project (regular) — Saturn NOT created", proj2 is None)
     finally:

@@ -1478,6 +1478,9 @@ def test_cov_database_build_engine_postgres_branch(monkeypatch):
         return object()  # never connected
 
     monkeypatch.setattr(database, "create_engine", fake_create_engine)
+    # The PG branch registers a connect listener; stub it so the fake (non-Engine)
+    # return value doesn't have to satisfy the event machinery.
+    monkeypatch.setattr(database.event, "listens_for", lambda *a, **k: (lambda f: f))
     eng = database._build_engine("postgresql+psycopg://u:p@db/bh")
     assert eng is not None
     assert captured["kw"].get("pool_pre_ping") is True

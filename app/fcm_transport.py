@@ -110,6 +110,13 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
         logger.exception("FCM multicast send failed")
         return []
 
+    if len(resp.responses) != len(tokens):  # pragma: no cover - FCM returns 1:1
+        # Defensive: a partial/misaligned multicast response would silently drop
+        # the unmatched tail under zip(). Surface it rather than swallow it.
+        logger.warning(
+            "FCM returned %d responses for %d tokens — response/token mismatch",
+            len(resp.responses), len(tokens),
+        )
     dead: list[str] = []
     for tok, result in zip(tokens, resp.responses):
         if result.success:

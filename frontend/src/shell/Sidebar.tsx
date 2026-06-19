@@ -21,6 +21,18 @@ interface Props {
   readonly onNavigate?: () => void;
 }
 
+// Make a non-<button> interactive element keyboard-operable: Enter/Space fire
+// the same action as a click. Used for the swatch/avatar/label spans below,
+// which stay <span> (not <button>) to preserve the existing grid/CSS layout.
+function keyActivate(fn: () => void) {
+  return (e: { key: string; preventDefault: () => void }) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      fn();
+    }
+  };
+}
+
 export default function Sidebar({ mobileOpen, onNavigate }: Props) {
   const {
     projects,
@@ -172,13 +184,22 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
                   data-act="filter"
                   style={{ background: p.color }}
                   title="Toggle filter"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Toggle filter: ${p.name}`}
                   onClick={() => toggleProjectFilter(p.id)}
+                  onKeyDown={keyActivate(() => toggleProjectFilter(p.id))}
                 ></span>
                 <span
                   className="label-text"
                   data-act="open-project"
                   title={canManage ? `${p.name} — click to edit` : p.name}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => (canManage ? openProjectForm(p) : toggleProjectFilter(p.id))}
+                  onKeyDown={keyActivate(() =>
+                    canManage ? openProjectForm(p) : toggleProjectFilter(p.id),
+                  )}
                 >
                   {p.name}
                 </span>
@@ -241,7 +262,11 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
                     className="avatar"
                     data-act="filter-user"
                     title="Toggle filter"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Toggle filter: ${u.name}`}
                     onClick={() => toggleAssigneeFilter(u.id)}
+                    onKeyDown={keyActivate(() => toggleAssigneeFilter(u.id))}
                   >
                     {initials(u.name)}
                   </span>
@@ -249,7 +274,12 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
                     className="label-text"
                     data-act="open-user"
                     title={canManage ? `${u.name} — click to edit` : u.name}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => (canManage ? openUserForm(u) : toggleAssigneeFilter(u.id))}
+                    onKeyDown={keyActivate(() =>
+                      canManage ? openUserForm(u) : toggleAssigneeFilter(u.id),
+                    )}
                   >
                     {u.name}
                     {u.role ? <span className="meta"> · {u.role}</span> : null}

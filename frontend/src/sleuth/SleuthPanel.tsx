@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { sanitizeHtml } from "../lib/sanitize";
 import { useApp } from "../state/AppContext";
 import type { ChatBlock, ChatOut } from "../types";
 
@@ -241,7 +242,7 @@ function TextBlock({ block }: Readonly<{ block: ChatBlock }>) {
       .split(`<a href="#open-bug-${openBugId}"`)
       .join(`<a href="#open-bug-${openBugId}" data-open-bug="${openBugId}"`);
   }
-  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }} />;
 }
 
 function TableBlock({ block }: Readonly<{ block: ChatBlock }>) {
@@ -793,7 +794,7 @@ export default function SleuthPanel() {
                   <div
                     key={m.id}
                     className="sleuth-msg bot"
-                    dangerouslySetInnerHTML={{ __html: WELCOME_HTML }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(WELCOME_HTML) }}
                   />
                 );
               case "user":
@@ -815,10 +816,10 @@ export default function SleuthPanel() {
             }
           })}
           {typing && (
-            <div className="sleuth-typing" aria-label="Sleuth is thinking">
-              <span></span>
-              <span></span>
-              <span></span>
+            <div className="sleuth-typing" role="status" aria-label="Sleuth is thinking">
+              <span aria-hidden="true"></span>
+              <span aria-hidden="true"></span>
+              <span aria-hidden="true"></span>
             </div>
           )}
         </div>

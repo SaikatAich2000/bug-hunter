@@ -28,6 +28,7 @@ import io
 import json
 import logging
 import re
+from itertools import islice
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -217,6 +218,14 @@ def _looks_like_header(row: list[str]) -> bool:
     return any(c.strip().lower() in _HEADER_WORDS for c in row if c.strip())
 
 
+# Hard bounds on workbook scan size. A 5 MB xlsx is a zip and can declare an
+# enormous sheet (billions of cells — a decompression bomb); cap rows × cols so
+# the scan can't blow up memory before the downstream spec cap (MAX_SPECS) ever
+# applies. 5000 rows × 100 cols is far above any real bug-import sheet.
+_MAX_XLSX_ROWS = 5000
+_MAX_XLSX_COLS = 100
+
+
 def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
     """Read the first sheet's non-empty rows as lists of strings, or None if the
     bytes aren't a readable workbook (so the caller falls through to text)."""
@@ -227,9 +236,11 @@ def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
         return None
     try:
         ws = wb.active
+        # islice caps rows; the per-row slice caps columns. read_only iter_rows
+        # doesn't honour max_row/max_col reliably, so we bound the stream here.
         rows = [
-            [("" if c is None else str(c)) for c in row]
-            for row in ws.iter_rows(values_only=True)
+            [("" if c is None else str(c)) for c in row[:_MAX_XLSX_COLS]]
+            for row in islice(ws.iter_rows(values_only=True), _MAX_XLSX_ROWS)
         ]
     finally:
         wb.close()

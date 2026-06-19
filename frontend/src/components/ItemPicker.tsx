@@ -100,8 +100,13 @@ export default function ItemPicker({
     }
   }, []);
 
+  // Read the CURRENT type tab at fire time (not the keystroke-time value) so a
+  // trailing debounced search can't repopulate the list with the previous tab's
+  // results after the user switched tabs within the debounce window.
+  const typeFilterRef = useRef(typeFilter);
+  typeFilterRef.current = typeFilter;
   const debouncedSearch = useRef(
-    debounce((q: string, type: TypeKey) => void runSearch(q, type), 200),
+    debounce((q: string) => void runSearch(q, typeFilterRef.current), 200),
   ).current;
 
   // Open → focus search + load an initial page for the active type tab.
@@ -222,7 +227,7 @@ export default function ItemPicker({
         className={`bh-sel-btn item-picker-trigger${disabled ? " is-disabled" : ""}`}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-controls={listboxId}
+        aria-controls={open ? listboxId : undefined}
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}
       >
@@ -257,7 +262,7 @@ export default function ItemPicker({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              debouncedSearch(e.target.value, typeFilter);
+              debouncedSearch(e.target.value);
             }}
             onKeyDown={onKeyDown}
           />

@@ -32,6 +32,7 @@ Confirmation flow:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Iterable, Literal, Optional
 
 from sqlalchemy import select
@@ -43,6 +44,7 @@ from app.auth import (
     can_manage_projects, can_edit_bug, ROLE_ADMIN,
 )
 from app.models import Activity, Bug, Comment, Project, User
+from app.schemas import ALLOWED_ENVIRONMENTS, ALLOWED_PRIORITIES, statuses_for_type
 
 from app.chatbot.executor import Block, Response
 
@@ -327,6 +329,25 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
     )
 
 
+def _validate_field_value(bug: Bug, field_name: str, value: Any) -> Optional[str]:
+    """Mirror the REST API's enum/date validation so the chat write path can't
+    persist a value the REST PUT would reject (notably a bogus due date)."""
+    if field_name == "status":
+        if value not in statuses_for_type(_itype_of(bug)):
+            return f"“{value}” isn't a valid status for a {_itype_of(bug).lower()}."
+        return None
+    if field_name == "priority" and value not in ALLOWED_PRIORITIES:
+        return f"“{value}” isn't a valid priority."
+    if field_name == "environment" and value not in ALLOWED_ENVIRONMENTS:
+        return f"“{value}” isn't a valid environment."
+    if field_name == "due_date" and value:
+        try:
+            date.fromisoformat(str(value))
+        except ValueError:
+            return f"“{value}” isn't a valid date — use YYYY-MM-DD."
+    return None
+
+
 def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
                      field_name: str, label: str, notify: bool = True) -> Response:
     bug = _load_bug(db, plan.bug_id) if plan.bug_id else None
@@ -337,6 +358,9 @@ def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
         return _error_response(err)
     old = getattr(bug, field_name)
     new = plan.new_value
+    invalid = _validate_field_value(bug, field_name, new)
+    if invalid:
+        return _error_response(invalid)
     if old == new:
         return _success_response(
             f"Bug #{bug.id} {label} is already **{old}** — nothing to do",
@@ -414,11 +438,18 @@ def _apply_create_bug(db: Session, plan: ActionPlan, actor: User) -> Response:
         project_id = first.id
     elif db.get(Project, project_id) is None:
         return _error_response("That project doesn't exist anymore")
+    # Mirror the REST POST: never persist an out-of-enum priority. The
+    # field-setter path validates; the create path must too.
+    priority = (plan.new_value or "Medium")
+    if priority not in ALLOWED_PRIORITIES:
+        return _error_response(
+            f"'{priority}' isn't a valid priority. Allowed: {', '.join(ALLOWED_PRIORITIES)}"
+        )
     bug = Bug(
         title=title,
         description=(plan.new_description or ""),
         status="New",
-        priority=(plan.new_value or "Medium"),
+        priority=priority,
         environment="DEV",
         project_id=project_id,
         reporter_id=actor.id,
@@ -583,10 +614,12 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
     plan really came from this user (we still re-check actor.id below)."""
     if plan.actor_user_id != actor.id:
         return _error_response("That action was staged for a different user")
-    # NOTE: the admin-only Sleuth-write policy is enforced UPSTREAM in the
-    # executor handlers (a non-admin never gets a plan staged, so never reaches
-    # here through the chat flow). execute_plan keeps the per-action edit checks
-    # below as its own contract for any direct caller.
+    # The admin-only Sleuth-write policy is enforced UPSTREAM in the executor
+    # handlers (a non-admin never gets a plan staged, so never reaches here
+    # through the chat flow). The per-action _check_can_edit_bug /
+    # _check_can_create_bug below re-authorize the REST permission — the real
+    # security boundary — at execute time for any direct caller, so a demoted
+    # actor can still only do what their current role allows.
     try:
         if plan.bug_ids:
             return _apply_bulk(plan, db, actor)

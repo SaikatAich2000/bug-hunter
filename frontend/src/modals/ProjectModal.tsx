@@ -29,7 +29,10 @@ export default function ProjectModal() {
   useEffect(() => {
     if (!open) return;
     setName(project ? project.name : "");
-    setColor(project ? project.color : DEFAULT_COLOR);
+    // A native <input type="color"> coerces any non-#rrggbb value to #000000,
+    // and saving would then overwrite a legacy color the user never chose. Fall
+    // back to the default for display instead of silently blacking it out.
+    setColor(project && /^#[0-9a-fA-F]{6}$/.test(project.color) ? project.color : DEFAULT_COLOR);
     setDescription(project ? project.description : "");
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);

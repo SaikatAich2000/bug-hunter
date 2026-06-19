@@ -35,6 +35,10 @@ from typing import Any, Optional
 # Tuned for a 2 GB box: 200 sessions × <1 KB each = under 200 KB.
 _MAX_SESSIONS = 200
 _TTL_SECONDS = 30 * 60   # 30 minutes idle
+# A staged write stays confirmable only briefly. The session TTL above is about
+# idle context; this is specifically so a stray "ok"/"sure" long after a
+# forgotten proposal can't fire a destructive write.
+_CONFIRM_TTL_SECONDS = 5 * 60   # 5 minutes
 
 
 @dataclass
@@ -45,10 +49,16 @@ class _Session:
     last_user_name: Optional[str] = None
     last_filter: dict[str, Any] = field(default_factory=dict)
     pending_action: Optional[dict[str, Any]] = None
+    # Epoch seconds when pending_action was staged — drives the confirm window
+    # (kept separate from last_seen, which any later activity refreshes).
+    pending_staged_at: float = 0.0
     # A document an admin uploaded to Sleuth, parsed into candidate bug specs
     # and parked here awaiting an explicit "create them" — Sleuth never creates
     # on upload alone, only when the admin says so.
     pending_ingest: Optional[dict[str, Any]] = None
+    # Epoch seconds when pending_ingest was staged — same short confirm window as
+    # pending_action, so a stray late "ok" can't fire a forgotten bulk create.
+    pending_ingest_staged_at: float = 0.0
     last_seen: float = 0.0   # epoch seconds, for TTL eviction
 
 
@@ -140,18 +150,24 @@ class _Store:
         with self._lock:
             s = self._get_or_create_locked(user_id, now)
             s.pending_action = dict(action)
+            s.pending_staged_at = now
             s.last_seen = now
 
     def take_pending(self, user_id: int) -> Optional[dict[str, Any]]:
         """Pop and return the staged action (single-use).
 
-        Returns None if there isn't one or the session has expired.
+        Returns None if there isn't one, the session has expired, or the short
+        confirm window has lapsed (so a stale "yes" can't fire a forgotten write).
         """
         now = time.time()
         with self._lock:
             self._evict_expired_locked(now)
             s = self._sessions.get(user_id)
             if s is None or s.pending_action is None:
+                return None
+            if (now - s.pending_staged_at) > _CONFIRM_TTL_SECONDS:
+                # Proposal went stale — drop it rather than execute on a late "ok".
+                s.pending_action = None
                 return None
             action = s.pending_action
             s.pending_action = None
@@ -171,15 +187,25 @@ class _Store:
         with self._lock:
             s = self._get_or_create_locked(user_id, now)
             s.pending_ingest = dict(data)
+            s.pending_ingest_staged_at = now
             s.last_seen = now
+
+    def _ingest_if_fresh(self, s: Optional["_Session"], now: float) -> Optional[dict[str, Any]]:
+        """The staged ingest if present AND within the confirm window; clears a
+        stale one so a late 'ok' can't fire a forgotten bulk create."""
+        if s is None or s.pending_ingest is None:
+            return None
+        if (now - s.pending_ingest_staged_at) > _CONFIRM_TTL_SECONDS:
+            s.pending_ingest = None
+            return None
+        return s.pending_ingest
 
     def peek_ingest(self, user_id: int) -> Optional[dict[str, Any]]:
         """Return the staged ingest WITHOUT consuming it (None if none/expired)."""
         now = time.time()
         with self._lock:
             self._evict_expired_locked(now)
-            s = self._sessions.get(user_id)
-            return s.pending_ingest if s is not None else None
+            return self._ingest_if_fresh(self._sessions.get(user_id), now)
 
     def take_ingest(self, user_id: int) -> Optional[dict[str, Any]]:
         """Pop and return the staged ingest (single-use)."""
@@ -187,9 +213,9 @@ class _Store:
         with self._lock:
             self._evict_expired_locked(now)
             s = self._sessions.get(user_id)
-            if s is None or s.pending_ingest is None:
+            data = self._ingest_if_fresh(s, now)
+            if data is None:
                 return None
-            data = s.pending_ingest
             s.pending_ingest = None
             s.last_seen = now
             return data

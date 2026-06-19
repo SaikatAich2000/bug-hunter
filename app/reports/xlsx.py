@@ -52,13 +52,20 @@ _ZEBRA_FILL = "F2F4F8"
 # Prefixing such cells with a single quote (OWASP-recommended) neutralizes it;
 # the quote is consumed by Excel on display, so the user still sees the
 # original text.
-_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _defang_formula_text(s: str) -> str:
     """Prefix a string with `'` when it leads with a formula trigger so
-    spreadsheet apps render it as text. Idempotent on already-safe text."""
-    if s and s[0] in _FORMULA_TRIGGERS:
+    spreadsheet apps render it as text. Idempotent on already-safe text.
+
+    Tests both the raw first character (covers a leading tab/CR/newline) and the
+    first NON-whitespace character — spreadsheet apps trim leading spaces, so
+    `" =cmd"` is still evaluated as a formula and must be defanged too."""
+    if not s:
+        return s
+    stripped = s.lstrip()
+    if s[0] in _FORMULA_TRIGGERS or (stripped and stripped[0] in _FORMULA_TRIGGERS):
         return "'" + s
     return s
 
@@ -187,7 +194,10 @@ def _write_filters_block(ws, result: ReportResult, start_row: int) -> int:
     f = result.filters or {}
     for key, label in _FILTER_LABELS:
         ws.cell(row=row, column=1, value=label)
-        ws.cell(row=row, column=2, value=_format_filter_display(f.get(key)))
+        # Defend the value column: text_search / label are user free-text whose
+        # leading =/+/-/@ survives .strip(), so route every value through _coerce
+        # (which defangs strings) — not just the data sheets.
+        ws.cell(row=row, column=2, value=_coerce(_format_filter_display(f.get(key))))
         row += 1
     return row
 

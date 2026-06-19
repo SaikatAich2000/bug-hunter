@@ -5,7 +5,7 @@
  *  - A 401 anywhere bounces to /login.html exactly once (no redirect storm
  *    when several in-flight calls all come back 401 after a session revoke).
  *  - 204 resolves to null; JSON is parsed otherwise.
- *  - Errors surface FastAPI's {detail} — string or Pydantic list — as a
+ *  - Errors surface FastAPI's {detail} â€” string or Pydantic list â€” as a
  *    readable message on ApiError.
  */
 
@@ -56,7 +56,7 @@ function detailToMessage(body: unknown, fallback: string): string {
 export interface ApiOptions extends Omit<RequestInit, "body"> {
   /** JSON-serialised into the body with Content-Type: application/json. */
   json?: unknown;
-  /** Raw body (FormData for uploads, etc.) — wins over `json`. */
+  /** Raw body (FormData for uploads, etc.) â€” wins over `json`. */
   body?: BodyInit;
 }
 
@@ -126,11 +126,24 @@ export async function apiBlob(
     try {
       msg = detailToMessage(await res.json(), msg);
     } catch {
-      /* binary error body — keep fallback */
+      /* binary error body â€” keep fallback */
     }
     throw new ApiError(msg, res.status);
   }
   const cd = res.headers.get("Content-Disposition") || "";
-  const m = /filename="?([^";]+)"?/i.exec(cd);
-  return { blob: await res.blob(), filename: m ? m[1] : null };
+  // Prefer RFC 5987 filename*=UTF-8''… (percent-encoded, non-ASCII safe). The
+  // plain fallback's first char excludes '*' so it can't partially capture the
+  // filename* form into a garbled name.
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(cd);
+  const plain = /filename="?([^";*][^";]*)"?/i.exec(cd);
+  let raw = "";
+  if (star) {
+    try { raw = decodeURIComponent(star[1].trim()); } catch { raw = star[1].trim(); }
+  } else if (plain) {
+    raw = plain[1].trim();
+  }
+  // Strip any path components a server (or proxy) might place in the filename so
+  // it can't influence where a saved download lands.
+  const filename: string | null = raw ? (raw.replace(/[\\/]/g, "_").trim() || null) : null;
+  return { blob: await res.blob(), filename };
 }

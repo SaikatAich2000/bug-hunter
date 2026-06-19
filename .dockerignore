@@ -14,6 +14,12 @@ __pycache__
 venv
 env
 
+# Secrets are provisioned on the host and bind-mounted read-only at runtime
+# (see docker-compose.yml) — never ship them in the build context or image
+# layers, even if a future Dockerfile switches to a broad COPY.
+secrets/
+*firebase-admin*.json
+
 # Tests aren't needed at runtime
 tests
 
@@ -29,6 +35,11 @@ models/*.safetensors
 .gitignore
 README.md
 *.md
+
+# Agent / editor scratch (never needed at runtime)
+.claude
+.vscode
+.idea
 
 # OS noise
 .DS_Store

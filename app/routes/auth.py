@@ -1,6 +1,7 @@
 """Authentication endpoints — login, logout, password management."""
 from __future__ import annotations
 
+import ipaddress
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -110,7 +111,14 @@ def _client_ip(request: Request) -> str:
         if fwd:
             # X-F-F is a comma-separated chain; the leftmost is the original client.
             ip = fwd.split(",")[0].strip()
-            return ip[:64]
+            # Only trust a value that parses as an IP — a crafted XFF could
+            # otherwise persist arbitrary text (control chars, misleading
+            # "spoofed" labels) into the session list / audit trail.
+            try:
+                ipaddress.ip_address(ip)
+                return ip[:64]
+            except ValueError:
+                pass
     if request.client and request.client.host:
         return request.client.host[:64]
     return ""
@@ -288,6 +296,11 @@ def forgot_password(
     settings = get_settings()
     user = db.scalar(select(User).where(User.email == payload.email))
     if user is None or not user.is_active:
+        # Enumeration-resistant mode: do the same token-derivation work the real
+        # path does (and discard it) so response timing doesn't betray whether
+        # the account exists — the same idea as login's dummy bcrypt verify.
+        if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
+            generate_reset_token()
         # Always record the server-side signal for auditing, regardless of mode.
         _audit(db, None, "password_reset_no_account",
                f"Password reset attempted for unknown/inactive email: {_mask_email(payload.email)}")

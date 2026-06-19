@@ -6,7 +6,10 @@
  * Class names and data-attributes match the markup that styles.css keys off.
  */
 import { useCallback, useState, type ReactNode } from "react";
-import { fileIcon, formatBytes, formatDate } from "../../lib/format";
+import { activityIcon, fileIcon, formatBytes, formatDate } from "../../lib/format";
+
+// Re-exported from lib/format so existing importers of this module keep working.
+export { activityIcon };
 import VideoLightbox from "../../components/VideoLightbox";
 import type { ActivityOut, AttachmentOut, MetaOut } from "../../types";
 
@@ -64,21 +67,6 @@ export function stagedLabel(count: number, idle: string): string {
 // ---------------------------------------------------------------------------
 // Activity icon + row
 // ---------------------------------------------------------------------------
-
-export function activityIcon(action: string): string {
-  if (action.includes("session")) return "🔐";
-  if (action.includes("login")) return "🔑";
-  if (action.includes("logout")) return "👋";
-  if (action.includes("password")) return "🔒";
-  if (action.includes("created")) return "✨";
-  if (action.includes("delete")) return "🗑";
-  if (action.includes("comment")) return "💬";
-  if (action.includes("attachment")) return "📎";
-  if (action.includes("link")) return "🔗";
-  if (action.includes("status")) return "🔄";
-  if (action.includes("assign")) return "👥";
-  return "📝";
-}
 
 export function ActivityRow({ activity }: Readonly<{ activity: ActivityOut }>) {
   return (

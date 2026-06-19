@@ -89,11 +89,17 @@ _HEADER_STYLE_FG = "FFFFFF"
 # start a cell. A bug title like `=cmd|'/c calc.exe'!A1` would execute
 # on open. Neutralized by prefixing a single quote — same defense as the
 # CSV export in routes/bugs.py and the reports writer (reports/xlsx.py).
-_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _defang_formula_text(s: str) -> str:
-    if s and s[0] in _FORMULA_TRIGGERS:
+    # Test the raw first char (leading tab/CR/newline) AND the first
+    # non-whitespace char — apps trim leading spaces, so " =cmd" is still a
+    # formula. Prefix the original value so its on-screen text is unchanged.
+    if not s:
+        return s
+    stripped = s.lstrip()
+    if s[0] in _FORMULA_TRIGGERS or (stripped and stripped[0] in _FORMULA_TRIGGERS):
         return "'" + s
     return s
 
@@ -116,9 +122,10 @@ _COLUMNS: list[tuple[str, str, int]] = [
 
 def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     if not OPENPYXL_AVAILABLE:
+        # User-facing message (surfaced verbatim in the chat reply) — don't leak
+        # the dependency name / server internals.
         raise ExcelGenerationError(
-            "openpyxl is not installed on the server. "
-            "Add it to requirements.txt and redeploy."
+            "The spreadsheet exporter is unavailable on this server right now."
         )
 
     wb = Workbook()

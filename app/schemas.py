@@ -378,8 +378,11 @@ class UserOut(BaseModel):
 # Auth
 # ---------------------------------------------------------------------------
 class LoginIn(BaseModel):
-    email: str
-    password: str
+    # Bound both fields so an unauthenticated caller can't POST a multi-megabyte
+    # password and burn CPU in the sha256 pre-hash (verify_password). 200 matches
+    # the new-password cap; no stored password can exceed it. 254 = RFC email max.
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=200)
 
     @field_validator("email")
     @classmethod
@@ -401,7 +404,9 @@ class ChangePasswordIn(BaseModel):
 
 
 class ForgotPasswordIn(BaseModel):
-    email: str
+    # Cap the length like LoginIn so an unauthenticated caller can't post a
+    # multi-megabyte "email" that the regex / DB query / audit line then process.
+    email: str = Field(max_length=254)
 
     @field_validator("email")
     @classmethod
@@ -410,7 +415,9 @@ class ForgotPasswordIn(BaseModel):
 
 
 class ResetPasswordIn(BaseModel):
-    token: str
+    # The token is a hex SHA-256 lookup key; bound it so an arbitrarily large
+    # body can't be hashed/compared.
+    token: str = Field(min_length=1, max_length=512)
     new_password: str
 
     @field_validator("new_password")
@@ -570,6 +577,18 @@ class BugUpdate(BaseModel):
     # "not changing" from "explicitly clearing".
     event_id: Optional[int] = None
 
+    # Optimistic concurrency (opt-in): the client may echo the item's
+    # updated_at as it last saw it. If the item changed in the meantime the
+    # update is rejected with 409 instead of silently clobbering the other
+    # edit. Omitting it preserves last-write-wins for older clients.
+    expected_updated_at: Optional[str] = Field(default=None, max_length=64)
+
+    # Preferred optimistic-concurrency token: the item's integer ``version`` as
+    # the client last saw it. Sub-second safe (unlike the whole-second
+    # expected_updated_at). On mismatch the update is rejected with 409; omitting
+    # both fields preserves last-write-wins.
+    expected_version: Optional[int] = Field(default=None, ge=0)
+
     @field_validator("title")
     @classmethod
     def _strip_title(cls, v: Optional[str]) -> Optional[str]:
@@ -656,6 +675,7 @@ class BugOut(BaseModel):
     event_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    version: int = 1
     attachment_count: int = 0
     can_edit: bool = False
 
@@ -752,8 +772,15 @@ class BugLinkOut(BaseModel):
 class BulkActionIn(BaseModel):
     action: str
     ids: list[int] = Field(min_length=1, max_length=500)
-    # status / priority / environment value for the set_* actions.
-    value: Optional[str] = None
+    # status / priority / environment value for the set_* actions. Longest valid
+    # value is well under 20 chars; the route still normalizes against the
+    # allowed set, so this is just a Pydantic-layer bound.
+    value: Optional[str] = Field(default=None, max_length=20)
+    # Optional optimistic-concurrency map {bug_id: last_seen_version}. When
+    # present, a row whose current version drifted is reported as a conflict and
+    # left unchanged — so a bulk edit can't silently clobber a concurrent change.
+    # Omitting it preserves last-writer-wins for callers that don't track it.
+    expected_versions: Optional[dict[int, int]] = Field(default=None, max_length=500)
 
     @field_validator("action")
     @classmethod
@@ -776,6 +803,8 @@ class BulkActionResult(BaseModel):
     updated: int = 0
     skipped: int = 0
     failed: int = 0
+    # Rows left unchanged because their version drifted from expected_versions.
+    conflicts: int = 0
     message: str = ""
 
 

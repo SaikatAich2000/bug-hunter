@@ -83,6 +83,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
   }, [open]);
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const panelId = `ms-panel-${filterKey}`;
 
   return (
     <div className="ms-wrap" data-filter={filterKey}>
@@ -92,6 +93,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
         data-ms-toggle=""
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         onClick={(e) => {
           e.stopPropagation();
           closeOthers(close);
@@ -101,12 +103,16 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
         <span className="ms-btn-label">{msButtonLabel(label, noun, options, selected)}</span>
         <span className="ms-caret">▾</span>
       </button>
-      <div className="ms-panel" hidden={!open} role="menu">
+      <div className="ms-panel" id={panelId} hidden={!open} role="menu">
         {options.length === 0 ? (
           <div className="ms-empty">No options</div>
         ) : (
           options.map(([v, lbl]) => {
             const isOn = selectedSet.has(v);
+            const toggle = (e: { stopPropagation: () => void }) => {
+              e.stopPropagation();
+              onToggle(v);
+            };
             return (
               <div
                 key={v}
@@ -114,9 +120,14 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
                 data-ms-value={v}
                 role="menuitemcheckbox"
                 aria-checked={isOn}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggle(v);
+                tabIndex={0}
+                onClick={toggle}
+                onKeyDown={(e) => {
+                  // Keyboard parity with the mouse: Enter/Space toggle the row.
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggle(e);
+                  }
                 }}
               >
                 <span className="ms-check">{isOn ? "✓" : ""}</span>

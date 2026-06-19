@@ -4,7 +4,7 @@
  * Data, paging and the implicit tab filter all live in AppContext; this
  * component only renders the bugs for the active tab.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useApp, type TabName } from "../state/AppContext";
 import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
@@ -129,15 +129,24 @@ export default function ListView() {
   };
   const clearSelection = () => setSelected(new Set());
 
+  const applyingRef = useRef(false);
   const applyBulk = async (action: string, value?: string): Promise<void> => {
     const ids = [...selected];
-    if (!ids.length) return;
+    if (!ids.length || applyingRef.current) return;  // guard double-submit
+    applyingRef.current = true;
+    // Send each selected row's last-seen version so the server skips rows that
+    // changed under us (opt-in optimistic concurrency) instead of clobbering.
+    const expected_versions: Record<number, number> = {};
+    for (const id of ids) {
+      const b = bugs.find((x) => x.id === id);
+      if (b && typeof b.version === "number") expected_versions[id] = b.version;
+    }
     try {
       const res = await withLoader(
         () =>
           api<BulkActionResult>("/bugs/bulk", {
             method: "POST",
-            json: { action, ids, value },
+            json: { action, ids, value, expected_versions },
           }),
         "Applying to selection…",
       );
@@ -147,6 +156,8 @@ export default function ListView() {
       await refreshAll();
     } catch (err) {
       toastError(err);
+    } finally {
+      applyingRef.current = false;
     }
   };
 

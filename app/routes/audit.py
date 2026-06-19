@@ -19,6 +19,11 @@ from app.schemas import ActivityOut
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
+# Largest value a 32-bit signed PK column (entity_id / bug_id) can hold. A
+# longer digit run in the search box would overflow int4 and raise a DataError
+# (500) on Postgres, so we only do an exact-id compare at or below it.
+_MAX_PK_INT = 2**31 - 1
+
 
 def _like_escape(needle: str) -> str:
     """Escape SQL LIKE wildcards so a query containing literal '%' or '_'
@@ -34,7 +39,7 @@ def _like_escape(needle: str) -> str:
 def list_audit(
     entity_type: Optional[str] = None,
     actor_user_id: Optional[int] = None,
-    q: Optional[str] = None,
+    q: Optional[str] = Query(default=None, max_length=200),
     # The ceiling is 10 000 (a firm upper bound to keep the response size
     # sane) so operators reviewing very old activity on long-running
     # deployments can still reach it. The SPA asks for 5000 by default, with a
@@ -88,17 +93,19 @@ def list_audit(
         # partial-id searches ("4" → 4, 40, 41, …, 422) still work.
         digits_match = re.search(r"\d+", raw)
         if digits_match:
-            try:
-                entity_id_val = int(digits_match.group(0))
+            digits = digits_match.group(0)
+            # Exact-id compare only for values that fit int4 — a longer run
+            # would overflow the entity_id / bug_id column and 500 on Postgres.
+            # The substring LIKE below still searches a long/partial id as text.
+            if int(digits) <= _MAX_PK_INT:
+                entity_id_val = int(digits)
                 clauses.append(Activity.entity_id == entity_id_val)
                 # Also catch rows still attached to the bug via bug_id.
                 clauses.append(Activity.bug_id == entity_id_val)
-            except ValueError:  # pragma: no cover - a \d+ match is always int-parseable
-                pass
             # Substring match on the entity_id column as text — lets the
             # user type "4" and find ids 4, 40, 41, … (handy when they
             # half-remember a bug number).
-            digit_like = f"%{_like_escape(digits_match.group(0))}%"
+            digit_like = f"%{_like_escape(digits)}%"
             clauses.append(cast(Activity.entity_id, String).ilike(digit_like, escape="\\"))
         stmt = stmt.where(or_(*clauses))
     stmt = (

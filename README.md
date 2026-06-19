@@ -44,7 +44,8 @@ app/
 ├── auth.py · email_service.py · notification_service.py · push_service.py
 ├── routes/      # auth · users · projects · bugs · events · stats
 │                # audit · sessions · reports · notifications · push
-├── chatbot/     # Sleuth: nlu · classifier · llm · cloud_llm · rag · redaction
+├── chatbot/     # Sleuth: nlu · classifier · llm · cloud_llm · redaction
+│                # rag · retrieval · verify · agent · evals (cloud grounding)
 │                # executor · actions · memory · excel · router
 ├── jobs/        # email_digest (scheduled digest job)
 └── static/      # built React bundle
@@ -104,6 +105,7 @@ All configuration is read from environment variables. Copy [`.env.example`](.env
 |---|---|---|
 | `SESSION_SECRET` | _(blank)_ | Signs session cookies. Set a long random value in production (`openssl rand -hex 32`); blank generates a new secret per restart, logging everyone out. |
 | `COOKIE_SECURE` | `false` | Set `true` only when serving over HTTPS. |
+| `ENABLE_API_DOCS` | `false` | Interactive API docs (`/docs`, `/redoc`) are always on in development; a production deploy (`COOKIE_SECURE=true`) disables them unless this is `true`. |
 | `APP_BASE_URL` | `http://localhost:8765` | Public URL used in email links. |
 | `CORS_ORIGINS` | _(blank = same-origin)_ | Comma-separated allow-list of cross-origin clients. |
 | `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `_NAME` | `admin@bughunter.local` / `ChangeMe123!` / `Admin` | First-run admin (only when the database has no users). |
@@ -229,7 +231,14 @@ Sleuth tries the cheapest layer first and escalates only when needed:
 
 With the defaults (`SLEUTH_CLOUD_ENABLED=0`, no model file), Sleuth is fully local: no outbound HTTP, no telemetry, no third-party API. The cloud layer (layer 4) is the only path that sends text off the box, and even then all text is passed through a secret-redaction filter (`app/chatbot/redaction.py`) first. In every mode, Sleuth never writes data through the model and never invents counts.
 
-Key cloud-layer variables (all default off or blank): `SLEUTH_CLOUD_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-2.5-flash`), `OPENROUTER_API_KEY`, and `SLEUTH_RAG_ENABLED`. The `/api/chat` endpoint is rate-limited to 30 messages per minute per user.
+When the cloud layer is on, four read-only enhancements can each be enabled independently to make answers more accurate and trustworthy. All are off by default and dependency-free, so they fit a small box:
+
+- **Grounding** (`SLEUTH_RETRIEVAL_ENABLED`) — answers free-form questions from real bug records found by a keyword search, with no vector database.
+- **Agent** (`SLEUTH_AGENT_ENABLED`) — for a multi-step question, the model runs a few read-only lookups before answering. Every lookup re-parses through the same write firewall, so the agent can never change data.
+- **Verification** (`SLEUTH_VERIFY_ANSWERS`) — deterministically checks every bug number an answer cites against the records and flags any that aren't grounded. No extra model call.
+- **Evaluation** (`SLEUTH_EVAL_ENABLED`) — a second model call scores each answer for grounding and faithfulness and appends a short "please verify" note when confidence is low. It can only annotate, never rewrite.
+
+Key cloud-layer variables (all default off or blank): `SLEUTH_CLOUD_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-2.5-flash`), `OPENROUTER_API_KEY`, `SLEUTH_RAG_ENABLED`, `SLEUTH_RETRIEVAL_ENABLED`, `SLEUTH_VERIFY_ANSWERS`, `SLEUTH_AGENT_ENABLED`, and `SLEUTH_EVAL_ENABLED`. The `/api/chat` endpoint is rate-limited to 30 messages per minute per user.
 
 ## Security
 

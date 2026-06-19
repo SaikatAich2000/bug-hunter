@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.auth import COOKIE_NAME, parse_session_token, require_admin
@@ -57,13 +57,12 @@ def list_sessions(
     list stays accurate without a separate cron."""
     now = datetime.now(timezone.utc)
 
-    # Sweep: drop sessions whose TTL has passed. Cheap idempotent delete;
-    # losing a race with a concurrent admin's delete is fine.
-    expired = db.scalars(select(SessionRow).where(SessionRow.expires_at < now)).all()
-    if expired:
-        for s in expired:
-            db.delete(s)
-        db.commit()
+    # Sweep: drop sessions whose TTL has passed. A set-based DELETE is naturally
+    # idempotent under concurrency — two admins (or the inline expiry delete)
+    # racing this won't raise StaleDataError the way load-then-ORM-delete does
+    # when the second runner's rows were already removed.
+    db.execute(delete(SessionRow).where(SessionRow.expires_at < now))
+    db.commit()
 
     rows = db.scalars(
         select(SessionRow)

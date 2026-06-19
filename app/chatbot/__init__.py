@@ -28,6 +28,11 @@ Architecture — three layers, ordered by cost:
                   back through the SQL handlers (numbers never invented) and
                   any write intent is dropped. rag.py grounds it with bug /
                   comment / doc retrieval; redaction.py scrubs secrets first.
+                  Optional, flag-gated accuracy helpers (all read-only, off by
+                  default): retrieval.py (dependency-free keyword grounding),
+                  agent.py (bounded multi-step reasoning over the SAME read-only
+                  tools and write firewall), verify.py (deterministic citation
+                  checking) and evals.py (LLM-as-judge that only annotates).
   - executor.py   Read intents (list/count/detail/stats/export) → SQL
                   SELECTs only. Never writes.
   - actions.py    Write intents (assign/close/comment/create/...) →

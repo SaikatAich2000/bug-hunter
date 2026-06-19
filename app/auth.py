@@ -74,9 +74,13 @@ def hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt. Returns a string suitable for DB."""
     if not plain:
         raise ValueError("Password cannot be empty")
-    # bcrypt has a 72-byte input limit. Pre-hash with sha256 to handle long
-    # passwords without surprising the user, then base64 the digest so it
-    # fits comfortably under the limit.
+    # bcrypt caps input at 72 bytes, so pre-hash with sha256 to handle long
+    # passwords without surprising the user. The 32-byte digest is well under
+    # the cap and is passed as RAW bytes: the pinned pyca/bcrypt backend uses the
+    # buffer's explicit length and does NOT NUL-truncate, so an embedded 0x00 is
+    # safe. NOTE: this pre-processing must stay byte-for-byte identical to
+    # verify_password — changing it (e.g. base64-encoding the digest) would
+    # invalidate every password already stored.
     pre = hashlib.sha256(plain.encode("utf-8")).digest()
     return bcrypt.hashpw(pre, bcrypt.gensalt(rounds=12)).decode("utf-8")
 

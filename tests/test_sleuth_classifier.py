@@ -39,6 +39,28 @@ from app import models
 from app.auth import hash_password
 from app.chatbot import classifier, executor, llm
 
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
+
+@pytest.fixture(autouse=True)
+def _rebind_app_modules():
+    """Re-bind this file's module-level app.* references to the current import
+    generation each test (conftest's `client` fixture purges `app.*` to rebind
+    the engine per test; stale refs would otherwise diverge from execute()'s)."""
+    import importlib
+    g = globals()
+    db_mod = importlib.import_module("app.database")
+    g["Base"], g["engine"], g["SessionLocal"] = (
+        db_mod.Base, db_mod.engine, db_mod.SessionLocal,
+    )
+    g["models"] = importlib.import_module("app.models")
+    g["hash_password"] = importlib.import_module("app.auth").hash_password
+    g["classifier"] = importlib.import_module("app.chatbot.classifier")
+    g["executor"] = importlib.import_module("app.chatbot.executor")
+    g["llm"] = importlib.import_module("app.chatbot.llm")
+    yield
+
+
 PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
 
@@ -49,7 +71,7 @@ def check(name, cond, detail=""):
         print(f"  PASS  {name}")
     else:
         FAILED.append((name, detail))
-        print(f"  FAIL  {name}  {detail}")
+        raise AssertionError(f"{name}: {detail}")
 
 
 def section(t):

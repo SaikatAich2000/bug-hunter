@@ -43,9 +43,12 @@ export default function SessionsView() {
   const refreshSessions = useCallback(async (quiet = false) => {
     try {
       setSessions(await api<SessionOut[]>("/sessions"));
-      setLoaded(true);
     } catch (err) {
       if (!quiet) toastError(err);
+    } finally {
+      // Mark loaded even on failure so the empty-state renders instead of a
+      // permanently blank screen when the very first fetch errors.
+      setLoaded(true);
     }
   }, []);
 

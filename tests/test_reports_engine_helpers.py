@@ -203,16 +203,26 @@ def test_fold_throughput_row_counts_resolution():
     assert details[0]["bug_id"] == 5
 
 
-def test_fold_throughput_row_deleted_actor_uses_sentinel():
+def test_fold_throughput_row_deleted_actor_bucketed_by_name():
+    # Deleted users (NULL actor_user_id) are bucketed by their preserved
+    # snapshot name, NOT collapsed onto one -1 sentinel — so two distinct
+    # ex-employees' work never gets merged under one name.
     from app.reports.engine import _fold_throughput_row
     per_user, details = {}, []
-    raw = _raw("status: 'New' → 'Closed'", actor_id=None, actor_name=None,
+    raw = _raw("status: 'New' → 'Closed'", actor_id=None, actor_name="Gone Guy",
                current_status="Closed")
     _fold_throughput_row(raw, per_user, details)
-    assert -1 in per_user
-    assert per_user[-1]["user_id"] is None
-    assert per_user[-1]["user_name"] == "(deleted user)"
-    assert details[0]["user_name"] == "(deleted user)"
+    assert "deleted:Gone Guy" in per_user
+    assert per_user["deleted:Gone Guy"]["user_id"] is None
+    assert per_user["deleted:Gone Guy"]["user_name"] == "Gone Guy"
+    assert details[0]["user_name"] == "Gone Guy"
+
+    # A second distinct ex-user stays in its OWN bucket.
+    raw2 = _raw("status: 'New' → 'Closed'", actor_id=None, actor_name="Other Gone",
+                current_status="Closed")
+    _fold_throughput_row(raw2, per_user, details)
+    assert per_user["deleted:Gone Guy"]["resolved_count"] == 1
+    assert per_user["deleted:Other Gone"]["resolved_count"] == 1
 
 
 def test_fold_throughput_row_ignores_non_resolution():

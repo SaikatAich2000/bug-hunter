@@ -332,14 +332,11 @@ def test_cov_aging_status_filter_intersection_and_empty(admin_client):
     titles = {r["title"] for r in inter["rows"]}
     assert titles == {"aging-open"}
 
-    # statuses with no overlap with the open set -> open_set becomes empty, so
-    # the status WHERE is skipped (branch 920->922) and ALL filtered items are
-    # returned (open + closed), each still age-bucketed.
+    # statuses with NO overlap with the open set -> an "open items" report has
+    # nothing to show (mirrors pending_snapshot), rather than silently leaking
+    # closed items stamped with a bogus age.
     empty_set = _run(admin_client, "aging", {"statuses": ["Closed"]})
-    titles2 = {r["title"] for r in empty_set["rows"]}
-    assert {"aging-open", "aging-closed"} <= titles2
-    for r in empty_set["rows"]:
-        assert "age_bucket" in r
+    assert empty_set["rows"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -438,4 +435,8 @@ def test_cov_export_xlsx_build_error_returns_500(admin_client, monkeypatch):
         "filters": {},
     })
     assert r.status_code == 500
-    assert "openpyxl" in r.json()["detail"].lower()
+    # The 500 body is GENERIC — server config/dependency state (the "openpyxl
+    # not installed" cause) is logged server-side, not echoed to the client.
+    detail = r.json()["detail"].lower()
+    assert "openpyxl" not in detail
+    assert "workbook" in detail

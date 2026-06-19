@@ -737,8 +737,11 @@ class TestEdgeCases:
         assert r.json()["items"] == []
 
     def test_large_search_query(self, admin_client):
-        """Search with very long string should not crash."""
+        """A very long search string is rejected cleanly (q is length-capped at
+        200), not crashed; a normal-length query still works."""
         r = admin_client.get("/api/bugs?q=" + "x" * 5000)
+        assert r.status_code == 422  # bounded by the q max_length guard
+        r = admin_client.get("/api/bugs?q=" + "x" * 50)
         assert r.status_code == 200
 
     def test_bug_status_case_insensitive_filter(self, admin_client):
@@ -874,16 +877,22 @@ class TestV321Security:
         )
         assert r.status_code == 201, r.text
 
-    def test_csrf_exempts_login_endpoint(self, client):
-        """Login is exempt so onboarding scripts that POST from a
-        different origin can still authenticate. The login itself is
-        password- and rate-limited."""
+    def test_csrf_login_blocks_cross_origin(self, client):
+        """Login is NO LONGER CSRF-exempt: a cross-site login POST (the
+        session-fixation vector) is blocked. Operator scripts still work — they
+        send no Origin/Referer and pass the no-fingerprint branch."""
         r = client.post(
             "/api/auth/login",
             json={"email": "admin@test.local", "password": "Admin1234"},
             headers={"Origin": "https://other-tool.example.com"},
         )
-        assert r.status_code == 200, r.text
+        assert r.status_code == 403, r.text
+        # No Origin header (operator script / same-origin) still authenticates.
+        r2 = client.post(
+            "/api/auth/login",
+            json={"email": "admin@test.local", "password": "Admin1234"},
+        )
+        assert r2.status_code == 200, r2.text
 
     def test_csrf_does_not_apply_to_safe_methods(self, admin_client):
         """GET / HEAD never trigger the Origin check — they don't change state."""

@@ -22,6 +22,7 @@ Why a separate router (instead of folding into routes/bugs.py)?
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Annotated, Optional
 
@@ -107,22 +108,25 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_REQUESTS = 30   # 30 chat asks / minute / user
 _rate_state: dict[int, list[float]] = {}
+# Sync endpoints run in a threadpool, so concurrent same-user asks race the
+# read-modify-write on a bucket; guard it like the other shared caches.
+_rate_lock = threading.Lock()
 
 
 def _check_rate(user_id: int) -> None:
     now = time.time()
-    bucket = _rate_state.setdefault(user_id, [])
-    # Drop timestamps older than the window. This is O(window) per call
-    # which is fine — the window is tiny.
     cutoff = now - _RATE_WINDOW_SECONDS
-    while bucket and bucket[0] < cutoff:
-        bucket.pop(0)
-    if len(bucket) >= _RATE_MAX_REQUESTS:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many chatbot requests, slow down a moment",
-        )
-    bucket.append(now)
+    with _rate_lock:
+        bucket = _rate_state.setdefault(user_id, [])
+        # Drop timestamps older than the window (O(window), window is tiny).
+        while bucket and bucket[0] < cutoff:
+            bucket.pop(0)
+        if len(bucket) >= _RATE_MAX_REQUESTS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many chatbot requests, slow down a moment",
+            )
+        bucket.append(now)
 
 
 # ---------------------------------------------------------------------------

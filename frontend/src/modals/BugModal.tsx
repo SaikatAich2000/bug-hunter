@@ -22,6 +22,7 @@ import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
 import { withLoader } from "../lib/loader";
 import { formatDate, initials } from "../lib/format";
+import { sanitizeHtml } from "../lib/sanitize";
 import { confirmDialog } from "../components/ConfirmHost";
 import BhSelect, { type BhSelectOption } from "../components/BhSelect";
 import BhDateInput from "../components/BhDateInput";
@@ -144,6 +145,10 @@ export default function BugModal() {
   const commentRef = useRef<RichEditorHandle>(null);
   const editCommentRef = useRef<RichEditorHandle>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  // updated_at captured when the modal OPENS, for the optimistic-concurrency
+  // check on save. Captured here (not read live at submit) so the 10s background
+  // poll refreshing the bug can't silently advance it past a concurrent edit.
+  const expectedVersionRef = useRef<number | null>(null);
 
   // Staging buckets.
   const createStaged = useStagedFiles();   // create-mode bug-level attach
@@ -189,6 +194,9 @@ export default function BugModal() {
       setDueDate(bug.due_date || "");
       setAssigneeIds(bug.assignees ? bug.assignees.map((a) => a.id) : []);
       descRef.current?.setHtml(bug.description || "");
+      // Capture the version we opened (frozen here, not refreshed by the 10s
+      // poll) so a concurrent edit is detected on save.
+      expectedVersionRef.current = bug.version ?? null;
     } else {
       // ----- create mode -----
       setTitle("");
@@ -202,6 +210,7 @@ export default function BugModal() {
       setDueDate(isoToday());
       setAssigneeIds([]);
       descRef.current?.setHtml("");
+      expectedVersionRef.current = null;
     }
 
     // Event select: seed the current event so the user sees it before /events
@@ -578,6 +587,12 @@ export default function BugModal() {
       // an explicit unlink in the EDIT path.
       event_id: eventId && eventId !== "0" ? Number.parseInt(eventId, 10) : null,
       assignee_ids: assigneeIds,
+      // Optimistic concurrency on EDIT: tell the server the version we opened so
+      // it 409s instead of silently clobbering a concurrent edit. The catch
+      // surfaces the server's "changed by someone else — reload" message.
+      ...(id && expectedVersionRef.current != null
+        ? { expected_version: expectedVersionRef.current }
+        : {}),
     };
     // Remember the chosen type on create so the next "+ New" defaults to it.
     if (!id) setDefaultNewType((payload.item_type as ItemType) || "Bug");
@@ -720,13 +735,14 @@ export default function BugModal() {
             </div>
           </div>
         ) : hasBody ? (
-          // Comment body is sanitized rich HTML from the backend —
-          // sanitize_html() in app/schemas.py strips every dangerous tag/attr
-          // before it ever hits the DB.
+          // Comment body is rich HTML. The server sanitizes on write
+          // (sanitize_html in app/schemas.py); sanitizeHtml() here is a
+          // defense-in-depth second pass so a single missed server path can't
+          // become stored XSS.
           <div
             className="comment-body bh-rich-content"
             data-comment-body={c.id}
-            dangerouslySetInnerHTML={{ __html: c.body }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHtml(c.body) }}
           />
         ) : null}
         {c.attachments.length > 0 && (

@@ -108,6 +108,100 @@ stays valid. SonarQube: 0 open issues, A/A/A ratings; 747 backend tests pass at
   `app/static/assets` and excluded that generated output from the scan; the
   source lives in `frontend/`.
 
+### Sleuth intelligence — 2026-06-18
+
+Optional, read-only accuracy layers for the cloud assistant. All off by default,
+additive, and dependency-free, so they fit the small-box target. The safety model
+is unchanged: the assistant still never writes through the model and never invents
+counts, and production data is untouched.
+
+- **Grounding** (`SLEUTH_RETRIEVAL_ENABLED`) — answers free-form questions from
+  real bug records via a keyword search, with no vector database.
+- **Read-only agent** (`SLEUTH_AGENT_ENABLED`, `SLEUTH_AGENT_MAX_STEPS`) — runs a
+  few read-only lookups before answering a multi-step question. Every tool
+  re-parses through the same write firewall, so the agent can never change data.
+- **Citation verification** (`SLEUTH_VERIFY_ANSWERS`) — deterministically flags
+  any cited bug number not supported by the retrieved records; no extra API call.
+- **Answer evaluation** (`SLEUTH_EVAL_ENABLED`, `SLEUTH_EVAL_MIN_SCORE`) — an
+  LLM-as-judge scores each answer for grounding and faithfulness and appends a
+  "please verify" note when confidence is low; it only annotates, never rewrites,
+  and fails open.
+- New modules `app/chatbot/retrieval.py`, `verify.py`, `agent.py`, and `evals.py`,
+  each fully unit-tested.
+
+### Audit hardening — 2026-06-18
+
+A full-codebase security and reliability review. Code/config only or additive DB
+(one new `bugs.version` column plus supporting indexes via `init_db()`);
+production data is untouched and the legacy `changeme` password exception is
+preserved.
+
+- **Tests.** The five standalone Sleuth suites (`test_sleuth_actions` /
+  `classifier` / `comprehensive` / `parser` / `safety`) now fail the run on a
+  failed check — previously a custom helper only recorded failures, so they
+  reported green regardless — and stale assertions that predated the admin-only
+  write policy were corrected. `conftest.py` forces every optional `SLEUTH_*`
+  flag off for the suite, so a developer's `.env` can never change test
+  behaviour. New tests cover every change in this section.
+- **Security.** Rich-text comment bodies and Sleuth answers are sanitized
+  client-side with DOMPurify, in addition to the server-side allowlist and CSP.
+  The login `next` parameter is restricted to a same-origin relative path
+  (open-redirect fix). Interactive API docs (`/docs`, `/redoc`, `/openapi.json`)
+  are disabled once `COOKIE_SECURE` is set. The rate-limit `429`, CSRF `403`, and
+  any unhandled `500` now carry the full security-header set, and a generic
+  exception handler returns a clean `500` with no internal detail. Email headers
+  strip CR/LF (header-injection guard), and the console email backend no longer
+  logs message bodies — including live password-reset links — at INFO. Login
+  input is length-bounded, the `q` search on the bug/audit lists is capped, and
+  the spreadsheet formula-injection defense also catches leading-whitespace and
+  newline forms. Adding or removing an item link requires edit rights on **both**
+  endpoints; Sleuth re-checks its admin-only write policy at confirm time,
+  expires staged writes after a short window, and validates enum/date values on
+  the write path like the REST API. Secret redaction covers more token and PII
+  shapes, the RAG context and the agent's tool output are fenced so a record's
+  own text can't forge the boundary, and the cloud layer's shared cooldown is
+  lock-guarded. Forgot-password does equivalent work for unknown accounts (timing
+  parity), the RAG embedder sends its API key in a header rather than the URL,
+  the Postgres host port binds to `127.0.0.1` only, and account email uniqueness
+  is case-insensitive.
+- **Reliability.** Bug edits use optimistic concurrency: a stale save returns
+  `409` instead of silently overwriting a concurrent edit. An additive per-row
+  `version` counter, compared under a row lock, catches a conflict even within
+  the same second; the legacy `expected_updated_at` path is retained, and a
+  malformed value is now a hard `400`. A database outage at boot degrades to a
+  serving state (`/api/health` reports `status: degraded` /
+  `database: unavailable`) instead of crash-looping, and `get_db` rolls back on
+  error. A malformed or decompression-bomb image is skipped from the header read
+  by a pixel budget and fails open to the original bytes rather than a `500`. The
+  last-admin guard takes a row lock so two concurrent demotions can't leave zero
+  admins, and linking two items is idempotent under a race. The cloud-LLM circuit
+  breaker trips on a `200` with an unparseable body, JSON extraction tolerates
+  braces inside strings and a stray brace in prose, the daily digest claims rows
+  with `FOR UPDATE SKIP LOCKED`, the xlsx ingest scan is row/column-bounded, and
+  the additive index pass survives a single failed `CREATE INDEX` rather than
+  crashing boot.
+- **Performance.** Every report bounds its detail rows (and the timeline its day
+  window and resolved side), so an aggregated export can't materialize the whole
+  table before the `413` guard fires. New `activity_log(action, created_at)` and
+  `notifications(emailed_at, created_at)` indexes keep the throughput/timeline
+  reports and the daily digest sargable as the audit trail grows. The
+  item-detail view and the dedicated `/comments` and `/activity` endpoints load a
+  bounded slice, report filter id-lists are length-capped, and an over-range
+  numeric search falls back to text search instead of erroring.
+- **Accessibility.** The filter-bar and chip multi-selects and the sidebar
+  project/user rows are fully keyboard-operable, the item picker only references
+  its listbox when open, and the Sleuth typing indicator is a labelled live
+  region with its decorative dots hidden.
+- **Housekeeping.** `docker-compose.yml` defaults `CORS_ORIGINS` to same-origin
+  (was `*`), `.dockerignore` drops editor/agent scratch and `secrets/` from the
+  Docker build context, Vite source maps are pinned off, and the OpenAPI spec
+  documents its cookie auth scheme. Postgres pool sizing is
+  env-tunable (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`) and `down.sh` gained `--force`
+  for unattended teardown. Project updates are true partial updates, event-item
+  edit affordances are computed per user, stats buckets are type-safe, a shared
+  `activityIcon` keeps the audit and item feeds consistent with stable row keys,
+  and the obsolete `interest-cohort` Permissions-Policy token is removed.
+
 ## [2.10] — 2026-06-11
 
 Maintenance and quality pass. No DB schema changes.

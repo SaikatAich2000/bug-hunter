@@ -101,11 +101,14 @@ export default function LoginPage() {
         return;
       }
       // Success — redirect to home (or `next` query param if provided).
+      // Only accept a same-origin relative path; reject absolute, protocol-
+      // relative ("//host") and backslash variants to avoid an open redirect.
       const params = new URLSearchParams(location.search);
-      const next = params.get("next") || "/";
+      const requested = params.get("next") || "/";
+      const next = /^\/(?![/\\])/.test(requested) ? requested : "/";
       location.replace(next);
-    } catch (err) {
-      console.error("Login network error:", err);
+    } catch {
+      // The user already sees the alert below; no need to noise up the console.
       setLoginAlert({ msg: "Network error. Try again", kind: "error" });
     } finally {
       setLoginBusy(false);
@@ -140,8 +143,7 @@ export default function LoginPage() {
         }
         setForgotAlert({ msg, kind: "error" });
       }
-    } catch (err) {
-      console.error("Forgot-password network error:", err);
+    } catch {
       setForgotAlert({ msg: "Network error. Try again", kind: "error" });
     } finally {
       setForgotBusy(false);

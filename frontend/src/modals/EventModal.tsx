@@ -65,6 +65,16 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
   const eligibleManagers = users.filter(
     (u) => u.is_active && (u.role === "admin" || u.role === "manager"),
   );
+  // Render chips for the eligible managers PLUS any already-assigned manager
+  // that's no longer eligible (e.g. since deactivated) — otherwise it has no
+  // chip to deselect yet is silently re-submitted on save.
+  const managerPickerItems = eligibleManagers.map((u) => ({ id: u.id, label: u.name, title: u.role }));
+  const eligibleManagerIds = new Set(managerPickerItems.map((i) => i.id));
+  for (const m of event?.managers ?? []) {
+    if (managerIds.includes(m.id) && !eligibleManagerIds.has(m.id)) {
+      managerPickerItems.push({ id: m.id, label: `${m.name} (inactive)`, title: m.role });
+    }
+  }
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -130,7 +140,7 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
           <legend>Managers</legend>
           <ChipPicker
             id="eventManagerPicker"
-            items={eligibleManagers.map((u) => ({ id: u.id, label: u.name, title: u.role }))}
+            items={managerPickerItems}
             selected={managerIds}
             onToggle={(uid) =>
               setManagerIds((prev) =>

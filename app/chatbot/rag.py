@@ -48,7 +48,9 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         model = f"models/{s.GEMINI_EMBED_MODEL}"
         r = httpx.post(
             f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
-            params={"key": s.GEMINI_API_KEY},
+            # Key in a header (not the URL query string) so it can't leak into a
+            # logged exception URL / proxy access log — mirrors cloud_llm.py.
+            headers={"x-goog-api-key": s.GEMINI_API_KEY},
             json={"requests": [
                 {"model": model, "content": {"parts": [{"text": t[:8000]}]}}
                 for t in texts
@@ -215,7 +217,14 @@ def retrieve_text(message: str, where: Optional[dict] = None) -> str:
         logger.warning("Sleuth RAG query failed: %s", exc)
         return ""
     docs = (res.get("documents") or [[]])[0]
-    return "\n---\n".join(docs) if docs else ""
+    if not docs:
+        return ""
+    # Wrap retrieved doc text as a fenced DATA block and defang any literal fence
+    # marker, so indexed content (arbitrary comment/doc bodies) can't smuggle
+    # instructions to the model — the same structural injection defense the
+    # keyword retrieval path applies in retrieval.format_context.
+    body = "\n---\n".join(d.replace("<<", "< <") for d in docs)
+    return f"<<DATA>>\n{body}\n<<END DATA>>"
 
 
 __all__ = ["retrieve_text", "index_all", "upsert_bug"]

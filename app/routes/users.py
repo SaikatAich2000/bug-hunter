@@ -46,8 +46,9 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 
-# Extracted to a module constant to avoid duplicating the literal.
+# Extracted to module constants to avoid duplicating the literals.
 _DETAIL_USER_NOT_FOUND = "User not found"
+_DETAIL_EMAIL_EXISTS = "Email already exists"
 
 def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail: str) -> None:
     db.add(Activity(
@@ -66,6 +67,16 @@ def _like_escape(needle: str) -> str:
               .replace("%", "\\%")
               .replace("_", "\\_")
     )
+
+
+def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> bool:
+    """Case-insensitive email-uniqueness check. The API lowercases emails before
+    insert, but this also rejects a collision with any legacy mixed-case row the
+    exact-match unique constraint would otherwise miss."""
+    stmt = select(User.id).where(func.lower(User.email) == email.lower())
+    if exclude_id is not None:
+        stmt = stmt.where(User.id != exclude_id)
+    return db.scalar(stmt) is not None
 
 
 @router.get("", response_model=list[UserOut])
@@ -106,6 +117,8 @@ def create_user(
         )
     # Reject if the chosen initial password is in HIBP.
     _reject_if_breached(payload.password)
+    if _email_in_use(db, payload.email):
+        raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
     user = User(
         name=payload.name,
         email=payload.email,
@@ -118,7 +131,7 @@ def create_user(
         db.flush()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Email already exists") from exc
+        raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS) from exc
     _audit(db, actor, "user_created", user.id,
            f"Created user '{user.name}' <{user.email}> ({user.role})")
     db.commit()
@@ -163,17 +176,32 @@ def _check_self_edit_guardrails(actor: User, target_id: int, fields: dict) -> No
         raise HTTPException(status_code=400, detail="You cannot deactivate yourself")
 
 
+def _count_other_active_admins(db: Session, exclude_id: int) -> int:
+    """Count active admins other than `exclude_id`, holding a row lock on the
+    admin rows so the check can't race itself.
+
+    Two admins concurrently deleting/demoting each other would each (with a
+    plain COUNT) see "1 other admin" and both commit, leaving the org with ZERO
+    admins. We SELECT ... FOR UPDATE over ALL active admins (not just the
+    others) so the second transaction blocks until the first commits and then
+    re-reads the now-smaller set. FOR UPDATE is a real lock on Postgres and a
+    harmless no-op on SQLite (single-writer; the test suite is serial).
+    """
+    admin_ids = db.scalars(
+        select(User.id)
+        .where(User.role == "admin", User.is_active.is_(True))
+        .with_for_update()
+    ).all()
+    return sum(1 for aid in admin_ids if aid != exclude_id)
+
+
 def _check_last_admin_guardrail(db: Session, target: User, target_id: int, fields: dict) -> None:
     """Don't allow demoting/disabling the last admin."""
     will_be_role = fields.get("role", target.role)
     will_be_active = fields.get("is_active", target.is_active)
     if target.role != "admin" or (will_be_role == "admin" and will_be_active):
         return
-    n_other_admins = db.scalar(
-        select(func.count(User.id))
-        .where(User.role == "admin", User.is_active.is_(True), User.id != target_id)
-    ) or 0
-    if n_other_admins == 0:
+    if _count_other_active_admins(db, target_id) == 0:
         raise HTTPException(
             status_code=400,
             detail="Cannot remove the last admin. Promote another user first.",
@@ -221,6 +249,10 @@ def update_user(
     _check_self_edit_guardrails(actor, user_id, fields)
     _check_last_admin_guardrail(db, user, user_id, fields)
 
+    new_email = fields.get("email")
+    if new_email and _email_in_use(db, new_email, exclude_id=user_id):
+        raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
+
     # If the admin is deactivating someone, kick their existing sessions.
     if fields.get("is_active") is False and user.is_active:
         user.session_version = (user.session_version or 0) + 1
@@ -234,7 +266,7 @@ def update_user(
         db.flush()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Email already exists") from exc
+        raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS) from exc
 
     if changes:
         _audit(db, actor, "user_updated", user.id,
@@ -257,16 +289,11 @@ def delete_user(
     if actor.id == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete yourself")
 
-    if user.role == "admin":
-        n_other_admins = db.scalar(
-            select(func.count(User.id))
-            .where(User.role == "admin", User.is_active.is_(True), User.id != user_id)
-        ) or 0
-        if n_other_admins == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot delete the last admin. Promote another user first.",
-            )
+    if user.role == "admin" and _count_other_active_admins(db, user_id) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete the last admin. Promote another user first.",
+        )
 
     label = f"{user.name} <{user.email}>"
     db.delete(user)

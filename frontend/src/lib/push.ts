@@ -74,7 +74,13 @@ function loadScript(src: string): Promise<void> {
     el.src = src;
     el.async = true;
     el.onload = () => resolve();
-    el.onerror = () => reject(new Error(`failed to load ${src}`));
+    el.onerror = () => {
+      // Remove the failed node so a later attempt re-adds and retries it,
+      // instead of the querySelector above short-circuiting to a resolved()
+      // for a script that never actually loaded (push silently dead otherwise).
+      el.remove();
+      reject(new Error(`failed to load ${src}`));
+    };
     document.head.appendChild(el);
   });
 }

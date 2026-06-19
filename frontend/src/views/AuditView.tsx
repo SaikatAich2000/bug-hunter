@@ -10,7 +10,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { toastError } from "../lib/toast";
-import { formatDate } from "../lib/format";
+import { activityIcon, formatDate } from "../lib/format";
 import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import type { AuditRow } from "../types";
 
@@ -19,21 +19,6 @@ import type { AuditRow } from "../types";
 // front was the largest single payload + serialization cost; 300/page keeps
 // the first paint light while staying well under the backend cap.
 const AUDIT_PAGE_SIZE = 300;
-
-/** Emoji per audit action. */
-function activityIcon(action: string): string {
-  if (action.includes("session")) return "🔐";
-  if (action.includes("login")) return "🔑";
-  if (action.includes("logout")) return "👋";
-  if (action.includes("password")) return "🔒";
-  if (action.includes("created")) return "✨";
-  if (action.includes("delete")) return "🗑";
-  if (action.includes("comment")) return "💬";
-  if (action.includes("attachment")) return "📎";
-  if (action.includes("status")) return "🔄";
-  if (action.includes("assign")) return "👥";
-  return "📝";
-}
 
 // Each audit row is memoized so typing in the search box (which only changes
 // view-local `q`) doesn't re-render the whole list. The row JSX is pure over
@@ -100,9 +85,13 @@ export default function AuditView() {
       loadedCountRef.current += page.length;
       setRows((prev) => (clean ? page : [...prev, ...page]));
       setDrained(page.length < AUDIT_PAGE_SIZE);
-      setLoaded(true);
     } catch (err) {
       toastError(err);
+      // Stop the "Load older" button from re-issuing the same failing request.
+      setDrained(true);
+    } finally {
+      // Render the empty-state instead of a blank screen when the first fetch errors.
+      setLoaded(true);
     }
   }, []);
 
@@ -202,7 +191,7 @@ export default function AuditView() {
         {loaded && rows.length === 0 ? (
           <p className="no-content">No audit events match</p>
         ) : null}
-        {rows.map((r, i) => <AuditRowView key={`${i}-${r.id}`} r={r} />)}
+        {rows.map((r) => <AuditRowView key={r.id} r={r} />)}
         {!drained && rows.length > 0 ? (
           <div className="audit-load-more">
             <button

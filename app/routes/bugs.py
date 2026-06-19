@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -14,6 +15,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import can_delete_bug, can_edit_bug, get_current_user
@@ -25,7 +27,7 @@ from app.email_service import (
 from app import notification_service
 from app.image_strip import strip_image_metadata
 from app.models import (
-    Activity, Attachment, Bug, BugLink, Comment, Event, Project, User,
+    ROLE_ADMIN, Activity, Attachment, Bug, BugLink, Comment, Event, Project, User,
 )
 from app.schemas import (
     ALLOWED_ENVIRONMENTS, ALLOWED_ITEM_TYPES, ALLOWED_PRIORITIES,
@@ -45,6 +47,12 @@ _DEFAULT_MIME = "application/octet-stream"
 # Soft cap on individual attachment size — protects the DB from a 4 GB video
 # upload. Configurable via env if the team needs bigger files later.
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Largest value the integer primary key can hold (32-bit signed, the Postgres
+# `integer` type). A numeric search token longer than this overflows the column
+# and raises a DataError on Postgres, so over-range digit strings are treated as
+# free text rather than an id lookup.
+_MAX_PK_INT = 2**31 - 1
 
 # Read uploads in 1 MB chunks so we abort over-sized requests before
 # they consume RAM. Anything above MAX_FILE_BYTES is rejected mid-stream.
@@ -201,6 +209,7 @@ def _bug_to_out_dict(bug: Bug, attachment_count: int = 0, can_edit: bool = False
         "event_name": bug.event.name if getattr(bug, "event", None) else None,
         "created_at": bug.created_at,
         "updated_at": bug.updated_at,
+        "version": getattr(bug, "version", 1),
         "attachment_count": attachment_count,
         "can_edit": can_edit,
     }
@@ -238,6 +247,19 @@ def _resolve_user(db: Session, user_id: int | None) -> User | None:
     if user is None:
         raise HTTPException(status_code=400, detail=f"User {user_id} does not exist")
     return user
+
+
+def _reject_inactive(users: list[User], noun: str = "user") -> None:
+    """Reject NEWLY assigning/reporting work to a DEACTIVATED account — a
+    disabled user can't log in, so routing notifications/emails to them is a
+    silent dead-end. Only new additions pass through here; an item that already
+    references a since-deactivated user is left editable."""
+    inactive = sorted((u.name for u in users if not u.is_active))
+    if inactive:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot assign a deactivated {noun}: {', '.join(inactive)}",
+        )
 
 
 # Human phrasing for a stored link_type, per direction. Outgoing is the
@@ -354,7 +376,7 @@ def _apply_where_both(stmt, count_stmt, clause):
 def _apply_q_filter(stmt, count_stmt, q: str):
     """Bug-id-or-text search: #123 / 123 → exact id match; otherwise LIKE."""
     q_clean = q.strip().lstrip("#")
-    if q_clean.isdigit():
+    if q_clean.isascii() and q_clean.isdigit() and int(q_clean) <= _MAX_PK_INT:
         return _apply_where_both(stmt, count_stmt, Bug.id == int(q_clean))
     if not q_clean:
         return stmt, count_stmt
@@ -415,7 +437,7 @@ def list_bugs(
     assignee_id: Optional[list[int]] = Query(default=None),
     event_id: Optional[int] = None,
     due_date: Optional[str] = None,
-    q: Optional[str] = None,
+    q: Optional[str] = Query(default=None, max_length=200),
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -482,20 +504,38 @@ def list_bugs(
 # ---------------------------------------------------------------------------
 # Detail
 # ---------------------------------------------------------------------------
+# Detail-view caps: the modal loads at most this many of the NEWEST comments /
+# activity rows. A long-lived item accrues unbounded activity rows, so loading
+# the whole history into one response is the worst case we bound here. Older
+# history stays reachable via the dedicated /activity (and /comments) endpoints.
+# Generous enough that realistic items are unaffected.
+_DETAIL_COMMENTS_MAX = 500
+_DETAIL_ACTIVITIES_MAX = 500
+_DETAIL_ATTACHMENTS_MAX = 500
+
+
 @router.get("/{bug_id}", response_model=BugDetail)
 def get_bug(
     bug_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> BugDetail:
-    bug = db.scalar(
-        _eager_bug().options(
-            selectinload(Bug.comments),
-            selectinload(Bug.activities),
-        ).where(Bug.id == bug_id)
-    )
+    bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+
+    # Bounded loads instead of the unbounded relationships. Newest first, which
+    # matches the Bug.comments / Bug.activities relationship ordering.
+    recent_comments = list(db.scalars(
+        select(Comment).where(Comment.bug_id == bug_id)
+        .order_by(Comment.created_at.desc(), Comment.id.desc())
+        .limit(_DETAIL_COMMENTS_MAX)
+    ).all())
+    recent_activities = list(db.scalars(
+        select(Activity).where(Activity.bug_id == bug_id)
+        .order_by(Activity.created_at.desc(), Activity.id.desc())
+        .limit(_DETAIL_ACTIVITIES_MAX)
+    ).all())
 
     # Pull all attachments (bug-level + comment-level), grouped per-comment,
     # newest first so the most recent evidence is at the top of each bucket on
@@ -503,6 +543,7 @@ def get_bug(
     all_atts = list(db.scalars(
         select(Attachment).where(Attachment.bug_id == bug_id)
         .order_by(Attachment.created_at.desc(), Attachment.id.desc())
+        .limit(_DETAIL_ATTACHMENTS_MAX)
     ).all())
     by_comment: dict[int, list[Attachment]] = {}
     bug_level: list[Attachment] = []
@@ -514,14 +555,16 @@ def get_bug(
 
     payload = _bug_to_out_dict(
         bug,
-        len(all_atts),
+        # Exact count via aggregate — the loaded `all_atts` list is capped at
+        # _DETAIL_ATTACHMENTS_MAX, so len() would under-report on busy items.
+        _attachment_count(db, bug_id),
         can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees],
                      item_type=_item_type(bug)),
     )
     payload["attachments"] = [_attachment_brief(a) for a in bug_level]
     payload["links"] = _bug_links(db, bug_id)
     payload["comments"] = []
-    for c in bug.comments:
+    for c in recent_comments:
         payload["comments"].append({
             "id": c.id, "bug_id": c.bug_id,
             "author_user_id": c.author_user_id, "author_name": c.author_name,
@@ -535,7 +578,7 @@ def get_bug(
             "actor_name": a.actor_name, "action": a.action, "detail": a.detail,
             "created_at": a.created_at,
         }
-        for a in bug.activities
+        for a in recent_activities
     ]
     return BugDetail.model_validate(payload)
 
@@ -553,6 +596,15 @@ def create_bug(
     if db.get(Project, payload.project_id) is None:
         raise HTTPException(status_code=400, detail="Project does not exist")
 
+    # Per-type policy: only admins/managers may create Tasks/Requirements
+    # (regular users get Bugs only) — the same rule can_edit_bug enforces on
+    # edit, so a user can't create an item they could never edit.
+    if not can_edit_bug(actor, actor.id, [], item_type=payload.item_type):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only admins or managers can create a {payload.item_type.lower()}.",
+        )
+
     # Reporter: if explicit one provided, only admin/manager can override.
     # Otherwise reporter = the current user.
     if payload.reporter_id is not None and payload.reporter_id != actor.id:
@@ -566,6 +618,8 @@ def create_bug(
         reporter = actor
 
     assignees = _resolve_users(db, payload.assignee_ids)
+    # Don't route new work to a deactivated reporter/assignee.
+    _reject_inactive([reporter, *assignees])
 
     # Validate optional event link.
     if payload.event_id is not None:
@@ -657,6 +711,47 @@ def _validate_update_authorization(bug: Bug, actor: User) -> None:
         )
 
 
+# Link types whose reverse direction would contradict the forward one — e.g.
+# "A blocks B" and "B blocks A" can't both be true. `relates` is symmetric and
+# is intentionally excluded.
+_DIRECTIONAL_LINK_TYPES = {"blocks", "duplicate"}
+
+
+def _require_can_edit_link_endpoint(item: Bug, actor: User) -> None:
+    """A link touches BOTH endpoints' relationship views, so adding or removing
+    one requires edit rights on each endpoint — otherwise a user who can edit a
+    Bug could attach/detach links on a Task/Requirement they cannot touch."""
+    if not can_edit_bug(actor, item.reporter_id, [a.id for a in item.assignees],
+                        item_type=_item_type(item)):
+        noun = _item_type(item).lower()
+        raise HTTPException(
+            status_code=403,
+            detail=f"You don't have permission to change links on this {noun}.",
+        )
+
+
+def _reject_inverse_directional_link(
+    db: Session, source_id: int, target: Bug, link_type: str,
+) -> None:
+    """Block A→B when B→A of the same directional type already exists, so the two
+    items can't carry contradictory directional relationships."""
+    if link_type not in _DIRECTIONAL_LINK_TYPES:
+        return
+    inverse = db.scalar(
+        select(BugLink).where(
+            BugLink.source_bug_id == target.id,
+            BugLink.target_bug_id == source_id,
+            BugLink.link_type == link_type,
+        )
+    )
+    if inverse is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"These items are already linked the other way "
+                    f"(#{target.id} {_link_phrase(link_type, 'outgoing')} #{source_id})."),
+        )
+
+
 def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
     """Over-post guard: re-authorize a client-supplied item_type change against
     the TARGET type. _validate_update_authorization only checked the CURRENT
@@ -711,6 +806,69 @@ def _validate_update_payload(fields: dict, bug: Bug, db: Session) -> None:
     _validate_update_status(fields, bug)
 
 
+def _stale_edit_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=("This item was changed by someone else since you opened it. "
+                "Reload to see the latest, then reapply your change."),
+    )
+
+
+def _reject_if_updated_at_drifted(
+    expected_updated_at: str, current_updated: datetime,
+) -> None:
+    """Legacy timestamp path of the optimistic-concurrency check. Unparseable
+    input is a hard 400 — a client that opts in gets a clear signal instead of
+    silently losing the protection. current_updated is the locked row's
+    updated_at (a NOT NULL column), so it's always present."""
+    try:
+        seen = datetime.fromisoformat(str(expected_updated_at).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="expected_updated_at is not a valid ISO-8601 timestamp.",
+        ) from exc
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    current = current_updated
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    # updated_at is stored at whole-second resolution, so compare seconds.
+    if int(seen.timestamp()) != int(current.timestamp()):
+        raise _stale_edit_conflict()
+
+
+def _enforce_optimistic_concurrency(
+    db: Session, bug_id: int,
+    expected_version: Optional[int],
+    expected_updated_at: Optional[str],
+) -> None:
+    """Opt-in optimistic concurrency.
+
+    Locks the item row (``FOR UPDATE``) so concurrent writers to the same item
+    serialize, then rejects (409) when the client's last-seen ``version``
+    (preferred — sub-second safe) or ``updated_at`` (legacy — whole-second) no
+    longer matches the authoritative current value. No-op when the client opts
+    out by sending neither field, preserving the prior last-write-wins.
+    """
+    if expected_version is None and not expected_updated_at:
+        return
+    locked = db.execute(
+        select(Bug.version, Bug.updated_at)
+        .where(Bug.id == bug_id)
+        .with_for_update()
+    ).first()
+    if locked is None:
+        # Row vanished (concurrent delete); the caller's load will 404.
+        return
+    current_version, current_updated = locked
+    if expected_version is not None:
+        if int(expected_version) != int(current_version):
+            raise _stale_edit_conflict()
+        return
+    _reject_if_updated_at_drifted(expected_updated_at, current_updated)
+
+
 def _compute_tracked_changes(bug: Bug, fields: dict) -> list[tuple[str, str, str]]:
     """List of (field, old, new) tuples for every tracked field that differs.
     Description is included so a description-only edit isn't a no-op."""
@@ -731,6 +889,7 @@ def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int]
         new_reporter_label = "—"
     else:
         new_reporter = _resolve_user(db, new_reporter_id)
+        _reject_inactive([new_reporter], "reporter")
         bug.reporter_id = new_reporter.id
         new_reporter_label = new_reporter.name if new_reporter else "—"
     if old_reporter_label != new_reporter_label:
@@ -738,19 +897,25 @@ def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int]
 
 
 def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]],
-                        changes: list[tuple[str, str, str]]) -> list[User]:
-    """Diff and re-bind assignees if the set actually changed. Returns the
-    list of NEWLY-added users so the caller can notify them."""
+                        changes: list[tuple[str, str, str]]) -> tuple[list[User], list[User]]:
+    """Diff and re-bind assignees if the set actually changed. Returns
+    (newly-added, newly-removed) users so the caller can notify BOTH — being
+    unassigned is as meaningful as being assigned."""
     if assignee_ids is None:
-        return []
+        return [], []
     new_users = _resolve_users(db, assignee_ids)
-    old_ids = {a.id for a in bug.assignees}
+    old_users = list(bug.assignees)
+    old_ids = {a.id for a in old_users}
     new_ids = {u.id for u in new_users}
     added_ids = new_ids - old_ids
     removed_ids = old_ids - new_ids
     if not (added_ids or removed_ids):
-        return []
-    old_names = sorted(a.name for a in bug.assignees)
+        return [], []
+    added = [u for u in new_users if u.id in added_ids]
+    removed = [u for u in old_users if u.id in removed_ids]
+    # Don't route new work to a deactivated account (only NEW additions).
+    _reject_inactive(added)
+    old_names = sorted(a.name for a in old_users)
     new_names = sorted(u.name for u in new_users)
     changes.append((
         "assignees",
@@ -758,7 +923,7 @@ def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]
         ", ".join(new_names) or "(none)",
     ))
     bug.assignees = new_users  # only re-bind when actually different
-    return [u for u in new_users if u.id in added_ids]
+    return added, removed
 
 
 def _persist_update(db: Session, bug: Bug, actor: User,
@@ -774,6 +939,10 @@ def _persist_update(db: Session, bug: Bug, actor: User,
             db, bug.id, actor, f"{field}_changed",
             f"{prefix}{field}: '{old}' → '{new}'",
         )
+    # Bump the optimistic-concurrency version on every committed change so a
+    # second writer holding a stale copy is detected at sub-second resolution.
+    # version is NOT NULL (server_default 1), so it's always an int here.
+    bug.version = bug.version + 1
     db.commit()
 
 
@@ -800,12 +969,20 @@ def update_bug(
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> BugOut:
+    fields = payload.model_dump(exclude_unset=True)
+    # Optimistic concurrency (opt-in): take the row lock and compare the client's
+    # last-seen version/timestamp BEFORE loading or mutating, so concurrent
+    # writers to the same item serialize and the stale one gets a clean 409.
+    _enforce_optimistic_concurrency(
+        db, bug_id,
+        fields.pop("expected_version", None),
+        fields.pop("expected_updated_at", None),
+    )
+
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
     _validate_update_authorization(bug, actor)
-
-    fields = payload.model_dump(exclude_unset=True)
     _validate_update_payload(fields, bug, db)
     # Over-post guard: block converting a Bug into a Task/Requirement the caller
     # can't edit (the auth check above only saw the CURRENT type).
@@ -831,14 +1008,14 @@ def update_bug(
 
     if reporter_actually_changes:
         _apply_reporter_change(bug, db, new_reporter_id, changes)
-    newly_assigned = _apply_assignee_diff(bug, db, assignee_ids, changes)
+    newly_assigned, newly_removed = _apply_assignee_diff(bug, db, assignee_ids, changes)
 
     _persist_update(db, bug, actor, changes)
 
     # In-app notifications mirror the update emails. Newly-assigned users get a
     # single "assigned" notification (not also "updated"), so each recipient
     # gets exactly one per change set.
-    if changes or newly_assigned:
+    if changes or newly_assigned or newly_removed:
         new_ids = {u.id for u in newly_assigned}
         _itype = _item_type(bug).lower()
         if changes:
@@ -860,6 +1037,14 @@ def update_bug(
                 title=f"Assigned to {_itype} #{bug.id}",
                 body=f"{actor.name} assigned you to “{bug.title}”.",
                 bug_id=bug.id, actor_name=actor.name,
+            )
+        if newly_removed:
+            # Being taken off an item is as meaningful as being added to one.
+            notification_service.notify(
+                db, [u.id for u in newly_removed], kind="updated", background=background,
+                title=f"Unassigned from {_itype} #{bug.id}",
+                body=f"{actor.name} removed you from “{bug.title}”.",
+                bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
             )
         db.commit()
 
@@ -973,6 +1158,7 @@ def list_comments(
     comments = list(db.scalars(
         select(Comment).where(Comment.bug_id == bug_id)
         .order_by(Comment.created_at.desc(), Comment.id.desc())
+        .limit(_DETAIL_COMMENTS_MAX)
     ).all())
     atts = list(db.scalars(
         select(Attachment).where(Attachment.bug_id == bug_id, Attachment.comment_id.isnot(None))
@@ -1003,6 +1189,9 @@ def add_comment(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Same per-type policy as edit/link: a regular user can discuss a Bug but
+    # not a Task/Requirement they have no edit rights on.
+    _validate_update_authorization(bug, author)
 
     c = Comment(
         bug_id=bug_id,
@@ -1075,6 +1264,9 @@ async def upload_attachment(
     bug = db.get(Bug, bug_id)
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Same per-type policy as edit/link: regular users can attach to a Bug but
+    # not to a Task/Requirement they can't edit.
+    _validate_update_authorization(bug, uploader)
     if comment_id is not None:
         c = db.get(Comment, comment_id)
         if c is None or c.bug_id != bug_id:
@@ -1088,6 +1280,13 @@ async def upload_attachment(
     # No-op for non-images and fail-open on errors so an exotic image format
     # never blocks the upload.
     data = strip_image_metadata(data, file.content_type)
+    # The cap was checked on the pre-strip bytes; re-assert it in case the
+    # re-encode grew the file past the limit.
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {MAX_FILE_BYTES // (1024 * 1024)} MB.",
+        )
 
     att = Attachment(
         bug_id=bug_id,
@@ -1156,9 +1355,20 @@ def download_attachment(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    a = db.get(Attachment, att_id)
-    if a is None or a.bug_id != bug_id:
+    # Load metadata WITHOUT the BLOB column: a range request must not pull the
+    # whole (up to 50 MB) `data` into memory just to slice a few bytes, or a
+    # video seek (which fires many small Range requests) becomes repeated
+    # full-column reads. The bytes themselves are fetched below — sliced in SQL
+    # for ranges, whole only for a full-body download.
+    meta = db.execute(
+        select(
+            Attachment.bug_id, Attachment.filename,
+            Attachment.content_type, Attachment.size_bytes,
+        ).where(Attachment.id == att_id)
+    ).first()
+    if meta is None or meta[0] != bug_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
+    _att_bug_id, att_filename, att_content_type, att_size = meta
 
     # Decide content-type and disposition.
     #
@@ -1167,20 +1377,20 @@ def download_attachment(
     # run in our origin's context — same-origin XSS via stored attachment.
     # For those types we force `attachment` disposition AND downgrade the
     # content-type to octet-stream so the browser saves rather than executes.
-    ct_lower = (a.content_type or "").lower().split(";")[0].strip()
+    ct_lower = (att_content_type or "").lower().split(";")[0].strip()
     is_active = ct_lower in _ACTIVE_CONTENT_TYPES
-    safe_ct = _DEFAULT_MIME if is_active else (a.content_type or _DEFAULT_MIME)
+    safe_ct = _DEFAULT_MIME if is_active else (att_content_type or _DEFAULT_MIME)
     inline_ok = not is_active and (
         ct_lower in _INLINE_SAFE_TYPES
         or ct_lower.startswith(_INLINE_SAFE_PREFIXES)
     )
     disposition = "inline" if inline_ok else "attachment"
 
-    safe_fname = _safe_filename_for_header(a.filename)
+    safe_fname = _safe_filename_for_header(att_filename)
     # RFC 5987 form for non-ASCII filenames; keeps a plain ASCII fallback.
     cd = (
         f'{disposition}; filename="{safe_fname}"; '
-        f"filename*=UTF-8''{quote(a.filename, safe='')}"
+        f"filename*=UTF-8''{quote(att_filename, safe='')}"
     )
 
     headers = {
@@ -1203,11 +1413,18 @@ def download_attachment(
         "Cache-Control": "private, max-age=0, no-cache",
     }
 
-    span = _parse_range(request.headers.get("range"), a.size_bytes)
+    span = _parse_range(request.headers.get("range"), att_size)
     if span is not None:
         start, end = span
-        chunk = a.data[start : end + 1]
-        headers["Content-Range"] = f"bytes {start}-{end}/{a.size_bytes}"
+        length = end - start + 1
+        # Slice in the database (1-indexed substr) so only the requested bytes
+        # leave storage. Works on both Postgres (bytea) and SQLite (blob).
+        raw = db.scalar(
+            select(func.substr(Attachment.data, start + 1, length))
+            .where(Attachment.id == att_id)
+        )
+        chunk = bytes(raw) if raw is not None else b""
+        headers["Content-Range"] = f"bytes {start}-{end}/{att_size}"
         headers["Content-Length"] = str(len(chunk))
         return Response(
             content=chunk,
@@ -1216,9 +1433,11 @@ def download_attachment(
             headers=headers,
         )
 
-    # Body is already in memory, so a plain Response is simplest and sets an
+    # Full download: fetch the whole column once. A plain Response sets an
     # accurate Content-Length (StreamingResponse drops the explicit one).
-    return Response(content=a.data, media_type=safe_ct, headers=headers)
+    data = db.scalar(select(Attachment.data).where(Attachment.id == att_id))
+    return Response(content=bytes(data) if data is not None else b"",
+                    media_type=safe_ct, headers=headers)
 
 
 @router.delete("/{bug_id}/attachments/{att_id}")
@@ -1235,7 +1454,7 @@ def delete_attachment(
     # comment-level): comments and attachments must not be editable or
     # deletable by anyone except an admin. Uploaders and managers cannot
     # remove their own files — admins curate the evidence.
-    if actor.role != "admin":
+    if actor.role != ROLE_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Only admins can delete attachments.",
@@ -1273,7 +1492,7 @@ def update_comment(
     """Edit a comment's body. Admin only — see route-module note. The
     audit trail records who edited and what the new body was so an
     accidental rewrite is traceable."""
-    if actor.role != "admin":
+    if actor.role != ROLE_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Only admins can edit comments.",
@@ -1299,6 +1518,8 @@ def update_comment(
     db.refresh(c)
     atts = list(db.scalars(
         select(Attachment).where(Attachment.comment_id == c.id)
+        .order_by(Attachment.created_at.desc(), Attachment.id.desc())
+        .limit(_DETAIL_ATTACHMENTS_MAX)
     ).all())
     return {
         "id": c.id, "bug_id": c.bug_id,
@@ -1318,7 +1539,7 @@ def delete_comment(
     """Delete a comment AND its attachments (the FK on attachments
     cascades from comment_id). Admin only. The audit row keeps the
     deleted body's preview so a moderator review still has context."""
-    if actor.role != "admin":
+    if actor.role != ROLE_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Only admins can delete comments.",
@@ -1359,6 +1580,7 @@ def list_activity(
     return list(db.scalars(
         select(Activity).where(Activity.bug_id == bug_id)
         .order_by(Activity.created_at.desc(), Activity.id.desc())
+        .limit(_DETAIL_ACTIVITIES_MAX)
     ).all())
 
 
@@ -1377,10 +1599,59 @@ def list_links(
 
 
 def _reload_link(db: Session, link_id: int) -> BugLink:
-    return db.scalar(
+    link = db.scalar(
         select(BugLink)
         .options(selectinload(BugLink.source), selectinload(BugLink.target))
         .where(BugLink.id == link_id)
+    )
+    if link is None:
+        # Concurrently deleted between insert/find and this reload — return a
+        # clean 409 instead of AttributeError-ing in _serialize_link.
+        raise HTTPException(status_code=409,
+                            detail="Link was modified concurrently. Please retry.")
+    return link
+
+
+def _insert_link_or_existing(db: Session, link: BugLink, refetch) -> tuple[BugLink, bool]:
+    """Flush a new BugLink; on a unique-index race, roll back and return the
+    existing edge. Returns ``(edge, created)``.
+
+    Keeps the "re-linking returns the existing edge" contract atomic: a
+    concurrent identical request that wins the race raises IntegrityError here,
+    which we convert into the existing edge instead of a 500. ``refetch`` re-runs
+    the existence lookup after the rollback.
+    """
+    db.add(link)
+    try:
+        db.flush()
+        return link, True
+    except IntegrityError:
+        db.rollback()
+        existing = refetch()
+        if existing is None:
+            raise
+        return existing, False
+
+
+def _link_stakeholders(bug: Bug) -> list[int | None]:
+    """Reporter + assignee ids for one end of a link."""
+    return [bug.reporter_id, *[a.id for a in bug.assignees]]
+
+
+def _notify_link_endpoints(
+    db: Session, recipients: list[int | None], primary_id: int, actor: User, *,
+    background: "BackgroundTasks | None", title: str, body: str,
+) -> None:
+    """Notify the (already-collected) reporters + assignees of BOTH ends of a
+    link. A link is a change to both items — a "blocks" edge especially matters
+    to the blocked item's assignees — so each endpoint's stakeholders hear about
+    it. ``notify()`` dedupes ids and drops the actor, so a user on both ends
+    still gets a single bell entry, and the same row feeds the email digest.
+    Deep-links to ``primary_id`` (the item the request was on)."""
+    notification_service.notify(
+        db, recipients, kind="updated", background=background,
+        title=title, body=body, bug_id=primary_id,
+        actor_name=actor.name, exclude=actor.id,
     )
 
 
@@ -1401,43 +1672,54 @@ def add_link(
     _validate_update_authorization(bug, actor)
     if payload.target_bug_id == bug_id:
         raise HTTPException(status_code=400, detail="An item can't be linked to itself")
-    target = db.get(Bug, payload.target_bug_id)
+    target = db.scalar(_eager_bug().where(Bug.id == payload.target_bug_id))
     if target is None:
         raise HTTPException(status_code=400, detail="Target item does not exist")
+    _require_can_edit_link_endpoint(target, actor)
+    _reject_inverse_directional_link(db, bug_id, target, payload.link_type)
 
-    existing = db.scalar(
-        select(BugLink).where(
-            BugLink.source_bug_id == bug_id,
-            BugLink.target_bug_id == target.id,
-            BugLink.link_type == payload.link_type,
+    def _find_existing() -> Optional[BugLink]:
+        return db.scalar(
+            select(BugLink).where(
+                BugLink.source_bug_id == bug_id,
+                BugLink.target_bug_id == target.id,
+                BugLink.link_type == payload.link_type,
+            )
         )
-    )
-    if existing is None:
-        link = BugLink(
+
+    existing = _find_existing()
+    if existing is not None:
+        return _serialize_link(_reload_link(db, existing.id), bug_id)
+
+    link, created = _insert_link_or_existing(
+        db,
+        BugLink(
             source_bug_id=bug_id, target_bug_id=target.id,
             link_type=payload.link_type, created_by_user_id=actor.id,
-        )
-        db.add(link)
-        db.flush()
-        _log(
-            db, bug_id, actor, "link_added",
-            f"#{bug_id} '{bug.title}' {_link_phrase(payload.link_type, 'outgoing')} "
-            f"#{target.id} '{target.title}'",
-        )
-        _notify_item_stakeholders(
-            db, bug, actor, kind="updated", background=background,
-            title=f"Link added on #{bug_id}",
-            body=(
-                f"{actor.name} linked “{bug.title}” "
-                f"{_link_phrase(payload.link_type, 'outgoing')} "
-                f"#{target.id} “{target.title}”."
-            ),
-        )
-        db.commit()
-        link_id = link.id
-    else:
-        link_id = existing.id
-    return _serialize_link(_reload_link(db, link_id), bug_id)
+        ),
+        _find_existing,
+    )
+    if not created:
+        # A concurrent identical request won the unique-index race — return the
+        # existing edge idempotently instead of 500ing.
+        return _serialize_link(_reload_link(db, link.id), bug_id)
+    _log(
+        db, bug_id, actor, "link_added",
+        f"#{bug_id} '{bug.title}' {_link_phrase(payload.link_type, 'outgoing')} "
+        f"#{target.id} '{target.title}'",
+    )
+    _notify_link_endpoints(
+        db, _link_stakeholders(bug) + _link_stakeholders(target), bug.id, actor,
+        background=background,
+        title=f"Link added on #{bug_id}",
+        body=(
+            f"{actor.name} linked “{bug.title}” "
+            f"{_link_phrase(payload.link_type, 'outgoing')} "
+            f"#{target.id} “{target.title}”."
+        ),
+    )
+    db.commit()
+    return _serialize_link(_reload_link(db, link.id), bug_id)
 
 
 @router.delete("/{bug_id}/links/{link_id}")
@@ -1457,10 +1739,17 @@ def remove_link(
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
     _validate_update_authorization(bug, actor)
     other_id = link.target_bug_id if link.source_bug_id == bug_id else link.source_bug_id
+    other = db.scalar(_eager_bug().where(Bug.id == other_id))
+    # Build the notify recipients inside the existing endpoint guard so both
+    # ends are covered without a second (untestable) None branch.
+    recipients = _link_stakeholders(bug)
+    if other is not None:
+        _require_can_edit_link_endpoint(other, actor)
+        recipients += _link_stakeholders(other)
     db.delete(link)
     _log(db, bug_id, actor, "link_removed", f"Unlinked #{bug_id} ↔ #{other_id}")
-    _notify_item_stakeholders(
-        db, bug, actor, kind="updated", background=background,
+    _notify_link_endpoints(
+        db, recipients, bug.id, actor, background=background,
         title=f"Link removed on #{bug_id}",
         body=f"{actor.name} unlinked “{bug.title}” from #{other_id}.",
     )
@@ -1534,10 +1823,19 @@ def _bulk_set_field(db: Session, bug: Bug, actor: User, field_name: str,
     return "updated"
 
 
-def _bulk_delete(db: Session, bug: Bug, actor: User) -> str:
-    # Mirror delete_bug: detach audit history (bug_id → NULL) so the trail
-    # survives, delete the row, then record the delete itself.
+def _bulk_delete(db: Session, bug: Bug, actor: User, background: BackgroundTasks) -> str:
+    # Mirror delete_bug exactly: notify the reporter + assignees BEFORE the row
+    # is gone (link_bug=False — the bug_id FK cascades, so the notification can't
+    # carry a deep-link to the about-to-vanish item), then detach audit history
+    # (bug_id → NULL) so the trail survives, delete the row, and record the
+    # delete itself. The notify row also feeds the email digest, so a bulk delete
+    # reaches assignees on every channel just like a single delete.
     title, itype, bug_id = bug.title, _item_type(bug), bug.id
+    _notify_item_stakeholders(
+        db, bug, actor, kind="updated", background=background, link_bug=False,
+        title=f"{itype} #{bug_id} deleted",
+        body=f"{actor.name} deleted “{title}”.",
+    )
     db.execute(update(Activity).where(Activity.bug_id == bug_id).values(bug_id=None))
     db.flush()
     db.delete(bug)
@@ -1549,15 +1847,27 @@ def _bulk_delete(db: Session, bug: Bug, actor: User) -> str:
     return "updated"
 
 
+def _bulk_version_conflict(bug: Bug, payload: BulkActionIn) -> bool:
+    """True when the caller supplied an expected version for this bug and it
+    drifted — so the bulk op must skip it rather than clobber a concurrent edit."""
+    if payload.expected_versions is None:
+        return False
+    expected = payload.expected_versions.get(bug.id)
+    return expected is not None and bug.version != expected
+
+
 def _apply_bulk_to_bug(db: Session, bug: Bug, actor: User, payload: BulkActionIn,
                        resolved, background: BackgroundTasks) -> str:
-    """Apply one bulk action to one bug. Returns 'updated' / 'skipped'.
-    Permission failures are 'skipped' so a mixed selection partially succeeds."""
+    """Apply one bulk action to one bug. Returns 'updated' / 'skipped' /
+    'conflict'. Permission failures are 'skipped' so a mixed selection partially
+    succeeds; a version drift is a 'conflict' (opt-in optimistic concurrency)."""
+    if _bulk_version_conflict(bug, payload):
+        return "conflict"
     action = payload.action
     if action == "delete":
         if not can_delete_bug(actor, item_type=_item_type(bug)):
             return "skipped"
-        return _bulk_delete(db, bug, actor)
+        return _bulk_delete(db, bug, actor, background)
     if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
                         item_type=_item_type(bug)):
         return "skipped"
@@ -1579,7 +1889,7 @@ def bulk_action(
     the same permission rules as its single-item endpoint; items the caller
     can't touch are skipped. Returns the updated / skipped / not-found tally."""
     resolved = _bulk_resolve_value(payload)
-    updated = skipped = failed = 0
+    updated = skipped = failed = conflicts = 0
     # Batch-load every selected item in ONE eager query (selectinload then
     # batches the relationship loads across all of them) instead of a fresh
     # eager query per id — turns ~4×N round-trips into ~3 total. Iterate the
@@ -1596,15 +1906,19 @@ def bulk_action(
         outcome = _apply_bulk_to_bug(db, bug, actor, payload, resolved, background)
         if outcome == "updated":
             updated += 1
+        elif outcome == "conflict":
+            conflicts += 1
         else:
             skipped += 1
     db.commit()
     parts = [f"{updated} updated"]
+    if conflicts:
+        parts.append(f"{conflicts} changed since you loaded them")
     if skipped:
         parts.append(f"{skipped} skipped")
     if failed:
         parts.append(f"{failed} not found")
     return BulkActionResult(
-        updated=updated, skipped=skipped, failed=failed,
+        updated=updated, skipped=skipped, failed=failed, conflicts=conflicts,
         message=", ".join(parts),
     )

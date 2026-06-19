@@ -32,7 +32,8 @@ def _parse_cron_part(part: str, lo: int, hi: int) -> range:
     if not part:
         raise ValueError("empty element in cron field")
     step = 1
-    if "/" in part:
+    has_step = "/" in part
+    if has_step:
         base, step_s = part.split("/", 1)
         step = int(step_s)
         if step <= 0:
@@ -45,7 +46,10 @@ def _parse_cron_part(part: str, lo: int, hi: int) -> range:
         a, b = base.split("-", 1)
         start, end = int(a), int(b)
     else:
-        start = end = int(base)
+        start = int(base)
+        # Standard cron: "N/step" means "from N to the field max, every step"
+        # (e.g. minute "5/15" → 5,20,35,50). A bare "N" (no step) is just N.
+        end = hi if has_step else start
     if start < lo or end > hi or start > end:
         raise ValueError(f"cron value '{base}' out of range [{lo}, {hi}]")
     return range(start, end + 1, step)

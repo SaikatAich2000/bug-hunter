@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import fcm_transport
@@ -77,15 +78,18 @@ def register(
     re-home it to this user (it may have moved browsers/accounts) and refresh
     ``last_seen_at`` rather than creating a duplicate.
     """
+    def _rehome(sub: PushSubscription) -> PushSubscription:
+        sub.user_id = user_id
+        sub.platform = platform or "web"
+        sub.user_agent = (user_agent or "")[:400]
+        sub.last_seen_at = _utcnow()
+        return sub
+
     existing = db.scalar(
         select(PushSubscription).where(PushSubscription.token == token)
     )
     if existing is not None:
-        existing.user_id = user_id
-        existing.platform = platform or "web"
-        existing.user_agent = (user_agent or "")[:400]
-        existing.last_seen_at = _utcnow()
-        return existing
+        return _rehome(existing)
     sub = PushSubscription(
         user_id=user_id,
         token=token,
@@ -93,6 +97,18 @@ def register(
         user_agent=(user_agent or "")[:400],
     )
     db.add(sub)
+    try:
+        db.flush()
+    except IntegrityError:
+        # A concurrent subscribe of the same globally-unique token won the
+        # insert race — re-home the row that landed instead of 500ing.
+        db.rollback()
+        other = db.scalar(
+            select(PushSubscription).where(PushSubscription.token == token)
+        )
+        if other is None:
+            raise
+        return _rehome(other)
     return sub
 
 

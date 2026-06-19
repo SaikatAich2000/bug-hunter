@@ -86,7 +86,10 @@ def update_project(
     p = db.get(Project, project_id)
     if p is None:
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
-    fields = payload.model_dump()
+    # exclude_unset so a partial PUT only touches the fields the client actually
+    # sent. Without it, omitting description/color would silently reset them to
+    # their schema defaults (and log the clobber as a "change").
+    fields = payload.model_dump(exclude_unset=True)
     changes = []
     for key, value in fields.items():
         old = getattr(p, key)

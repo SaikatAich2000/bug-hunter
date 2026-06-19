@@ -16,7 +16,10 @@ Design notes
 ------------
 * **Idempotent.** Rows are selected on ``emailed_at IS NULL`` and stamped after
   a successful send, so re-running the job (or running it twice a day) never
-  double-sends.
+  double-sends. The select also claims its rows with ``FOR UPDATE SKIP LOCKED``
+  (Postgres; a no-op on SQLite), so two runners racing in the same minute — e.g.
+  the in-app scheduler under an accidental multi-worker deploy — claim DISJOINT
+  rows instead of both stamping the same ones.
 * **Bounded.** The ``created_at >= now - lookback`` window means the very first
   run after deploying this feature can't replay the entire notification history
   — only the last ~day is ever considered. Existing rows (``emailed_at`` NULL
@@ -143,12 +146,21 @@ def run_digest(
         select(Notification)
         .where(Notification.emailed_at.is_(None), Notification.created_at >= cutoff)
         .order_by(Notification.user_id, Notification.created_at)
+        # Claim the rows so a concurrent runner can't grab and re-send the same
+        # ones. Real lock on Postgres; silently ignored on SQLite (single-writer,
+        # and the test suite is serial).
+        .with_for_update(skip_locked=True)
     ).all())
     if not rows:
         return {"users": 0, "emails_sent": 0, "operations": 0}
 
     by_user = _group_by_user(rows)
-    emails_sent = 0
+    # Phase 1 — build each deliverable user's digest and CLAIM their rows by
+    # stamping emailed_at, then commit to RELEASE the FOR UPDATE locks. We must
+    # not hold row locks (and an idle-in-transaction pooled connection) across
+    # the blocking SMTP sends below: a slow mail server would otherwise pin the
+    # connection for the whole batch and starve concurrent web requests.
+    outbox: list[tuple[str, str, str]] = []  # (email, subject, body)
     operations = 0
     for user_id, user_rows in by_user.items():
         user = db.get(User, user_id)
@@ -157,16 +169,22 @@ def run_digest(
             # window ages them out on its own (they remain visible in-app).
             continue
         subject, body = render_digest(user, user_rows)
-        email_service.deliver(subject, [user.email], body)
+        outbox.append((user.email, subject, body))
         for row in user_rows:
             row.emailed_at = now
-        emails_sent += 1
         operations += len(user_rows)
 
-    db.commit()
+    db.commit()  # locks released; claimed rows are now stamped (at-most-once)
+
+    # Phase 2 — deliver OUTSIDE the transaction. A crash here drops at most this
+    # batch's emails (already stamped), which is preferable to double-sending or
+    # to holding DB locks across network I/O.
+    for email, subject, body in outbox:
+        email_service.deliver(subject, [email], body)
+
     return {
         "users": len(by_user),
-        "emails_sent": emails_sent,
+        "emails_sent": len(outbox),
         "operations": operations,
     }
 

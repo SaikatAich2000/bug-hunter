@@ -100,6 +100,21 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
+  // Escape closes ONLY this popover. Capture-phase + stopPropagation pre-empts
+  // the app-level (bubble) Escape handler, which would otherwise dismiss the
+  // whole surrounding modal and discard the user's in-progress form.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+      btnRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
   // Resolve the selected option the way the native select would:
   // unmatched value → selectedIndex -1 → label falls back to "—".
   const selectedIndex = options.findIndex((o) => o.value === value);

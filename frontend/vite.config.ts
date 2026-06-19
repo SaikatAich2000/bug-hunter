@@ -18,6 +18,10 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, "..", "app", "static"),
     emptyOutDir: false,
+    // Never emit source maps into the publicly-served bundle — they'd expose the
+    // original TypeScript. This is Vite's default; pinned explicitly so a future
+    // config change can't silently start shipping .map files to app/static.
+    sourcemap: false,
     rollupOptions: {
       input: {
         index: resolve(__dirname, "index.html"),

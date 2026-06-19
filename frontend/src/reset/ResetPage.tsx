@@ -68,8 +68,7 @@ export default function ResetPage() {
         }
         setResetAlert({ msg, kind: "error" });
       }
-    } catch (err) {
-      console.error("Reset-password network error:", err);
+    } catch {
       setResetAlert({ msg: "Network error. Try again", kind: "error" });
     } finally {
       setBusy(false);

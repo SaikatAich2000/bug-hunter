@@ -47,11 +47,25 @@ PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _seed_module_db():
-    """Under pytest the ``__main__`` block never runs, so seed the dedicated
-    DB once for this module's read-only test functions (mirrors the manual
-    ``seed()`` call in ``if __name__ == "__main__"``)."""
+@pytest.fixture(autouse=True)
+def _rebind_and_seed():
+    """Re-bind this file's module-level app.* references to the current import
+    generation each test, then seed its dedicated DB. conftest's `client`
+    fixture purges `app.*` to rebind the engine per test; without re-binding and
+    re-seeding here, parser's reads would hit a stale or empty engine. (Under
+    pytest the ``__main__`` block that seeds in standalone mode never runs.)"""
+    import importlib
+    g = globals()
+    db_mod = importlib.import_module("app.database")
+    g["Base"], g["engine"], g["SessionLocal"] = (
+        db_mod.Base, db_mod.engine, db_mod.SessionLocal,
+    )
+    g["models"] = importlib.import_module("app.models")
+    g["hash_password"] = importlib.import_module("app.auth").hash_password
+    g["nlu"] = importlib.import_module("app.chatbot.nlu")
+    g["executor"] = importlib.import_module("app.chatbot.executor")
+    g["excel"] = importlib.import_module("app.chatbot.excel")
+    g["build_context"] = g["executor"].build_context
     seed()
     yield
 
@@ -62,7 +76,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         print(f"  PASS  {name}")
     else:
         FAILED.append((name, detail))
-        print(f"  FAIL  {name}  {detail}")
+        raise AssertionError(f"{name}: {detail}")
 
 
 def section(title: str) -> None:

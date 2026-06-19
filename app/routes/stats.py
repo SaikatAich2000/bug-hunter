@@ -185,12 +185,21 @@ def stats(
     project_count = db.scalar(select(func.count(Project.id))) or 0
     user_count = db.scalar(select(func.count(User.id))) or 0
 
-    by_priority = dict(db.execute(
-        _scoped_f(select(Bug.priority, func.count(Bug.id)).group_by(Bug.priority))
-    ).all())
-    by_environment = dict(db.execute(
-        _scoped_f(select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment))
-    ).all())
+    # Cast keys/values like by_status above (consistency + NULL-key safety): a
+    # bare dict() would leave raw DB ints and could surface a None key that the
+    # dict[str, int] response model rejects.
+    by_priority = {
+        str(p): int(c)
+        for p, c in db.execute(
+            _scoped_f(select(Bug.priority, func.count(Bug.id)).group_by(Bug.priority))
+        ).all()
+    }
+    by_environment = {
+        str(e): int(c)
+        for e, c in db.execute(
+            _scoped_f(select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment))
+        ).all()
+    }
     # by_type stays global so the tab-count badges stay correct regardless
     # of which tab is active.
     by_type = dict(db.execute(

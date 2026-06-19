@@ -256,6 +256,11 @@ class ReportResult:
     # click on the rolled-up number and immediately see the details.
     detail_columns: list[ReportColumn] = field(default_factory=list)
     detail_rows: list[dict[str, Any]] = field(default_factory=list)
+    # True when a row/detail-producing query hit _detail_cap() — the result is a
+    # TRUNCATED view, so the export route turns it into a 413 rather than letting
+    # an aggregate (throughput / time-to-resolution / timeline) silently report
+    # under-counts computed over a partial scan.
+    truncated: bool = False
 
     @property
     def total(self) -> int:
@@ -456,10 +461,14 @@ def _parse_resolution_status(detail: str) -> Optional[str]:
     None if the detail isn't a status_changed row or doesn't parse."""
     if not detail:
         return None
-    m = RESOLUTION_DETAIL_RE.search(detail)
-    if not m:
+    # The structured "status: 'old' → 'new'" clause is always the LAST segment
+    # of the detail line; a bug TITLE embedded earlier can itself contain a
+    # "status: 'x' → 'y'" lookalike, so take the RIGHTMOST match — otherwise a
+    # crafted title silently hides the item from every resolution report.
+    matches = RESOLUTION_DETAIL_RE.findall(detail)
+    if not matches:
         return None
-    return m.group(1).strip()
+    return matches[-1].strip()
 
 
 def _fetch_resolution_info(
@@ -481,6 +490,7 @@ def _fetch_resolution_info(
             Activity.created_at,
             Activity.detail,
             Bug.item_type,
+            Bug.status.label("current_status"),
         )
         .join(Bug, Bug.id == Activity.bug_id)
         .where(
@@ -491,14 +501,14 @@ def _fetch_resolution_info(
     ).all()
     out: dict[int, tuple[Optional[str], Optional[datetime]]] = {}
     seen: set[int] = set()
-    for bug_id, actor_name, created_at, detail, item_type in rows:
+    for bug_id, actor_name, created_at, detail, item_type, current_status in rows:
         if bug_id in seen:
-            # We already captured the most recent resolution-into event
-            # for this bug. A later status change away from resolved
-            # (e.g. Reopened) doesn't undo the prior resolution event
-            # for "who resolved it last" purposes — but if the current
-            # status isn't resolved, the caller will have skipped this
-            # bug anyway via the open/resolved check.
+            continue
+        # Only attribute a resolution when the bug is CURRENTLY resolved — a
+        # reopened (now-open) bug must not show a stale resolved_at / resolver
+        # or an understated days_open in item-detail / project-breakdown.
+        if not _is_resolved_status(current_status or "", item_type or "Bug"):
+            seen.add(bug_id)
             continue
         new_status = _parse_resolution_status(detail or "")
         if new_status and _is_resolved_status(new_status, item_type or "Bug"):
@@ -548,6 +558,22 @@ def _detail_columns() -> list[ReportColumn]:
 # ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
+def _detail_cap() -> int:
+    """Hard ceiling on rows any single report materializes into memory.
+
+    +1 over the configured MAX_REPORT_ROWS lets the export route detect "there
+    were more" and return 413 instead of letting run_report build an unbounded
+    result (and the XLSX workbook from it) in RAM. EVERY report applies this to
+    its row/detail-producing query so the OOM guard can't be outrun.
+    """
+    return get_settings().MAX_REPORT_ROWS + 1
+
+
+# Longest window the day-by-day timeline will materialize, so a pathological
+# date_from (e.g. year 0001) can't build hundreds of thousands of day rows.
+_MAX_TIMELINE_DAYS = 366
+
+
 def _report_item_detail(db: Session, filters: Filters) -> ReportResult:
     """Universal SQL-like detail export — every item matching filters."""
     # Bound the DB read so a no-filter export can't materialize an unbounded
@@ -555,7 +581,7 @@ def _report_item_detail(db: Session, filters: Filters) -> ReportResult:
     # routes/reports.py). +1 lets the route detect "there were more".
     stmt = (_apply_bug_filters(_eager_bug(), filters)
             .order_by(Bug.id.desc())
-            .limit(get_settings().MAX_REPORT_ROWS + 1))
+            .limit(_detail_cap()))
     bugs = list(db.scalars(stmt).all())
     bug_ids = [b.id for b in bugs]
     attach = _attachments_by_bug(db, bug_ids)
@@ -605,9 +631,7 @@ def _report_pending_snapshot(db: Session, filters: Filters) -> ReportResult:
         )
     stmt = _apply_bug_filters(_eager_bug(), filters, apply_status=False).where(
         Bug.status.in_(list(open_set))
-    ).order_by(Bug.priority.desc(), Bug.created_at.asc()).limit(
-        get_settings().MAX_REPORT_ROWS + 1
-    )
+    ).order_by(Bug.priority.desc(), Bug.created_at.asc()).limit(_detail_cap())
     bugs = list(db.scalars(stmt).all())
     bug_ids = [b.id for b in bugs]
     attach = _attachments_by_bug(db, bug_ids)
@@ -617,11 +641,12 @@ def _report_pending_snapshot(db: Session, filters: Filters) -> ReportResult:
     by_assignee: dict[str, int] = {}
     for r in rows:
         by_priority[r["priority"]] = by_priority.get(r["priority"], 0) + 1
-        # Count one per assignee, not per item.
-        for name in (r["assignees"] or "").split(", "):
-            n = name.strip()
-            if n:
-                by_assignee[n] = by_assignee.get(n, 0) + 1
+    # Count one per assignee from the ORM relationship — splitting the joined
+    # ", "-display string would invent phantom assignees for a name like
+    # "Doe, Jane".
+    for b in bugs:
+        for a in b.assignees:
+            by_assignee[a.name] = by_assignee.get(a.name, 0) + 1
     return ReportResult(
         report_key="pending_snapshot",
         report_label="Pending Items Snapshot",
@@ -639,8 +664,8 @@ def _report_pending_snapshot(db: Session, filters: Filters) -> ReportResult:
 def _build_throughput_query(filters: Filters):
     """SELECT every status_changed activity for the filter set within the
     date window. Joined back to Bug so we can check item_type for the
-    resolution-state map. Excludes activities by deleted users (NULL
-    actor_user_id) since "by user" needs a user."""
+    resolution-state map. Deleted-user actors (NULL actor_user_id) are kept and
+    bucketed by their preserved actor_name snapshot, not dropped."""
     stmt = (
         select(
             Activity.bug_id,
@@ -685,7 +710,7 @@ def _build_throughput_query(filters: Filters):
 
 def _fold_throughput_row(
     raw,
-    per_user: dict[int, dict[str, Any]],
+    per_user: dict[Any, dict[str, Any]],
     detail_rows: list[dict[str, Any]],
 ) -> None:
     """Process one throughput-query tuple: count it into the right user
@@ -697,10 +722,13 @@ def _fold_throughput_row(
     new_status = _parse_resolution_status(detail or "")
     if not new_status or not _is_resolved_status(new_status, it):
         return
-    key = actor_id if actor_id is not None else -1  # -1 = deleted-user actor
     name = actor_name or "(deleted user)"
+    # Keep distinct deleted users distinct: actor_user_id is NULL once a user is
+    # deleted, but actor_name is a preserved snapshot — so bucket on the name
+    # rather than collapsing every ex-user's work onto one mislabeled row.
+    key = actor_id if actor_id is not None else f"deleted:{name}"
     bucket = per_user.setdefault(key, {
-        "user_id": key if key != -1 else None,
+        "user_id": actor_id,
         "user_name": name,
         "resolved_count": 0,
         "by_status": {},
@@ -722,14 +750,14 @@ def _fold_throughput_row(
     })
 
 
-def _accumulate_throughput(rows_raw) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]]:
+def _accumulate_throughput(rows_raw) -> tuple[dict[Any, dict[str, Any]], list[dict[str, Any]]]:
     """Fold throughput-query tuples into per-user buckets + detail rows.
 
     Only rows whose detail string records a transition INTO a resolved
-    state for the item's type are counted. Deleted-user actors collapse
-    onto the -1 sentinel key.
+    state for the item's type are counted. Deleted-user actors are bucketed
+    by their preserved snapshot name (so distinct ex-users stay distinct).
     """
-    per_user: dict[int, dict[str, Any]] = {}
+    per_user: dict[Any, dict[str, Any]] = {}
     detail_rows: list[dict[str, Any]] = []
     for raw in rows_raw:
         _fold_throughput_row(raw, per_user, detail_rows)
@@ -741,7 +769,10 @@ def _report_throughput(db: Session, filters: Filters) -> ReportResult:
     the time window. Multi-counts intentionally if the same bug was
     reopened and re-resolved by different people in the same window —
     that's two real units of work."""
-    rows_raw = db.execute(_build_throughput_query(filters)).all()
+    # Bounded read: caps the per-resolution detail list (the volume driver) so
+    # the export route's 413 guard can't be outrun into an OOM.
+    rows_raw = db.execute(_build_throughput_query(filters).limit(_detail_cap())).all()
+    truncated = len(rows_raw) >= _detail_cap()
     per_user, detail_rows = _accumulate_throughput(rows_raw)
     rows: list[dict[str, Any]] = []
     for bucket in per_user.values():
@@ -782,6 +813,7 @@ def _report_throughput(db: Session, filters: Filters) -> ReportResult:
         filters=filters.to_meta(),
         detail_columns=detail_columns,
         detail_rows=detail_rows,
+        truncated=truncated,
     )
 
 
@@ -812,11 +844,19 @@ def _distribution_report(
     total = sum(r["count"] for r in rows)
     for r in rows:
         r["percentage"] = round((r["count"] / total) * 100, 1) if total else 0.0
-    # Drill-down: every bug that contributed to a non-zero bucket.
-    detail_stmt = _apply_bug_filters(_eager_bug(), filters).order_by(Bug.id.desc())
+    # Drill-down: the bugs that contributed, bounded so a no-filter export can't
+    # materialize the whole table (the GROUP BY counts above stay exact — they
+    # run over the full filtered set, independent of this detail cap).
+    detail_stmt = (_apply_bug_filters(_eager_bug(), filters)
+                   .order_by(Bug.id.desc())
+                   .limit(_detail_cap()))
     detail_bugs = list(db.scalars(detail_stmt).all())
     attach = _attachments_by_bug(db, [b.id for b in detail_bugs])
-    detail_rows = [_bug_to_detail_row(b, attach, {}) for b in detail_bugs]
+    # Populate resolved-at / resolved-by for the drill-down too (consistent with
+    # item_detail). _fetch_resolution_info only fills currently-resolved bugs, so
+    # open rows correctly stay blank.
+    resolved_info = _fetch_resolution_info(db, [b.id for b in detail_bugs])
+    detail_rows = [_bug_to_detail_row(b, attach, resolved_info) for b in detail_bugs]
     columns = [
         ReportColumn(label_key, label_header, 18),
         ReportColumn("count", "Count", 12, kind="number", align="right"),
@@ -850,29 +890,38 @@ def _report_priority_distribution(db: Session, filters: Filters) -> ReportResult
     )
 
 
+def _add_breakdown_counts(bucket: dict[str, int], status: str,
+                          item_type: str, count: int) -> None:
+    """Fold one (status, item_type) group's count into a project bucket."""
+    bucket["created"] += count
+    if _is_open_status(status, item_type):
+        bucket["open"] += count
+    if _is_resolved_status(status, item_type):
+        bucket["resolved"] += count
+    if status in FINAL_STATUSES_BY_TYPE.get(item_type, []):
+        bucket["final"] += count
+
+
 def _report_project_breakdown(db: Session, filters: Filters) -> ReportResult:
-    """Per-project: created, still open, resolved/done. Drill-down is the
-    full item list for the active filter set."""
-    base = _apply_bug_filters(_eager_bug(), filters).order_by(Bug.id.desc())
-    bugs = list(db.scalars(base).all())
+    """Per-project: created, still open, resolved/done.
+
+    The rolled-up counts come from a GROUP BY over the FULL filtered set, so
+    they stay exact on any table size; only the drill-down detail list is capped
+    (see _detail_cap) so a no-filter export can't materialize the whole table.
+    """
+    agg_stmt = _apply_bug_filters(
+        select(Project.name, Bug.item_type, Bug.status, func.count(Bug.id))
+        .select_from(Bug)
+        .join(Project, Project.id == Bug.project_id),
+        filters,
+    ).group_by(Project.name, Bug.item_type, Bug.status)
     by_project: dict[str, dict[str, int]] = {}
-    for b in bugs:
-        proj = b.project.name if b.project else "(no project)"
-        bucket = by_project.setdefault(proj, {
+    for proj, item_type, statusv, count in db.execute(agg_stmt).all():
+        bucket = by_project.setdefault(proj or "(no project)", {
             "created": 0, "open": 0, "resolved": 0, "final": 0,
         })
-        bucket["created"] += 1
-        it = getattr(b, "item_type", None) or "Bug"
-        if _is_open_status(b.status or "", it):
-            bucket["open"] += 1
-        if _is_resolved_status(b.status or "", it):
-            bucket["resolved"] += 1
-        if b.status in FINAL_STATUSES_BY_TYPE.get(it, []):
-            bucket["final"] += 1
-    rows = [
-        {"project": name, **counts}
-        for name, counts in by_project.items()
-    ]
+        _add_breakdown_counts(bucket, statusv or "", item_type or "Bug", int(count))
+    rows = [{"project": name, **counts} for name, counts in by_project.items()]
     rows.sort(key=lambda r: (-r["created"], r["project"].lower()))
     columns = [
         ReportColumn("project", "Project", 28),
@@ -881,6 +930,10 @@ def _report_project_breakdown(db: Session, filters: Filters) -> ReportResult:
         ReportColumn("resolved", "Resolved", 12, kind="number", align="right"),
         ReportColumn("final", "Final", 10, kind="number", align="right"),
     ]
+    detail_stmt = (_apply_bug_filters(_eager_bug(), filters)
+                   .order_by(Bug.id.desc())
+                   .limit(_detail_cap()))
+    bugs = list(db.scalars(detail_stmt).all())
     attach = _attachments_by_bug(db, [b.id for b in bugs])
     resolved_info = _fetch_resolution_info(db, [b.id for b in bugs])
     detail_rows = [_bug_to_detail_row(b, attach, resolved_info) for b in bugs]
@@ -889,7 +942,8 @@ def _report_project_breakdown(db: Session, filters: Filters) -> ReportResult:
         report_label="Project Breakdown",
         columns=columns,
         rows=rows,
-        summary={"project_count": len(rows), "item_count": len(bugs)},
+        summary={"project_count": len(rows),
+                 "item_count": sum(r["created"] for r in rows)},
         filters=filters.to_meta(),
         detail_columns=_detail_columns(),
         detail_rows=detail_rows,
@@ -914,13 +968,18 @@ def _report_aging(db: Session, filters: Filters) -> ReportResult:
     open_set: set[str] = set()
     for t in types_to_use:
         open_set.update(OPEN_STATUSES_BY_TYPE.get(t, []))
+    no_open_match = False
     if filters.statuses:
         open_set &= set(filters.statuses)
+        no_open_match = not open_set
     stmt = _apply_bug_filters(_eager_bug(), filters, apply_status=False)
     if open_set:
         stmt = stmt.where(Bug.status.in_(list(open_set)))
-    stmt = stmt.order_by(Bug.created_at.asc())
-    bugs = list(db.scalars(stmt).all())
+    stmt = stmt.order_by(Bug.created_at.asc()).limit(_detail_cap())
+    # A statuses filter that excludes every open status → an "open items" report
+    # has nothing to show (mirror pending_snapshot), rather than silently
+    # returning resolved/closed items stamped with a bogus age.
+    bugs = [] if no_open_match else list(db.scalars(stmt).all())
     bug_ids = [b.id for b in bugs]
     attach = _attachments_by_bug(db, bug_ids)
     rows: list[dict[str, Any]] = []
@@ -960,6 +1019,13 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     today = datetime.now(timezone.utc).date()
     start = filters.date_from or (today - timedelta(days=29))
     end = filters.date_to or today
+    # Clamp the window so a pathological date_from (e.g. year 0001) can't build
+    # hundreds of thousands of per-day rows in memory. Keep the most recent
+    # _MAX_TIMELINE_DAYS of the requested range.
+    if end < start:
+        start = end
+    if (end - start).days > _MAX_TIMELINE_DAYS:
+        start = end - timedelta(days=_MAX_TIMELINE_DAYS)
     # Created: bugs.created_at in [start, end]
     created_stmt = _apply_bug_filters(
         select(func.date(Bug.created_at), func.count(Bug.id)),
@@ -991,8 +1057,16 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
         text_search=filters.text_search,
     )
     resolved_by_day: dict[str, int] = {}
+    # Bound the resolved-side scan the same way every other report query is
+    # bounded — the 366-day window clamps the date span but NOT the number of
+    # status-change rows in it, so without this cap a busy instance streams the
+    # entire activity history into memory here.
+    res_rows = db.execute(
+        _build_throughput_query(res_filters).limit(_detail_cap())
+    ).all()
+    truncated = len(res_rows) >= _detail_cap()
     for (_bug_id, _actor_id, _actor_name, created_at, detail,
-         item_type, *_rest) in db.execute(_build_throughput_query(res_filters)).all():
+         item_type, *_rest) in res_rows:
         ns = _parse_resolution_status(detail or "")
         if ns and _is_resolved_status(ns, item_type or "Bug"):
             key = (created_at.date() if isinstance(created_at, datetime) else created_at).isoformat()
@@ -1032,6 +1106,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
             "net": total_created - total_resolved,
         },
         filters=filters.to_meta(),
+        truncated=truncated,
     )
 
 
@@ -1082,7 +1157,8 @@ def _ttr_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _report_time_to_resolution(db: Session, filters: Filters) -> ReportResult:
     """Per-resolved-item: hours from creation to resolution. Plus aggregate
     avg / median / p95 across the whole filtered set."""
-    rows_raw = db.execute(_build_throughput_query(filters)).all()
+    rows_raw = db.execute(_build_throughput_query(filters).limit(_detail_cap())).all()
+    truncated = len(rows_raw) >= _detail_cap()
     # Load bug creation times in one shot.
     bug_ids = list({row[0] for row in rows_raw})
     creation = dict(db.execute(
@@ -1119,6 +1195,7 @@ def _report_time_to_resolution(db: Session, filters: Filters) -> ReportResult:
         rows=rows,
         summary=_ttr_summary(rows),
         filters=filters.to_meta(),
+        truncated=truncated,
     )
 
 

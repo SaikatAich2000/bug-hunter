@@ -243,3 +243,26 @@ def test_actor_does_not_get_their_own_push(admin_client, monkeypatch):
         "environment": "DEV",
     })
     assert all("admin-token" not in c["tokens"] for c in calls)
+
+
+def test_bulk_delete_fires_push_immediately(admin_client, monkeypatch):
+    """A bulk delete pushes to assignees just like a single delete — parity on
+    every channel for the bulk path that was previously silent."""
+    _enable_push(monkeypatch, on=True)
+    calls = _capture_fcm(monkeypatch)
+    yid = _mk_user(admin_client, "Yolanda", "yolanda@test.local")
+    _register(yid, "yolanda-token")
+
+    proj = admin_client.post("/api/projects", json={"name": "Bulk Push"}).json()
+    bug = admin_client.post("/api/bugs", json={
+        "project_id": proj["id"], "title": "Bulk push me", "priority": "Medium",
+        "environment": "DEV", "assignee_ids": [yid],
+    }).json()
+    calls.clear()  # drop the assignment push; isolate the bulk-delete push
+
+    r = admin_client.post("/api/bugs/bulk", json={"action": "delete", "ids": [bug["id"]]})
+    assert r.status_code == 200, r.text
+
+    pushed = [c for c in calls if "yolanda-token" in c["tokens"]]
+    assert pushed, calls
+    assert "deleted" in pushed[0]["title"].lower()

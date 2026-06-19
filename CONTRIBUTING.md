@@ -40,17 +40,20 @@ npm run build
 
 ## Tests
 
-The full suite must stay green for every pull request.
+The full suite must stay green for every pull request. Coverage is enforced
+(`fail_under = 99`); `addopts` does not add `--cov`, so pass it explicitly:
 
 ```bash
-python -m pytest                            # full suite with coverage
+python -m pytest -m "not ui" --cov=app      # backend suite + coverage gate
 ```
 
-UI smoke tests use Playwright + Chromium:
+UI smoke tests use Playwright + Chromium and serve the built SPA, so build the
+frontend first:
 
 ```bash
+cd frontend && npm run build && cd ..
 python -m playwright install chromium
-python -m pytest tests/test_ui_smoke.py
+python -m pytest -m ui
 ```
 
 Static analysis is configured in `sonar-project.properties` and run with

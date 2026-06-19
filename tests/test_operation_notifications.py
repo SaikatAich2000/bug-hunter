@@ -5,10 +5,11 @@ notification (and feed the email digest) to the assignees." The create / update
 / assign / comment-add paths were already covered (test_notifications.py); this
 file pins the operations that were previously silent:
 
-  - link add / remove
+  - link add / remove (BOTH endpoints' assignees, not just the source's)
   - attachment add / delete
   - comment edit / delete
-  - bug delete (notification survives the row via a NULL bug_id deep-link)
+  - bug delete — single AND bulk (notification survives the row via a NULL
+    bug_id deep-link)
 
 Plus one end-to-end digest check: with EMAIL_DIGEST_ENABLED, one of these new
 operations is batched into the daily digest email for the assignee.
@@ -206,3 +207,48 @@ def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
     bob_emails = [body for _subj, to, body in sent if bob["email"] in to]
     assert bob_emails, f"no digest email reached the assignee; sent={sent}"
     assert any("Link added" in body for body in bob_emails), bob_emails
+
+
+# ---------------------------------------------------------------------------
+# Bulk delete — must notify exactly like a single delete (was previously silent)
+# ---------------------------------------------------------------------------
+def test_bulk_delete_notifies_assignee_and_survives(admin_client):
+    _proj, bob, bug = _setup(admin_client, "bulkdel")
+
+    r = admin_client.post("/api/bugs/bulk", json={
+        "action": "delete", "ids": [bug["id"]],
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == 1
+
+    db = _session()
+    deleted = [n for n in _notifs_for(db, bob["id"]) if "deleted" in n.title.lower()]
+    assert deleted, "assignee not notified of bulk delete"
+    # Deep-link dropped (link_bug=False) so the CASCADE FK can't erase the row.
+    assert deleted[0].bug_id is None
+
+
+# ---------------------------------------------------------------------------
+# Link notifies BOTH endpoints — the target item's assignees are told too, since
+# a link (a "blocks" edge especially) changes the target item as much as the
+# source. Previously only the source's stakeholders were notified.
+# ---------------------------------------------------------------------------
+def test_link_add_notifies_both_endpoint_assignees(admin_client):
+    proj, bob, bug = _setup(admin_client, "linkboth")
+    carol = admin_client.post("/api/users", json={
+        "name": "Carol", "email": "carol_linkboth@op.test",
+        "role": "user", "password": _PW,
+    }).json()
+    target = admin_client.post("/api/bugs", json={
+        "project_id": proj["id"], "title": "Target with owner",
+        "priority": "Medium", "environment": "DEV", "assignee_ids": [carol["id"]],
+    }).json()
+
+    r = admin_client.post(f"/api/bugs/{bug['id']}/links", json={
+        "target_bug_id": target["id"], "link_type": "blocks",
+    })
+    assert r.status_code == 201, r.text
+
+    db = _session()
+    assert _titles_containing(db, bob["id"], "Link added"), "source assignee not notified"
+    assert _titles_containing(db, carol["id"], "Link added"), "target assignee not notified"

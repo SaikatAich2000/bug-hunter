@@ -51,6 +51,24 @@ export function fileIcon(
   return "📎";
 }
 
+/** Emoji per audit/activity action. Single source of truth shared by the bug
+ * modal's activity feed and the Audit Trail view (they previously kept drifting
+ * copies — the Audit one was missing the "link" case). */
+export function activityIcon(action: string): string {
+  if (action.includes("session")) return "🔐";
+  if (action.includes("login")) return "🔑";
+  if (action.includes("logout")) return "👋";
+  if (action.includes("password")) return "🔒";
+  if (action.includes("created")) return "✨";
+  if (action.includes("delete")) return "🗑";
+  if (action.includes("comment")) return "💬";
+  if (action.includes("attachment")) return "📎";
+  if (action.includes("link")) return "🔗";
+  if (action.includes("status")) return "🔄";
+  if (action.includes("assign")) return "👥";
+  return "📝";
+}
+
 /** Compact relative time ("just now", "5m", "3h", "2d", else a date). */
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "";

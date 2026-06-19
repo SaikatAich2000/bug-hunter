@@ -374,7 +374,16 @@ export default function EventsView() {
     }
   }, []);
 
+  const openedEventIdRef = useRef<number | null>(null);
   const openEventDetail = useCallback(async (eventId: number) => {
+    if (openedEventIdRef.current !== eventId) {
+      // Opening a DIFFERENT event → drop the previous event's filters/search so
+      // they don't carry over (and orphan an assignee chip absent from the new
+      // event). A same-event refresh (poll / after-save) keeps the filters.
+      setDetailFilters(EMPTY_DETAIL_FILTER);
+      setDetailQInput("");
+    }
+    openedEventIdRef.current = eventId;
     setMode("detail");
     setDetail(null); // header shows "Event", items show Loading…
     setDetailLoading(true);
@@ -402,6 +411,7 @@ export default function EventsView() {
   const showListMode = useCallback(() => {
     setMode("list");
     setDetail(null);
+    openedEventIdRef.current = null;  // re-opening an event later starts fresh
   }, []);
 
   // Entering the Events view resets to list mode and refetches.

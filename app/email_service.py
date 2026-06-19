@@ -114,18 +114,32 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> None:
 
 
 def _send_console(msg: EmailMessage) -> None:
-    body = msg.get_content() if msg.is_multipart() is False else "(multipart)"
+    # Body is deliberately NOT logged at INFO: a password-reset email's body
+    # carries a live single-use reset link, and operation emails carry bug/
+    # comment PII. Log only routing metadata; gate the full body behind DEBUG
+    # for local development.
     logger.info(
-        "[console-email]\n  From: %s\n  To: %s\n  Subject: %s\n  ----\n%s\n  ----",
-        msg["From"], msg["To"], msg["Subject"], body.strip(),
+        "[console-email] to=%s subject=%r (body suppressed — set log level "
+        "DEBUG to include it)",
+        msg["To"], msg["Subject"],
     )
+    if logger.isEnabledFor(logging.DEBUG):
+        body = msg.get_content() if msg.is_multipart() is False else "(multipart)"
+        logger.debug("[console-email] body for %r:\n%s", msg["Subject"], body.strip())
+
+
+def _header_safe(value: str) -> str:
+    """Strip CR/LF so a crafted title/subject/address can't inject extra email
+    headers (header-injection defense; the stdlib also rejects these, but we
+    neutralize them up front so a bug title with a newline can't 500 the send)."""
+    return value.replace("\r", " ").replace("\n", " ")
 
 
 def _build(subject: str, to: list[str], body: str, settings: Settings) -> EmailMessage:
     msg = EmailMessage()
-    msg["From"] = settings.EMAIL_FROM
-    msg["To"] = ", ".join(to)
-    msg["Subject"] = subject
+    msg["From"] = _header_safe(settings.EMAIL_FROM)
+    msg["To"] = ", ".join(_header_safe(addr) for addr in to)
+    msg["Subject"] = _header_safe(subject)
     msg.set_content(body)
     return msg
 

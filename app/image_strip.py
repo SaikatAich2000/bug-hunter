@@ -33,6 +33,14 @@ logger = logging.getLogger("bug_hunter.image_strip")
 _RASTER_PREFIXES = ("image/jpeg", "image/png", "image/gif", "image/webp",
                     "image/bmp", "image/tiff")
 
+# Decoded-pixel ceiling (50 MP). Pillow's own default only WARNS at ~178 MP and
+# raises only at 2× that (~357 MP ≈ 1.4 GB RGBA) — enough to OOM the small
+# target box. The 50 MB upload cap bounds COMPRESSED bytes, so a highly
+# compressible "decompression bomb" image can still declare an enormous raster;
+# this bounds the actual decode. 50 MP comfortably covers real phone/camera
+# screenshots while rejecting bombs.
+_MAX_IMAGE_PIXELS = 50_000_000
+
 
 def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
     """Return a metadata-stripped copy of ``data`` if it's a recognised
@@ -57,6 +65,16 @@ def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
     try:
         with io.BytesIO(data) as src:
             img = Image.open(src)
+            # Reject oversized rasters from the (cheap) header read BEFORE load()
+            # ever allocates the pixel buffer. The 50 MB upload cap bounds
+            # COMPRESSED bytes, so a highly-compressible "decompression bomb" can
+            # still declare an enormous raster; this bounds the actual decode.
+            # Pillow's own MAX_IMAGE_PIXELS stays a secondary backstop.
+            width, height = img.size
+            if width * height > _MAX_IMAGE_PIXELS:
+                logger.info("EXIF strip skipped (%s): %d×%d px exceeds the decode budget",
+                            ct, width, height)
+                return data
             img.load()
             fmt = img.format
             if fmt is None:
@@ -74,10 +92,13 @@ def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
             else:
                 img.save(out, format=fmt)
             return out.getvalue()
-    except (OSError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - deliberate fail-open
         # Corrupt image, a format Pillow can't decode, or a decompression-bomb
-        # trip — leave the file alone. PIL.UnidentifiedImageError subclasses
-        # OSError, so catching OSError covers it too. Logged at info level (not
-        # warn) because it's an expected outcome for exotic uploads.
+        # trip — leave the file alone. We catch broadly ON PURPOSE: the contract
+        # is "never block a legitimate upload over metadata cleanup", and Pillow
+        # raises a mix of OSError (UnidentifiedImageError) AND bare-Exception
+        # subclasses — notably Image.DecompressionBombError(Exception) — that a
+        # narrow tuple would let escape as a 500. Logged at info level (not warn)
+        # because it's an expected outcome for exotic uploads.
         logger.info("EXIF strip skipped (%s): %s", ct, exc)
         return data

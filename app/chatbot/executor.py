@@ -81,9 +81,16 @@ class Response:
 # projects are small (hundreds at most for an internal tool) and because
 # stale name resolution would be a confusing bug.
 # ---------------------------------------------------------------------------
+# Bounds on the whole-table scans the chat layer does. Mirrors the REST list
+# caps so a large users/projects table can't be streamed into one chat response
+# (display handlers) or materialized on every request (name-resolution context).
+_CHAT_LIST_CAP = 500
+_CHAT_CONTEXT_CAP = 2000
+
+
 def build_context(db: Session) -> Context:
-    users = list(db.scalars(select(User)).all())
-    projects = list(db.scalars(select(Project)).all())
+    users = list(db.scalars(select(User).limit(_CHAT_CONTEXT_CAP)).all())
+    projects = list(db.scalars(select(Project).limit(_CHAT_CONTEXT_CAP)).all())
 
     user_tuples: list[tuple[int, str, str, str]] = []
     role_map: dict[int, str] = {}
@@ -437,7 +444,7 @@ def _handle_list_users(db: Session, pq: ParsedQuery) -> Response:
     stmt = select(User).order_by(func.lower(User.name))
     if pq.role_filter:
         stmt = stmt.where(User.role == pq.role_filter)
-    rows = list(db.scalars(stmt).all())
+    rows = list(db.scalars(stmt.limit(_CHAT_LIST_CAP)).all())
     if not rows:
         return Response(
             blocks=[Block("text", {"text": "No users match that filter"})],
@@ -464,7 +471,7 @@ def _handle_list_users(db: Session, pq: ParsedQuery) -> Response:
 
 def _handle_list_projects(db: Session) -> Response:
     rows = list(db.scalars(
-        select(Project).order_by(func.lower(Project.name))
+        select(Project).order_by(func.lower(Project.name)).limit(_CHAT_LIST_CAP)
     ).all())
     if not rows:
         return Response(
@@ -1523,8 +1530,12 @@ def _handle_confirm_no(actor: User) -> Response:
 # import … them/these/all/the bugs". Deliberately NOT matching "create a bug
 # titled X" (that's a different, single-item request the rule engine handles).
 _INGEST_CONFIRM_RE = re.compile(
-    r"\b(yes|yep|yeah|yup|sure|ok|okay|confirm|proceed|go ahead|do it|please do|go for it)\b"
-    r"|\b(create|add|import|insert|file|make|save)\b.{0,14}\b(them|these|all|it|the\s+(bugs?|items?|tasks?|requirements?))\b",
+    # A bare affirmation must be ~the WHOLE message (anchored), so an incidental
+    # "ok"/"sure" inside an unrelated question can't fire a bulk create.
+    r"^\s*(?:yes|yep|yeah|yup|sure|ok|okay|confirm|proceed|go ahead|do it|please do|go for it)\b[\s!.]*$"
+    # …or an explicit object phrase ("create them / these / all / the bugs").
+    # Dropped the over-broad bare "make"/"it" that matched "make it high priority".
+    r"|\b(?:create|add|import|insert|file|save)\b.{0,14}\b(?:them|these|all|the\s+(?:bugs?|items?|tasks?|requirements?))\b",
     re.IGNORECASE,
 )
 _INGEST_CANCEL_RE = re.compile(

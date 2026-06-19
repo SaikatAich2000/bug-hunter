@@ -371,36 +371,32 @@ def _build_prompt(user_message: str) -> str:
 # Inference + JSON extraction
 # ---------------------------------------------------------------------------
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
-    """Pull the first {...} block out of the model's reply. Models
-    sometimes wrap JSON in markdown fences or prose; we tolerate both."""
+    """Pull the first JSON object out of the model's reply. Models sometimes
+    wrap JSON in markdown fences or prose; we tolerate both.
+
+    Uses the stdlib decoder's raw_decode, which is string-aware: a brace inside
+    a JSON string value (a regex or code snippet) doesn't truncate parsing and
+    silently drop the reply.
+    """
     if not raw:
         return None
-    # Scrub markdown fences.
+    # Scrub markdown fences, then decode the first JSON value at/after the brace.
     s = raw.strip()
     s = s.replace("```json", "").replace("```JSON", "").replace("```", "")
-    # Find the first balanced { ... }.
-    start = s.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    end = -1
-    for i in range(start, len(s)):
-        c = s[i]
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end < 0:
-        return None
-    candidate = s[start:end + 1]
-    try:
-        return json.loads(candidate)
-    except ValueError:
-        # json.JSONDecodeError is a ValueError subclass.
-        return None
+    decoder = json.JSONDecoder()
+    idx = s.find("{")
+    while idx != -1:
+        try:
+            obj, _end = decoder.raw_decode(s[idx:])
+        except ValueError:
+            # json.JSONDecodeError is a ValueError subclass.
+            idx = s.find("{", idx + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        # Non-dict at this brace — keep scanning subsequent braces.
+        idx = s.find("{", idx + 1)
+    return None
 
 
 def _run_inference(message: str) -> Optional[dict[str, Any]]:

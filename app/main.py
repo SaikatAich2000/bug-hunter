@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -109,16 +109,70 @@ def _bootstrap() -> None:
         db.commit()
 
 
+def _runtime_config_warnings(s) -> list[str]:
+    """Non-fatal startup warnings for insecure-but-allowed configuration.
+
+    Returned (not just logged) so the policy is unit-testable without driving the
+    whole lifespan. The fatal fail-closed checks stay inline in lifespan().
+    """
+    warnings: list[str] = []
+    if not s.SESSION_SECRET:
+        # Fine for dev (a strong random secret is generated per process) but on
+        # ANY long-lived deploy — including HTTP/intranet (COOKIE_SECURE=false),
+        # where the fatal check below doesn't fire — every restart invalidates
+        # every session and multi-worker uvicorn gives each worker its own
+        # secret, randomly logging users out.
+        warnings.append(
+            "SESSION_SECRET is not set. Using a random per-process fallback, so "
+            "sessions will NOT survive a restart and multi-worker deployments log "
+            "users out unpredictably. Set SESSION_SECRET (`openssl rand -hex 32`) "
+            "for any non-throwaway deploy, HTTP or HTTPS."
+        )
+    if s.COOKIE_SECURE and s.EMAIL_BACKEND == "console":
+        # The console backend logs full email bodies — including live, single-use
+        # password-reset links — to stdout/log aggregation. Fine for dev; a
+        # credential-in-logs exposure on a production-signalled deploy.
+        warnings.append(
+            "EMAIL_BACKEND=console on a COOKIE_SECURE deploy: every email body, "
+            "INCLUDING password-reset links, is written to the logs. Set "
+            "EMAIL_BACKEND=smtp (or 'disabled') in production."
+        )
+    return warnings
+
+
+def _safe_init_db() -> bool:
+    """Run schema init + bootstrap, swallowing a DB-down failure so a transient
+    outage at boot starts the app degraded instead of crash-looping with no
+    observable cause."""
+    try:
+        init_db()
+        _bootstrap()
+        return True
+    except (SQLAlchemyError, OSError):
+        logger.exception(
+            "Database initialization failed at startup — starting degraded; "
+            "/api/health will report the database as unavailable until it recovers."
+        )
+        return False
+
+
+def _check_db_health() -> bool:
+    """Cheap DB liveness probe for /api/health."""
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text("SELECT 1"))
+            return True
+        finally:
+            db.close()
+    except (SQLAlchemyError, OSError):
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    _bootstrap()
+    _safe_init_db()
 
-    # Warn loudly if the session secret isn't set — fine for dev (a random
-    # one is generated per process) but every restart invalidates every
-    # session, and multiple uvicorn workers each get their OWN secret so
-    # users would be randomly logged out as load-balanced requests hit
-    # different workers. Both surprises in production.
     _settings = get_settings()
     if _settings.COOKIE_SECURE and len(_settings.SESSION_SECRET) < 32:
         # Production signal (COOKIE_SECURE=true / HTTPS) but no stable, strong
@@ -129,12 +183,8 @@ async def lifespan(app: FastAPI):
             "SESSION_SECRET must be set to a strong value (>= 32 chars) when "
             "COOKIE_SECURE=true. Generate one with `openssl rand -hex 32`."
         )
-    if not _settings.SESSION_SECRET:
-        logger.warning(
-            "SESSION_SECRET is not set. Using a random per-process fallback. "
-            "Set SESSION_SECRET in your environment for stable sessions across "
-            "restarts and multi-worker deployments."
-        )
+    for _w in _runtime_config_warnings(_settings):
+        logger.warning(_w)
 
     # Optional in-app email-digest scheduler. No-op unless EMAIL_DIGEST_CRON
     # is configured (see app/scheduler.py); never breaks startup.
@@ -148,10 +198,18 @@ async def lifespan(app: FastAPI):
 
 
 settings = get_settings()
+# Interactive API docs (/docs, /redoc, /openapi.json) are handy in dev but
+# publish the full endpoint surface for recon. Keep them in dev; drop them once
+# COOKIE_SECURE (the production/https signal) is set, unless ENABLE_API_DOCS
+# explicitly forces them on.
+_docs_enabled = settings.ENABLE_API_DOCS or not settings.COOKIE_SECURE
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # Compute once at import time — used by middleware and the HTML serving
@@ -348,34 +406,39 @@ def _build_csp() -> str:
 
 _CSP = _build_csp()
 
+def _apply_security_headers(h) -> None:
+    """Set the standard security headers on a response header map.
+
+    Shared so the normal path (this middleware), the middleware-generated
+    short-circuits (429 rate-limit, 403 CSRF — they sit OUTSIDE this middleware
+    in the stack) and the generic 500 handler (served by Starlette's
+    ServerErrorMiddleware, also outside this one) all emit one identical,
+    complete set. `setdefault` so a downstream layer can still override.
+    """
+    h.setdefault("Content-Security-Policy", _CSP)
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault("Permissions-Policy",
+                 "camera=(), microphone=(), geolocation=(), "
+                 "payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()")
+    h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    # CORP blocks other origins from fetching our responses as subresources.
+    h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    h.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+    # Strip uvicorn's default "server: uvicorn" — no reason to advertise the stack.
+    if "server" in h:
+        del h["server"]
+    # HSTS: only safe behind real https; COOKIE_SECURE doubles as the https signal.
+    if settings.COOKIE_SECURE:
+        h.setdefault("Strict-Transport-Security",
+                     "max-age=63072000; includeSubDomains")
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
-        h = response.headers
-        # Don't clobber if a downstream layer set its own.
-        h.setdefault("Content-Security-Policy", _CSP)
-        h.setdefault("X-Content-Type-Options", "nosniff")
-        h.setdefault("X-Frame-Options", "DENY")
-        h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        h.setdefault("Permissions-Policy",
-                     "camera=(), microphone=(), geolocation=(), interest-cohort=(), "
-                     "payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()")
-        h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-        # CORP blocks other origins from fetching our responses as
-        # subresources — defense in depth for the API and HTML pages.
-        # Attachment downloads override this in their own headers if a
-        # legitimate cross-origin use case ever appears.
-        h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
-        h.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-        # Strip uvicorn's default "server: uvicorn" — minor info leak,
-        # but no reason to advertise the stack to a scanner.
-        if "server" in h:
-            del h["server"]
-        # HSTS: only safe behind real https. Production-style deploys set
-        # COOKIE_SECURE=true, which doubles as the "we're on https" signal.
-        if settings.COOKIE_SECURE:
-            h.setdefault("Strict-Transport-Security",
-                         "max-age=63072000; includeSubDomains")
+        _apply_security_headers(response.headers)
         return response
 
 
@@ -454,11 +517,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     "Rate limit hit: %s from %s (%d/%d in %ss)",
                     path, ip, len(bucket), max_req, window,
                 )
-                return JSONResponse(
+                resp = JSONResponse(
                     status_code=429,
                     content={"detail": "Too many attempts. Please try again later."},
                     headers={"Retry-After": str(retry_after)},
                 )
+                _apply_security_headers(resp.headers)
+                resp.headers.setdefault("Cache-Control", "no-store")
+                return resp
             bucket.append(now)
         return await call_next(request)
 
@@ -504,9 +570,12 @@ def _allowed_origins() -> set[str]:
 
 # Methods that mutate state; safe methods (GET/HEAD/OPTIONS) skip the check.
 _CSRF_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-# Endpoints exempt from the Origin check. Login may be invoked from
-# operator scripts during onboarding; the chatbot download is GET-only.
-_CSRF_EXEMPT_PATHS = {"/api/auth/login"}
+# Endpoints exempt from the Origin check. None: login is no longer exempt so a
+# cross-site forced-login (session fixation) is blocked. Operator scripts still
+# work — they send no Origin/Referer and are allowed by the no-fingerprint
+# branch — and a legitimately allow-listed cross-origin browser client passes
+# via CORS_ORIGINS.
+_CSRF_EXEMPT_PATHS: frozenset[str] = frozenset()
 
 
 class CsrfOriginMiddleware(BaseHTTPMiddleware):
@@ -561,10 +630,13 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
             "CSRF check failed: method=%s path=%s origin=%r referer=%r",
             method, path, origin, referer,
         )
-        return JSONResponse(
+        resp = JSONResponse(
             status_code=403,
             content={"detail": "Cross-origin request blocked."},
         )
+        _apply_security_headers(resp.headers)
+        resp.headers.setdefault("Cache-Control", "no-store")
+        return resp
 
 
 app.add_middleware(CsrfOriginMiddleware)
@@ -747,8 +819,10 @@ def firebase_messaging_sw() -> Response:
 
 @app.get("/api/health", tags=["meta"])
 def health() -> dict[str, str]:
+    db_ok = _check_db_health()
     return {
-        "status": "ok",
+        "status": "ok" if db_ok else "degraded",
+        "database": "ok" if db_ok else "unavailable",
         "version": settings.APP_VERSION,
         "asset_version": app.state.asset_version,
     }
@@ -792,6 +866,19 @@ async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse
         content={"detail": exc.detail},
         headers=getattr(exc, "headers", None) or None,
     )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exc_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Starlette serves unhandled errors from ServerErrorMiddleware, which sits
+    # OUTSIDE the security-headers middleware — so without this an unexpected 500
+    # would ship as bare text with no CSP/anti-clickjacking headers. Log it and
+    # return a generic, header-complete JSON 500 (no internals leak to clients).
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    resp = JSONResponse(status_code=500, content={"detail": "Internal server error."})
+    _apply_security_headers(resp.headers)
+    resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
 
 
 if __name__ == "__main__":

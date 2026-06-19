@@ -48,6 +48,11 @@ export default function ChangePasswordModal() {
           method: "POST",
           json: { current_password: current, new_password: next },
         });
+        // Zero the plaintext credentials out of state / the inputs immediately
+        // on success rather than leaving them until the modal is reopened.
+        setCurrent("");
+        setNext("");
+        setConfirm("");
         close();
       }, "Updating password…");
       toast("Password updated", "success");

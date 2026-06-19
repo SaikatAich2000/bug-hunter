@@ -134,6 +134,7 @@ export interface BugOut {
   event_name: string | null;
   created_at: string;
   updated_at: string;
+  version: number;
   attachment_count: number;
   can_edit: boolean;
 }
@@ -165,6 +166,8 @@ export interface BulkActionResult {
   updated: number;
   skipped: number;
   failed: number;
+  /** Rows left unchanged because their version drifted from what we sent. */
+  conflicts: number;
   message: string;
 }
 

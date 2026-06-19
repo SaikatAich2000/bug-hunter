@@ -24,9 +24,13 @@ services:
     volumes:
       - bugtracker_pgdata:/var/lib/postgresql/data
     ports:
-      # Host:Container — host side is non-default to avoid colliding
-      # with any Postgres already running on 5432.
-      - "55432:5432"
+      # Bound to 127.0.0.1 ONLY: the app reaches Postgres over the internal
+      # bugtracker_net network (see DATABASE_URL below), so this mapping exists
+      # purely for local admin/debugging on the host. Binding to localhost keeps
+      # the DB off the LAN/internet — important because POSTGRES_PASSWORD has a
+      # well-known default. Host side is non-default to avoid colliding with any
+      # Postgres already on 5432.
+      - "127.0.0.1:55432:5432"
     networks:
       - bugtracker_net
     healthcheck:
@@ -45,6 +49,11 @@ services:
           cpus: "0.10"
           memory: 64M
 
+  # Run a SINGLE app worker (the image's default CMD does). The login/lockout
+  # rate limiters and the in-app email-digest scheduler keep per-process state,
+  # so scaling to multiple workers/replicas weakens the limits and can duplicate
+  # the digest. To scale out, front with a shared limiter (e.g. nginx limit_req)
+  # and run the digest from one place (host cron, or a single scheduler worker).
   app:
     build:
       context: .
@@ -53,7 +62,7 @@ services:
         # FROM image without editing the Dockerfile. Default mirrors
         # the Dockerfile's hard-coded fallback.
         BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
-    image: bugtracker_app:2.6
+    image: bugtracker_app:3.0
     container_name: bugtracker_app
     restart: unless-stopped
     depends_on:
@@ -66,7 +75,9 @@ services:
       APP_NAME: ${APP_NAME:-Bug Hunter}
       APP_VERSION: ${APP_VERSION:-3.0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # Empty default = same-origin only (the app's secure default). Set to your
+      # concrete origin(s), e.g. https://bugs.example.com, for cross-origin use.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       API_KEY: ${API_KEY:-}
 
       # Sleuth cloud AI assistant (optional). OFF unless SLEUTH_CLOUD_ENABLED=1

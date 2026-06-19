@@ -20,12 +20,20 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Force Sleuth's cloud layer OFF for the whole suite, even if a developer's
-# local .env enables it (config.py auto-loads .env). Tests that exercise the
-# cloud path opt in by monkeypatching the settings object, so the suite never
-# makes a real network call. Hard-set (not setdefault) so a stray .env can't
-# turn it on in CI.
-os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
+# Force Sleuth's optional/cloud layers OFF for the whole suite, even if a
+# developer's local .env enables them (config.py auto-loads .env). Tests that
+# exercise these paths opt in by monkeypatching the settings object, so the
+# suite never makes a real network call and behaves identically on every
+# machine. Hard-set (not setdefault) so a stray .env can't turn them on in CI.
+for _flag in (
+    "SLEUTH_CLOUD_ENABLED",
+    "SLEUTH_RETRIEVAL_ENABLED",
+    "SLEUTH_VERIFY_ANSWERS",
+    "SLEUTH_AGENT_ENABLED",
+    "SLEUTH_EVAL_ENABLED",
+    "SLEUTH_RAG_ENABLED",
+):
+    os.environ[_flag] = "0"
 
 
 BOOTSTRAP_EMAIL = "admin@test.local"

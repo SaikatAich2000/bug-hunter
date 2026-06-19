@@ -370,6 +370,7 @@ class TestImageStripEdgeCases:
         class _FakeImg:
             format = None
             info: dict = {}
+            size = (8, 8)   # within the decode-pixel budget (the pre-check reads .size)
             def load(self):
                 # Pillow's real load() decodes pixel data; the stub
                 # doesn't need to do anything to exercise the

@@ -170,8 +170,11 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     restoring: false,
   });
 
-  // Uncontrolled seeding: initialHtml is read once on mount; later changes
-  // to the prop are intentionally ignored (use the setHtml handle instead).
+  // Uncontrolled seeding: initialHtml is read once on mount; later changes to
+  // the prop (including `disabled`) are intentionally ignored. To change content
+  // or read-only state on an already-mounted editor, callers MUST use the
+  // imperative setHtml() handle or force a remount with a changing `key`
+  // (BugModal does both) — otherwise the surface would keep stale content.
   const initialHtmlRef = useRef(initialHtml);
 
   // Latest-prop refs so DOM-driven callbacks never go stale.

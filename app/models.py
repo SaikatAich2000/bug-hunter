@@ -91,9 +91,14 @@ Index("idx_event_managers_user_id", event_managers.c.user_id)
 # User
 #
 # Roles (enforced in app code, not DB constraints, for flexibility):
-#   admin    - full access; only admins manage users
-#   manager  - can edit any bug or project, but not users
-#   user     - default; can only edit bugs they reported or are assigned to
+#   admin    - full access; only admins manage users and delete anything
+#   manager  - can edit any work item or project, but not users
+#   user     - default. The tracker is deliberately collaborative: a user can
+#              edit ANY Bug (not only their own), matching the flat read model
+#              where everyone already sees every item. Requirements and Tasks
+#              are planning artifacts and stay manager/admin-only; all deletes
+#              are admin-only. The authoritative rules live in app/auth.py
+#              (can_edit_bug / can_delete_bug) — keep this comment in sync.
 # ---------------------------------------------------------------------------
 ROLE_ADMIN = "admin"
 ROLE_MANAGER = "manager"
@@ -126,6 +131,11 @@ class User(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
+    # Case-insensitive email uniqueness is enforced at the app layer (see
+    # app/routes/users.py `_email_in_use`): every email is lowercased before
+    # insert and a func.lower() lookup also rejects a collision with any legacy
+    # mixed-case row. A DB-level expression index was avoided because SQLite
+    # can't reflect one, which breaks the additive-index idempotency check.
     __table_args__ = (Index("idx_users_email", "email"),)
 
 
@@ -257,6 +267,13 @@ class Bug(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+    # Optimistic-concurrency counter — bumped on every committed update so a
+    # client editing a stale copy is caught at sub-second resolution (the
+    # whole-second updated_at alone can miss same-second collisions). Fresh rows
+    # and any legacy row migrated by _add_missing_columns start at 1.
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
     )
 
     project: Mapped[Project] = relationship("Project", back_populates="bugs")
@@ -436,6 +453,12 @@ class Activity(Base):
         # (bug_id, created_at); extending the action index with created_at lets
         # those reports avoid an in-memory sort over the audit table.
         Index("idx_activity_action_bug_created", "action", "bug_id", "created_at"),
+        # Those same reports filter `action == "status_changed"` AND a
+        # created_at *range* without constraining bug_id. The (action, bug_id,
+        # created_at) index above can't seek the date range (bug_id sits between
+        # the two predicates), so this (action, created_at) index makes the
+        # date-windowed scan sargable as the audit table grows. Additive.
+        Index("idx_activity_action_created", "action", "created_at"),
         Index("idx_activity_actor_user_id", "actor_user_id"),
     )
 
@@ -541,6 +564,10 @@ class Notification(Base):
         Index("idx_notifications_user_created", "user_id", "created_at"),
         # The daily digest job scans for un-emailed operations (emailed_at NULL).
         Index("idx_notifications_emailed_at", "emailed_at"),
+        # …and filters that set by a created_at cutoff, oldest-first. The
+        # composite lets the digest seek straight to the window instead of
+        # scanning every un-emailed row. Additive; created by init_db on boot.
+        Index("idx_notifications_emailed_created", "emailed_at", "created_at"),
     )
 
 
@@ -606,7 +633,11 @@ class ChatConversation(Base):
     messages: Mapped[list["ChatMessage"]] = relationship(
         "ChatMessage", back_populates="conversation",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
-        order_by="ChatMessage.created_at",
+        # id is the tiebreaker: _utcnow() truncates to whole seconds, so a
+        # user+assistant turn written in the same second would otherwise replay
+        # in an unstable order. Matches the (created_at, id) ordering used by
+        # Bug.comments / Bug.activities.
+        order_by="ChatMessage.created_at, ChatMessage.id",
     )
 
     __table_args__ = (Index("idx_chat_conv_user_id", "user_id"),)

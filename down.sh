@@ -15,6 +15,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 # ── Parse flags ──────────────────────────────────────────────────────────────
 WIPE_DB=false
 REMOVE_IMAGES=false
+FORCE=false
 
 usage() {
   echo ""
@@ -24,6 +25,7 @@ usage() {
   echo "  --wipe-db        Also DELETE the bugtracker_pgdata volume (ALL DATA LOST)"
   echo "  --remove-images  Also remove the built bugtracker_app image"
   echo "  --full-clean     Equivalent to --wipe-db --remove-images"
+  echo "  --force          Skip the --wipe-db confirmation prompt (for automation)"
   echo ""
 }
 
@@ -32,6 +34,7 @@ for arg in "$@"; do
     --wipe-db)        WIPE_DB=true ;;
     --remove-images)  REMOVE_IMAGES=true ;;
     --full-clean)     WIPE_DB=true; REMOVE_IMAGES=true ;;
+    --force)          FORCE=true ;;
     --help|-h)        usage; exit 0 ;;
     *)                echo -e "${RED}[ERROR]${NC} Unknown option: $arg"; usage; exit 1 ;;
   esac
@@ -50,7 +53,12 @@ fi
 # ── Optional: wipe DB volume ─────────────────────────────────────────────────
 if [[ "$WIPE_DB" == true ]]; then
   warn "Removing bugtracker_pgdata volume — ALL DATABASE DATA WILL BE LOST."
-  read -rp "Are you sure? Type YES to confirm: " CONFIRM
+  if [[ "$FORCE" == true ]]; then
+    warn "--force given: skipping confirmation and deleting the DB volume NOW."
+    CONFIRM="YES"
+  else
+    read -rp "Are you sure? Type YES to confirm: " CONFIRM
+  fi
   if [[ "$CONFIRM" == "YES" ]]; then
     docker volume rm bugtracker_pgdata 2>/dev/null && info "Volume removed." \
       || warn "Volume not found or already removed."
@@ -62,7 +70,7 @@ fi
 # ── Optional: remove built image ─────────────────────────────────────────────
 if [[ "$REMOVE_IMAGES" == true ]]; then
   info "Removing bugtracker_app image..."
-  docker rmi bugtracker_app:2.6 2>/dev/null && info "Image removed." \
+  docker rmi bugtracker_app:3.0 2>/dev/null && info "Image removed." \
     || warn "Image not found or already removed."
 fi
 

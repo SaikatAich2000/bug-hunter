@@ -12,16 +12,20 @@ ability to silently log other people out is a sensitive operation.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.auth import COOKIE_NAME, parse_session_token, require_admin
 from app.database import get_db
 from app.models import Activity, Session as SessionRow, User
 from app.schemas import SessionOut
+
+logger = logging.getLogger("bug_hunter.sessions")
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -60,9 +64,16 @@ def list_sessions(
     # Sweep: drop sessions whose TTL has passed. A set-based DELETE is naturally
     # idempotent under concurrency — two admins (or the inline expiry delete)
     # racing this won't raise StaleDataError the way load-then-ORM-delete does
-    # when the second runner's rows were already removed.
-    db.execute(delete(SessionRow).where(SessionRow.expires_at < now))
-    db.commit()
+    # when the second runner's rows were already removed. Wrapped so a transient
+    # write/lock error doesn't turn this read-only listing into a 500 — the
+    # SELECT below already filters expired rows, so a failed sweep is harmless
+    # (those rows just linger until the next successful sweep).
+    try:
+        db.execute(delete(SessionRow).where(SessionRow.expires_at < now))
+        db.commit()
+    except SQLAlchemyError:
+        logger.exception("Session expiry sweep failed; serving the listing anyway.")
+        db.rollback()
 
     rows = db.scalars(
         select(SessionRow)

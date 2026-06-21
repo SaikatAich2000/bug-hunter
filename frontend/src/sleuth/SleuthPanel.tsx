@@ -5,8 +5,9 @@
  * Security:
  *  - All server-supplied text goes through escapeHtml() before the mdLite
  *    markdown transforms add any tags. dangerouslySetInnerHTML is only used on
- *    the output of that escape-then-format pipeline (and on the static welcome
- *    markdown, which has no markup-significant characters).
+ *    the output of that escape-then-format pipeline (including the static
+ *    welcome banner, which is escaped before mdLite like any other text), and
+ *    the result is passed through the fail-closed sanitizeSleuth allowlist.
  *  - Table / file / suggestions / confirm blocks render via JSX, which escapes
  *    automatically.
  *  - Bug links carry data-open-bug attributes; a single delegated click handler
@@ -15,7 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import { sanitizeHtml } from "../lib/sanitize";
+import { sanitizeSleuth } from "../lib/sanitize";
 import { useApp } from "../state/AppContext";
 import type { ChatBlock, ChatOut } from "../types";
 
@@ -60,95 +61,141 @@ const rec = (v: unknown): Record<string, unknown> =>
  *
  * Order matters: bold before italic so "**foo**" doesn't get half-eaten.
  */
-// Linear scan that converts `[text](url)` markdown links to <a> tags, only
-// for safe URL schemes (http(s), mailto, fragment hashes). Hand-written, not
-// a regex, to keep the static analyzer happy.
-const _SAFE_URL_PREFIXES = ["http://", "https://", "mailto:", "#"];
+// Safe URL schemes for markdown links. Fragment links are restricted to the
+// exact pseudo-link the bug-detail handler emits ("#open-bug-<n>"); a blanket
+// "any #..." allowance would let an attacker plant arbitrary in-app fragments.
+const _SAFE_URL_PREFIXES = ["http://", "https://", "mailto:"];
+const _OPEN_BUG_FRAGMENT_RE = /^#open-bug-\d+$/;
 function _hasSafeUrlPrefix(url: string): boolean {
+  if (_OPEN_BUG_FRAGMENT_RE.test(url)) return true;
   for (const p of _SAFE_URL_PREFIXES) {
     if (url.startsWith(p)) return true;
   }
   return false;
 }
-function _mdLiteLinks(s: string): string {
+
+// ---------------------------------------------------------------------------
+// mdLite: convert a tiny markdown subset to HTML in a single inline pass that
+// skips already-emitted `code` regions (so markdown inside backticks stays
+// literal), then assembles block-level HTML (lists are real <ul> blocks, never
+// nested inside a <p>, and no <br> sits adjacent to a block tag).
+//
+// The input is already html-escaped, so user text can never inject tags.
+// ---------------------------------------------------------------------------
+
+/**
+ * Format inline markdown for one line: `code`, **bold**, *italic*, [text](url).
+ * Code spans are emitted verbatim and excluded from any later transform — the
+ * scanner walks the string once and only formats outside code regions.
+ */
+function formatInline(line: string): string {
   let out = "";
   let i = 0;
-  const n = s.length;
+  const n = line.length;
   while (i < n) {
-    const lb = s.indexOf("[", i);
-    if (lb < 0) {
-      out += s.slice(i);
-      break;
-    }
-    out += s.slice(i, lb);
-    const rb = s.indexOf("]", lb + 1);
-    if (rb < 0 || s.charAt(rb + 1) !== "(") {
-      out += s.charAt(lb);
-      i = lb + 1;
+    const ch = line.charAt(i);
+    // --- code span: copy verbatim, no inner transforms ---
+    if (ch === "`") {
+      const close = line.indexOf("`", i + 1);
+      if (close > i) {
+        out += `<code>${line.slice(i + 1, close)}</code>`;
+        i = close + 1;
+        continue;
+      }
+      // Unbalanced backtick — emit literally.
+      out += ch;
+      i += 1;
       continue;
     }
-    const rp = s.indexOf(")", rb + 2);
-    if (rp < 0) {
-      out += s.charAt(lb);
-      i = lb + 1;
+    // --- link [text](url) ---
+    if (ch === "[") {
+      const rb = line.indexOf("]", i + 1);
+      if (rb > i && line.charAt(rb + 1) === "(") {
+        const rp = line.indexOf(")", rb + 2);
+        if (rp > rb) {
+          const txt = line.slice(i + 1, rb);
+          const url = line.slice(rb + 2, rp);
+          if (txt && url && _hasSafeUrlPrefix(url)) {
+            out += `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>`;
+            i = rp + 1;
+            continue;
+          }
+        }
+      }
+      out += ch;
+      i += 1;
       continue;
     }
-    const txt = s.slice(lb + 1, rb);
-    const url = s.slice(rb + 2, rp);
-    if (txt && url && _hasSafeUrlPrefix(url)) {
-      out += `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>`;
-    } else {
-      out += s.slice(lb, rp + 1);
+    // --- bold **...** ---
+    if (ch === "*" && line.charAt(i + 1) === "*") {
+      const close = line.indexOf("**", i + 2);
+      if (close > i + 1) {
+        out += `<strong>${formatInline(line.slice(i + 2, close))}</strong>`;
+        i = close + 2;
+        continue;
+      }
     }
-    i = rp + 1;
+    // --- italic *...* (single, no embedded *) ---
+    if (ch === "*") {
+      const close = line.indexOf("*", i + 1);
+      if (close > i && !line.slice(i + 1, close).includes("*")) {
+        out += `<em>${formatInline(line.slice(i + 1, close))}</em>`;
+        i = close + 1;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
   }
   return out;
 }
 
 function mdLite(escaped: string): string {
-  let s = escaped;
-  // Code spans first (so we don't transform markdown inside them).
-  s = s.replace(/`([^`]+)`/g, (_m, code: string) => `<code>${code}</code>`);
-  // Bold and italic — bold first.
-  s = s.replace(/\*\*([^*]+)\*\*/g, (_m, b: string) => `<strong>${b}</strong>`);
-  s = s.replace(
-    /(^|[^*])\*([^*\n]+)\*/g,
-    (_m, pre: string, it: string) => `${pre}<em>${it}</em>`,
-  );
-  // Links — only http(s)://, mailto:, or fragment hashes for safety.
-  s = _mdLiteLinks(s);
-  // Bulleted lists (lines starting with "- "). Process line-by-line.
-  const lines = s.split(/\n/);
-  const out: string[] = [];
-  let inList = false;
+  const lines = escaped.split(/\n/);
+  // Assemble at the BLOCK level: paragraphs accumulate, lists are flushed as
+  // standalone <ul> blocks. No <br> ever touches a block-tag boundary.
+  const blocks: string[] = [];
+  let para: string[] = []; // inline-formatted lines awaiting a <p>
+  let listItems: string[] = []; // <li> contents awaiting a <ul>
+
+  const flushPara = () => {
+    if (para.length) {
+      blocks.push(`<p>${para.join("<br>")}</p>`);
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (listItems.length) {
+      blocks.push(`<ul>${listItems.map((li) => `<li>${li}</li>`).join("")}</ul>`);
+      listItems = [];
+    }
+  };
+
   for (const line of lines) {
     const m = /^- (.*)$/.exec(line);
     if (m) {
-      if (!inList) {
-        out.push("<ul>");
-        inList = true;
-      }
-      out.push(`<li>${m[1]}</li>`);
+      // A list item — close any open paragraph first.
+      flushPara();
+      listItems.push(formatInline(m[1]));
+      continue;
+    }
+    // A non-list line — close any open list first.
+    flushList();
+    if (line.trim() === "") {
+      // Blank line ends the current paragraph (paragraph break).
+      flushPara();
     } else {
-      if (inList) {
-        out.push("</ul>");
-        inList = false;
-      }
-      out.push(line);
+      para.push(formatInline(line));
     }
   }
-  if (inList) out.push("</ul>");
-  // Wrap consecutive plain lines into paragraphs separated by blank lines.
-  const joined = out
-    .join("\n")
-    .replace(/\n{2,}/g, "</p><p>")
-    .replace(/\n/g, "<br>");
-  return `<p>${joined}</p>`;
+  flushPara();
+  flushList();
+  return blocks.join("");
 }
 
-// Static welcome banner — this trusted string goes straight to mdLite without
-// escaping (it contains no markup-significant characters).
-const WELCOME_HTML = mdLite(
+// Static welcome banner. Escape first (the copy contains quotes/apostrophes),
+// then run mdLite over the escaped text exactly like server-supplied text.
+const WELCOME_HTML = mdLite(escapeHtml(
   "Hi! I'm your **Bug Hunter AI Assistant**.\n\n" +
     "I can **answer questions** like:\n" +
     "- *show open bugs assigned to alice*\n" +
@@ -162,7 +209,7 @@ const WELCOME_HTML = mdLite(
     "- *comment on #5: looks fixed*\n" +
     '- *create a bug titled "Login broken" in project Apollo*\n\n' +
     "Type **help** for the full guide.",
-);
+));
 
 // ---------------------------------------------------------------------------
 // Message log — discriminated union held in React state. Not persisted
@@ -235,14 +282,15 @@ function TextBlock({ block }: Readonly<{ block: ChatBlock }>) {
   let html = mdLite(safe);
   // Special case: the bug-detail handler emits an "Open in Bug Hunter"
   // pseudo-link ([label](#open-bug-N)). Tag those anchors with data-open-bug
-  // so the panel's delegated click handler picks them up (CSP-safe).
+  // so the panel's delegated click handler picks them up (CSP-safe). Only a
+  // positive integer id is honoured.
   const openBugId = num(block.payload.open_bug_id);
-  if (openBugId != null) {
+  if (openBugId != null && Number.isInteger(openBugId) && openBugId > 0) {
     html = html
       .split(`<a href="#open-bug-${openBugId}"`)
       .join(`<a href="#open-bug-${openBugId}" data-open-bug="${openBugId}"`);
   }
-  return <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }} />;
+  return <div dangerouslySetInnerHTML={{ __html: sanitizeSleuth(html) }} />;
 }
 
 function TableBlock({ block }: Readonly<{ block: ChatBlock }>) {
@@ -261,8 +309,10 @@ function TableBlock({ block }: Readonly<{ block: ChatBlock }>) {
         </thead>
         <tbody>
           {rows.map((row, idx) => {
-            const rawId = ids[idx];
-            const clickable = Boolean(rawId);
+            const rawId = num(ids[idx]);
+            // Clickable only for a positive integer id (numeric guard, not
+            // Boolean(); bug ids start at 1, so 0 is rejected here).
+            const clickable = rawId != null && Number.isInteger(rawId) && rawId > 0;
             const bugId = clickable ? String(rawId) : undefined;
             return (
               <tr
@@ -646,7 +696,8 @@ export default function SleuthPanel() {
     if (!target) return;
     e.preventDefault();
     const bugId = Number(target.dataset.openBug);
-    if (!Number.isFinite(bugId)) return;
+    // Dispatch only for a real positive-integer id.
+    if (!Number.isInteger(bugId) || bugId <= 0) return;
     document.dispatchEvent(
       new CustomEvent("sleuth:open-bug", { detail: { bugId } }),
     );
@@ -794,7 +845,7 @@ export default function SleuthPanel() {
                   <div
                     key={m.id}
                     className="sleuth-msg bot"
-                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(WELCOME_HTML) }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeSleuth(WELCOME_HTML) }}
                   />
                 );
               case "user":

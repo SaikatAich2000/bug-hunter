@@ -1,6 +1,6 @@
-"""Unit tests for the v3.0 Sleuth smartness improvements.
+"""Unit tests for Sleuth's NLU and fallback helpers.
 
-All pure / in-process — no DB, no network, no LLM:
+All pure and in-process: no DB, no network, no LLM.
   - bare (unquoted) free-text search after a topic cue word
   - the enum-word guard that stops a filter phrase being treated as text
   - quoted-search precedence

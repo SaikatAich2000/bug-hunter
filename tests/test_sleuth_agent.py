@@ -3,7 +3,7 @@
 The loop orchestration is pure — model call and tools are injected — so most of
 this is fast unit coverage with fakes. Two DB-backed end-to-end tests then pin
 the safety contract through the real cloud path: the agent grounds and verifies
-its answer, and its query tool can NEVER write.
+its answer, and its query tool can never write.
 """
 from __future__ import annotations
 
@@ -253,7 +253,7 @@ def test_agent_query_tool_can_never_write(admin_client, monkeypatch):
     bid = _bug(admin_client, pid, "Login crash", "boom")
     _enable_agent(monkeypatch, cloud_llm)
 
-    # The model tries to use the query tool to CLOSE a bug, then answers.
+    # The model tries to use the query tool to close a bug, then answers.
     replies = [
         '{"action":"query","canonical_query":"close bug %d"}' % bid,
         '{"action":"final","text":"I can only look things up, not change them."}',

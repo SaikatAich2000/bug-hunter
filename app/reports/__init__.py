@@ -4,12 +4,10 @@ Single source of truth for every report the system can produce. The same
 engine powers:
 
   - The REST API at /api/reports/*  (driven by the Reports sidebar view).
-  - The Sleuth chatbot's "report" intent (natural-language → same reports).
+  - The Sleuth chatbot's "report" intent (natural-language to the same reports).
 
-Why one engine in two callers? So a manager who clicks "Throughput,
-last 7 days" in the UI gets exactly the same numbers as a manager who
-asks Sleuth "who resolved how many bugs last week". No drift, one set
-of tests.
+Both callers share one engine so the UI and the chatbot return identical
+numbers for the same query.
 
 What lives here:
   catalog.py  — the registry of report types + their default filters.

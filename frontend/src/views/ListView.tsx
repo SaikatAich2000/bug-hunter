@@ -73,6 +73,14 @@ const PANEL_LABEL: Record<TabName, string> = {
   Task: "Tasks",
 };
 
+/** Plural noun per active type tab, for the pager count. */
+const PAGER_NOUN: Record<TabName, string> = {
+  all: "items",
+  Bug: "bugs",
+  Requirement: "requirements",
+  Task: "tasks",
+};
+
 export default function ListView() {
   const {
     bugs,
@@ -89,6 +97,15 @@ export default function ListView() {
   } = useApp();
 
   const cols = TAB_COLUMNS[activeTab] ?? TAB_COLUMNS.all;
+
+  // Clamp the current page to the available range. After a poll or a bulk
+  // delete shrinks totalPages below `page`, the user would otherwise be
+  // stranded on an empty page — snap back to the last real page.
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) {
+      setPage(Math.max(1, totalPages));
+    }
+  }, [page, totalPages, setPage]);
 
   // ----- bulk multi-select -------------------------------------------------
   // Selection is scoped to the visible page; it clears whenever the page's id
@@ -197,7 +214,7 @@ export default function ListView() {
       case "id":
         return <td key={col} className="col-id">#{bug.id}</td>;
       case "title":
-        // For per-type tabs the type prefix is redundant — the tab IS the type.
+        // For per-type tabs the type prefix is redundant — the tab is the type.
         return (
           <td key={col} className="col-title">
             <div className="title-cell">
@@ -420,7 +437,7 @@ export default function ListView() {
               ← Prev
             </button>
             <span>
-              Page {page} of {totalPages} ({total} bugs)
+              Page {page} of {totalPages} ({total} {PAGER_NOUN[activeTab] ?? "items"})
             </span>
             <button id="pgNext" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
               Next →

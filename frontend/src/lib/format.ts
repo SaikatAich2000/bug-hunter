@@ -51,9 +51,8 @@ export function fileIcon(
   return "📎";
 }
 
-/** Emoji per audit/activity action. Single source of truth shared by the bug
- * modal's activity feed and the Audit Trail view (they previously kept drifting
- * copies — the Audit one was missing the "link" case). */
+/** Icon per audit/activity action. Shared by the bug modal's activity feed and
+ * the Audit Trail view. */
 export function activityIcon(action: string): string {
   if (action.includes("session")) return "🔐";
   if (action.includes("login")) return "🔑";
@@ -85,13 +84,21 @@ export function timeAgo(iso: string | null | undefined): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+export interface Debounced<A extends unknown[]> {
+  (...args: A): void;
+  /** Cancel any pending trailing invocation (call from an unmount cleanup). */
+  cancel: () => void;
+}
+
 export function debounce<A extends unknown[]>(
   fn: (...args: A) => void,
   ms = 250,
-): (...args: A) => void {
+): Debounced<A> {
   let t: ReturnType<typeof setTimeout> | undefined;
-  return (...args: A) => {
+  const debounced = (...args: A) => {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   };
+  debounced.cancel = () => clearTimeout(t);
+  return debounced;
 }

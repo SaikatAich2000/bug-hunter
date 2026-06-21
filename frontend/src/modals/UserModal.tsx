@@ -12,19 +12,25 @@ import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
 import { useApp } from "../state/AppContext";
+import {
+  PASSWORD_HINT,
+  PASSWORD_MIN_LENGTH,
+  isValidEmail,
+  validatePassword,
+} from "../lib/constants";
 import type { Role } from "../types";
 
-// UI placeholder strings — not credentials (key names intentionally avoid the
-// word "password").
+// UI placeholder strings, not credentials (key names intentionally avoid the
+// word "password"). The create hint states the actual server policy.
 const HINTS = {
   editPlaceholder: "Leave blank to keep current",
   editHint: "Leave blank to keep current",
-  createPlaceholder: "Min 8 characters",
-  createHint: "At least 8 characters",
+  createPlaceholder: `Min ${PASSWORD_MIN_LENGTH} characters`,
+  createHint: PASSWORD_HINT,
 } as const;
 
 export default function UserModal() {
-  const { userModal, closeUserModal, loadUsers, refreshAll, canManage } = useApp();
+  const { userModal, closeUserModal, loadUsers, refreshAll, canManage, isAdmin } = useApp();
   const { open, user } = userModal;
   const isEdit = user != null;
 
@@ -55,6 +61,11 @@ export default function UserModal() {
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     const id = user?.id;
+    const trimmedEmail = email.trim();
+    if (!isValidEmail(trimmedEmail)) {
+      toast("Enter a valid email address", "error");
+      return;
+    }
     const payload: {
       name: string;
       email: string;
@@ -63,14 +74,15 @@ export default function UserModal() {
       password?: string;
     } = {
       name: name.trim(),
-      email: email.trim(),
+      email: trimmedEmail,
       role,
       is_active: isActive,
     };
     // Only include password if the user typed one (on edit, blank = keep current)
     if (password) {
-      if (password.length < 8) {
-        toast("Password must be at least 8 characters", "error");
+      const pwErr = validatePassword(password);
+      if (pwErr) {
+        toast(pwErr, "error");
         return;
       }
       payload.password = password;
@@ -148,7 +160,10 @@ export default function UserModal() {
           >
             <option value="user">User — only edit own bugs</option>
             <option value="manager">Manager — edit any bug, manage projects</option>
-            <option value="admin">Admin — full access including users</option>
+            {/* Only an admin may grant the admin role; managers cannot. */}
+            {(isAdmin || role === "admin") && (
+              <option value="admin">Admin — full access including users</option>
+            )}
           </select>
         </label>
         <label className="field" id="userPasswordField">

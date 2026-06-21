@@ -1,18 +1,15 @@
-"""
-These guard the most important property of the assistant: it must NEVER
-corrupt the database. Specifically:
+"""Guards that the assistant never corrupts the database. Specifically:
 
-  - Read intents (list / count / detail / stats / export / activity)
-    must not write anything to the database — not even an audit row.
-  - Write intents must execute atomically: a permission failure or
-    target-not-found leaves the DB exactly as it was, with no partial
-    state.
-  - Concurrent users mustn't interfere with each other's pending
-    actions (Bob's "yes" must not execute Alice's staged plan).
-  - Memory expiry / "yes" with nothing pending must not crash and must
-    not write to the DB.
-  - The schema itself must not be altered by anything Sleuth does:
-    no DROP, no ALTER, no new tables sneaked in by the chatbot module.
+  - Read intents (list / count / detail / stats / export / activity) must not
+    write anything to the database, not even an audit row.
+  - Write intents execute atomically: a permission failure or target-not-found
+    leaves the DB exactly as it was, with no partial state.
+  - Concurrent users do not interfere with each other's pending actions (Bob's
+    "yes" must not execute Alice's staged plan).
+  - Memory expiry, or "yes" with nothing pending, must not crash and must not
+    write to the DB.
+  - Sleuth never alters the schema: no DROP, no ALTER, no new tables sneaked in
+    by the chatbot module.
 """
 from __future__ import annotations
 
@@ -40,9 +37,9 @@ os.environ["SLEUTH_CLOUD_ENABLED"] = "0"   # never call the cloud in tests
 
 from sqlalchemy import inspect, text
 
-# Force a fresh app import bound to THIS file's dedicated DB (see the long note
-# in test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
-# engine bound to an earlier-collected module's torn-down DB.
+# Force a fresh app import bound to this file's dedicated DB. Avoids a
+# full-suite "no such table" from a shared engine bound to an earlier-collected
+# module's torn-down DB.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -203,11 +200,10 @@ def test_schema_unchanged() -> None:
             "attachments", "sessions",
         }
         # The cloud assistant adds two durable conversation tables. They are
-        # strictly additive (new tables, created by
-        # create_all; existing tables/data untouched) and are an explicit,
-        # approved design decision — so they are allow-listed here. The
-        # property this test still guards is that Sleuth's OPERATIONS never
-        # DROP/ALTER the schema or sneak in any OTHER table at runtime.
+        # additive (new tables created by create_all; existing tables and data
+        # untouched) and are intentional, so they are allow-listed here. This
+        # test still guards that Sleuth's operations never drop or alter the
+        # schema or sneak in any other table at runtime.
         approved_chat_tables = {"chat_conversations", "chat_messages"}
         leaked = [t for t in tables
                   if t not in approved_chat_tables
@@ -299,7 +295,7 @@ def test_permission_denial_no_writes() -> None:
         before_act = db.query(models.Activity).count()
 
         # Bob is role=user. Sleuth writes are admin-only, so the create is
-        # denied UP FRONT and never staged — the follow-up "yes" is then idle.
+        # denied up front and never staged, leaving the follow-up "yes" idle.
         denied = executor.execute("create project Saturn", db, bob)
         check("perm: regular user's write denied up front",
               denied.intent == "action_denied", f"got {denied.intent}")
@@ -340,8 +336,8 @@ def test_concurrent_users_isolated() -> None:
         check("isolated: bob has NO pending",
               sess_b is None or sess_b.pending_action is None)
 
-        # Bob says "yes" — should be a no-op (confirm_idle), NOT execute
-        # admin's plan.
+        # Bob says "yes": should be a no-op (confirm_idle), not execute admin's
+        # plan.
         bug_status_before = db.get(models.Bug, 1).status
         resp = executor.execute("yes", db, bob)
         check("isolated: bob's 'yes' is confirm_idle",
@@ -375,8 +371,8 @@ def test_memory_edge_cases() -> None:
     section("Memory: TTL eviction, max sessions, reset")
     memstore._clear_all_for_test()
 
-    # Fill up to the cap with "synthetic" sessions and verify cap holds.
-    # We use direct API calls; no DB needed.
+    # Fill up to the cap with synthetic sessions and verify the cap holds, using
+    # direct API calls (no DB needed).
     for i in range(1, 250):
         memstore.remember_bug(i, i * 10)
     sessions = memstore._all_sessions_for_test()
@@ -420,7 +416,7 @@ def test_new_action_overrides_pending() -> None:
     try:
         admin = db.get(models.User, admin_id)
         executor.execute("close bug 1", db, admin)
-        # User changes their mind without confirming and asks something else.
+        # User changes their mind without confirming and asks for something else.
         executor.execute(f"set bug 1 priority to low", db, admin)
         # Pending is now the priority change.
         sess = memstore.get(admin_id)

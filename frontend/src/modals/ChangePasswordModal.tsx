@@ -11,6 +11,7 @@ import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
 import { useApp } from "../state/AppContext";
+import { PASSWORD_HINT, validatePassword } from "../lib/constants";
 
 export default function ChangePasswordModal() {
   const { changePasswordOpen, setChangePasswordOpen } = useApp();
@@ -38,8 +39,9 @@ export default function ChangePasswordModal() {
       toast("New passwords don't match", "error");
       return;
     }
-    if (next.length < 8) {
-      toast("Password must be at least 8 characters", "error");
+    const pwErr = validatePassword(next);
+    if (pwErr) {
+      toast(pwErr, "error");
       return;
     }
     try {
@@ -102,7 +104,7 @@ export default function ChangePasswordModal() {
             value={next}
             onChange={(e) => setNext(e.target.value)}
           />
-          <small className="hint">At least 8 characters</small>
+          <small className="hint">{PASSWORD_HINT}</small>
         </label>
         <label className="field">
           <span>

@@ -6,8 +6,8 @@
  *     <button class="bh-date-btn" aria-haspopup="dialog" aria-expanded>
  *       <span class="bh-date-icon">📅</span>
  *       <span class="bh-date-label [bh-date-placeholder]">Jun 12, 2026 | Select date</span>
- *       <span class="bh-date-clear">×</span>            ← only when a value is set
  *     </button>
+ *     <button class="bh-date-clear" type="button">×</button> ← only when a value is set
  *     <div class="bh-date-pop" role="dialog">           ← only while open
  *       .bh-date-head  (‹ nav / .bh-date-title / › nav)
  *       .bh-date-grid  (7 × .bh-date-dow + 42 × .bh-date-cell)
@@ -35,11 +35,17 @@ function isoDate(d: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Parse YYYY-MM-DD as a local-time Date. */
+/** Parse YYYY-MM-DD as a local-time Date. Rejects impossible dates (e.g.
+ *  2026-02-31, which JS would roll forward to Mar 3) via a round-trip
+ *  equality check. */
 function parseIso(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split("-").map((n) => Number.parseInt(n, 10));
-  return new Date(y, m - 1, d);
+  const date = new Date(y, m - 1, d);
+  // If the constructed date doesn't round-trip back to the same string, the
+  // input named a day/month that doesn't exist — reject it.
+  if (isoDate(date) !== s) return null;
+  return date;
 }
 
 /** "Jun 12, 2026". */
@@ -92,8 +98,8 @@ interface Props {
 
 export default function BhDateInput({ name, value, onChange, required, disabled, id }: Props) {
   const [open, setOpen] = useState(false);
-  // The month being VIEWED (independent of selection so the user can
-  // browse without committing). Re-seeded from value on every open.
+  // The month being viewed, independent of selection so the user can browse
+  // without committing. Re-seeded from value on every open.
   const [view, setView] = useState<{ y: number; m: number }>(() => {
     const seed = parseIso(value) ?? new Date();
     return { y: seed.getFullYear(), m: seed.getMonth() };
@@ -217,13 +223,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
         aria-expanded={open}
         disabled={disabled}
         ref={btnRef}
-        onClick={(e) => {
-          // Don't toggle when the user clicked the inline clear ✕.
-          if (e.target instanceof HTMLElement && e.target.classList.contains("bh-date-clear")) {
-            e.stopPropagation();
-            onChange("");
-            return;
-          }
+        onClick={() => {
           if (open) setOpen(false);
           else openPop();
         }}
@@ -232,10 +232,21 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
         <span className={`bh-date-label${value ? "" : " bh-date-placeholder"}`}>
           {value ? formatHumanDate(value) : "Select date"}
         </span>
-        {value ? (
-          <span className="bh-date-clear" aria-label="Clear" title="Clear">×</span>
-        ) : null}
       </button>
+      {value && !disabled ? (
+        <button
+          type="button"
+          className="bh-date-clear"
+          aria-label="Clear date"
+          title="Clear"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange("");
+          }}
+        >
+          ×
+        </button>
+      ) : null}
       {open && (
         <div
           className="bh-date-pop"

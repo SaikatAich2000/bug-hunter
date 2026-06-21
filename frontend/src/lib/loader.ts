@@ -1,7 +1,6 @@
 /**
- * Global blocking loader. Imperative and counter-based so concurrent
- * operations can share it; drives the #globalLoader overlay the App shell
- * renders.
+ * Global blocking loader. Counter-based so concurrent operations can share it;
+ * drives the #globalLoader overlay the App shell renders.
  */
 let pending = 0;
 

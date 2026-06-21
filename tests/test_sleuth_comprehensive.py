@@ -1,14 +1,9 @@
-"""Comprehensive scenario tests for Sleuth.
-
-Where the other test files cover specific subsystems, this one is
-thorough: it walks the entire user-visible API of Sleuth through
-every meaningful variant of every input shape. The goal is not just
-"the code is correct" but "no realistic phrasing the user might try
-will silently fail or do the wrong thing".
+"""Scenario tests covering the user-visible API of Sleuth across many input
+variants.
 
 Coverage axes:
   - Status synonyms (open, fixed, in progress, WIP, blocker, etc)
-  - Priority synonyms (P0–P3, urgent, blocker, critical, low, etc)
+  - Priority synonyms (P0-P3, urgent, blocker, critical, low, etc)
   - Environment synonyms (production, staging, qa, prod, dev, etc)
   - Time windows (today, yesterday, this week, last N days/weeks/months/hours)
   - Action verbs in many phrasings
@@ -39,8 +34,8 @@ os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
 
-# Force a fresh app import bound to THIS file's dedicated DB (see the long note
-# in test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
+# Force a fresh app import bound to this file's dedicated DB (see the note in
+# test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
 # engine bound to an earlier-collected module's torn-down DB.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):

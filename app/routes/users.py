@@ -32,9 +32,8 @@ from app.schemas import UserIn, UserOut, UserUpdate
 
 
 def _reject_if_breached(plain: str) -> None:
-    """Refuse any password that appears in the HIBP corpus. Mirrors the helper
-    in routes/auth.py — kept here to avoid a circular import between the auth
-    route module and the users route module."""
+    """Reject any password that appears in the HIBP corpus. Duplicated from
+    routes/auth.py to avoid a circular import between the two route modules."""
     if is_password_breached(plain):
         raise HTTPException(
             status_code=400,
@@ -45,8 +44,6 @@ def _reject_if_breached(plain: str) -> None:
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-
-# Extracted to module constants to avoid duplicating the literals.
 _DETAIL_USER_NOT_FOUND = "User not found"
 _DETAIL_EMAIL_EXISTS = "Email already exists"
 
@@ -60,8 +57,8 @@ def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail:
 
 
 def _like_escape(needle: str) -> str:
-    """Escape LIKE wildcards so `%` and `_` match the literal characters
-    rather than 'any'. Pair with escape='\\\\' on the LIKE clause."""
+    """Escape LIKE wildcards so `%` and `_` match the literal characters.
+    Pair with escape='\\\\' on the LIKE clause."""
     return (
         needle.replace("\\", "\\\\")
               .replace("%", "\\%")
@@ -71,7 +68,7 @@ def _like_escape(needle: str) -> str:
 
 def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> bool:
     """Case-insensitive email-uniqueness check. The API lowercases emails before
-    insert, but this also rejects a collision with any legacy mixed-case row the
+    insert, but this also rejects a collision with any mixed-case row the
     exact-match unique constraint would otherwise miss."""
     stmt = select(User.id).where(func.lower(User.email) == email.lower())
     if exclude_id is not None:
@@ -90,14 +87,18 @@ def list_users(
     if not include_inactive:
         stmt = stmt.where(User.is_active.is_(True))
     if q:
+        # Search name and email only. Folding User.role into the LIKE would turn
+        # this picker (available to every authenticated user) into a
+        # role-enumeration oracle, e.g. q="admin" returning every admin account.
+        # Role-based filtering, if ever needed, should be a param guarded for
+        # managers/admins.
         like = f"%{_like_escape(q.lower())}%"
         stmt = stmt.where(or_(
             func.lower(User.name).like(like, escape="\\"),
             func.lower(User.email).like(like, escape="\\"),
-            func.lower(User.role).like(like, escape="\\"),
         ))
-    # Hard row ceiling so this picker list can't grow unbounded; the users
-    # table is bounded by team size, so 500 is well above any realistic count.
+    # Row ceiling so this picker list can't grow unbounded; the users table is
+    # bounded by team size, so 500 is well above any realistic count.
     stmt = stmt.order_by(func.lower(User.name)).limit(500)
     return list(db.scalars(stmt).all())
 
@@ -108,14 +109,13 @@ def create_user(
     db: Session = Depends(get_db),
     actor: User = Depends(require_manager_or_admin),
 ) -> User:
-    # Managers can create users — but they can't manufacture peers above
-    # them. Only admins are allowed to grant the admin role.
+    # Managers can create users but can't grant the admin role; only admins can.
     if payload.role == "admin" and actor.role != "admin":
         raise HTTPException(
             status_code=403,
             detail="Only admins can create admin users.",
         )
-    # Reject if the chosen initial password is in HIBP.
+    # Reject an initial password that appears in HIBP.
     _reject_if_breached(payload.password)
     if _email_in_use(db, payload.email):
         raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
@@ -180,12 +180,11 @@ def _count_other_active_admins(db: Session, exclude_id: int) -> int:
     """Count active admins other than `exclude_id`, holding a row lock on the
     admin rows so the check can't race itself.
 
-    Two admins concurrently deleting/demoting each other would each (with a
-    plain COUNT) see "1 other admin" and both commit, leaving the org with ZERO
-    admins. We SELECT ... FOR UPDATE over ALL active admins (not just the
-    others) so the second transaction blocks until the first commits and then
-    re-reads the now-smaller set. FOR UPDATE is a real lock on Postgres and a
-    harmless no-op on SQLite (single-writer; the test suite is serial).
+    Two admins concurrently deleting/demoting each other would each, with a
+    plain COUNT, see "1 other admin" and both commit, leaving the org with zero
+    admins. SELECT ... FOR UPDATE over all active admins (not just the others)
+    makes the second transaction block until the first commits, then re-read the
+    smaller set. FOR UPDATE is a real lock on Postgres and a no-op on SQLite.
     """
     admin_ids = db.scalars(
         select(User.id)
@@ -219,10 +218,10 @@ def _apply_user_field_changes(user: User, fields: dict, changes: list[str]) -> N
 
 def _apply_admin_password_reset(user: User, db: Session, new_password: str,
                                 changes: list[str]) -> None:
-    """An admin password-reset is a security event — kick existing sessions
-    and revoke any outstanding reset tokens."""
-    # HIBP check before committing. Admin-driven resets are not exempt from
-    # breach checking — the user might keep the assigned password.
+    """An admin password-reset is a security event: kick existing sessions and
+    revoke any outstanding reset tokens."""
+    # HIBP check before committing; admin-driven resets aren't exempt since the
+    # user might keep the assigned password.
     _reject_if_breached(new_password)
     user.password_hash = hash_password(new_password)
     user.session_version = (user.session_version or 0) + 1
@@ -253,7 +252,7 @@ def update_user(
     if new_email and _email_in_use(db, new_email, exclude_id=user_id):
         raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
 
-    # If the admin is deactivating someone, kick their existing sessions.
+    # When deactivating a user, kick their existing sessions.
     if fields.get("is_active") is False and user.is_active:
         user.session_version = (user.session_version or 0) + 1
 

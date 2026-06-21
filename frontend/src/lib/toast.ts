@@ -4,7 +4,7 @@
  * The app shell renders a single `<div id="toast" class="toast" hidden>`;
  * toast() swaps its text + type class and unhides it for 3.5s.
  *
- * Imperative on purpose: callable from anywhere (API error paths, editors)
+ * Imperative so it can be called from anywhere (API error paths, editors)
  * without prop-drilling.
  */
 import { ApiError } from "./api";

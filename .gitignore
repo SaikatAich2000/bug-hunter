@@ -45,9 +45,14 @@ sonar-hotspots.csv
 # JSON (FCM_CREDENTIALS_FILE) lives here; these patterns also catch any
 # similarly-named credential downloaded into the repo by mistake.
 secrets/
+# Broadened from *firebase-adminsdk*.json so the common short name
+# `firebase-admin.json` is matched on its own, not only via the secrets/ rule.
+*firebase-admin*.json
 *firebase-adminsdk*.json
 *service-account*.json
 *serviceaccount*.json
+*.pem
+*.key
 *-credentials.json
 google-credentials*.json
 

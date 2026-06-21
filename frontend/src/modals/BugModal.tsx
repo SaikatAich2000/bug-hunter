@@ -22,6 +22,7 @@ import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
 import { withLoader } from "../lib/loader";
 import { formatDate, initials } from "../lib/format";
+import { fileTooLargeMessage, MAX_UPLOAD_BYTES } from "../lib/upload";
 import { sanitizeHtml } from "../lib/sanitize";
 import { confirmDialog } from "../components/ConfirmHost";
 import BhSelect, { type BhSelectOption } from "../components/BhSelect";
@@ -145,7 +146,7 @@ export default function BugModal() {
   const commentRef = useRef<RichEditorHandle>(null);
   const editCommentRef = useRef<RichEditorHandle>(null);
   const titleRef = useRef<HTMLInputElement>(null);
-  // updated_at captured when the modal OPENS, for the optimistic-concurrency
+  // updated_at captured when the modal opens, for the optimistic-concurrency
   // check on save. Captured here (not read live at submit) so the 10s background
   // poll refreshing the bug can't silently advance it past a concurrent edit.
   const expectedVersionRef = useRef<number | null>(null);
@@ -155,9 +156,10 @@ export default function BugModal() {
   const commentStaged = useStagedFiles();  // comment composer attach
   const bugAttachStaged = useStagedFiles(); // post-creation "Add attachment"
 
-  // Drag-and-drop file targets for the two attach zones.
+  // Drag-and-drop file targets for the attach zones.
   const createDrop = useFileDrop((files) => createStaged.addFiles(files));
   const bugAttachDrop = useFileDrop((files) => bugAttachStaged.addFiles(files));
+  const commentDrop = useFileDrop((files) => commentStaged.addFiles(files));
 
   // Per-role read-only mode. Create mode is never read-only — anyone can file
   // an item. Prefer the backend per-item can_edit flag (source of truth) and
@@ -206,7 +208,7 @@ export default function BugModal() {
       setPriority("Medium");
       setEnvironment("DEV");
       setEventId(defaultEventId ? String(defaultEventId) : "");
-      // Default Due Date to TODAY on create.
+      // Default due date to today on create.
       setDueDate(isoToday());
       setAssigneeIds([]);
       descRef.current?.setHtml("");
@@ -254,17 +256,12 @@ export default function BugModal() {
     if (editingCommentId != null) editCommentRef.current?.focus();
   }, [editingCommentId]);
 
-  // A closed modal renders nothing, which skips all the derived option arrays
-  // and the large render tree below. The modal is always mounted in Shell and
-  // re-renders on every context change (the data and session polls both swap
-  // the context value), so without this guard a closed BugModal would recompute
-  // statusOpts/projectOpts/assigneeItems (filtering `users`, mapping
-  // `projects`) and rebuild its xxl form + RichEditors on every tick. Returning
-  // null is behaviourally identical to the `hidden` attribute here:
-  // `.modal[hidden]` is display:none, the global Escape handler only queries
-  // `.modal:not([hidden])`, and the enter animation lives on .modal-card (fires
-  // on mount either way). All hooks run above this point, so the early return
-  // never trips the Rules of Hooks.
+  // A closed modal renders nothing, skipping the derived option arrays and the
+  // large render tree below. The modal is always mounted in Shell and re-renders
+  // on every context change, so without this guard a closed BugModal would
+  // recompute its option arrays and rebuild its form + RichEditors on every
+  // poll tick. Returning null is equivalent to the `hidden` attribute here, and
+  // all hooks run above this point so the early return is safe.
   if (!open) return null;
 
   // ----- derived select options ---------------------------------------------
@@ -331,14 +328,20 @@ export default function BugModal() {
   // uploaded after the bug is created.
   const onDescPaste = async (f: File): Promise<void> => {
     if (bugId) {
+      const tooBig = fileTooLargeMessage(f);
+      if (tooBig) {
+        toast(tooBig, "error");
+        return;
+      }
       const fd = new FormData();
       fd.append("file", f);
       await api(`/bugs/${bugId}/attachments`, { method: "POST", body: fd });
       await reloadBugModal();
       toast(`Attached: ${f.name || "pasted file"}`, "success");
     } else {
+      // addFiles() enforces the size limit before staging.
       createStaged.addFiles([f]);
-      toast(`Staged: ${f.name || "pasted file"}`, "info");
+      if (f.size <= MAX_UPLOAD_BYTES) toast(`Staged: ${f.name || "pasted file"}`, "info");
     }
   };
 
@@ -353,6 +356,11 @@ export default function BugModal() {
   // already saved, so its comment_id linkage can't be backfilled.
   const onEditCommentPaste = async (f: File): Promise<void> => {
     if (!bugId) return;
+    const tooBig = fileTooLargeMessage(f);
+    if (tooBig) {
+      toast(tooBig, "error");
+      return;
+    }
     const fd = new FormData();
     fd.append("file", f);
     await api(`/bugs/${bugId}/attachments`, { method: "POST", body: fd });
@@ -569,7 +577,7 @@ export default function BugModal() {
   const onSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     const id = bugId;
-    // Reporter: for NEW items use the current user; for EDIT preserve
+    // Reporter: for new items use the current user; for edit preserve
     // whoever the original reporter was (the disabled select carries it).
     const reporterFromForm = isEdit ? bug.reporter?.id ?? null : null;
     const reporterFromMe = currentUser.id || null;
@@ -584,10 +592,10 @@ export default function BugModal() {
       environment,
       due_date: dueDate || null,
       // "" or "0" means "no event" — send null so the server treats it as
-      // an explicit unlink in the EDIT path.
+      // an explicit unlink in the edit path.
       event_id: eventId && eventId !== "0" ? Number.parseInt(eventId, 10) : null,
       assignee_ids: assigneeIds,
-      // Optimistic concurrency on EDIT: tell the server the version we opened so
+      // Optimistic concurrency on edit: tell the server the version we opened so
       // it 409s instead of silently clobbering a concurrent edit. The catch
       // surfaces the server's "changed by someone else — reload" message.
       ...(id && expectedVersionRef.current != null
@@ -609,16 +617,40 @@ export default function BugModal() {
       return;
     }
 
-    // Saving must NOT navigate the user away from where they are. Closing the
+    // Don't let a save silently discard files that were staged but never
+    // uploaded. Only relevant in edit mode — on create, staged files upload as
+    // part of the create below.
+    if (id) {
+      if (bugAttachStaged.files.length > 0) {
+        const n = bugAttachStaged.files.length;
+        toast(
+          `You have ${n} attachment${n > 1 ? "s" : ""} that ${n > 1 ? "haven't" : "hasn't"} been uploaded yet. ` +
+            'Click "Upload" in the Attachments section, or remove ' +
+            `${n > 1 ? "them" : "it"}, before saving.`,
+          "error",
+        );
+        return;
+      }
+      if (commentStaged.files.length > 0) {
+        const n = commentStaged.files.length;
+        toast(
+          `You have ${n} file${n > 1 ? "s" : ""} attached to a comment you haven't posted yet. ` +
+            'Click "Post" to add the comment, or remove ' +
+            `${n > 1 ? "them" : "it"}, before saving.`,
+          "error",
+        );
+        return;
+      }
+    }
+
+    // Saving must not navigate the user away from where they are. Closing the
     // modal returns them to the underlying view, which refreshes itself: the
     // Work Items list reflects the change via refreshAll(); the Events detail
     // refetches via its own bugModal.open effect (so "+ Add Task" stays inside
-    // the event); Analytics keeps its charts. A forced setView("list") here was
-    // the cause of the "creating a task inside an event jumps to Work Items" bug
-    // (and the same surprise on every other view).
+    // the event); Analytics keeps its charts.
     try {
       if (id) {
-        // EDIT — save, then close the modal; the underlying view stays put.
+        // Edit: save, then close the modal; the underlying view stays put.
         const result = await withLoader(async () => {
           const updated = await api<BugOut>(`/bugs/${id}`, { method: "PUT", json: payload });
           closeBugModal();
@@ -628,9 +660,9 @@ export default function BugModal() {
         const utype = result?.item_type || payload.item_type || "Bug";
         toast(`${utype} #${id} updated`, "success");
       } else {
-        // CREATE — POST the item, then upload any staged files before
-        // closing the modal. Per-file failures are toasted but don't abort
-        // the create flow — the item itself is already saved.
+        // Create: POST the item, then upload any staged files before closing
+        // the modal. Per-file failures are toasted but don't abort the create
+        // flow — the item itself is already saved.
         await withLoader(async () => {
           const created = await api<BugOut>("/bugs", { method: "POST", json: payload });
           const ctype = created?.item_type || payload.item_type || "Bug";
@@ -870,7 +902,7 @@ export default function BugModal() {
                         id="createBugFiles"
                         aria-label="Attachments for new bug"
                         onChange={(e) => {
-                          // ADD to (not replace) the bucket; reset the input
+                          // Add to (not replace) the bucket; reset the input
                           // so re-selecting the same file fires again.
                           createStaged.addFiles(e.currentTarget.files ?? []);
                           e.currentTarget.value = "";
@@ -941,17 +973,26 @@ export default function BugModal() {
                     />
                   ))}
                   {bugAttachStaged.files.length > 0 && (
-                    // Stage multiple, review, then confirm.
-                    <button
-                      type="button"
-                      className="btn primary attach-staged-upload"
-                      onClick={() => {
-                        withLoader(flushBugAttach, "Uploading attachment(s)…").catch(toastError);
-                      }}
-                    >
-                      Upload {bugAttachStaged.files.length} file
-                      {bugAttachStaged.files.length > 1 ? "s" : ""}
-                    </button>
+                    // Stage multiple, review, then upload or cancel.
+                    <div className="attach-staged-actions">
+                      <button
+                        type="button"
+                        className="btn primary attach-staged-upload"
+                        onClick={() => {
+                          withLoader(flushBugAttach, "Uploading attachment(s)…").catch(toastError);
+                        }}
+                      >
+                        Upload {bugAttachStaged.files.length} file
+                        {bugAttachStaged.files.length > 1 ? "s" : ""}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost attach-staged-cancel"
+                        onClick={() => bugAttachStaged.clear()}
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div className="attachment-grid" id="bugAttachmentsGrid">
@@ -993,7 +1034,14 @@ export default function BugModal() {
                 >
                   {bug?.comments.map((c) => renderComment(c))}
                 </div>
-                <div className="comment-form" id="commentForm" hidden={readOnly} onKeyDown={onComposerKeyDown}>
+                <div
+                  className={`comment-form attach-dropzone${commentDrop.dragging ? " is-dragging" : ""}`}
+                  id="commentForm"
+                  hidden={readOnly}
+                  onKeyDown={onComposerKeyDown}
+                  {...commentDrop.dropProps}
+                >
+                  <div className="attach-drop-hint">Drop files to attach</div>
                   <RichEditor
                     ref={commentRef}
                     textareaId="commentBody"
@@ -1024,11 +1072,21 @@ export default function BugModal() {
                         />
                       ))}
                     </div>
+                    {commentStaged.files.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn ghost attach-staged-cancel"
+                        style={{ marginLeft: "auto" }}
+                        onClick={() => commentStaged.clear()}
+                      >
+                        Cancel
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn primary"
                       id="commentPostBtn"
-                      style={{ marginLeft: "auto" }}
+                      style={commentStaged.files.length > 0 ? undefined : { marginLeft: "auto" }}
                       onClick={() => void onPostComment()}
                     >
                       Post

@@ -13,10 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # HTML sanitizer for rich-text fields (description, comment body)
 #
 # The contenteditable rich-text editor emits HTML (bold/italic/underline/
-# lists/quotes/code/images). Storing the HTML preserves formatting on read,
-# but a naive `innerHTML = body` would be a stored-XSS bug — a user could
-# paste `<script>` or an `onerror` attribute and trigger arbitrary JS for
-# every viewer.
+# lists/quotes/code/images). Storing the HTML preserves formatting on read, but
+# rendering it unsanitized would be a stored-XSS bug: a user could paste
+# `<script>` or an `onerror` attribute and run arbitrary JS for every viewer.
 #
 # Sanitizing on the server before storing keeps the database holding clean
 # HTML. The allowlist is tight: only the formatting tags the editor produces,
@@ -38,8 +37,10 @@ _ALLOWED_TAGS = {
 }
 _ALLOWED_ATTRS = {
     # Per-tag attr allowlist. Anything missing here is stripped, even for
-    # whitelisted tags — this is what blocks `<img onerror=...>` and the like.
-    "a":   {"href", "title", "rel"},
+    # whitelisted tags, which is what blocks `<img onerror=...>` and the like.
+    # `rel` is not accepted on <a>; we force our own rel="noopener nofollow"
+    # below so a user-supplied rel="" / rel="opener" can't strip the hardening.
+    "a":   {"href", "title"},
     "img": {"src", "alt", "title", "width", "height"},
     "code": {"class"},   # editor sometimes emits `<code class="language-X">`
     "pre":  {"class"},
@@ -47,6 +48,21 @@ _ALLOWED_ATTRS = {
 # Schemes allowed on `href` / `src`. `data:` is allowed only for image
 # pastes; we check the URL scheme + MIME prefix together below.
 _ALLOWED_URL_SCHEMES = ("http:", "https:", "mailto:", "/", "#")
+# Only true raster image data: URLs survive sanitization (not svg+xml, which is
+# scriptable). Compared against the lower-cased URL prefix.
+_DATA_IMAGE_RASTER_PREFIXES = (
+    "data:image/png", "data:image/jpeg", "data:image/jpg",
+    "data:image/gif", "data:image/webp", "data:image/bmp", "data:image/avif",
+)
+# Tags whose CONTENT is CDATA/RCDATA in the HTML spec (their inner text is not
+# markup). They're not on the allowlist, so the tags are dropped — but we also
+# drop their text content entirely rather than escaping and re-emitting it,
+# closing a parser-differential / mutation-XSS hazard if a consumer ever parses
+# with a real HTML5 tokenizer.
+_RCDATA_DROP_TAGS = frozenset({
+    "script", "style", "textarea", "title", "noscript", "xmp",
+    "iframe", "noframes", "template",
+})
 
 
 class _HTMLAllowlistSanitizer(HTMLParser):
@@ -59,6 +75,8 @@ class _HTMLAllowlistSanitizer(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self.out: list[str] = []
+        # Depth counter for CDATA/RCDATA elements whose text content we suppress.
+        self._drop_text_depth = 0
 
     def _safe_url(self, raw: str) -> Optional[str]:
         if not raw:
@@ -69,6 +87,11 @@ class _HTMLAllowlistSanitizer(HTMLParser):
         # runaway storage. Upload-based attachments don't go through this
         # path; this is for inline pastes only.
         if low.startswith("data:image/"):
+            # Raster images only. data:image/svg+xml is an XML document that can
+            # carry <script>/onload and executes in our origin if navigated to,
+            # so it must not survive sanitization; only true bitmap types do.
+            if not low.startswith(_DATA_IMAGE_RASTER_PREFIXES):
+                return None
             if len(s) > 14 * 1024 * 1024:
                 return None
             return s
@@ -77,17 +100,13 @@ class _HTMLAllowlistSanitizer(HTMLParser):
                 return s
         return None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        t = tag.lower()
-        if t not in _ALLOWED_TAGS:
-            return
-        kept = []
+    def _kept_attrs(self, t: str, attrs: list[tuple[str, Optional[str]]]) -> list[str]:
+        """Build the surviving `name="value"` attribute strings for tag `t`."""
+        kept: list[str] = []
         allowed_attrs = _ALLOWED_ATTRS.get(t, set())
         for k, v in attrs:
             k = k.lower()
-            if k not in allowed_attrs:
-                continue
-            if v is None:
+            if k not in allowed_attrs or v is None:
                 continue
             if k in ("href", "src"):
                 clean = self._safe_url(v)
@@ -99,16 +118,30 @@ class _HTMLAllowlistSanitizer(HTMLParser):
             v_safe = (v.replace("&", "&amp;").replace("<", "&lt;")
                        .replace(">", "&gt;").replace('"', "&quot;"))
             kept.append(f'{k}="{v_safe}"')
-        # `a` tags get a forced rel for any external link.
+        # Force our own rel on every <a> (user rel isn't accepted), so the
+        # reverse-tabnabbing/nofollow hardening can't be stripped by the input.
         if t == "a":
-            has_rel = any(p.startswith("rel=") for p in kept)
-            if not has_rel:
-                kept.append('rel="noopener nofollow"')
+            kept.append('rel="noopener nofollow"')
+        return kept
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        t = tag.lower()
+        if t in _RCDATA_DROP_TAGS:
+            # Enter a script/style/etc. block: drop the tag AND its text content.
+            self._drop_text_depth += 1
+            return
+        if t not in _ALLOWED_TAGS:
+            return
+        kept = self._kept_attrs(t, attrs)
         attr_str = (" " + " ".join(kept)) if kept else ""
         self.out.append(f"<{t}{attr_str}>")
 
     def handle_endtag(self, tag: str) -> None:
         t = tag.lower()
+        if t in _RCDATA_DROP_TAGS:
+            if self._drop_text_depth > 0:
+                self._drop_text_depth -= 1
+            return
         if t not in _ALLOWED_TAGS:
             return
         # Void elements don't take a closing tag.
@@ -117,10 +150,18 @@ class _HTMLAllowlistSanitizer(HTMLParser):
         self.out.append(f"</{t}>")
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        # `<br/>` / `<img .../>` — re-emit as start-tag only.
+        # `<br/>` / `<img .../>` — re-emit as start-tag only. A self-closing
+        # RCDATA tag (e.g. <script/>) opens and closes in one token, so don't
+        # leave the suppression depth stuck on.
+        if tag.lower() in _RCDATA_DROP_TAGS:
+            return
         self.handle_starttag(tag, attrs)
 
     def handle_data(self, data: str) -> None:
+        if self._drop_text_depth > 0:
+            # Inside a dropped script/style/etc. element — discard its content
+            # entirely rather than escaping and re-emitting it as text.
+            return
         self.out.append(
             data.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
@@ -155,8 +196,8 @@ def sanitize_html(value: Optional[str]) -> str:
 # updated to a valid value — but updates that try to move to an invalid value
 # are rejected by the route layer.
 #
-# ALLOWED_STATUSES is the union, kept for the filter endpoints and any client
-# that POSTs a status without an item_type. The per-type sets below are the
+# ALLOWED_STATUSES is the union, used by the filter endpoints and any client
+# that posts a status without an item_type. The per-type sets below are the
 # source of truth for create/update validation.
 STATUSES_BY_TYPE = {
     "Bug": [
@@ -228,7 +269,15 @@ def normalize_choice(value: str, allowed: list[str], label: str) -> str:
 _normalize_choice = normalize_choice
 
 
-_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+# Local part has no leading/trailing/consecutive dots; each domain label is
+# alphanumeric with only internal hyphens; TLD is alphabetic. This rejects
+# malformed addresses (leading/consecutive dots, hyphen-bounded labels) that
+# would otherwise be stored and used to send password-reset mail. Quantifiers
+# are bounded so the pattern is not vulnerable to ReDoS.
+_EMAIL_RE = re.compile(
+    r"^(?![.])(?!.*[.]{2})[A-Za-z0-9._%+\-]+(?<![.])@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
 
 
 def _validate_email(value: str) -> str:
@@ -267,26 +316,25 @@ def _normalize_role(v: str) -> str:
 def _check_password_strength(v: str) -> str:
     if not isinstance(v, str):
         raise ValueError("Password must be a string")
-    # Backwards-compat exception: 'changeme' (case-insensitive) is the legacy
-    # default password widely used in existing deployments and already present
-    # in the production database for many accounts. It is ALWAYS accepted.
-    # This MUST stay ABOVE the length/complexity checks so it keeps working
-    # even when PASSWORD_MIN_LENGTH is raised above 8 characters.
+    # Backwards-compat exception: 'changeme' (case-insensitive) is the default
+    # password present in existing deployments for many accounts. It is always
+    # accepted, and must stay above the length/complexity checks so it keeps
+    # working even when PASSWORD_MIN_LENGTH is raised above 8 characters.
     if v.lower() == "changeme":
         return v
     # Upper bound is a DoS guard (bcrypt cost grows with input) — always on.
     if len(v) > 200:
         raise ValueError("Password is too long")
-    # Configurable strength rules (app/config). Defaults preserve the prior
-    # behaviour exactly: min length 8, letter+digit required.
+    # Configurable strength rules (app/config). Defaults: min length 8,
+    # letter+digit required.
     from app.config import get_settings  # local import avoids an import cycle
     settings = get_settings()
     min_len = max(1, settings.PASSWORD_MIN_LENGTH)
     if len(v) < min_len:
         raise ValueError(f"Password must be at least {min_len} characters")
-    # We deliberately do NOT require special characters — NIST 800-63B §5.1.1.2
-    # finds character-class rules push users toward predictable substitutions
-    # without raising real entropy. Length + letter + digit is the middle ground.
+    # Special characters are not required: NIST 800-63B §5.1.1.2 finds
+    # character-class rules push users toward predictable substitutions without
+    # raising real entropy. Length + letter + digit is the middle ground.
     if settings.PASSWORD_REQUIRE_COMPLEXITY:
         has_letter = any(c.isalpha() for c in v)
         has_digit = any(c.isdigit() for c in v)
@@ -708,7 +756,11 @@ class CommentIn(BaseModel):
             raise ValueError("Comment body must be a string")
         cleaned = sanitize_html(v.strip())
         text_only = re.sub(r"<[^>]+>", "", cleaned).strip()
-        if not text_only and "<img" not in cleaned.lower():
+        # Treat the comment as non-empty only if it has visible text or a real
+        # image (an <img> with a surviving src), so a bare content-less <img>
+        # can't pass as non-empty and allow invisible/blank comment spam.
+        has_image = re.search(r"<img\b[^>]*\bsrc=", cleaned, re.IGNORECASE) is not None
+        if not text_only and not has_image:
             raise ValueError("Comment body cannot be empty")
         return cleaned
 
@@ -844,7 +896,7 @@ class SessionOut(BaseModel):
 # Stats
 # ---------------------------------------------------------------------------
 class StatsOut(BaseModel):
-    # Total bugs — EXCLUDES the "Not a Bug" status per product requirement.
+    # Total bugs, excluding the "Not a Bug" status per product requirement.
     bugs: int
     # Operational status buckets used by the KPI strip on the dashboard.
     open: int
@@ -874,9 +926,9 @@ class EventCreate(BaseModel):
     scheduled_for: Optional[str] = None  # YYYY-MM-DD
     # User IDs (admin or manager role) to set as event managers. These
     # users receive notifications when the event is created / updated /
-    # deleted — but NOT when individual tasks inside the event are
-    # filed. Empty list = no managers (the event has no notification
-    # recipients beyond the creator).
+    # deleted, but not when individual tasks inside the event are filed.
+    # Empty list = no managers (the event has no notification recipients
+    # beyond the creator).
     manager_ids: list[int] = Field(default_factory=list, max_length=200)
 
     @field_validator("name")
@@ -965,6 +1017,9 @@ class EventOut(BaseModel):
 class EventDetail(EventOut):
     """Event with its full item list — what /api/events/{id} returns."""
     items: list[BugOut] = Field(default_factory=list)
+    # True when the item list was capped at the server's per-event ceiling, so
+    # the client can show "showing N of M" instead of a silently lossy view.
+    items_truncated: bool = False
 
 
 # ---------------------------------------------------------------------------

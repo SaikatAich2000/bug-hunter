@@ -1,17 +1,13 @@
-"""
-Comprehensive regression test suite for Bug Hunter.
+"""Regression test suite for Bug Hunter.
 
-Goal: methodically exercise every documented behavior across:
+Exercises behavior across:
   - Auth (login, logout, reset, change password, sessions)
-  - Users CRUD + permissions
-  - Projects CRUD + permissions
-  - Bugs CRUD + permissions + filters + pagination + can_edit
-  - Comments + attachments
-  - Audit trail + stats
-  - Edge cases / input validation / security boundaries
-
-Each test is documented with what it's checking. Failures indicate
-regressions or latent bugs.
+  - Users CRUD and permissions
+  - Projects CRUD and permissions
+  - Bugs CRUD, permissions, filters, pagination, can_edit
+  - Comments and attachments
+  - Audit trail and stats
+  - Edge cases, input validation, and security boundaries
 """
 from __future__ import annotations
 
@@ -138,7 +134,7 @@ class TestAuth:
         assert r.status_code == 200
 
     def test_login_with_extremely_long_password(self, client):
-        """A 1000-char password should not crash bcrypt (sha256 prehash protects)."""
+        """A 1000-char password should not crash bcrypt; a sha256 prehash protects it."""
         r = client.post("/api/auth/login", json={
             "email": "admin@test.local", "password": "x" * 1000,
         })
@@ -591,11 +587,9 @@ class TestCommentsAttachments:
             assert d.status_code != 500, "header injection from filename crashed server"
 
     def test_uploader_cannot_delete_their_own_attachment_v25(self, admin_client):
-        """Attachment deletion is admin-only across the board. The
-        previous uploader-keeps-rights rule was removed when the spec
-        moved to "Comments and Attachments must not be editable or
-        deletable by anyone except the admin." Uploads stay open
-        — admins curate."""
+        """Attachment deletion is admin-only. The uploader-keeps-rights rule
+        was removed: comments and attachments may only be deleted by an admin.
+        Uploads themselves stay open to assigned users."""
         p = _create_project(admin_client, name="C9")
         # Admin creates bug
         bug = _create_bug(admin_client, p["id"])
@@ -607,12 +601,12 @@ class TestCommentsAttachments:
         files = {"file": ("u.txt", io.BytesIO(b"u"), "text/plain")}
         r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
         att_id = r.json()["id"]
-        # The uploader (a regular user, still assigned) can NO LONGER
-        # delete their own attachment — admin-only.
+        # The uploader (a regular user, still assigned) cannot delete their
+        # own attachment; deletion is admin-only.
         d = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
         assert d.status_code == 403
         assert "admin" in d.json()["detail"].lower()
-        # Admin CAN delete.
+        # An admin can delete.
         _logout(admin_client)
         _login_as(admin_client, "admin@test.local", "Admin1234")
         d = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
@@ -756,8 +750,8 @@ class TestEdgeCases:
         # Test with lowercase
         r = admin_client.get("/api/bugs?status=new")
         n_lower = r.json()["total"]
-        # If lower returns 0 but canonical > 0, the filter is case-sensitive (mismatch with creation,
-        # which IS case-insensitive per `_normalize_choice`).
+        # If lower returns 0 but canonical > 0, the filter is case-sensitive,
+        # which would mismatch creation (case-insensitive per `_normalize_choice`).
         assert n_lower == n_canonical, \
             f"Filter is case-SENSITIVE but creation is case-INSENSITIVE: " \
             f"created with 'new'/found 'New' but filter ?status=new yields {n_lower} vs {n_canonical}"
@@ -822,8 +816,7 @@ class TestSecurity:
 #     hardened response headers
 # ===========================================================================
 class TestV321Security:
-    """Tests for additive security hardening that layers on top of prior
-    behavior:
+    """Tests for security hardening:
       - CSRF: state-changing /api/* requests with a foreign Origin are
         rejected with 403 before they hit the route.
       - Upload rate limit: 20 attachments / 60s / user.
@@ -878,8 +871,8 @@ class TestV321Security:
         assert r.status_code == 201, r.text
 
     def test_csrf_login_blocks_cross_origin(self, client):
-        """Login is NO LONGER CSRF-exempt: a cross-site login POST (the
-        session-fixation vector) is blocked. Operator scripts still work — they
+        """Login is not CSRF-exempt: a cross-site login POST (the
+        session-fixation vector) is blocked. Operator scripts still work; they
         send no Origin/Referer and pass the no-fingerprint branch."""
         r = client.post(
             "/api/auth/login",
@@ -950,7 +943,7 @@ class TestV321Security:
         assert r.headers.get("Cross-Origin-Resource-Policy") == "same-origin"
 
     def test_csp_still_set(self, admin_client):
-        """Existing CSP must not have been clobbered by the v3.2.1 changes."""
+        """The Content-Security-Policy header is still set with the expected directives."""
         r = admin_client.get("/api/health")
         csp = r.headers.get("Content-Security-Policy", "")
         assert "default-src 'self'" in csp
@@ -958,12 +951,12 @@ class TestV321Security:
 
 
 # ===========================================================================
-# 8c. PERFORMANCE GUARANTEES
+# 8c. PERFORMANCE
 #
-# These tests don't assert wall-clock speed — that's flaky on shared CI.
-# They lock in the *structural* improvements: query-count collapse on the
-# dashboard, deferred BLOB loading on Attachment, and parallel boot
-# loader still rendering correctly.
+# These tests don't assert wall-clock speed, which is flaky on shared CI.
+# They lock in structural behavior: query-count collapse on the dashboard,
+# deferred BLOB loading on Attachment, and the boot loader still rendering
+# correctly.
 # ===========================================================================
 class TestV321Performance:
     def test_stats_endpoint_returns_expected_kpis(self, admin_client):
@@ -1066,15 +1059,15 @@ class TestCascades:
 
 
 # ===========================================================================
-# 8d. v3.2.1 SLEUTH CHATBOT — rule-engine improvements
+# 8d. SLEUTH CHATBOT — rule-engine behavior
 # ===========================================================================
 class TestV321Chatbot:
-    """Tests for the v3.2.1 NLU additions:
+    """Tests for NLU behavior:
       - "me" / "mine" / "my bugs" pronoun resolution
       - "unassigned" / "no assignee" filter
       - "oldest" / "stale" sort hint
       - "minor" / "trivial" priority synonyms
-      - Better unknown-intent fallback
+      - Context-aware unknown-intent fallback
     """
 
     def _ask(self, c, message):
@@ -1162,8 +1155,7 @@ class TestV321Chatbot:
         assert "Older one" in table2["payload"]["rows"][0][1], table2["payload"]["rows"]
 
     def test_priority_synonyms_minor_and_blocker(self, admin_client):
-        """'minor bugs' → Low, 'showstopper bugs' → Critical. These were
-        in the v3.2.1 synonym expansion."""
+        """'minor bugs' maps to Low and 'showstopper bugs' maps to Critical."""
         p = _create_project(admin_client, name="SYN1")
         _create_bug(admin_client, p["id"], title="Tiny issue", priority="Low")
         _create_bug(admin_client, p["id"], title="Crashing!", priority="Critical")

@@ -1,9 +1,9 @@
-"""Regression guards for item links, bulk actions, Sleuth document-ingest, the
-two-tier layout, and the removal of the watchers and labels experiments.
+"""Source guards for item links, bulk actions, Sleuth document-ingest, the
+two-tier layout, and the removal of the watchers and labels features.
 
-Behavior is covered end-to-end by test_links / test_bulk / test_sleuth_ingest;
-these source-sniff the wiring and the removals so a refactor can't silently
-re-introduce a dropped feature or break the layout.
+Behavior is covered end-to-end by test_links and test_bulk; these sniff the
+source wiring and the removals so a refactor can't silently re-introduce a
+dropped feature or break the layout.
 """
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def test_sleuth_panel_admin_upload_and_text():
 
 
 # ---------------------------------------------------------------------------
-# Removed features — watchers + labels must be GONE everywhere
+# Removed features — watchers and labels must be gone everywhere
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("needle", [
     "bug_watchers", "bug_labels", "class Label(", "watchers:", "labels:",
@@ -112,7 +112,7 @@ def test_frontend_has_no_label_or_watch_wiring(src_file, gone):
 
 
 # ---------------------------------------------------------------------------
-# Two-tier (no-collapse) layout — matches the Design-Vibes mockup
+# Two-tier (no-collapse) layout
 # ---------------------------------------------------------------------------
 def test_shell_uses_frame_not_collapsible_rail():
     shell = _read(SHELL)

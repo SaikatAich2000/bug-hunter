@@ -57,7 +57,14 @@ if [[ "$WIPE_DB" == true ]]; then
     warn "--force given: skipping confirmation and deleting the DB volume NOW."
     CONFIRM="YES"
   else
-    read -rp "Are you sure? Type YES to confirm: " CONFIRM
+    # Guard the read: on a non-TTY stdin (CI / piped) read returns non-zero at
+    # EOF, which under `set -e` would abort the whole script BEFORE the
+    # image-removal block below — so e.g. `--full-clean </dev/null` would
+    # silently skip removing the image. Treat a failed read as "no confirmation"
+    # (skip the destructive wipe) and keep going.
+    if ! read -rp "Are you sure? Type YES to confirm: " CONFIRM; then
+      CONFIRM=""
+    fi
   fi
   if [[ "$CONFIRM" == "YES" ]]; then
     docker volume rm bugtracker_pgdata 2>/dev/null && info "Volume removed." \

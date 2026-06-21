@@ -187,8 +187,6 @@ python -m playwright install chromium
 pytest tests/test_ui_smoke.py
 ```
 
-SonarQube configuration is in `sonar-project.properties` (see `scripts/sonar-scan.{sh,ps1}`). Static analysis only; it never touches the runtime database.
-
 ## Deployment
 
 Production deployment is `git pull` followed by `./deploy.sh`. There is no separate migration step — `init_db()` reconciles the schema additively on boot. Secrets (`.env` and `secrets/firebase-admin.json`) are provisioned once per host and are never committed.

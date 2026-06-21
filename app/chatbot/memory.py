@@ -1,23 +1,19 @@
 """Per-user conversation memory for the Sleuth assistant.
 
-Sleuth conversations are stateful: people say "close it" after viewing a
-bug, or "and assign her to bug 5" after listing managers. Without
-remembering recent referents the assistant feels brain-dead. This module
-provides that memory — small, in-process, TTL-cleaned.
+Conversations are stateful: people say "close it" after viewing a bug, or
+"and assign her to bug 5" after listing managers. This module tracks recent
+referents in a small, in-process, TTL-cleaned store.
 
 Design notes:
-- Storage is a plain dict keyed by user_id. We don't persist across
-  process restarts on purpose: chat memory should feel like a phone call,
-  not a permanent record. If the server restarts, the conversation is
-  fresh — no surprise resurrections of stale "it"s.
-- Access is thread-safe via a single lock. Read-modify-writes are
-  bounded (a few microseconds), so contention is negligible at our scale.
+- Storage is a plain dict keyed by user_id. It does not persist across
+  process restarts: after a restart the conversation starts fresh, with no
+  stale referents.
+- Access is thread-safe via a single lock; read-modify-writes are short.
 - Hard caps on total sessions (200) and per-session entry size keep RAM
-  flat. On a 2 GB box, every byte matters.
-- TTL is 30 minutes. After that, "it" no longer means anything; the
-  user has likely moved on.
+  bounded.
+- TTL is 30 minutes; after that a pronoun like "it" no longer resolves.
 
-The state stored is intentionally minimal:
+The state stored is minimal:
 - last_bug_id          — for pronouns like "it", "that bug"
 - last_user_id         — for "her", "him" after listing/mentioning a user
 - last_filter          — the most recent ParsedQuery filter dict
@@ -32,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-# Tuned for a 2 GB box: 200 sessions × <1 KB each = under 200 KB.
+# 200 sessions at under 1 KB each keeps total memory under ~200 KB.
 _MAX_SESSIONS = 200
 _TTL_SECONDS = 30 * 60   # 30 minutes idle
 # A staged write stays confirmable only briefly. The session TTL above is about
@@ -53,8 +49,8 @@ class _Session:
     # (kept separate from last_seen, which any later activity refreshes).
     pending_staged_at: float = 0.0
     # A document an admin uploaded to Sleuth, parsed into candidate bug specs
-    # and parked here awaiting an explicit "create them" — Sleuth never creates
-    # on upload alone, only when the admin says so.
+    # and parked here awaiting an explicit "create them". Creation happens only
+    # on that confirmation, never on upload alone.
     pending_ingest: Optional[dict[str, Any]] = None
     # Epoch seconds when pending_ingest was staged — same short confirm window as
     # pending_action, so a stray late "ok" can't fire a forgotten bulk create.
@@ -66,8 +62,7 @@ class _Store:
     """Thread-safe session store.
 
     All mutating operations take the lock and update last_seen on the
-    session in question, so a chatty user keeps their context alive
-    without us doing anything special.
+    session, so ongoing activity keeps a user's context alive.
     """
 
     def __init__(self) -> None:

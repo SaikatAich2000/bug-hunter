@@ -4516,6 +4516,17 @@ body.is-loading .events-detail-mode {
   padding: 8px 14px;
   font-size: 12px;
 }
+.attach-staged-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-basis: 100%;
+  margin-top: 8px;
+}
+.attach-staged-cancel {
+  padding: 8px 14px;
+  font-size: 12px;
+}
 
 /* ============================================================
  * v2.5 — Top bar / events / column layout polish

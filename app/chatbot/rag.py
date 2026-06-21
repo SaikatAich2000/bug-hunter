@@ -4,19 +4,17 @@ Indexes the things a user asks free-form questions about — bugs,
 requirements, tasks (the `bugs` table), their comments, and any plain-text
 / markdown docs under SLEUTH_DOCS_DIR — into a local Chroma vector store,
 embedded with Gemini's embedding API. `retrieve_text()` returns the top-k
-snippets as a compact CONTEXT block for cloud_llm.
+snippets as a compact context block for cloud_llm.
 
-Scope / isolation note: this internal Bug Hunter deployment is
-SINGLE-TENANT — there is no organization table, and every authenticated
-user already sees every bug through the normal handlers. So retrieval is
-not org-filtered (there is only one company's data here). The `where`
-parameter on the Chroma query is the seam where a tenant/project filter
-would go if this app ever became multi-tenant — mirror the SQL handlers'
-scoping there.
+Scope: this deployment is single-tenant — there is no organization table,
+and every authenticated user already sees every bug through the normal
+handlers, so retrieval is not org-filtered. The `where` parameter on the
+Chroma query is the seam where a tenant/project filter would go if this app
+ever became multi-tenant; mirror the SQL handlers' scoping there.
 
 Everything is lazy and gated: with SLEUTH_RAG_ENABLED off, or chromadb not
 installed, or no embedding key, retrieve_text() returns "" and the cloud
-layer simply runs without grounding. Nothing here can break startup.
+layer runs without grounding. Nothing here can break startup.
 """
 from __future__ import annotations
 
@@ -45,14 +43,19 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         return None
     try:
         import httpx
+        from app.chatbot.redaction import redact
         model = f"models/{s.GEMINI_EMBED_MODEL}"
         r = httpx.post(
             f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
             # Key in a header (not the URL query string) so it can't leak into a
             # logged exception URL / proxy access log — mirrors cloud_llm.py.
             headers={"x-goog-api-key": s.GEMINI_API_KEY},
+            # Redact every text before it leaves the box. This embedding call is
+            # outbound egress like the generation path, so secrets/PII in bug
+            # descriptions, comment bodies, author names or docs pass the same
+            # gate. Redact first, then truncate.
             json={"requests": [
-                {"model": model, "content": {"parts": [{"text": t[:8000]}]}}
+                {"model": model, "content": {"parts": [{"text": redact(t)[:8000]}]}}
                 for t in texts
             ]},
             timeout=s.SLEUTH_CLOUD_TIMEOUT_S,
@@ -195,7 +198,7 @@ def upsert_bug(db: Session, bug_id: int) -> None:
 # Retrieval
 # ---------------------------------------------------------------------------
 def retrieve_text(message: str, where: Optional[dict] = None) -> str:
-    """Return a compact CONTEXT block of the top-k snippets, or "" if RAG
+    """Return a compact context block of the top-k snippets, or "" if RAG
     is disabled/unavailable.
 
     `where` is the multi-tenant scoping seam: pass a Chroma metadata filter
@@ -219,7 +222,7 @@ def retrieve_text(message: str, where: Optional[dict] = None) -> str:
     docs = (res.get("documents") or [[]])[0]
     if not docs:
         return ""
-    # Wrap retrieved doc text as a fenced DATA block and defang any literal fence
+    # Wrap retrieved doc text as a fenced data block and defang any literal fence
     # marker, so indexed content (arbitrary comment/doc bodies) can't smuggle
     # instructions to the model — the same structural injection defense the
     # keyword retrieval path applies in retrieval.format_context.

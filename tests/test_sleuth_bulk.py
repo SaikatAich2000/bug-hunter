@@ -1,17 +1,17 @@
-"""Sleuth bulk actions + the admin-only write policy.
+"""Sleuth bulk actions and the admin-only write policy.
 
 Two things are exercised here:
 
-  * **Bulk writes** — "assign all the bugs to X", "close all bugs", etc. The
-    command is staged as ONE confirmable plan whose ``bug_ids`` covers every
+  - Bulk writes ("assign all the bugs to X", "close all bugs", etc.): the
+    command is staged as one confirmable plan whose ``bug_ids`` covers every
     matching item, and a single "yes" applies it to all of them.
 
-  * **Role policy** — Sleuth is a full read/write/edit assistant for ADMINS
-    only (never delete). Managers and regular users get read/lookup access;
-    any write attempt (single or bulk) is refused with intent ``action_denied``
-    while reads keep working.
+  - Role policy: Sleuth provides read/write/edit access for admins only (never
+    delete). Managers and regular users get read/lookup access; any write
+    attempt (single or bulk) is refused with intent ``action_denied`` while
+    reads keep working.
 
-Self-contained temp-SQLite isolation, mirroring the other sleuth test files.
+Self-contained temp-SQLite isolation.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
 os.environ["SESSION_SECRET"] = "test-secret-bulk-only"
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
-# Fresh app import bound to THIS file's dedicated DB (see the long note in
+# Fresh app import bound to this file's dedicated DB (see the note in
 # test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
 # engine bound to an earlier-collected module's torn-down DB.
 import sys as _sys_purge
@@ -100,11 +100,62 @@ def test_bulk_assign_all_admin():
         assigned = sum(1 for b in db.query(models.Bug).all()
                        if any(a.id == ids["admin"] for a in b.assignees))
         assert assigned == 3, assigned
-        # Bulk emits ONE aggregate notification (not one per item) — and the
+        # Bulk emits one aggregate notification (not one per item), and the
         # actor (assignee here) gets it.
         notifs = db.query(models.Notification).filter_by(user_id=ids["admin"]).all()
         assert len(notifs) == 1, len(notifs)
         assert notifs[0].kind == "assigned"
+    finally:
+        db.close()
+
+
+def test_bulk_assign_all_to_me():
+    """"assign all the bugs to me" resolves "me" to the actor and assigns all."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("assign all the bugs to me", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        assert "3" in staged.blocks[0].payload["text"]
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        assigned = sum(1 for b in db.query(models.Bug).all()
+                       if any(a.id == ids["admin"] for a in b.assignees))
+        assert assigned == 3, assigned
+    finally:
+        db.close()
+
+
+def test_bulk_assign_all_to_me_no_noun():
+    """"assign all to me" (no item noun) still stages a bulk self-assign."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        staged = executor.execute("assign all to me", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+    finally:
+        db.close()
+
+
+def test_single_assign_to_me():
+    """"assign bug N to me" resolves "me" to the actor for a single item."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        bug_id = ids["bugs"][0]
+        staged = executor.execute(f"assign bug {bug_id} to me", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        bug = db.get(models.Bug, bug_id)
+        assert any(a.id == ids["admin"] for a in bug.assignees)
     finally:
         db.close()
 
@@ -217,8 +268,8 @@ def _add_mixed_types(db, proj_id, admin_id):
 
 
 def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
-    """THE fix: "assign all the bugs" must touch ONLY Bugs — never the
-    Requirements and Tasks that share the same table."""
+    """"assign all the bugs" must touch only Bugs, never the Requirements and
+    Tasks that share the same table."""
     ids = seed()
     db = SessionLocal()
     try:
@@ -228,7 +279,7 @@ def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
         admin = _user(db, ids["admin"])
         staged = executor.execute("assign all the bugs to Saikat Aich", db, admin)
         assert staged.intent == "confirm_action", staged.intent
-        # The confirmation states the TYPED scope so the user can't be surprised.
+        # The confirmation states the typed scope so the user can't be surprised.
         text = staged.blocks[0].payload["text"]
         assert "3 Bug" in text, text
 
@@ -250,7 +301,7 @@ def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
 
 
 def test_bulk_assign_all_items_covers_every_type_with_breakdown():
-    """"assign all ITEMS" sweeps every type — and the confirmation spells out
+    """"assign all items" sweeps every type, and the confirmation spells out
     the Bug/Requirement/Task breakdown so nothing is hidden."""
     ids = seed()
     db = SessionLocal()

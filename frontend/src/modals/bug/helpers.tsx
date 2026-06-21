@@ -7,6 +7,28 @@
  */
 import { useCallback, useState, type ReactNode } from "react";
 import { activityIcon, fileIcon, formatBytes, formatDate } from "../../lib/format";
+import { toast } from "../../lib/toast";
+import { partitionBySize } from "../../lib/upload";
+
+// Executable / script extensions blocked client-side as UX (the server also
+// rejects them — this just gives immediate feedback). Mirrors the backend
+// _DANGEROUS_UPLOAD_EXTS denylist. Trailing dots/spaces are stripped first so
+// "evil.exe." can't slip past.
+const _DANGEROUS_EXTS = new Set([
+  // .js intentionally allowed (legit source; neutralized at download). Mirrors
+  // the backend _DANGEROUS_UPLOAD_EXTS denylist.
+  "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "hta", "jar",
+  "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "psm1", "sh", "bash",
+  "app", "dmg", "pkg", "deb", "rpm", "apk", "msc", "reg", "lnk", "gadget",
+  "dll", "sys", "elf",
+]);
+
+function isDangerousFile(name: string): boolean {
+  const cleaned = (name || "").trim().replace(/[.\s]+$/, "");
+  const dot = cleaned.lastIndexOf(".");
+  if (dot < 0) return false;
+  return _DANGEROUS_EXTS.has(cleaned.slice(dot + 1).trim().toLowerCase());
+}
 
 // Re-exported from lib/format so existing importers of this module keep working.
 export { activityIcon };
@@ -204,7 +226,7 @@ export interface StagedFile {
 
 export interface StagedBucket {
   files: StagedFile[];
-  /** ADD to (not replace) the bucket so files can be picked in batches. */
+  /** Add to (not replace) the bucket so files can be picked in batches. */
   addFiles: (files: File[] | FileList) => void;
   removeAt: (idx: number) => void;
   clear: () => void;
@@ -216,7 +238,20 @@ export function useStagedFiles(): StagedBucket {
   const addFiles = useCallback((fs: File[] | FileList) => {
     const list = Array.from(fs);
     if (!list.length) return;
-    const staged = list.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
+    // Stop files that are over the size limit before any upload starts.
+    const { allowed: sized, tooLargeMessage } = partitionBySize(list);
+    if (tooLargeMessage) toast(tooLargeMessage, "error");
+    // Drop executable/script files (the server rejects them too); say which.
+    const blocked = sized.filter((f) => isDangerousFile(f.name));
+    const allowed = sized.filter((f) => !isDangerousFile(f.name));
+    if (blocked.length) {
+      toast(
+        `Can't attach ${blocked.map((f) => f.name).join(", ")} — for safety, programs and scripts aren't allowed.`,
+        "error",
+      );
+    }
+    if (!allowed.length) return;
+    const staged = allowed.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
     setFiles((prev) => [...prev, ...staged]);
   }, []);
 

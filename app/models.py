@@ -66,14 +66,14 @@ bug_assignees = Table(
 # user_id is the trailing column of the (bug_id, user_id) PK, so Postgres can't
 # seek on it alone. A standalone index backs "all bugs assigned to user X"
 # joins (stats by-assignee, event assignee counts). Added additively by
-# init_db's _add_missing_indexes; never recreates the table.
+# init_db's _add_missing_indexes.
 Index("idx_bug_assignees_user_id", bug_assignees.c.user_id)
 
 # event_managers: many-to-many between events and the (admin/manager) users
-# who own that event. Notifications about the event (create / edit /
-# delete) fan out to this list. Tasks created INSIDE the event email
-# their own assignees as normal — they do NOT cc the event managers, so
-# adding someone here doesn't sign them up for every task email.
+# who own that event. Notifications about the event (create / edit / delete)
+# fan out to this list. Tasks created inside the event email their own
+# assignees as normal and do not cc the event managers, so adding someone here
+# doesn't sign them up for every task email.
 event_managers = Table(
     "event_managers",
     Base.metadata,
@@ -93,12 +93,12 @@ Index("idx_event_managers_user_id", event_managers.c.user_id)
 # Roles (enforced in app code, not DB constraints, for flexibility):
 #   admin    - full access; only admins manage users and delete anything
 #   manager  - can edit any work item or project, but not users
-#   user     - default. The tracker is deliberately collaborative: a user can
-#              edit ANY Bug (not only their own), matching the flat read model
-#              where everyone already sees every item. Requirements and Tasks
-#              are planning artifacts and stay manager/admin-only; all deletes
-#              are admin-only. The authoritative rules live in app/auth.py
-#              (can_edit_bug / can_delete_bug) — keep this comment in sync.
+#   user     - default. The tracker is collaborative: a user can edit any Bug
+#              (not only their own), matching the flat read model where everyone
+#              already sees every item. Requirements and Tasks are planning
+#              artifacts and stay manager/admin-only; all deletes are
+#              admin-only. The authoritative rules live in app/auth.py
+#              (can_edit_bug / can_delete_bug); keep this comment in sync.
 # ---------------------------------------------------------------------------
 ROLE_ADMIN = "admin"
 ROLE_MANAGER = "manager"
@@ -291,12 +291,12 @@ class Bug(Base):
     # Activities ordered newest-first with an id-DESC tiebreaker so two rows
     # recorded in the same second still come back in a stable, insert-
     # consistent order that matches the dedicated /activity endpoint.
-    # Activity rows are deliberately NOT cascade-deleted when a bug is
-    # deleted: the audit trail must outlive the bugs it describes so an admin
-    # can still find "who deleted bug #42 and when". On delete the route
-    # handler detaches the rows (bug_id → NULL); entity_id stays set to the
-    # original bug id and the detail string preserves the title, so the
-    # global audit screen still shows the full history.
+    # Activity rows are not cascade-deleted when a bug is deleted: the audit
+    # trail must outlive the bugs it describes so an admin can still find "who
+    # deleted bug #42 and when". On delete the route handler detaches the rows
+    # (bug_id → NULL); entity_id stays set to the original bug id and the detail
+    # string preserves the title, so the global audit screen shows the full
+    # history.
     activities: Mapped[list["Activity"]] = relationship(
         "Activity", back_populates="bug",
         order_by="(Activity.created_at.desc(), Activity.id.desc())",
@@ -361,13 +361,12 @@ class Comment(Base):
 # Files (PDF / image / video) are stored INSIDE the database as a BLOB.
 # This is intentional:
 #   - No NFS / S3 / object-store dependency.
-#   - One backup of the database = full backup of all attachments.
-#   - Survives container restart, host migration, anything.
+#   - One backup of the database is a full backup of all attachments.
+#   - Survives container restart and host migration.
 #
-# Trade-off: very large videos can bloat the DB. We cap upload size at
-# 50 MB per file (config-driven) so this stays reasonable for an
-# internal tool. If you ever outgrow this, swap data->S3 with no API
-# changes — only the storage layer.
+# Trade-off: very large videos can bloat the DB. Upload size is capped at
+# 50 MB per file (config-driven). To outgrow this, move data to S3 with no API
+# change, only the storage layer.
 #
 # An attachment can belong to a bug directly (bug_id set, comment_id NULL)
 # or to a comment (both set; comment FK lives in addition to bug FK so a
@@ -466,20 +465,19 @@ class Activity(Base):
 # ---------------------------------------------------------------------------
 # Session
 #
-# Server-side record of every active login. We need this for the Keycloak-
-# style "list / revoke active sessions" admin feature: stateless signed
-# cookies alone can't be selectively revoked because the server keeps no
-# record of which tokens it has issued.
+# Server-side record of every active login, needed for the "list / revoke
+# active sessions" admin feature: stateless signed cookies alone can't be
+# selectively revoked because the server keeps no record of which tokens it
+# has issued.
 #
-# Each session row is keyed by a unique `jti` (JWT-style ID) which is also
-# baked into the signed session cookie. On every authenticated request we
-# look up the row by jti — if it's missing or expired, the cookie is
-# rejected. The admin "revoke" action just deletes the row.
+# Each session row is keyed by a unique `jti` (JWT-style ID) also baked into
+# the signed session cookie. On every authenticated request the row is looked
+# up by jti; if it's missing or expired, the cookie is rejected. The admin
+# "revoke" action deletes the row.
 #
-# Backward compatibility note: tokens issued before this table existed
-# don't carry a jti. The auth layer accepts those legacy tokens but they
-# don't appear in the session list (they will the next time the user logs
-# in fresh).
+# Tokens issued before this table existed don't carry a jti. The auth layer
+# accepts those tokens but they don't appear in the session list until the
+# user next logs in.
 # ---------------------------------------------------------------------------
 class Session(Base):
     __tablename__ = "sessions"

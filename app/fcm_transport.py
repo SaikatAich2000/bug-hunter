@@ -1,12 +1,12 @@
 """Firebase Cloud Messaging transport (optional external integration).
 
 Lazily initialises the Firebase Admin SDK from a service-account JSON and sends
-a single push to many device tokens. Kept isolated here — and excluded from the
-coverage gate, like the other optional external integrations (llm / cloud_llm /
-rag) — because it only runs against a live Firebase project the hermetic test
-suite never provisions. ``app.push_service`` mocks ``send()`` in its tests.
+a single push to many device tokens. Excluded from the coverage gate (like the
+other optional external integrations) because it only runs against a live
+Firebase project the test suite never provisions; ``app.push_service`` mocks
+``send()`` in its tests.
 
-Nothing here can break startup: ``firebase_admin`` is imported lazily inside the
+Nothing here breaks startup: ``firebase_admin`` is imported lazily inside the
 functions, every failure is caught and logged, and a failed init disables push
 for the process rather than raising.
 """
@@ -66,6 +66,18 @@ def _is_dead_token(exc) -> bool:
     return "not-registered" in str(exc).lower()
 
 
+def _webpush_config(messaging, url: str):
+    """A WebpushConfig carrying the click-through link, but only for an
+    absolute https URL. FCM rejects any other link value and an encode-time
+    error would abort the whole multicast; the link is also carried in
+    data["url"], so omitting it here just drops a browser convenience."""
+    if url.startswith("https://"):
+        return messaging.WebpushConfig(
+            fcm_options=messaging.WebpushFCMOptions(link=url),
+        )
+    return None
+
+
 def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = None) -> list[str]:
     """Send one notification to many FCM tokens.
 
@@ -75,6 +87,11 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
     tokens = list(tokens or [])
     if not tokens:
         return []
+    # Normalize url up front: a None slipping through would make the
+    # url.startswith("https://") check below raise AttributeError, and that line
+    # sits outside the try/except — breaking this function's documented
+    # never-raises contract in a background push path.
+    url = url or ""
     app = _ensure_app()
     if app is None:
         return []
@@ -87,22 +104,14 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
     payload = {"url": url or "/"}
     if data:
         payload.update({k: str(v) for k, v in data.items()})
-    # FCM rejects any WebpushFCMOptions.link that isn't an absolute HTTPS URL
-    # (and encode-time errors abort the WHOLE multicast). The deep link is also
-    # carried in data["url"], which the Android app and the web service worker
-    # read directly — so the webpush link is purely a convenience for the
-    # browser's click-through. Only attach it when it's a valid HTTPS URL;
-    # otherwise (e.g. local http:// testing) omit it so push still delivers.
-    webpush = None
-    if url.startswith("https://"):
-        webpush = messaging.WebpushConfig(
-            fcm_options=messaging.WebpushFCMOptions(link=url),
-        )
+    # The deep link is carried in data["url"] (read by the Android app and the
+    # web service worker); the webpush link below is a browser click-through
+    # convenience, attached only for an https URL — see _webpush_config.
     message = messaging.MulticastMessage(
         tokens=tokens,
         notification=messaging.Notification(title=title, body=body),
         data=payload,
-        webpush=webpush,
+        webpush=_webpush_config(messaging, url),
     )
     try:
         resp = messaging.send_each_for_multicast(message, app=app)

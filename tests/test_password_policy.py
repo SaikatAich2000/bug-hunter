@@ -1,16 +1,16 @@
-"""Configurable password policy + the permanent 'changeme' exception
+"""Configurable password policy and the permanent 'changeme' exception
 (app/schemas._check_password_strength, driven by app/config flags).
 
-IMPORTANT — why everything is imported INSIDE the tests:
+Why everything is imported inside the tests:
 The `client` fixture in conftest.py deletes and re-imports every ``app.*``
 module between tests so each test can pick up its own env overrides. A module
-captured at THIS file's top level therefore goes stale (points at an earlier
-import generation) the moment any client-using test has run, while
+captured at this file's top level would go stale (point at an earlier import
+generation) once any client-using test has run, while
 ``_check_password_strength`` resolves ``from app.config import get_settings``
-against the CURRENT generation at call time. Importing ``app.config`` and
-``app.schemas`` inside each test guarantees we patch the very same Settings
-class the function reads. We patch the Settings CLASS attribute (not a cached
-instance): every instance sees it via normal attribute lookup and monkeypatch
+against the current generation at call time. Importing ``app.config`` and
+``app.schemas`` inside each test guarantees we patch the same Settings class
+the function reads. We patch the Settings class attribute (not a cached
+instance): every instance sees it via normal attribute lookup, and monkeypatch
 restores it cleanly afterwards.
 """
 import pytest

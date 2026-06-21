@@ -5,31 +5,30 @@ Run once a day (e.g. from host cron) with::
     python -m app.jobs.email_digest
 
 When ``EMAIL_DIGEST_ENABLED`` is on, the per-operation work-item emails (new
-item / update / assignment / comment / event) are NOT sent immediately — each
+item / update / assignment / comment / event) are not sent immediately; each
 operation is recorded as a notification row instead (the same rows that power
 the in-app bell, written by ``app.notification_service.notify``). This job
 sweeps up every user's un-emailed operations from the last
-``EMAIL_DIGEST_LOOKBACK_HOURS`` and sends ONE grouped email per user, then
+``EMAIL_DIGEST_LOOKBACK_HOURS`` and sends one grouped email per user, then
 stamps ``notifications.emailed_at`` so the same operation is never re-sent.
 
-Design notes
-------------
-* **Idempotent.** Rows are selected on ``emailed_at IS NULL`` and stamped after
-  a successful send, so re-running the job (or running it twice a day) never
+Notes
+-----
+* Idempotent. Rows are selected on ``emailed_at IS NULL`` and stamped after a
+  successful send, so re-running the job (or running it twice a day) never
   double-sends. The select also claims its rows with ``FOR UPDATE SKIP LOCKED``
-  (Postgres; a no-op on SQLite), so two runners racing in the same minute — e.g.
-  the in-app scheduler under an accidental multi-worker deploy — claim DISJOINT
-  rows instead of both stamping the same ones.
-* **Bounded.** The ``created_at >= now - lookback`` window means the very first
-  run after deploying this feature can't replay the entire notification history
-  — only the last ~day is ever considered. Existing rows (``emailed_at`` NULL
-  by virtue of the new column) age out of the window instead of flooding inboxes.
-* **Per-user & role-respecting for free.** Notification rows only exist for
-  users already entitled to know about the operation, so the digest inherits
-  that scoping with no extra checks.
-* **Security emails are untouched.** Password-reset and other transactional
-  emails never become notification rows and always send immediately — this job
-  only ever deals with the five work-item *operation* categories.
+  (Postgres; a no-op on SQLite), so two runners racing in the same minute claim
+  disjoint rows instead of both stamping the same ones.
+* Bounded. The ``created_at >= now - lookback`` window means the first run
+  after enabling this feature can't replay the entire notification history;
+  only the last ~day is considered. Older rows age out of the window instead
+  of flooding inboxes.
+* Per-user and role-respecting. Notification rows only exist for users already
+  entitled to know about the operation, so the digest inherits that scoping
+  with no extra checks.
+* Security emails are untouched. Password-reset and other transactional emails
+  never become notification rows and always send immediately; this job only
+  deals with the five work-item operation categories.
 """
 from __future__ import annotations
 
@@ -105,8 +104,7 @@ def render_digest(user: User, rows: list[Notification]) -> tuple[str, str]:
         if section:
             body_lines += _section_lines(label, section, base)
 
-    # Future-proofing: surface any kind we don't have a category for rather
-    # than silently dropping it.
+    # Surface any kind without a known category rather than dropping it.
     other = [r for r in rows if r.kind not in _KNOWN_KINDS]
     if other:
         body_lines += _section_lines("📌 Other", other, base)
@@ -146,20 +144,19 @@ def run_digest(
         select(Notification)
         .where(Notification.emailed_at.is_(None), Notification.created_at >= cutoff)
         .order_by(Notification.user_id, Notification.created_at)
-        # Claim the rows so a concurrent runner can't grab and re-send the same
-        # ones. Real lock on Postgres; silently ignored on SQLite (single-writer,
-        # and the test suite is serial).
-        .with_for_update(skip_locked=True)
     ).all())
     if not rows:
         return {"users": 0, "emails_sent": 0, "operations": 0}
 
     by_user = _group_by_user(rows)
-    # Phase 1 — build each deliverable user's digest and CLAIM their rows by
-    # stamping emailed_at, then commit to RELEASE the FOR UPDATE locks. We must
-    # not hold row locks (and an idle-in-transaction pooled connection) across
-    # the blocking SMTP sends below: a slow mail server would otherwise pin the
-    # connection for the whole batch and starve concurrent web requests.
+    # Phase 1 — for each deliverable user, atomically claim their rows with a
+    # guarded UPDATE (set emailed_at WHERE emailed_at IS NULL) and only build a
+    # digest when the claim affected rows. This is atomic on both backends,
+    # unlike FOR UPDATE SKIP LOCKED, which SQLite ignores, so two overlapping
+    # runs there would otherwise both stamp and both send. The loser of a race
+    # sees rowcount 0 and skips, so each row is emailed once. Claim and commit
+    # before the blocking SMTP sends so a slow mail server can't pin a DB
+    # connection for the whole batch.
     outbox: list[tuple[str, str, str]] = []  # (email, subject, body)
     operations = 0
     for user_id, user_rows in by_user.items():
@@ -168,13 +165,20 @@ def run_digest(
             # Nothing to deliver to — leave the rows un-stamped; the lookback
             # window ages them out on its own (they remain visible in-app).
             continue
+        ids = [r.id for r in user_rows]
+        claimed = (
+            db.query(Notification)
+            .filter(Notification.id.in_(ids), Notification.emailed_at.is_(None))
+            .update({Notification.emailed_at: now}, synchronize_session=False)
+        )
+        if not claimed:
+            # Another runner already claimed these rows — don't double-send.
+            continue
         subject, body = render_digest(user, user_rows)
         outbox.append((user.email, subject, body))
-        for row in user_rows:
-            row.emailed_at = now
-        operations += len(user_rows)
+        operations += claimed
 
-    db.commit()  # locks released; claimed rows are now stamped (at-most-once)
+    db.commit()  # claimed rows are now stamped (at-most-once)
 
     # Phase 2 — deliver OUTSIDE the transaction. A crash here drops at most this
     # batch's emails (already stamped), which is preferable to double-sending or

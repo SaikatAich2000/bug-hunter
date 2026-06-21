@@ -1,9 +1,8 @@
 """Per-user in-app notifications API.
 
-Every endpoint is scoped to the authenticated user: you can only ever list,
-read, or delete YOUR OWN notifications. There is deliberately no admin path to
-read another user's notifications — they are private, exactly like the emails
-they mirror.
+Every endpoint is scoped to the authenticated user: a caller can only list,
+read, or delete their own notifications. There is no admin path to read another
+user's notifications; they are private, like the emails they mirror.
 """
 from __future__ import annotations
 

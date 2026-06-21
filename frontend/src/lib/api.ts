@@ -1,12 +1,12 @@
 /**
  * Typed fetch wrapper for the JSON API.
  *
- *  - Same-origin cookies ride along automatically (credentials: include).
- *  - A 401 anywhere bounces to /login.html exactly once (no redirect storm
- *    when several in-flight calls all come back 401 after a session revoke).
+ *  - Sends same-origin cookies (credentials: include).
+ *  - A 401 redirects to /login.html once, even when several in-flight calls
+ *    return 401 after a session revoke.
  *  - 204 resolves to null; JSON is parsed otherwise.
- *  - Errors surface FastAPI's {detail} â€” string or Pydantic list â€” as a
- *    readable message on ApiError.
+ *  - Surfaces FastAPI's {detail} (string or Pydantic list) as a readable
+ *    message on ApiError.
  */
 
 export const API = "/api";
@@ -40,7 +40,7 @@ function detailToMessage(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown }).detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
-    // Pydantic validation list: [{loc, msg, type}, ...]
+    // Pydantic validation list: [{loc, msg, type}, ...].
     const msgs = detail
       .map((d) =>
         d && typeof d === "object" && "msg" in d
@@ -56,7 +56,7 @@ function detailToMessage(body: unknown, fallback: string): string {
 export interface ApiOptions extends Omit<RequestInit, "body"> {
   /** JSON-serialised into the body with Content-Type: application/json. */
   json?: unknown;
-  /** Raw body (FormData for uploads, etc.) â€” wins over `json`. */
+  /** Raw body (FormData for uploads, etc.); takes precedence over `json`. */
   body?: BodyInit;
 }
 
@@ -79,7 +79,7 @@ export async function api<T = unknown>(
 
   if (res.status === 401) {
     bounceToLogin();
-    // Silent: the page is navigating away; callers shouldn't toast this.
+    // Silent: the page is navigating away, so callers don't toast this.
     throw new ApiError("Session expired", 401, true);
   }
 
@@ -126,7 +126,7 @@ export async function apiBlob(
     try {
       msg = detailToMessage(await res.json(), msg);
     } catch {
-      /* binary error body â€” keep fallback */
+      /* binary error body; keep fallback */
     }
     throw new ApiError(msg, res.status);
   }
@@ -142,7 +142,7 @@ export async function apiBlob(
   } else if (plain) {
     raw = plain[1].trim();
   }
-  // Strip any path components a server (or proxy) might place in the filename so
+  // Strip any path components a server or proxy might place in the filename so
   // it can't influence where a saved download lands.
   const filename: string | null = raw ? (raw.replace(/[\\/]/g, "_").trim() || null) : null;
   return { blob: await res.blob(), filename };

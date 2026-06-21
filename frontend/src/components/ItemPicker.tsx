@@ -1,18 +1,13 @@
 /**
- * ItemPicker — a Jira-style searchable, MULTI-SELECT combobox for linking work
- * items. Open it, optionally filter by type (All / Bugs / Requirements /
- * Tasks), type to search by title or #id, and tick one or more results; the
- * chosen items appear as removable chips and are all linked together when the
- * caller's "Link" button is pressed.
+ * ItemPicker — a searchable, multi-select combobox for linking work items.
+ * Optionally filter by type (All / Bugs / Requirements / Tasks), search by
+ * title or #id, and tick one or more results; chosen items appear as removable
+ * chips and are linked together when the caller's "Link" button is pressed.
  *
  * Controlled: `selected` is the array of staged items; toggling a row calls
  * onChange with the next array. `excludeIds` removes the current item and
- * anything already linked, preventing duplicate or self-links. The list is not
- * restricted to bugs — GET /bugs returns every item type; the type tabs scope
- * it server-side.
- *
- * Styling: the search input, type tabs and popover all use the shared field /
- * surface tokens so the control matches every other dropdown in light + dark.
+ * anything already linked, preventing duplicate or self-links. GET /bugs
+ * returns every item type; the type tabs scope it server-side.
  */
 import {
   useCallback,
@@ -100,7 +95,7 @@ export default function ItemPicker({
     }
   }, []);
 
-  // Read the CURRENT type tab at fire time (not the keystroke-time value) so a
+  // Read the current type tab at fire time (not the keystroke-time value) so a
   // trailing debounced search can't repopulate the list with the previous tab's
   // results after the user switched tabs within the debounce window.
   const typeFilterRef = useRef(typeFilter);
@@ -108,6 +103,9 @@ export default function ItemPicker({
   const debouncedSearch = useRef(
     debounce((q: string) => void runSearch(q, typeFilterRef.current), 200),
   ).current;
+  // Cancel a pending trailing search when the picker unmounts so it can't fire
+  // a stale query (and resolve) after the component is gone.
+  useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
 
   // Open → focus search + load an initial page for the active type tab.
   useEffect(() => {

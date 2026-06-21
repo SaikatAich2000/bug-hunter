@@ -1,37 +1,46 @@
 """Sleuth Layer 4 — optional cloud LLM (Gemini primary, OpenRouter fallback).
 
-This is the natural-language fallback for the ~5% of questions the rules
-(Layer 1), the classifier (Layer 2) and the optional local model (Layer 3)
-can't handle. It is the ONLY part of Sleuth that calls an external API, and
-it is OFF unless the operator sets SLEUTH_CLOUD_ENABLED and pastes a key.
+The natural-language fallback for questions the rules (Layer 1), the
+classifier (Layer 2) and the optional local model (Layer 3) can't handle.
+It is the only part of Sleuth that calls an external API, and it is off
+unless the operator sets SLEUTH_CLOUD_ENABLED and supplies a key.
 
-Two hard safety rules, enforced in code below — not just in the prompt:
+Two safety rules, enforced in code below, not just in the prompt:
 
-  1. NEVER invents data. A question that needs facts ("how many bugs did
-     John close last week?") is turned into a *canonical query phrase* and
+  1. Does not invent data. A question that needs facts ("how many bugs did
+     John close last week?") is turned into a canonical query phrase and
      re-parsed by the deterministic NLU, so the numbers come from real SQL
      SELECTs. The model picks the filter; the database produces the answer.
 
-  2. NEVER writes. If the model's canonical query parses to an `action_*`
-     (close/delete/assign/comment/...) intent we DROP it and fall through.
-     Writes happen only when the *user themselves* types the command and
-     confirms it via the existing rule-based Yes/Cancel flow.
+  2. Does not write. If the model's canonical query parses to an `action_*`
+     (close/delete/assign/comment/...) intent it is dropped and the call
+     falls through. Writes happen only when the user types the command and
+     confirms it via the rule-based Yes/Cancel flow.
 
 Everything sent outbound is run through redaction.redact() first. Any
 failure (no key, timeout, bad JSON, both providers down) returns None and
-the chat falls back to the normal "I didn't understand" reply — a cloud
-fault can never take the chat path down.
+the chat falls back to the "I didn't understand" reply, so a cloud fault
+cannot take the chat path down.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
+
+# Operator-supplied model names are interpolated into the request (the Gemini
+# one into the URL PATH). Validate them so a stray value can't inject a path
+# segment / alternate host. Gemini ids are bare (no slash); OpenRouter ids carry
+# a "vendor/model:tag" shape, so its check is a touch broader (still no
+# whitespace / scheme / @host / query chars).
+_GEMINI_MODEL_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
+_OPENROUTER_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\-]+$")
 
 from app.config import get_settings
 from app.models import User
@@ -45,8 +54,8 @@ logger = logging.getLogger("bug_hunter.sleuth.cloud")
 # Availability
 # ---------------------------------------------------------------------------
 def is_available() -> bool:
-    """True iff the operator enabled the layer AND gave us at least one key
-    AND httpx is importable. Cheap to call on every request."""
+    """True if the operator enabled the layer, supplied at least one key, and
+    httpx is importable. Cheap to call on every request."""
     s = get_settings()
     if not s.SLEUTH_CLOUD_ENABLED:
         return False
@@ -63,9 +72,9 @@ def is_available() -> bool:
 # System prompt
 # ---------------------------------------------------------------------------
 # The model returns a single JSON object. It either routes a data question
-# back to our SQL handlers (mode="data") or answers a free-form question
-# from the supplied CONTEXT (mode="answer"). It must NEVER produce counts
-# or write actions itself.
+# back to the SQL handlers (mode="data") or answers a free-form question from
+# the supplied context (mode="answer"). It does not produce counts or write
+# actions itself.
 SYSTEM_PROMPT = (
     "You are Sleuth, the sharp, friendly AI assistant built into the Bug "
     "Hunter issue tracker. Be a smart teammate: natural, varied, concise "
@@ -132,6 +141,9 @@ def _call_gemini(system: str, user: str) -> Optional[str]:
     s = get_settings()
     if not s.GEMINI_API_KEY:
         return None
+    if not _GEMINI_MODEL_RE.match(s.GEMINI_MODEL or ""):
+        logger.warning("Sleuth: refusing suspicious GEMINI_MODEL=%r", s.GEMINI_MODEL)
+        return None
     import httpx
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -168,6 +180,9 @@ def _call_openrouter(system: str, user: str) -> Optional[str]:
     s = get_settings()
     if not s.OPENROUTER_API_KEY:
         return None
+    if not _OPENROUTER_MODEL_RE.match(s.OPENROUTER_MODEL or ""):
+        logger.warning("Sleuth: refusing suspicious OPENROUTER_MODEL=%r", s.OPENROUTER_MODEL)
+        return None
     import httpx
     try:
         r = httpx.post(
@@ -192,9 +207,9 @@ def _call_openrouter(system: str, user: str) -> Optional[str]:
         return None
 
 
-# Circuit breaker: after BOTH providers fail (quota exhausted, outage), skip
-# the cloud for a short window instead of paying a doomed network round-trip
-# on every message. The rule-based layers keep answering meanwhile.
+# Circuit breaker: after both providers fail (quota exhausted, outage), skip
+# the cloud for a short window instead of paying a network round-trip on every
+# message. The rule-based layers keep answering meanwhile.
 _COOLDOWN_S = 45.0
 _cooldown_until = 0.0
 # Sync endpoints run in a threadpool, so the cooldown timestamp is shared across
@@ -219,9 +234,16 @@ def _complete(system: str, user_raw: str, *,
     Returns the parsed dict or None on any failure.
 
     ``trip_cooldown=False`` is for sub-calls (the LLM-as-judge, the agent loop)
-    that must NOT take the chat path's circuit breaker down on their own
+    that must not take the chat path's circuit breaker down on their own
     flakiness — only a primary chat completion should arm the cooldown.
     """
+    # Honour the breaker on every call, including sub-calls. Once a primary
+    # failure has tripped the cooldown, agent-loop / judge sub-calls
+    # short-circuit immediately instead of each paying a full Gemini+OpenRouter
+    # timeout (the agent loop otherwise blocked one request for up to
+    # max_steps × 2 × timeout seconds during a provider outage).
+    if _in_cooldown():
+        return None
     user = redact(user_raw)
     raw = _call_gemini(system, user)
     if raw is None:
@@ -248,32 +270,56 @@ def _complete(system: str, user_raw: str, *,
 def complete_json(system: str, user: str) -> Optional[dict[str, Any]]:
     """Public wrapper around the provider call + JSON parse. Reused by the
     admin document-ingest feature (app/chatbot/ingest.py) so it shares the same
-    redaction, Gemini→OpenRouter fallback and cooldown as the chat path.
-    Returns the parsed dict or None on any failure."""
-    return _complete(system, user)
+    redaction and Gemini→OpenRouter fallback as the chat path.
+
+    trip_cooldown=False: ingest is a sub-call, not a primary chat completion, so
+    a flaky/large ingest must not arm the 45s breaker that suppresses the cloud
+    chat path for all users (an admin's failed document upload shouldn't degrade
+    everyone's chat). Returns the parsed dict or None on any failure."""
+    return _complete(system, user, trip_cooldown=False)
+
+
+def _strip_wrapping_fence(text: str) -> str:
+    """Strip a code fence that wraps the whole payload (```json\\n...\\n``` or
+    ``` ... ```), while leaving a fence inside a legitimate JSON string value
+    (common when Sleuth explains code) intact.
+
+    Implemented with linear string operations rather than a regex to avoid the
+    catastrophic-backtracking (ReDoS) risk of a pattern with overlapping
+    quantifiers.
+    """
+    s = text.strip()
+    if not (len(s) >= 6 and s.startswith("```") and s.endswith("```")):
+        return s
+    inner = s[3:-3]
+    newline = inner.find("\n")
+    # Drop an optional language hint on the opening fence line (```json).
+    if newline != -1 and inner[:newline].strip().lower() in ("", "json"):
+        inner = inner[newline + 1:]
+    return inner.strip()
 
 
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
-    """Pull the first JSON object out of the reply (tolerates code fences).
+    """Pull the first JSON object out of the reply (tolerates a wrapping code
+    fence).
 
     Uses the stdlib decoder's raw_decode, which is string-aware: a brace inside
     a JSON string value (a regex or code snippet in an answer, e.g. "a{2,}") no
     longer truncates parsing and silently drops the whole reply.
     """
-    s = raw.strip().replace("```json", "").replace("```JSON", "").replace("```", "")
+    s = _strip_wrapping_fence(raw)
     decoder = json.JSONDecoder()
     idx = s.find("{")
     while idx != -1:
         try:
             obj, _end = decoder.raw_decode(s[idx:])
         except ValueError:
+            # This '{' didn't start valid JSON — try the next one.
             idx = s.find("{", idx + 1)
             continue
-        if isinstance(obj, dict):
-            return obj
-        # Decoded a non-dict at this brace (e.g. an array/number) — keep scanning
-        # subsequent braces rather than giving up on the whole reply.
-        idx = s.find("{", idx + 1)
+        # A JSON value that starts at '{' always decodes to an object (dict),
+        # so the first one that parses is our result.
+        return obj
     return None
 
 
@@ -439,6 +485,17 @@ def _run_agent(message: str, db: Session, actor: User, now: datetime,
     """
     from app.chatbot import agent, retrieval
 
+    # Aggregate wall-clock budget for the WHOLE agent run, so a mid-run provider
+    # outage can't tie up a worker for max_steps × 2 × timeout. Once the deadline
+    # passes, call_model returns None and the loop ends cleanly.
+    deadline = time.monotonic() + (settings.SLEUTH_CLOUD_TIMEOUT_S * 2)
+
+    def call_model(prompt: str) -> Optional[dict[str, Any]]:
+        if time.monotonic() >= deadline:
+            logger.info("Sleuth agent: aggregate time budget exhausted; stopping.")
+            return None
+        return _complete(agent.AGENT_SYSTEM, prompt, trip_cooldown=False)
+
     def run_query(canonical: str) -> str:
         try:
             return agent.summarize_response(_route_data_query(canonical, db, actor, now))
@@ -456,7 +513,7 @@ def _run_agent(message: str, db: Session, actor: User, now: datetime,
 
     result = agent.run_agent(
         message,
-        call_model=lambda p: _complete(agent.AGENT_SYSTEM, p, trip_cooldown=False),
+        call_model=call_model,
         run_query=run_query,
         run_retrieve=run_retrieve,
         max_steps=settings.SLEUTH_AGENT_MAX_STEPS,
@@ -502,8 +559,8 @@ def _recent_history(db: Session, actor: User, limit: int = 6) -> str:
 def _route_data_query(canonical: str, db: Session, actor: User,
                       now: datetime) -> Optional[Response]:
     """Re-parse the model's canonical query with the deterministic NLU and
-    dispatch it through the READ handlers only. This is what guarantees the
-    numbers are real and that the cloud layer can never trigger a write."""
+    dispatch it through the read handlers only. This guarantees the numbers
+    are real and that the cloud layer cannot trigger a write."""
     canonical = canonical.strip()
     if not canonical:
         return None
@@ -519,7 +576,9 @@ def _route_data_query(canonical: str, db: Session, actor: User,
         logger.info("Sleuth cloud: dropping non-read canonical query %r", canonical)
         return None
 
-    resp = _dispatch_read_intent(pq.intent, db, pq, actor, ctx)
+    # read_only=True: a model-chosen 'bug N' lookup on this firewall path must
+    # not repoint the user's pronoun memory (see _dispatch_read_intent).
+    resp = _dispatch_read_intent(pq.intent, db, pq, actor, ctx, read_only=True)
     if resp is not None:
         resp.intent = f"cloud_data:{pq.intent}"
     return resp

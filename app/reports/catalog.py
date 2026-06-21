@@ -5,11 +5,9 @@ Kept separate from engine.py so the catalog can be served to the frontend
 """
 from __future__ import annotations
 
-# Each entry describes ONE report type. Ordering matters: this is the
-# order the dropdown / Sleuth lists them. Item Detail Export is first
-# because it's the most-used (the "SQL query" view that produces an
-# Excel sheet of every matching item — what most managers actually want
-# when they ask "give me a report").
+# Each entry describes one report type. Ordering is the order the dropdown /
+# Sleuth lists them. Item Detail Export is first because it's the most-used:
+# the "SQL query" view that produces an Excel sheet of every matching item.
 REPORT_TYPES: list[dict] = [
     {
         "key": "item_detail",

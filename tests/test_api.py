@@ -1,4 +1,4 @@
-"""End-to-end API tests for Bug Hunter v3 (with auth)."""
+"""End-to-end API tests for the authenticated REST endpoints."""
 from __future__ import annotations
 
 import io
@@ -229,9 +229,8 @@ def test_user_creates_bug_can_edit_true(user_client):
 
 
 def test_user_can_edit_others_bugs_but_cannot_delete(admin_client):
-    """v3.1 spec: regular users can edit and reassign any bug, but only
-    admins can delete. (Old test asserted the opposite — kept here under
-    the new name for searchability.)"""
+    """Regular users can edit and reassign any bug, but only admins can
+    delete."""
     p = _make_project(admin_client, name="ProjA")
     bug = _make_bug(admin_client, p["id"], title="Admin's bug")
     bug_id = bug["id"]
@@ -249,12 +248,12 @@ def test_user_can_edit_others_bugs_but_cannot_delete(admin_client):
     r = admin_client.get(f"/api/bugs/{bug_id}")
     assert r.json()["can_edit"] is True
 
-    # Bob CAN update it (title, status, priority — any field)
+    # Bob can update it (title, status, priority — any field)
     r = admin_client.put(f"/api/bugs/{bug_id}", json={"title": "Bob edited this"})
     assert r.status_code == 200
     assert r.json()["title"] == "Bob edited this"
 
-    # Bob CANNOT delete it — admin-only
+    # Bob cannot delete it — admin-only
     r = admin_client.delete(f"/api/bugs/{bug_id}")
     assert r.status_code == 403
 

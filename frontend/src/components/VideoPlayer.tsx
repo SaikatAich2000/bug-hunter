@@ -1,14 +1,14 @@
 /**
- * VideoPlayer — a polished, dependency-free player built on the native <video>
- * element (so decoding stays hardware-accelerated). The themed control bar is
- * ALWAYS visible (windowed and fullscreen) so the seek bar is always grabbable.
+ * VideoPlayer — a dependency-free player built on the native <video> element
+ * (so decoding stays hardware-accelerated). The themed control bar stays
+ * visible windowed and fullscreen so the seek bar is always grabbable.
  *
  * Features: play/pause, a draggable seek bar with a buffered track + thumb,
  * current/total time, mute + volume slider, a playback-speed cycle, optional
  * picture-in-picture, fullscreen, a buffering spinner, and keyboard shortcuts
  * (Space/k play, ←/→ seek 5s, ↑/↓ volume, m mute, f fullscreen, 0-9 seek to %).
  *
- * Used both inline-large and inside <VideoLightbox/> (the "View" experience).
+ * Used both inline and inside <VideoLightbox/>.
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
@@ -43,6 +43,44 @@ function volumeIcon(muted: boolean, volume: number): string {
 
 const PIP_SUPPORTED =
   typeof document !== "undefined" && Boolean(document.pictureInPictureEnabled);
+
+// ----- prefixed Fullscreen API shims -----
+// Safari (desktop + iOS WebKit) only exposes the webkit-prefixed Fullscreen
+// API, and iOS Safari only supports element-level fullscreen on the <video>
+// via webkitEnterFullscreen(). Detect and bridge these.
+interface FsElement extends HTMLElement {
+  webkitRequestFullscreen?: () => void;
+}
+interface FsVideoElement extends HTMLVideoElement {
+  webkitRequestFullscreen?: () => void;
+  webkitEnterFullscreen?: () => void;
+}
+interface FsDocument extends Document {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => void;
+}
+
+function fsElement(): Element | null {
+  const d = document as FsDocument;
+  return document.fullscreenElement ?? d.webkitFullscreenElement ?? null;
+}
+
+function requestFs(el: FsElement): void {
+  if (el.requestFullscreen) {
+    void el.requestFullscreen().catch(() => undefined);
+  } else if (el.webkitRequestFullscreen) {
+    el.webkitRequestFullscreen();
+  }
+}
+
+function exitFs(): void {
+  const d = document as FsDocument;
+  if (document.exitFullscreen) {
+    void document.exitFullscreen().catch(() => undefined);
+  } else if (d.webkitExitFullscreen) {
+    d.webkitExitFullscreen();
+  }
+}
 
 export default function VideoPlayer({ src, type, label, autoPlay = false }: Readonly<Props>) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -101,15 +139,19 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
     };
   }, []);
 
-  // Track fullscreen (incl. Esc-exit).
+  // Track fullscreen (incl. Esc-exit), via both the standard and the
+  // webkit-prefixed fullscreenchange events.
   useEffect(() => {
-    const onFs = () => setIsFs(document.fullscreenElement === wrapRef.current);
+    const onFs = () => setIsFs(fsElement() === wrapRef.current);
     document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs);
+    };
   }, []);
 
-  // Autoplay (lightbox). If the browser blocks it, the big play button is
-  // right there.
+  // Autoplay (lightbox). If the browser blocks it, the big play button remains.
   useEffect(() => {
     if (!autoPlay) return;
     const v = videoRef.current;
@@ -171,10 +213,19 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
   const toggleFs = useCallback(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
-    if (document.fullscreenElement === wrap) {
-      void document.exitFullscreen().catch(() => undefined);
+    if (fsElement() === wrap) {
+      exitFs();
+      return;
+    }
+    // Standard + webkit element fullscreen on the wrapper; if neither exists
+    // (iOS Safari, where only the <video> can go fullscreen), fall back to the
+    // <video>'s own webkitEnterFullscreen.
+    const el = wrap as FsElement;
+    if (typeof el.requestFullscreen === "function" || typeof el.webkitRequestFullscreen === "function") {
+      requestFs(el);
     } else {
-      void wrap.requestFullscreen().catch(() => undefined);
+      const v = videoRef.current as FsVideoElement | null;
+      v?.webkitEnterFullscreen?.();
     }
   }, []);
 
@@ -205,16 +256,20 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
         break;
       case "m":
       case "M":
+        e.preventDefault();
         toggleMute();
         break;
       case "f":
       case "F":
+        e.preventDefault();
         toggleFs();
         break;
       default:
-        if (/^\d$/.test(e.key) && duration) {
+        // Guard on the live element duration; the React `duration` state is
+        // stale in the moment right after load.
+        if (/^\d$/.test(e.key) && Number.isFinite(v.duration)) {
           e.preventDefault();
-          seekTo((Number(e.key) / 10) * duration);
+          seekTo((Number(e.key) / 10) * v.duration);
         }
         break;
     }

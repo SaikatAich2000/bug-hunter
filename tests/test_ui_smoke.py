@@ -1,18 +1,16 @@
 """End-to-end UI smoke tests run in a real Chromium via Playwright.
 
-These tests would have caught the nested-form Create-button bug. They
-boot the FastAPI app on a real port, then drive Chromium to:
+They boot the FastAPI app on a real port, then drive Chromium to:
 
-  1. Log in as admin
-  2. Create a project
-  3. Open the bug create modal — assert the Create button is INSIDE
-     the bug form, the Reporter select is disabled, and pressing
-     Create actually fires the POST /api/bugs request and creates a
-     bug visible in the list.
-  4. Open the bug, assert the inline comments section appears.
-  5. Sessions panel: as admin, revoke a different user's session and
-     assert that user's open tab is bounced to /login.html within
-     ~20 s by the periodic /me poll.
+  1. Log in as admin.
+  2. Create a project.
+  3. Open the bug create modal and assert the Create button is inside the bug
+     form, the Reporter select is disabled, and pressing Create fires the
+     POST /api/bugs request and creates a bug visible in the list.
+  4. Open the bug and assert the inline comments section appears.
+  5. Sessions panel: as admin, revoke a different user's session and assert that
+     user's open tab is bounced to /login.html within ~20 s by the periodic /me
+     poll.
 
 Run from the repo root:  python -m pytest tests/test_ui_smoke.py -q
 """
@@ -48,11 +46,11 @@ def live_server():
     os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@ui.test"
     os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminUI1234"
     os.environ["BOOTSTRAP_ADMIN_NAME"] = "UI Admin"
-    # v2.7-security T4: disable the HIBP outbound call. Unlike the
-    # TestClient fixtures in conftest.py, this live_server starts a real
-    # uvicorn thread BEFORE any function-scoped monkeypatch is applied,
-    # so it would inherit the unset (= default-enabled) value otherwise
-    # and create-user would block on a live network round-trip.
+    # Disable the HIBP outbound call. Unlike the TestClient fixtures in
+    # conftest.py, this live_server starts a real uvicorn thread before any
+    # function-scoped monkeypatch is applied, so it would otherwise inherit the
+    # unset (default-enabled) value and create-user would block on a live
+    # network round-trip.
     os.environ["PASSWORD_BREACH_CHECK_ENABLED"] = "false"
     # Force a fresh import after env is set.
     for m in list(sys.modules):
@@ -114,12 +112,12 @@ def _login(page, base_url, email="admin@ui.test", password="AdminUI1234"):
 
 
 # ---------------------------------------------------------------------------
-# THE CRITICAL TEST: clicking "Create" actually creates a bug.
+# Clicking "Create" actually creates a bug.
 #
-# Before the v3.1.1 fix, the inline comment <form> was nested inside the
-# bug-modal <form>, which (per HTML5 spec) silently terminated the outer
-# form. The Create button ended up parent-less and clicking it did
-# nothing. This test reproduces that scenario end-to-end.
+# When the inline comment <form> is nested inside the bug-modal <form>, the
+# HTML5 spec silently terminates the outer form. The Create button then ends up
+# parent-less and clicking it does nothing. This test reproduces that scenario
+# end-to-end.
 # ---------------------------------------------------------------------------
 def test_create_bug_button_actually_creates(live_server, browser):
     ctx = browser.new_context()
@@ -138,11 +136,10 @@ def test_create_bug_button_actually_creates(live_server, browser):
     page.wait_for_selector("#modalBug", state="visible", timeout=2000)
 
     # ----- Assertions about modal structure -----
-    # Create button must be INSIDE the bug form. NOTE: getAttribute('id')
-    # not f.id — HTMLFormElement has a named-property accessor that lets
-    # `form.id` resolve to a child input named "id" (we have
-    # <input name="id"> in formBug for the hidden bug-id field). Famous
-    # DOM gotcha.
+    # Create button must be inside the bug form. Use getAttribute('id') rather
+    # than f.id: HTMLFormElement has a named-property accessor that lets
+    # `form.id` resolve to a child input named "id" (formBug has
+    # <input name="id"> for the hidden bug-id field).
     enclosing_form_id = page.evaluate("""
         () => {
             const btn = document.getElementById('bugSubmitBtn');
@@ -227,15 +224,15 @@ def test_open_bug_shows_inline_comments_section(live_server, browser):
 
 
 def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
-    """v3.0 shell redesign regression guard.
+    """Shell chrome regression guard.
 
-    Locks in the three chrome bugs fixed in the redesign:
-      1. The notification panel actually renders when the bell is clicked.
-      2. The bell sits in the SAME (right-hand) place on every view — it used
-         to snap to the left next to the title on non-list views because a
-         hidden search box still matched a `~` sibling rule.
+    Locks in three chrome behaviors:
+      1. The notification panel renders when the bell is clicked.
+      2. The bell sits in the same right-hand place on every view (it could
+         snap to the left next to the title on non-list views when a hidden
+         search box still matched a `~` sibling rule).
       3. Account controls (change-password / theme / log out) live in a
-         top-right profile menu, NOT in the sidebar.
+         top-right profile menu, not in the sidebar.
     """
     ctx = browser.new_context()
     page = ctx.new_page()
@@ -248,12 +245,12 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
     assert page.locator(".sidebar #logoutBtn").count() == 0, \
         "Log out must no longer live in the sidebar"
 
-    # The bell + profile share one right-hand cluster, so the bell's left edge
-    # must be well into the right half of the viewport (it used to be ~0 on
-    # non-list views). Switch to a NON-LIST view first (the original bug).
-    # v3.1: the view nav lives in TWO surfaces — the desktop chrome bar and the
-    # mobile drawer (Sidebar). Target the chrome one explicitly so this desktop
-    # test doesn't resolve to the hidden drawer copy that's first in the DOM.
+    # The bell and profile share one right-hand cluster, so the bell's left edge
+    # must be well into the right half of the viewport (it could be ~0 on
+    # non-list views). Switch to a non-list view first. The view nav lives in
+    # two surfaces: the desktop chrome bar and the mobile drawer (Sidebar).
+    # Target the chrome one explicitly so this desktop test doesn't resolve to
+    # the hidden drawer copy that's first in the DOM.
     page.click('.chrome .nav-btn[data-view="events"]')
     page.wait_for_selector("#viewEvents, .view", timeout=3000)
     box = page.locator("#notifBtn").bounding_box()
@@ -261,7 +258,7 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
     assert box and box["x"] > vw / 2, \
         f"Bell should be right-aligned on the Events view (x={box and box['x']}, vw={vw})"
 
-    # Clicking the bell opens the panel (bug #1: it didn't render before).
+    # Clicking the bell opens the panel.
     page.click("#notifBtn")
     page.wait_for_selector(".notif-panel", state="visible", timeout=2000)
     assert page.locator(".notif-panel .notif-panel-title").inner_text().strip() == "Notifications"
@@ -282,22 +279,20 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
 
 
 def test_session_revoke_kicks_user_out_promptly(live_server, browser):
-    """Admin revokes a user's session → user is logged out.
+    """Admin revokes a user's session and the user is logged out.
 
-    The v3.1.1 fix has two parts working together:
+    Two parts work together:
 
-      • Frontend: api() catches 401 and calls bounceToLogin() which does
-        location.replace('/login.html'). Also a periodic /me poll for
-        the case where the user does nothing.
-      • Backend: _has_valid_session() now consults the sessions table,
-        not just the cookie signature. Without this fix, the / and
-        /login.html HTML handlers can't tell a revoked cookie from a
-        live one — so the SPA's location.replace('/login.html') just
-        bounces back to / in an infinite loop. (That was the
-        "behaving strangely after refresh" symptom.)
+      - Frontend: api() catches 401 and calls bounceToLogin(), which does
+        location.replace('/login.html'). A periodic /me poll covers the case
+        where the user does nothing.
+      - Backend: _has_valid_session() consults the sessions table, not just the
+        cookie signature. Otherwise the / and /login.html HTML handlers can't
+        tell a revoked cookie from a live one, so the SPA's
+        location.replace('/login.html') bounces back to / in an infinite loop.
 
-    We exercise the most common user flow: revoke → user reloads (or
-    triggers any API call) → server now correctly serves /login.html.
+    Exercises the common flow: revoke, user reloads (or triggers any API call),
+    server then correctly serves /login.html.
     """
     import httpx
     admin = httpx.Client(base_url=live_server)
@@ -324,9 +319,9 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
     r = admin.delete(f"/api/sessions/{victim_session['id']}")
     assert r.status_code == 200
 
-    # Reload the victim's tab → boot() calls /me → 401 → location.replace.
-    # Server-side, _has_valid_session must now correctly return False for
-    # the revoked cookie so /login.html doesn't bounce back to /.
+    # Reload the victim's tab: boot() calls /me, gets 401, and location.replace
+    # runs. Server-side, _has_valid_session must return False for the revoked
+    # cookie so /login.html doesn't bounce back to /.
     victim_page.reload()
     try:
         victim_page.wait_for_url("**/login.html", timeout=5000)
@@ -343,21 +338,17 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
 
 
 # ---------------------------------------------------------------------------
-# Navigation regression guards (v3.3.1)
+# Navigation regression guards.
 #
-# A class of "surprise redirect" bugs: saving an item or clicking a KPI from a
-# non-list view would force-navigate the user to the Work Items list. The most
-# visible symptom was reported against events — "after creating a task inside an
-# event, saving redirects to the all-work-items screen instead of staying in the
-# event." The same forced setView("list") lived in BugModal (create + edit),
-# ProjectModal (save) and KpiStrip (click). These tests pin the fix: a save /
-# KPI click keeps the user exactly where they were.
+# Saving an item or clicking a KPI from a non-list view should not force-navigate
+# the user to the Work Items list. The forced setView("list") lived in BugModal
+# (create and edit), ProjectModal (save), and KpiStrip (click). These tests pin
+# the behavior: a save or KPI click keeps the user where they were.
 #
-# Detection trick: Shell mounts ONLY the active view (`{view === "x" && <X/>}`),
-# so when the app is on Events the #viewList element is absent from the DOM
-# entirely. `#viewList` count == 0 is therefore a precise "did not redirect to
-# the list" assertion, and #viewEvents/#viewAnalytics visibility confirms we
-# stayed put.
+# Shell mounts only the active view (`{view === "x" && <X/>}`), so when the app
+# is on Events the #viewList element is absent from the DOM entirely. A
+# `#viewList` count of 0 is therefore a precise "did not redirect to the list"
+# assertion, and #viewEvents/#viewAnalytics visibility confirms we stayed put.
 # ---------------------------------------------------------------------------
 def _api_admin(live_server):
     """Logged-in httpx client for seeding fixtures via the API. Credentials are
@@ -395,8 +386,8 @@ def nav_page(live_server, browser):
 
 
 def test_create_task_inside_event_stays_in_event(nav_page):
-    """THE reported bug: '+ Add Task' inside an event, then Save, must keep the
-    user inside that event's detail panel — never bounce to Work Items."""
+    """'+ Add Task' inside an event, then Save, must keep the user inside that
+    event's detail panel and never bounce to Work Items."""
     page = nav_page
 
     # Open the Events view and drill into our event. Scope the card click to the
@@ -425,7 +416,7 @@ def test_create_task_inside_event_stays_in_event(nav_page):
         page.click("#bugSubmitBtn")
     assert ri.value.status == 201, f"create task failed: {ri.value.text()}"
 
-    # Modal closes — and we must STILL be inside the event, not on the list.
+    # Modal closes, and we must still be inside the event, not on the list.
     page.wait_for_selector("#modalBug", state="hidden", timeout=3000)
     assert page.locator("#viewList").count() == 0, (
         "BUG: creating a task inside an event redirected to the Work Items list. "
@@ -510,8 +501,8 @@ def test_project_save_keeps_current_view(nav_page):
 
 
 # ---------------------------------------------------------------------------
-# Feature regressions (v3.3.2): linked-items Jira-style picker + the unified
-# square checkbox. Both reuse the shared nav_page login (rate-limit budget).
+# Feature regressions: linked-items Jira-style picker and the unified square
+# checkbox. Both reuse the shared nav_page login (rate-limit budget).
 # ---------------------------------------------------------------------------
 def _seed_bug_via_page(page, title: str) -> int:
     """Create a Bug straight through the authenticated browser session (no extra
@@ -534,8 +525,8 @@ def _seed_bug_via_page(page, title: str) -> int:
 
 
 def test_user_active_checkbox_is_square(nav_page):
-    """The user-create "Active" checkbox must render as a SQUARE (custom themed
-    control), not the old stretched rectangle."""
+    """The user-create "Active" checkbox must render as a square (custom themed
+    control), not a stretched rectangle."""
     page = nav_page
     page.click("#newUserBtn")
     page.wait_for_selector("#modalUser", state="visible", timeout=3000)
@@ -572,7 +563,7 @@ def test_linked_items_picker_multiselect_and_link(nav_page):
     )
     page.wait_for_selector("#modalBug", state="visible", timeout=3000)
 
-    # Open the picker, narrow to the Bugs tab, search, and tick TWO results.
+    # Open the picker, narrow to the Bugs tab, search, and tick two results.
     page.click(".item-picker-trigger")
     page.click('.item-picker-tab:has-text("Bugs")')
     page.fill(".item-picker-search", "ZZ Picker Target")
@@ -638,9 +629,9 @@ def test_bulk_bar_uses_themed_selects(nav_page):
 
 def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
     """A video attachment shows a compact poster thumbnail in the card; clicking
-    "View" opens the custom player in a themed lightbox (NOT the browser's native
-    player in a new tab). The control bar must be visible while paused AND while
-    playing — the seek bar is always grabbable, including fullscreen."""
+    "View" opens the custom player in a themed lightbox, not the browser's native
+    player in a new tab. The control bar must be visible while paused and while
+    playing, and the seek bar is always grabbable, including fullscreen."""
     page = nav_page
     bug_id = _seed_bug_via_page(page, "ZZ Video Bug")
     # Upload a tiny fake mp4 so the card is treated as a video by content-type.

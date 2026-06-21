@@ -20,8 +20,8 @@
  */
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-// --- one-open-panel-at-a-time registry. Every mounted instance subscribes its
-// --- close callback; opening one instance closes all the others.
+// One-open-panel-at-a-time registry. Every mounted instance subscribes its
+// close callback; opening one instance closes the others.
 const closers = new Set<() => void>();
 function closeOthers(except: () => void): void {
   closers.forEach((close) => {
@@ -80,6 +80,19 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
     const onDocClick = () => setOpen(false);
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
+  }, [open]);
+
+  // Escape closes the panel while it's open. Capture-phase + stopPropagation so
+  // it pre-empts any surrounding modal's Escape handler.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   }, [open]);
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
@@ -141,8 +154,8 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
   );
 }
 
-// Memoized so a parent re-render (e.g. the 10s/15s context polls) doesn't
-// re-render every filter when its own props are unchanged. FilterBar now
-// passes stable useCallback handlers + useMemo'd option/selected arrays, so
-// the shallow prop compare actually holds.
+// Memoized so a parent re-render (e.g. a context poll) doesn't re-render every
+// filter when its own props are unchanged. FilterBar passes stable useCallback
+// handlers and useMemo'd option/selected arrays, so the shallow prop compare
+// holds.
 export default memo(MsFilter);

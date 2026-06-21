@@ -1,22 +1,22 @@
 """Sleuth executor — turns a ParsedQuery into a structured response.
 
-This module is the only place chat-driven SQL gets built. It is
-**deliberately read-only**: the executor never issues an INSERT, UPDATE or
-DELETE — it accepts a parsed intent, runs the appropriate SELECT, and
-returns a `Response` dataclass for the router to serialize.
+The only place chat-driven SQL is built, and it is read-only: the executor
+never issues an INSERT, UPDATE or DELETE. It accepts a parsed intent, runs
+the appropriate SELECT, and returns a `Response` dataclass for the router
+to serialize.
 
-The same response structure is used for every intent so the frontend
-just renders a uniform list of "blocks":
+Every intent uses the same response structure so the frontend renders a
+uniform list of "blocks":
 
   - text     — markdown-ish prose
   - table    — header + rows, rendered inline in the chat
   - file     — a server-generated download (Excel) the user can save
 
-Why structured blocks instead of HTML? Two reasons. First, the frontend
-escapes everything before rendering, which sidesteps stored-XSS via a
-malicious bug title — only known-safe formatting (bold, code, links) is
-rendered. Second, this gives the LLM passthrough (router.py) a clean
-target shape to emit, so rule-engine and LLM responses look identical.
+Structured blocks rather than HTML: the frontend escapes everything before
+rendering, which avoids stored-XSS via a malicious bug title (only known-safe
+formatting — bold, code, links — is rendered), and gives the LLM passthrough
+(router.py) a clean target shape so rule-engine and LLM responses look the
+same.
 """
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class Response:
     # The frontend uses this to drive a one-line aria-live announcement.
     summary: str = ""
     # Lightweight observability — surfaces in the network log and helps
-    # debug missed intents during dogfooding.
+    # debug missed intents.
     intent: str = ""
     # When the rule engine wasn't sure, the router can choose to hand off
     # to the optional LLM. This flag isn't shown to the user.
@@ -86,6 +86,10 @@ class Response:
 # (display handlers) or materialized on every request (name-resolution context).
 _CHAT_LIST_CAP = 500
 _CHAT_CONTEXT_CAP = 2000
+# Hard ceiling on how many items one chat bulk action ("close all bugs") may
+# touch. Above this we refuse and ask the user to narrow the scope, rather than
+# stage a very long per-item mutate loop behind a single "yes".
+_BULK_ACTION_CAP = 500
 
 
 def build_context(db: Session) -> Context:
@@ -188,6 +192,8 @@ def _apply_bug_filters(stmt, count_stmt, pq: ParsedQuery):
     Returned as a tuple so the caller can run COUNT and SELECT side by
     side (we always want the total even when paginating to a slice).
     """
+    if pq.item_types:
+        stmt, count_stmt = _apply_both(stmt, count_stmt, Bug.item_type.in_(pq.item_types))
     if pq.statuses:
         stmt, count_stmt = _apply_both(stmt, count_stmt, Bug.status.in_(pq.statuses))
     if pq.priorities:
@@ -313,12 +319,13 @@ def _handle_about(message: str) -> Response:
             "Resolve Later, Not a Bug. *Open* groups New + In Progress + "
             "Reopened. *Not a Bug* is excluded from the total-bugs KPI"
         ),
-        "priority": (
+        # Stem "priorit" matches both "priority" and "priorities" (the y→ies
+        # change means "priority" is not a substring of "priorities", so a bare
+        # "priority" key would miss the plural and fall through to the not-sure
+        # reply). One stem entry covers both without a duplicated literal.
+        "priorit": (
             "**Priorities**: Low, Medium, High, Critical. P0 → Critical, "
             "P1 → High, P2 → Medium, P3 → Low when you use those aliases"
-        ),
-        "priorities": (
-            "**Priorities**: Low, Medium, High, Critical"
         ),
         "environment": (
             "**Environments**: DEV, UAT, PROD. *staging*, *qa*, *test* are "
@@ -827,8 +834,12 @@ def _list_bugs_order(pq: ParsedQuery):
     return (Bug.updated_at.desc(), Bug.id.desc())
 
 
-def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = None) -> Response:
-    """Run the parsed bug filter and render either count / list / file."""
+def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = None,
+                      owner_id: int = 0) -> Response:
+    """Run the parsed bug filter and render either count / list / file.
+
+    ``owner_id`` is the requesting user; it's stamped on any staged XLSX so only
+    that user can download it (see excel.stage_workbook)."""
     clarify = _clarify_ambiguous_names(pq) or _clarify_unresolved_user(pq, ctx)
     if clarify is not None:
         return clarify
@@ -847,7 +858,7 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = Non
         # "give me everything". The CSV route handles bigger pulls.
         export_cap = 5000
         rows = list(db.scalars(stmt.order_by(*order_cols).limit(export_cap)).all())
-        return _build_export_response(rows, pq, total, export_cap)
+        return _build_export_response(rows, pq, total, export_cap, owner_id)
 
     limit = max(5, min(pq.limit or 100, 200))
     rows = list(db.scalars(stmt.order_by(*order_cols).limit(limit)).all())
@@ -856,7 +867,8 @@ def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = Non
     return _build_inline_list_response(rows, total, limit, pq, descr)
 
 
-def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: int) -> Response:
+def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: int,
+                           owner_id: int = 0) -> Response:
     """Generate the Excel file via excel.py and return a file block."""
     # Lazy import so the chatbot module can be loaded even if openpyxl
     # is missing (e.g. test environments). Failure here is gracefully
@@ -888,7 +900,7 @@ def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: in
 
     try:
         rows_dicts = [_bug_row(b) for b in rows]
-        token, byte_size = excel.stage_workbook(rows_dicts, file_label, descr)
+        token, byte_size = excel.stage_workbook(rows_dicts, file_label, owner_id, descr)
     except excel.ExcelGenerationError as exc:
         return Response(
             blocks=[Block("text", {"text":
@@ -939,23 +951,12 @@ def _filters_from_parsed(pq: ParsedQuery) -> "Any":
             date_from = pq.time_window.start.date()
         if pq.time_window.end:
             date_to = pq.time_window.end.date()
-    item_types: list[str] = []
-    # If the user mentioned a specific item type (bug / requirement /
-    # task / defect), scope to it; else leave empty so the report covers
-    # all three.
-    msg_l = (pq.raw_message or "").lower()
-    type_keywords = (
-        ("Bug",         ("bug", "defect")),
-        ("Requirement", ("requirement",)),
-        ("Task",        ("task",)),
-    )
-    for canonical, needles in type_keywords:
-        if any(n in msg_l for n in needles):
-            item_types.append(canonical)
+    # Item-type scope is detected once in the NLU (_populate_item_types) and
+    # shared across the list/count and reports paths so they stay consistent.
     return Filters(
         date_from=date_from,
         date_to=date_to,
-        item_types=item_types,
+        item_types=list(pq.item_types),
         statuses=list(pq.statuses),
         priorities=list(pq.priorities),
         environments=list(pq.environments),
@@ -981,9 +982,9 @@ def _report_row_to_table_row(row: dict, columns) -> list[str]:
     return out
 
 
-def _stage_report_xlsx(result, report_key: str) -> tuple[str, int, str]:
-    """Build the XLSX and stage it under a fresh download token. Returns
-    (token, byte_size, filename)."""
+def _stage_report_xlsx(result, report_key: str, owner_id: int) -> tuple[str, int, str]:
+    """Build the XLSX and stage it under a fresh download token bound to
+    ``owner_id``. Returns (token, byte_size, filename)."""
     from app.chatbot import excel as _excel
     from app.reports import build_workbook_bytes
     from app.reports.xlsx import XlsxBuildError
@@ -993,7 +994,7 @@ def _stage_report_xlsx(result, report_key: str) -> tuple[str, int, str]:
         raise _excel.ExcelGenerationError(str(exc)) from exc
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"report-{report_key}-{stamp}.xlsx"
-    token, size = _excel.stage_bytes(payload, filename)
+    token, size = _excel.stage_bytes(payload, filename, owner_id)
     return token, size, filename
 
 
@@ -1074,12 +1075,12 @@ def _build_report_preview_text(result, filters, preview_rows_count: int) -> str:
     return text
 
 
-def _try_stage_file_block(result, report_key: str) -> Optional[Block]:
-    """Best-effort: build + stage the XLSX. Returns the file Block on
-    success, None if the export step failed. Logs the exception on
+def _try_stage_file_block(result, report_key: str, owner_id: int) -> Optional[Block]:
+    """Best-effort: build + stage the XLSX (bound to ``owner_id``). Returns the
+    file Block on success, None if the export step failed. Logs the exception on
     failure; never raises (chat must always reply)."""
     try:
-        token, size, filename = _stage_report_xlsx(result, report_key)
+        token, size, filename = _stage_report_xlsx(result, report_key, owner_id)
     except Exception as exc:   # noqa: BLE001 — file build must never crash chat
         _LOGGER.exception("Sleuth report XLSX build failed: %s", exc)
         return None
@@ -1117,6 +1118,22 @@ def _handle_report(db: Session, pq: ParsedQuery, actor: User) -> Response:
     if result.total == 0:
         return _report_empty_response(result)
 
+    # Mirror the REST export's 413 guard: if the report matched more rows than
+    # MAX_REPORT_ROWS (or the engine flagged truncation), DON'T materialize a
+    # full multi-sheet workbook in RAM on the small worker — ask the user to
+    # narrow the filters instead. (REST raises 413 here.)
+    from app.config import get_settings as _get_settings
+    max_rows = _get_settings().MAX_REPORT_ROWS
+    if getattr(result, "truncated", False) or result.total > max_rows:
+        return Response(
+            blocks=[Block("text", {"text":
+                f"That report matches {result.total:,} rows, which is too many "
+                f"to export here (limit {max_rows:,}). Please narrow the filters "
+                "(a date range, project, status, etc.) and try again."})],
+            summary="Report too large",
+            intent="report_too_large",
+        )
+
     preview_rows = result.rows[:15]
     blocks: list[Block] = [
         Block("text", {"text": _build_report_preview_text(result, filters, len(preview_rows))}),
@@ -1125,7 +1142,7 @@ def _handle_report(db: Session, pq: ParsedQuery, actor: User) -> Response:
             "rows": [_report_row_to_table_row(r, result.columns) for r in preview_rows],
         }),
     ]
-    file_block = _try_stage_file_block(result, report_key)
+    file_block = _try_stage_file_block(result, report_key, actor.id)
     if file_block is not None:
         blocks.append(file_block)
     else:
@@ -1288,8 +1305,9 @@ def _build_action_plan(pq, actor: User) -> "tuple[Any, Optional[str]]":
 
 
 _BULK_SCOPE_RE = re.compile(
-    r"\b(all|every|each|the\s+whole|entire)\b[\w\s'/-]*?\b"
-    r"(bugs?|issues?|tickets?|items?|work\s*items?|requirements?|tasks?)\b",
+    r"\b(all|every|each|everything|the\s+whole|entire)\b"
+    r"(?:[\w\s'/-]*?\b"
+    r"(bugs?|issues?|tickets?|items?|work\s*items?|requirements?|tasks?)\b)?",
     re.IGNORECASE,
 )
 # Bulk-capable write kinds (NOT delete — Sleuth never deletes; NOT create — a
@@ -1321,8 +1339,8 @@ def _resolve_trailing_assignee(message: str, ctx) -> "tuple[list[int], list[str]
     when the single-action parser couldn't (the "all the bugs" infix defeats
     its cue patterns). Returns ([], []) if nothing unambiguous is found."""
     from app.chatbot import nlu as _nlu
-    # IGNORECASE already folds case, so the first letter only needs [a-z]
-    # (a redundant A-Z range trips Sonar S5869).
+    # IGNORECASE already folds case, so the first letter only needs [a-z];
+    # an A-Z range would be redundant.
     m = re.search(r"\bto\s+([a-z][\w.'\-]*(?:\s+[a-z][\w.'\-]*)*)\s*$",
                   message.strip(), re.IGNORECASE)
     if not m:
@@ -1334,12 +1352,12 @@ def _resolve_trailing_assignee(message: str, ctx) -> "tuple[list[int], list[str]
     return [uid], [disp]
 
 
-# Map the bulk-scope NOUN (the word the user actually used) to the single
-# item_type it restricts to. This is the fix for "assign all BUGS" silently
-# hitting Requirements and Tasks too: bugs/issues/tickets/defects → Bug only;
-# requirements → Requirement only; tasks → Task only. The generic
-# items / work items (and "everything") deliberately map to None = ALL types,
-# so the user has to say "items"/"everything" to sweep across all three.
+# Map the bulk-scope noun (the word the user used) to the single item_type it
+# restricts to, so "assign all bugs" doesn't also hit Requirements and Tasks:
+# bugs/issues/tickets/defects → Bug only; requirements → Requirement only;
+# tasks → Task only. The generic items / work items (and "everything") map to
+# None = all types, so the user must say "items"/"everything" to sweep across
+# all three.
 _BULK_NOUN_TO_TYPE: dict[str, Optional[str]] = {
     "bug": "Bug", "bugs": "Bug",
     "issue": "Bug", "issues": "Bug",
@@ -1375,7 +1393,10 @@ def _resolve_bulk_bug_ids(db: Session, pq, item_type: Optional[str]) -> list[int
         stmt = stmt.where(Bug.environment.in_(pq.environments))
     if pq.project_ids:
         stmt = stmt.where(Bug.project_id.in_(pq.project_ids))
-    stmt = stmt.order_by(Bug.id)
+    # Hard cap so "close all bugs" can't stage tens of thousands of ids that the
+    # per-item apply loop would then mutate. Fetch one over the cap so the
+    # caller can detect (and refuse) an over-cap scope.
+    stmt = stmt.order_by(Bug.id).limit(_BULK_ACTION_CAP + 1)
     return [int(i) for i in db.scalars(stmt).all()]
 
 
@@ -1424,7 +1445,7 @@ def _maybe_handle_bulk_action(message: str, db: Session, actor: User, pq, ctx) -
         return None
 
     # The noun the user used ("bugs" / "tasks" / "items") decides which item
-    # type(s) the sweep covers — the whole point of the fix.
+    # type(s) the sweep covers.
     item_type = _bulk_item_type(scope_match.group(2))
 
     # Sleuth writes are admin-only — managers/users get read/lookup only.
@@ -1452,6 +1473,15 @@ def _maybe_handle_bulk_action(message: str, db: Session, actor: User, pq, ctx) -
             blocks=[Block("text", {"text":
                 f"I couldn't find any matching {scope_word} to update."})],
             summary="No matching items", intent="action_invalid")
+    if len(bug_ids) > _BULK_ACTION_CAP:
+        # Refuse an over-cap scope rather than stage a per-item mutate loop over
+        # tens of thousands of rows behind one "yes".
+        return Response(
+            blocks=[Block("text", {"text":
+                f"That would affect more than {_BULK_ACTION_CAP} items, which is "
+                "too many to change in one go. Please narrow it (add a project, "
+                "status, priority, or environment) and try again."})],
+            summary="Bulk scope too large", intent="action_invalid")
 
     names = ", ".join(assignee_names) or "user(s)"
     scope = _bulk_scope_phrase(db, bug_ids, item_type)
@@ -1524,7 +1554,7 @@ def _handle_confirm_no(actor: User) -> Response:
 
 # ---------------------------------------------------------------------------
 # Staged document ingest (admin) — Sleuth read a doc on upload and parked the
-# candidates; it creates them ONLY when the admin gives an explicit go-ahead.
+# candidates; it creates them only when the admin gives an explicit go-ahead.
 # ---------------------------------------------------------------------------
 # A go-ahead refers to the STAGED items: a bare affirmation, or "create/add/
 # import … them/these/all/the bugs". Deliberately NOT matching "create a bug
@@ -1620,9 +1650,27 @@ def _empty_intent_response() -> Response:
     )
 
 
-def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx) -> Optional[Response]:
+def _remember_detail_bug(actor: User, pq, read_only: bool) -> None:
+    """Record the looked-up bug as the conversation's last_bug_id (for pronoun
+    resolution) — unless this is the read-only cloud/agent path, where a
+    model-chosen lookup must not mutate the user's pronoun memory."""
+    if pq.bug_id and not read_only:
+        from app.chatbot.memory import store as _mem
+        _mem.remember_bug(actor.id, pq.bug_id)
+
+
+def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx,
+                          read_only: bool = False) -> Optional[Response]:
     """Dispatch a read-side parser intent to its handler.
-    Returns None if the intent isn't a known read intent."""
+    Returns None if the intent isn't a known read intent.
+
+    ``read_only`` controls whether the bug_detail intent updates per-user
+    conversation memory (last_bug_id, which drives pronoun resolution). The
+    normal user-typed flow keeps the default (False) so 'show bug 5' then
+    'close it' works. The cloud / agent write-firewall path passes
+    read_only=True so a MODEL-chosen 'bug N' lookup can't silently repoint the
+    user's pronoun memory (and thus the target of a later confirmed write) —
+    keeping that path truly side-effect free as documented."""
     if intent == "empty":
         return _empty_intent_response()
     if intent == "greeting":
@@ -1638,16 +1686,14 @@ def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx) -> Opt
     if intent == "list_projects":
         return _handle_list_projects(db)
     if intent == "bug_detail":
-        from app.chatbot.memory import store as _mem
-        if pq.bug_id:
-            _mem.remember_bug(actor.id, pq.bug_id)
+        _remember_detail_bug(actor, pq, read_only)
         return _handle_bug_detail(db, pq)
     if intent == "stats":
         return _handle_stats(db)
     if intent == "recent_activity":
         return _handle_recent_activity(db, pq, actor)
     if intent == "list_bugs":
-        return _handle_list_bugs(db, pq, ctx)
+        return _handle_list_bugs(db, pq, ctx, owner_id=actor.id)
     if intent == "report":
         return _handle_report(db, pq, actor)
     return None
@@ -1685,7 +1731,7 @@ def _try_classifier(message: str, db: Session, pq, actor: User, ctx) -> Optional
 
 def _try_llm(message: str, db: Session, actor: User) -> Optional[Response]:
     """Layer 3 fallback: optional local LLM. Returns None if unavailable
-    or if it failed — an LLM fault must NEVER take down the chat path."""
+    or if it failed — an LLM fault must never take down the chat path."""
     try:
         from app.chatbot import llm as _llm
         if _llm.is_available():
@@ -1697,8 +1743,8 @@ def _try_llm(message: str, db: Session, actor: User) -> Optional[Response]:
     return None
 
 
-# Greetings / one-word pleasantries that get instant canned replies even in
-# AI-first mode — no value in a network round-trip for "hi".
+# Greetings / one-word pleasantries that get canned replies without a cloud
+# round-trip even when the cloud layer is enabled.
 _CLOUD_SKIP_EXACT = frozenset({
     "hi", "hello", "hey", "yo", "help", "?", "thanks", "thank you",
     "ok", "okay", "good morning", "good afternoon", "good evening",
@@ -1707,9 +1753,9 @@ _CLOUD_SKIP_EXACT = frozenset({
 
 def _try_cloud_llm(message: str, db: Session, actor: User,
                    now: Optional[datetime]) -> Optional[Response]:
-    """Layer 4 fallback: optional cloud LLM (Gemini / OpenRouter). OFF unless
+    """Layer 4 fallback: optional cloud LLM (Gemini / OpenRouter). Off unless
     the operator enabled it and supplied a key. Like every other fallback, a
-    fault here must NEVER take down the chat — we swallow and return None.
+    fault here is swallowed and returns None so the chat stays up.
 
     The cloud layer is read-only by construction: data questions are routed
     back through the SQL handlers and any action_* intent is dropped inside
@@ -1762,20 +1808,18 @@ def execute(message: str, db: Session, actor: User,
     if pq.intent.startswith("action_"):
         return _handle_action_request(pq, actor)
 
-    # AI-FIRST: when the cloud assistant is ON, it leads for everything that
-    # isn't a staged confirmation or an explicit write command. The keyword
-    # rules are precise for terse commands but greedily mis-match free-form
-    # chat (e.g. "...can you revoke someone's session?" contains "admin",
-    # which rules-first would answer with an admins table). The AI translates
-    # real data asks into canonical queries that run through the SAME SQL
-    # handlers below, so tables/counts stay deterministic — and everything
-    # conversational gets an actual conversational answer.
+    # When the cloud assistant is enabled, it leads for everything that isn't a
+    # staged confirmation or an explicit write command. The keyword rules are
+    # precise for terse commands but mis-match free-form chat (e.g. "...can you
+    # revoke someone's session?" contains "admin", which rules-first would
+    # answer with an admins table). The cloud layer translates data asks into
+    # canonical queries that run through the same SQL handlers below, so
+    # tables/counts stay deterministic, while conversational input gets a
+    # conversational answer.
     #
-    # Trivial one-worders ("hi", "help", "thanks") skip the network hop and
-    # keep their instant canned replies. If the cloud call fails (quota,
-    # outage, bad JSON) the flow falls straight back to the full
-    # deterministic chain, so the chatbot is never worse off than without
-    # the AI.
+    # One-word messages ("hi", "help", "thanks") skip the network hop and keep
+    # their canned replies. If the cloud call fails (quota, outage, bad JSON)
+    # the flow falls back to the deterministic chain.
     msg_norm = message.strip().lower()
     if msg_norm and msg_norm not in _CLOUD_SKIP_EXACT:
         cloud_resp = _try_cloud_llm(message, db, actor, now)

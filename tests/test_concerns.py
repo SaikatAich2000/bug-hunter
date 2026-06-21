@@ -1,4 +1,4 @@
-"""Regression tests covering code-review concerns and related edge cases:
+"""Tests covering security and correctness concerns and related edge cases:
 
   - Session lifecycle around password changes / resets
   - Outstanding password-reset tokens after password change
@@ -53,7 +53,7 @@ def _make_user(c, name="Someone", email="some@x.com", role="user", password="Tes
 # ===========================================================================
 class TestSessionLifecycle:
     def test_existing_session_still_works_after_password_change(self, admin_client):
-        """Changing the password does NOT invalidate existing sessions. A
+        """Changing the password does not invalidate existing sessions. A
         compromised account can stay compromised even after the legitimate
         owner resets their password."""
         # Confirm session works
@@ -71,9 +71,8 @@ class TestSessionLifecycle:
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200, \
             "BUG: old session is invalidated after password change (good!) — update test"
-        # Documents the finding: existing sessions ARE preserved across a
-        # password change. That is the current behavior, but is a security
-        # gap worth flagging.
+        # Existing sessions are preserved across a password change. That is the
+        # current behavior, but is a security gap worth flagging.
 
     def test_outstanding_reset_tokens_remain_after_password_change(self, admin_client):
         """If a user requests a password reset, then quickly changes their
@@ -106,7 +105,7 @@ class TestUpdateBugOrdering:
     def test_failed_reporter_change_does_not_persist_other_changes(self, admin_client):
         """A regular user PUTs an update with title + reporter_id=different_user.
         The role check rejects the request (cannot change reporter). Verify
-        that the title change is NOT persisted (no partial write)."""
+        that the title change is not persisted (no partial write)."""
         p = _make_project(admin_client, "U1")
         owner = _make_user(admin_client, name="Owner", email="owner@x.com",
                            password="TestUserPwd9X")
@@ -122,7 +121,7 @@ class TestUpdateBugOrdering:
             "email": "owner@x.com", "password": "TestUserPwd9X",
         })
 
-        # Owner attempts both a legitimate title change AND an unauthorized
+        # Owner attempts both a legitimate title change and an unauthorized
         # reporter change in one PUT. The 403 must reject everything.
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={
             "title": "Hacked title here",
@@ -130,7 +129,7 @@ class TestUpdateBugOrdering:
         })
         assert r.status_code == 403
 
-        # Verify title was NOT changed
+        # Verify title was not changed
         r = admin_client.get(f"/api/bugs/{bug['id']}")
         assert r.json()["title"] == "Original title here", \
             "BUG: title was persisted despite the 403 from the role check"
@@ -166,8 +165,8 @@ class TestActivityOrdering:
 class TestFrontendContract:
     def test_bug_detail_attachments_only_includes_bug_level(self, admin_client):
         """The 'attachments' list at the top level of a BugDetail should
-        only contain BUG-level attachments (comment_id NULL). Comment-level
-        attachments belong to their respective comment. Frontend depends
+        only contain bug-level attachments (comment_id NULL). Comment-level
+        attachments belong to their respective comment. The frontend depends
         on this split."""
         p = _make_project(admin_client, "FE1")
         bug = _make_bug(admin_client, p["id"])
@@ -188,7 +187,7 @@ class TestFrontendContract:
         # Comment-level under that comment
         comment_atts = d["comments"][0]["attachments"]
         assert {a["filename"] for a in comment_atts} == {"c.txt"}
-        # But attachment_count should reflect TOTAL
+        # But attachment_count should reflect the total
         assert d["attachment_count"] == 2
 
     def test_xlsx_export_preserves_commas_and_newlines_in_description(self, admin_client):

@@ -1,22 +1,21 @@
-"""Regression guards for the frontend theme and layout.
+"""Source guards for the frontend theme and layout.
 
 These tests can't run a DOM through the TestClient, so they pin the theme and
-layout invariants by sniffing the React/CSS/HTML sources — a refactor that
-drops one breaks CI.
+layout invariants by sniffing the React/CSS/HTML sources.
 
 The invariants pinned here:
 
-  1. Unified Steam page header — every view's title/subtitle now lives ONCE in
+  1. Unified Steam page header — every view's title/subtitle lives once in
      PageHead. The old per-view `.page-intro` banners (which duplicated the
-     title the moment PageHead started rendering it for all views) are gone.
+     title once PageHead rendered it for all views) are gone.
   2. Mobile drawer view-nav — the desktop chrome bar hides its horizontal nav
      on phones, so the view nav is surfaced inside the drawer (Sidebar) from a
-     SHARED NAV_ITEMS module both nav surfaces consume, role-gated identically.
+     shared NAV_ITEMS module both nav surfaces consume, role-gated identically.
   3. Steam field-gradient modal headers (same surface family as the table
-     panel header) + the title/subtitle stack styling.
-  4. Stale copy fix: the Sessions help text points at the profile menu (where
-     Log out now lives), not the old sidebar.
-  5. The radius-reduction sweep + dead-CSS cleanup ("a bit less px for all").
+     panel header) and the title/subtitle stack styling.
+  4. The Sessions help text points at the profile menu (where Log out lives),
+     not the old sidebar.
+  5. The reduced-radius token scale and dead-CSS cleanup.
   6. `meta theme-color` (Steam chrome) on all three HTML entry points.
 """
 from __future__ import annotations
@@ -53,7 +52,7 @@ def _read(p: Path) -> str:
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("view_file", [AUDIT, SESSIONS, REPORTS, EVENTS])
 def test_views_no_longer_render_duplicate_page_intro(view_file):
-    """PageHead renders the title for EVERY view, so a per-view `.page-intro`
+    """PageHead renders the title for every view, so a per-view `.page-intro`
     banner would print the same title twice. All four were removed."""
     src = _read(view_file)
     assert "page-intro" not in src, (
@@ -169,7 +168,7 @@ def test_sessions_copy_points_at_profile_menu_not_sidebar():
 
 
 # ---------------------------------------------------------------------------
-# 5. Radius reduction ("a bit less px for all") + dead-CSS cleanup
+# 5. Reduced-radius token scale + dead-CSS cleanup
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("css_file", [STYLES, CHATBOT])
 def test_oversized_radii_were_reduced(css_file):

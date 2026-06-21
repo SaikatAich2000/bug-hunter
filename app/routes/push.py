@@ -7,7 +7,7 @@ service-account JSON never leaves the server.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import push_service
@@ -15,6 +15,7 @@ from app.auth import get_current_user
 from app.config import get_settings
 from app.database import get_db
 from app.models import User
+from app.push_service import PushTokenConflict
 from app.schemas import PushConfigOut, PushSubscribeIn, PushUnsubscribeIn
 
 router = APIRouter(prefix="/api/push", tags=["push"])
@@ -48,13 +49,21 @@ def subscribe(
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
     """Register (or refresh) this browser/device's FCM token for the user."""
-    push_service.register(
-        db,
-        user_id=user.id,
-        token=payload.token,
-        platform=payload.platform,
-        user_agent=payload.user_agent,
-    )
+    try:
+        push_service.register(
+            db,
+            user_id=user.id,
+            token=payload.token,
+            platform=payload.platform,
+            user_agent=payload.user_agent,
+        )
+    except PushTokenConflict as exc:
+        # Token already bound to a different account — refuse rather than let a
+        # replayed token hijack that device's push.
+        raise HTTPException(
+            status_code=409,
+            detail="This device token is already registered to another account.",
+        ) from exc
     db.commit()
     return {"ok": True}
 

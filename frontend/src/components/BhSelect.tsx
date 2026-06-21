@@ -9,8 +9,8 @@
  *       <span class="bh-sel-caret">▾</span>             ← hidden while disabled
  *     </button>
  *     <div class="bh-sel-pop" role="listbox">           ← only while open
- *       <button class="bh-sel-row [is-selected]" role="menuitemcheckbox"
- *               aria-checked data-bh-sel-i="i">…</button> × n
+ *       <button class="bh-sel-row [is-selected]" role="option"
+ *               aria-selected data-bh-sel-i="i">…</button> × n
  *     </div>
  *   </div>
  *
@@ -100,9 +100,9 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  // Escape closes ONLY this popover. Capture-phase + stopPropagation pre-empts
+  // Escape closes only this popover. Capture-phase + stopPropagation pre-empts
   // the app-level (bubble) Escape handler, which would otherwise dismiss the
-  // whole surrounding modal and discard the user's in-progress form.
+  // surrounding modal and discard the user's in-progress form.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -161,12 +161,11 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
         {!disabled && <span className="bh-sel-caret" aria-hidden="true">▾</span>}
       </button>
       {/* Portal the popover to <body> so its position:fixed coordinates are
-          always relative to the VIEWPORT. Rendered in-place, any ancestor with
-          a transform / filter / contain (or even a quirky stacking context)
-          becomes the containing block and the panel lands in the wrong spot —
-          which is exactly what misplaced the Reports "Report type" dropdown.
-          popRef still points at the real node, so the outside-click guard and
-          placePop math keep working unchanged. */}
+          relative to the viewport. Rendered in-place, any ancestor with a
+          transform / filter / contain (or other stacking context) becomes the
+          containing block and the panel lands in the wrong spot. popRef still
+          points at the real node, so the outside-click guard and placePop math
+          keep working unchanged. */}
       {open &&
         createPortal(
           <div className="bh-sel-pop" role="listbox" ref={popRef}>
@@ -177,8 +176,8 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
                   type="button"
                   key={o.value}
                   className={`bh-sel-row${isSel ? " is-selected" : ""}`}
-                  role="menuitemcheckbox"
-                  aria-checked={isSel}
+                  role="option"
+                  aria-selected={isSel}
                   data-bh-sel-i={i}
                   title={o.title}
                   onClick={() => {

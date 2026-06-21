@@ -159,11 +159,20 @@ async def _tick(schedule: CronSchedule, tz: tzinfo, now: datetime | None = None)
 
 
 async def _loop(schedule: CronSchedule, tz: tzinfo) -> None:
+    last_fired_minute: datetime | None = None
     while True:
         now = datetime.now(tz)
         # Wake at the start of the next minute, then evaluate the schedule.
         await asyncio.sleep(max(1.0, 60 - now.second - now.microsecond / 1_000_000))
-        await _tick(schedule, tz)
+        now = datetime.now(tz)
+        minute = now.replace(second=0, microsecond=0)
+        # Fire at most once per clock-minute: wake-time drift can land us back
+        # in the same minute, which would otherwise double-run the digest.
+        if minute == last_fired_minute:
+            continue
+        if schedule.matches(now):
+            last_fired_minute = minute
+            await _tick(schedule, tz, now)
 
 
 _task: asyncio.Task | None = None
@@ -177,6 +186,12 @@ def start() -> None:
     running event loop (e.g. the FastAPI lifespan).
     """
     global _task
+    if _task is not None and not _task.done():
+        # Re-entry guard: a second start() (e.g. an accidental double lifespan)
+        # must not orphan the first loop task — stop() can only cancel the one
+        # in _task, so overwriting it would leak the original forever.
+        logger.debug("Scheduler already running; start() is a no-op.")
+        return
     settings = get_settings()
     expr = settings.EMAIL_DIGEST_CRON
     if not expr:

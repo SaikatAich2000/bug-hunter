@@ -279,7 +279,7 @@ def test_init_db_with_events_idempotent(admin_client):
 
 
 def test_legacy_db_gets_event_id_column(tmp_path, monkeypatch):
-    """Pre-2.3 SQLite DB has no event_id column on bugs. init_db must
+    """A legacy SQLite DB with no event_id column on bugs: init_db must
     ALTER TABLE ADD COLUMN it (nullable) without losing data."""
     import sqlite3
     db_file = tmp_path / "legacy.db"

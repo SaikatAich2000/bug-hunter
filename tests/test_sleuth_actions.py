@@ -1,9 +1,7 @@
-"""
-Validates the write-side of the assistant: action plans, confirmation
-flow, permission denial, audit trail, pronoun resolution, and atomicity.
+"""Tests the write side of the assistant: action plans, confirmation flow,
+permission denial, audit trail, pronoun resolution, and atomicity.
 
-Reuses the same temp-SQLite isolation as _chatbot_test.py.
-Run from bug-hunter root: python3 _action_test.py
+Uses self-contained temp-SQLite isolation.
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 
-# Force a fresh app import bound to THIS file's dedicated DB. Without this, an
+# Force a fresh app import bound to this file's dedicated DB. Without this, an
 # earlier-collected test module that already imported app.database leaves the
 # engine bound to a different (often torn-down) DB, so our seed()'s create_all
 # fails with "no such table" in the full-suite collection order.
@@ -165,8 +163,11 @@ def test_assign_flow() -> None:
         # Audit trail entry
         acts = list(db.query(models.Activity).filter_by(bug_id=bug1).all())
         check("assign — audit entry written",
-              any("Assignees" in (a.detail or "") for a in acts),
+              any("assignees" in (a.detail or "").lower() for a in acts),
               f"acts={[a.detail for a in acts]}")
+        check("assign — uses REST assignees_changed verb",
+              any(a.action == "assignees_changed" for a in acts),
+              f"actions={[a.action for a in acts]}")
     finally:
         db.close()
 

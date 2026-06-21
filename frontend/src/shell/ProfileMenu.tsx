@@ -51,6 +51,15 @@ export default function ProfileMenu() {
       danger: false,
     });
     if (!ok) return;
+    // Deregister this device's push token first (needs the still-valid session)
+    // so a logged-out or next user on a shared browser stops receiving the
+    // previous user's notifications. Best-effort; never blocks logout.
+    try {
+      const { unsubscribeOnLogout } = await import("../lib/push");
+      await unsubscribeOnLogout();
+    } catch {
+      /* push not configured / import failed — proceed with logout */
+    }
     try {
       await api("/auth/logout", { method: "POST" });
     } catch {

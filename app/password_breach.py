@@ -8,15 +8,15 @@ API:  GET https://api.pwnedpasswords.com/range/{PREFIX}
 Doc:  https://haveibeenpwned.com/API/v3#PwnedPasswords
 
 Behaviour:
-  - Default: enabled. Set PASSWORD_BREACH_CHECK_ENABLED=false to disable
-    in airgapped deploys (no outbound HTTPS) or test environments.
-  - Fail-OPEN on network error / timeout / non-200 response. We log a
-    warning and let the password through. Blocking legitimate password
-    changes because Cloudflare hiccuped would be worse than the rare
-    miss; the password still has to pass the local strength checks.
+  - Default: enabled. Set PASSWORD_BREACH_CHECK_ENABLED=false to disable in
+    airgapped deploys (no outbound HTTPS) or test environments.
+  - Fail-open on network error / timeout / non-200 response: log a warning and
+    let the password through. A transient API outage shouldn't block a
+    legitimate password change, and the password still has to pass the local
+    strength checks.
   - Short timeout (3 s) so a slow API doesn't slow every password set.
-  - Add-Padding: true so the response size is constant — the server
-    can't infer the prefix's true hit-count from the byte count.
+  - Add-Padding: true so the response size is constant and the server can't
+    infer the prefix's true hit-count from the byte count.
 
 Tests monkeypatch ``_fetch_range`` to return a controlled response.
 """
@@ -34,9 +34,9 @@ _API_URL = "https://api.pwnedpasswords.com/range/"
 _TIMEOUT_SECONDS = 3.0
 
 # Backwards-compat exception, mirroring app/schemas._check_password_strength:
-# 'changeme' (case-insensitive) is the legacy default password baked into many
-# existing deployments and the production DB. It is ALWAYS accepted, so the
-# breach gate must whitelist it even though it is (obviously) in the corpus.
+# 'changeme' (case-insensitive) is the default password present in many
+# existing deployments. It is always accepted, so the breach gate must
+# whitelist it even though it is in the corpus.
 _ALWAYS_ALLOWED = frozenset({"changeme"})
 
 

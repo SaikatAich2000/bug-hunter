@@ -57,7 +57,7 @@ def _logout(client):
 
 
 # ===========================================================================
-# 1. BUG DELETION — admin-only
+# 1. Bug deletion — admin-only
 # ===========================================================================
 class TestBugDeletePermissions:
     def test_admin_can_delete_bug(self, admin_client):
@@ -67,7 +67,7 @@ class TestBugDeletePermissions:
         assert r.status_code == 200
 
     def test_manager_cannot_delete_bug(self, admin_client):
-        """v3.1 change: managers used to be allowed; now blocked."""
+        """Managers cannot delete a bug."""
         p = _make_project(admin_client, name="DelProj2")
         bug = _make_bug(admin_client, p["id"], title="manager must not delete me")
         _make_user(admin_client, name="Mgr", email="mgr1@x.com",
@@ -102,7 +102,7 @@ class TestBugDeletePermissions:
 
 
 # ===========================================================================
-# 2. BUG EDIT / REASSIGN — every user can edit any bug
+# 2. Bug edit / reassign — every user can edit any bug
 # ===========================================================================
 class TestBugEditPermissions:
     def test_user_can_edit_someone_elses_bug(self, admin_client):
@@ -153,11 +153,11 @@ class TestBugEditPermissions:
 
 
 # ===========================================================================
-# 3. PROJECTS — admin-only delete
+# 3. Projects — admin-only delete
 # ===========================================================================
 class TestProjectDeletePermissions:
     def test_manager_cannot_delete_project(self, admin_client):
-        """v3.1: project delete is admin-only. Manager used to be allowed."""
+        """Project delete is admin-only; a manager is blocked."""
         p = _make_project(admin_client, name="MgrCannotDel")
         _make_user(admin_client, name="Mgr2", email="mgr2@x.com",
                    role="manager", password="Mgr2_abc99")
@@ -195,7 +195,7 @@ class TestProjectDeletePermissions:
 
 
 # ===========================================================================
-# 4. USERS — manager can manage but not delete; no admin role for managers
+# 4. Users — manager can manage but not delete; no admin role for managers
 # ===========================================================================
 class TestUserManagementPermissions:
     def test_manager_can_create_and_edit_user(self, admin_client):
@@ -265,7 +265,7 @@ class TestUserManagementPermissions:
 
 
 # ===========================================================================
-# 5. AUDIT — hidden from regular users
+# 5. Audit — hidden from regular users
 # ===========================================================================
 class TestAuditVisibility:
     def test_audit_403_for_user(self, user_client):
@@ -286,11 +286,11 @@ class TestAuditVisibility:
 
 
 # ===========================================================================
-# 6. SESSIONS — admin-only list + revoke
+# 6. Sessions — admin-only list + revoke
 #
-# These tests need genuinely-separate clients (the conftest fixtures all
-# share one TestClient). We make our own with the FastAPI TestClient and
-# the running app instance so each "device" has its own cookie jar.
+# These tests need separate clients (the conftest fixtures all share one
+# TestClient). We make our own with the FastAPI TestClient and the running
+# app instance so each "device" has its own cookie jar.
 # ===========================================================================
 def _new_client():
     """Build a brand-new TestClient against the same already-running app
@@ -383,7 +383,7 @@ class TestSessionsAdmin:
         assert "log out" in r.json()["detail"].lower()
 
     def test_admin_can_revoke_their_own_OTHER_session(self, admin_client):
-        """If admin is logged in on two devices, they can revoke the OTHER
+        """If admin is logged in on two devices, they can revoke the other
         device while keeping the current one."""
         # Spin up a SECOND TestClient and log in as admin on it.
         other_dev = _new_client()
@@ -435,7 +435,7 @@ class TestSessionsAdmin:
 
 
 # ===========================================================================
-# 7. PASSWORD CHANGE — should re-establish session cleanly
+# 7. Password change — should re-establish session cleanly
 # ===========================================================================
 class TestPasswordChangeKeepsCurrentDevice:
     def test_change_password_keeps_current_session_works(self, admin_client):

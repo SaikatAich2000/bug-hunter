@@ -16,7 +16,7 @@ export type Role = "admin" | "manager" | "user";
 /** SPA-side main-view selector (frontend-only, no backend schema). */
 export type ViewName = "list" | "events" | "analytics" | "audit" | "sessions" | "reports";
 
-/** Minimum role required to OPEN a view. Single source of truth shared by the
+/** Minimum role required to open a view. Single source of truth shared by the
  *  Sidebar (which hides the nav button) and the Shell (which refuses to mount
  *  the view + fire its fetch) so the two can't drift. Views not listed are
  *  open to every authenticated user. The backend remains the real authority —

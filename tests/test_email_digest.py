@@ -6,8 +6,8 @@ Covers:
   - the lookback window (old operations age out instead of replaying)
   - undeliverable recipients are skipped and left un-stamped
   - main() is a no-op when EMAIL_DIGEST_ENABLED is off, and sends when on
-  - with the digest ON the per-operation work-item emails are suppressed,
-    while the password-reset email STILL sends immediately (security email)
+  - with the digest on the per-operation work-item emails are suppressed,
+    while the password-reset email still sends immediately (security email)
 
 All direct-DB: we seed notification rows on a real session and call the job
 in-process, capturing email_service.deliver(...) so no SMTP is touched.
@@ -180,7 +180,7 @@ def test_main_sends_when_enabled(admin_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Suppression of immediate work-item emails — but NOT security emails
+# Suppression of immediate work-item emails — but not security emails
 # ---------------------------------------------------------------------------
 def test_digest_on_suppresses_work_item_email_but_not_password_reset(
     admin_client, monkeypatch,
@@ -199,7 +199,7 @@ def test_digest_on_suppresses_work_item_email_but_not_password_reset(
     email_service.notify_bug_created(snap, actor_user_id=None)
     assert sent == []
 
-    # Security/transactional email is NOT suppressed — it must send now.
+    # Security/transactional email is not suppressed — it must send now.
     email_service.notify_password_reset("user@test.local", "User", "https://x/reset")
     assert len(sent) == 1
     assert "Reset your password" in sent[0][0]
@@ -207,8 +207,8 @@ def test_digest_on_suppresses_work_item_email_but_not_password_reset(
 
 def test_immediate_era_operations_are_never_later_digested(admin_client, monkeypatch):
     """The 'only new, never old' guarantee: an operation recorded while the
-    digest was OFF is born already-emailed (emailed_at stamped), so turning the
-    digest ON later never re-sends it."""
+    digest was off is born already-emailed (emailed_at stamped), so turning the
+    digest on later never re-sends it."""
     _enable_digest(monkeypatch, on=False)  # immediate mode when the op happens
     from app import notification_service
     from app.models import _utcnow
@@ -230,8 +230,8 @@ def test_immediate_era_operations_are_never_later_digested(admin_client, monkeyp
 
 
 def test_digest_era_operations_are_picked_up(admin_client, monkeypatch):
-    """Counterpart: an operation recorded while the digest is ON is left
-    un-emailed (emailed_at NULL) and the daily job carries it."""
+    """An operation recorded while the digest is on is left un-emailed
+    (emailed_at NULL) and the daily job carries it."""
     _enable_digest(monkeypatch, on=True)
     from app import notification_service
     from app.models import _utcnow

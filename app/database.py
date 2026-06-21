@@ -33,10 +33,9 @@ def _build_engine(url: str) -> Engine:
             future=True,
         )
 
-        # SQLite ships with FK enforcement OFF by default. We turn it on
-        # for every new connection so ON DELETE CASCADE / SET NULL clauses
-        # actually fire — without this, deleting a user wouldn't clean up
-        # bug_assignees rows on SQLite.
+        # SQLite ships with FK enforcement off by default; enable it for every
+        # new connection so ON DELETE CASCADE / SET NULL clauses fire. Without
+        # this, deleting a user wouldn't clean up bug_assignees rows on SQLite.
         @event.listens_for(eng, "connect")
         def _enable_sqlite_fk(dbapi_conn, _):
             cursor = dbapi_conn.cursor()
@@ -116,9 +115,9 @@ def _column_names(inspector, table: str) -> set[str]:
 
 def _add_column_safely(conn, sql: str) -> None:
     """Run one additive ALTER inside a SAVEPOINT so one table's failure can't
-    roll back the other additive columns (mirrors _create_index_safely). The
-    pass is best-effort and idempotent — a column that already exists or a
-    transient error is logged and skipped, not fatal to boot."""
+    roll back the other additive columns (mirrors _create_index_safely).
+    Best-effort and idempotent: a column that already exists or a transient
+    error is logged and skipped, not fatal to boot."""
     from sqlalchemy import text
     try:
         with conn.begin_nested():
@@ -129,14 +128,14 @@ def _add_column_safely(conn, sql: str) -> None:
 
 
 def _add_missing_columns(conn) -> None:
-    """ALTER-ADD any NEW columns the model declares but an existing DB lacks.
+    """ALTER-ADD any columns the model declares but an existing DB lacks.
 
-    SQLAlchemy's create_all() never alters an existing table, so a column
-    added in a later release would never appear on a production database. This
-    pass closes that gap. It is strictly ADDITIVE — nothing is dropped, altered
-    or renamed — and every new column is safe to add to a populated table
-    (NULLABLE, or NOT NULL with a column-level DEFAULT so existing rows get a
-    value at the DB level). Runs BEFORE the index pass since new composite
+    SQLAlchemy's create_all() never alters an existing table, so a column added
+    in a later release would never appear on a populated database; this pass
+    closes that gap. It is strictly additive — nothing is dropped, altered or
+    renamed — and every new column is safe to add to a populated table
+    (nullable, or NOT NULL with a column-level default so existing rows get a
+    value at the DB level). Runs before the index pass since new composite
     indexes may reference these columns.
     """
     from sqlalchemy import inspect
@@ -154,18 +153,16 @@ def _add_missing_columns(conn) -> None:
         # session-level relationship enforces referential integrity in code.
         _add_column_safely(conn, "ALTER TABLE bugs ADD COLUMN event_id INTEGER")
 
-    # bugs.version — optimistic-concurrency counter added in the stale-edit
-    # hardening release. NOT NULL with a DEFAULT so every existing row gets 1 at
-    # the DB level without a backfill pass.
+    # bugs.version — optimistic-concurrency counter. NOT NULL with a default so
+    # every existing row gets 1 at the DB level without a backfill pass.
     if bug_cols and "version" not in bug_cols:
         _add_column_safely(conn,
             "ALTER TABLE bugs ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
-    # notifications.emailed_at — added in the daily-email-digest release.
-    # Nullable timestamp; existing rows get NULL, and the digest job's lookback
-    # window keeps that historical backlog from ever being replayed. tz-aware
-    # type on Postgres to match the ORM column; SQLite is dynamically typed so
-    # a plain TIMESTAMP is fine there.
+    # notifications.emailed_at — nullable timestamp; existing rows get NULL,
+    # and the digest job's lookback window keeps that historical backlog from
+    # being replayed. tz-aware type on Postgres to match the ORM column; SQLite
+    # is dynamically typed so a plain TIMESTAMP is fine there.
     notif_cols = _column_names(inspector, "notifications")
     if notif_cols and "emailed_at" not in notif_cols:
         tstype = (
@@ -219,14 +216,14 @@ def _create_index_safely(conn, idx, table_name: str) -> None:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist, then ADD any missing columns and
-    indexes the model declares. Idempotent — safe to call on every boot.
+    """Create tables if they don't exist, then add any missing columns and
+    indexes the model declares. Idempotent and safe to call on every boot.
 
     SQLAlchemy's `create_all()` skips tables that already exist (and their
     columns/indexes), so columns/indexes added in a later release would never
-    appear on a long-running production database. The two follow-up passes
-    close that gap. This is strictly ADDITIVE: nothing is dropped, altered or
-    renamed, and existing data is never touched.
+    appear on a long-running database. The two follow-up passes close that gap.
+    This is strictly additive: nothing is dropped, altered or renamed, and
+    existing data is never touched.
     """
     # Local import avoids circular import at module load.
     from app import models  # noqa: F401  (registers tables on Base.metadata)

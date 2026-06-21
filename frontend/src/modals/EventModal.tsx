@@ -115,7 +115,7 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
       }
       onClose={onClose}
     >
-      <form id="formEvent" className="modal-body" noValidate onSubmit={submit}>
+      <form id="formEvent" className="modal-body" onSubmit={submit}>
         <input type="hidden" name="id" value={event ? String(event.id) : ""} readOnly />
         <label className="field">
           <span>

@@ -1,15 +1,15 @@
 """Sleuth document-ingest — the admin "upload a doc full of bugs" feature.
 
-This is Sleuth's one deliberate WRITE surface, and it is **admin-only** (the
-route in router.py enforces it). An admin uploads a document listing bugs and
-Sleuth turns each entry into a real work item, with the same validation +
-audit trail as the REST create endpoint.
+Sleuth's one write surface, admin-only (enforced by the route in router.py).
+An admin uploads a document listing bugs and Sleuth turns each entry into a
+work item, with the same validation and audit trail as the REST create
+endpoint.
 
 Two extraction paths, in order of preference:
 
   1. AI — when the cloud assistant is configured (SLEUTH_CLOUD_ENABLED + a key),
      the raw text is handed to the model, which returns a structured list of
-     bug specs. This is the "Sleuth AI analyzes the document" path.
+     bug specs.
 
   2. Deterministic parser — always available, no network. Understands xlsx,
      JSON, CSV and free-form text / markdown (one bug per line / bullet /
@@ -17,9 +17,9 @@ Two extraction paths, in order of preference:
 
 Both paths converge on the same cleaned `spec` shape, so the rest of the
 pipeline (validation, creation, audit) is identical regardless of how the
-document was read. The AI is an enhancement layered on top of a parser that
-fully stands on its own — so the feature works on a box with no API key, and
-the test-suite covers it without ever making a network call.
+document was read. The parser works without an API key, so the feature works
+on a box with no cloud access and the test suite covers it without a network
+call.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ MAX_DOC_BYTES = 5 * 1024 * 1024  # 5 MB of text/spreadsheet is plenty
 
 
 # ---------------------------------------------------------------------------
-# Synonym maps — make the parser forgiving of however the admin wrote the doc.
+# Synonym maps — let the parser accept various spellings of priority/type/env.
 # ---------------------------------------------------------------------------
 _PRIORITY_SYNONYMS = {
     "critical": "Critical", "blocker": "Critical", "p0": "Critical", "urgent": "Critical",
@@ -94,7 +94,7 @@ def _norm_from(value: Any, synonyms: dict[str, str], allowed: list[str], default
 
 def _first_key(row: dict, keys: tuple[str, ...]) -> Any:
     """First present, non-empty value among `keys` for a dict whose own keys may
-    be any case AND may be multi-word ("Bug Summary", "Sev."). We match exactly
+    be any case and may be multi-word ("Bug Summary", "Sev."). Match exactly
     first, then fall back to a word-level contains check (in `keys` priority
     order) so real-world column headers map to the right field."""
     low = {str(k).strip().lower(): v for k, v in row.items()}
@@ -352,8 +352,8 @@ def _document_text(filename: str, raw: bytes) -> str:
 
 def extract_specs(filename: str, raw: bytes) -> tuple[list[dict], str]:
     """Top-level extraction: let the AI read the document first (it handles
-    headers, messy layouts and prose far better than the parser), falling back
-    to the deterministic parser when the AI layer is off or unhelpful. Returns
+    headers, messy layouts and prose better than the parser), falling back to
+    the deterministic parser when the AI layer is off or unhelpful. Returns
     (specs, method) where method is 'ai' or 'parser'."""
     text = _document_text(filename, raw)
     if text.strip():

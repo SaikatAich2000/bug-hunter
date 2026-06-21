@@ -3,6 +3,7 @@
 // No inline scripts/styles (strict CSP); the theme bootstrap lives in main.tsx.
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { PASSWORD_HINT, validatePassword } from "../lib/constants";
 
 type AlertKind = "error" | "success";
 
@@ -38,8 +39,9 @@ export default function ResetPage() {
       setResetAlert({ msg: "Passwords don't match", kind: "error" });
       return;
     }
-    if (newPw.length < 8) {
-      setResetAlert({ msg: "Password must be at least 8 characters", kind: "error" });
+    const pwErr = validatePassword(newPw);
+    if (pwErr) {
+      setResetAlert({ msg: pwErr, kind: "error" });
       return;
     }
 
@@ -56,12 +58,28 @@ export default function ResetPage() {
           location.replace("/login.html");
         }, 1500);
       } else {
-        // Take {detail} as-is, falling back on parse failure or a falsy detail.
+        // Render the error legibly. /api/auth/reset-password returns 422 with
+        // `detail` as an ARRAY of Pydantic error objects when the new password
+        // fails the server-side strength/blocklist checks (reachable because the
+        // client only enforces length>=8). The old `String(detail)` produced
+        // "[object Object]" for that case, masking the real reason and blocking
+        // a legitimate reset.
         let msg = "Reset failed";
         try {
           const detail: unknown = ((await res.json()) as { detail?: unknown }).detail;
-          if (detail) {
-            msg = typeof detail === "string" ? detail : String(detail);
+          const asText = (v: unknown): string =>
+            typeof v === "string" ? v : JSON.stringify(v);
+          if (Array.isArray(detail)) {
+            const parts = detail
+              .map((e) =>
+                e && typeof e === "object" && "msg" in e
+                  ? asText((e as { msg: unknown }).msg)
+                  : asText(e),
+              )
+              .filter(Boolean);
+            if (parts.length) msg = parts.join(", ");
+          } else if (typeof detail === "string" && detail) {
+            msg = detail;
           }
         } catch {
           /* non-JSON error body — keep the fallback message */
@@ -105,7 +123,7 @@ export default function ResetPage() {
               autoFocus
               disabled={noToken}
             />
-            <small className="hint">At least 8 characters</small>
+            <small className="hint">{PASSWORD_HINT}</small>
           </label>
           <label className="field">
             <span>

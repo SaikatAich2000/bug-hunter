@@ -1,13 +1,10 @@
 """Stats / analytics API.
 
-KPI strip on the dashboard now shows:
-    Total | Open | Resolved | Closed | Resolve Later
+The dashboard KPI strip shows: Total | Open | Resolved | Closed | Resolve Later.
 
-Important: "Not a Bug" rows are explicitly EXCLUDED from the `bugs` total
-because the product owner clarified that "Not a Bug" means the report
-turned out not to be a bug at all, and therefore should not be counted.
-The DB still keeps those rows around for audit / history; we just hide
-them from the headline total.
+"Not a Bug" rows are excluded from the `bugs` total since they represent
+reports that turned out not to be bugs. The rows are kept in the DB for audit /
+history but hidden from the headline total.
 """
 from __future__ import annotations
 
@@ -21,6 +18,11 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Bug, Event, Project, User, bug_assignees
+from app.reports.engine import (
+    OPEN_STATUSES_BY_TYPE,
+    RESOLVED_STATUSES_BY_TYPE,
+    _utc_date,
+)
 from app.schemas import EXCLUDED_FROM_TOTAL_STATUSES, StatsOut
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -30,8 +32,8 @@ _VALID_TYPES = {"Bug", "Requirement", "Task"}
 
 def _by_project_stmt(item_type: Optional[str], status_filter: list[str]):
     """Bugs-per-project, scoped to item_type + status. Uses an OUTER join so
-    projects with zero matching items still appear with count 0 — that means
-    every scope predicate goes on the JOIN condition, not a WHERE clause."""
+    projects with zero matching items still appear with count 0, which means
+    every scope predicate goes on the join condition, not a WHERE clause."""
     join_cond = Bug.project_id == Project.id
     if item_type is not None:
         join_cond &= Bug.item_type == item_type
@@ -47,8 +49,8 @@ def _by_project_stmt(item_type: Optional[str], status_filter: list[str]):
 
 def _by_assignee_stmt(item_type: Optional[str], status_filter: list[str]):
     """Top-10 assignees by item count, scoped to item_type + status. The Bug
-    table is only joined when a scope is active (the unscoped path counts pure
-    assignment rows, the cheaper query)."""
+    table is joined only when a scope is active; the unscoped path counts
+    assignment rows directly."""
     stmt = (
         select(User.id, User.name, User.email, func.count(bug_assignees.c.bug_id))
         .join(bug_assignees, bug_assignees.c.user_id == User.id)
@@ -72,14 +74,18 @@ def _timeline_14d(db: Session, scoped_f):
     today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=13)
     # Sargable filter: compare the raw column to a datetime boundary so the
-    # index on bugs.created_at can be used (wrapping the column in func.date()
-    # would force a full scan). func.date() stays only in SELECT/GROUP BY.
+    # index on bugs.created_at can be used; wrapping the column in func.date()
+    # would force a full scan, so func.date() stays only in SELECT/GROUP BY.
     start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
+    # UTC-bucket the day: func.date of a timestamptz uses the session TZ on
+    # Postgres, shifting the timeline by a day for a non-UTC session, so
+    # _utc_date forces UTC to match the window keys built below.
+    day_col = _utc_date(db, Bug.created_at)
     rows = db.execute(
         scoped_f(
-            select(func.date(Bug.created_at), func.count(Bug.id))
+            select(day_col, func.count(Bug.id))
             .where(Bug.created_at >= start_dt)
-            .group_by(func.date(Bug.created_at))
+            .group_by(day_col)
         )
     ).all()
     counts_by_day: dict[str, int] = {}
@@ -91,6 +97,33 @@ def _timeline_14d(db: Session, scoped_f):
          "count": counts_by_day.get((start + timedelta(days=i)).isoformat(), 0)}
         for i in range(14)
     ]
+
+
+def _derive_kpis(
+    by_status_global: dict[str, int], item_type: Optional[str],
+) -> tuple[int, int, int, int]:
+    """Headline KPI counts (open, resolved, closed, resolve_later) for the
+    active scope. Per-type, so a Requirement's open/resolved use its own status
+    set (New/In Review/Approved -> open, Implemented -> resolved) and a Task's
+    its own (New/In Progress -> open, Done -> resolved). Closed and Resolve
+    Later are Bug-only concepts, so they're 0 off the Bug tab."""
+    if item_type and item_type != "Bug":
+        open_count = sum(
+            by_status_global.get(s, 0) for s in OPEN_STATUSES_BY_TYPE.get(item_type, [])
+        )
+        resolved_count = sum(
+            by_status_global.get(s, 0) for s in RESOLVED_STATUSES_BY_TYPE.get(item_type, [])
+        )
+        return open_count, resolved_count, 0, 0
+    open_count = sum(
+        by_status_global.get(s, 0) for s in ("New", "In Progress", "Reopened")
+    )
+    return (
+        open_count,
+        by_status_global.get("Resolved", 0),
+        by_status_global.get("Closed", 0),
+        by_status_global.get("Resolve Later", 0),
+    )
 
 
 @router.get("", response_model=StatsOut)
@@ -118,10 +151,8 @@ def stats(
     ),
 ) -> StatsOut:
     # The per-status KPIs are collapsed into a single GROUP BY status (one
-    # round-trip instead of five for the same data), and those counts are
-    # reused for the by_status breakdown to save another query. This keeps the
-    # endpoint at ~6 queries instead of the ~11 a naive per-status/per-
-    # dimension approach would issue.
+    # round-trip instead of five), and those counts are reused for the
+    # by_status breakdown to save another query.
 
     if item_type is not None and item_type not in _VALID_TYPES:
         raise HTTPException(
@@ -129,12 +160,12 @@ def stats(
             detail=f"item_type must be one of {sorted(_VALID_TYPES)}",
         )
 
-    # Normalize the status filter (drop blanks). Empty → no chart scoping.
+    # Normalize the status filter (drop blanks). Empty means no chart scoping.
     status_filter = [s for s in (status or []) if s]
 
     # Type-tab scoping: when item_type is set, every Bug-table aggregation
-    # filters on Bug.item_type. by_type and the Event count are always
-    # global — the tab badges rely on the unfiltered totals.
+    # filters on Bug.item_type. by_type and the Event count stay global, since
+    # the tab badges rely on the unfiltered totals.
     def _scoped(stmt):
         if item_type is not None:
             return stmt.where(Bug.item_type == item_type)
@@ -148,28 +179,25 @@ def stats(
             stmt = stmt.where(Bug.status.in_(status_filter))
         return stmt
 
-    # GLOBAL by_status (item_type scope only) — drives the headline KPI counts,
-    # which must stay total/toggleable regardless of the chart status filter.
+    # Global by_status (item_type scope only) drives the headline KPI counts,
+    # which stay total and toggleable regardless of the chart status filter.
     by_status_global: dict[str, int] = {}
     for status_name, cnt in db.execute(
         _scoped(select(Bug.status, func.count(Bug.id)).group_by(Bug.status))
     ).all():
         by_status_global[status_name] = int(cnt)
 
-    # Derive KPIs from the GLOBAL set. Total excludes the statuses the product
-    # owner said don't count as real bugs.
+    # Derive KPIs from the global set. Total excludes the statuses that don't
+    # count as real bugs.
     bug_count = sum(
         c for s, c in by_status_global.items() if s not in EXCLUDED_FROM_TOTAL_STATUSES
     )
-    open_count = sum(
-        by_status_global.get(s, 0) for s in ("New", "In Progress", "Reopened")
+    open_count, resolved_count, closed_count, resolve_later_count = _derive_kpis(
+        by_status_global, item_type,
     )
-    resolved_count = by_status_global.get("Resolved", 0)
-    closed_count = by_status_global.get("Closed", 0)
-    resolve_later_count = by_status_global.get("Resolve Later", 0)
 
-    # by_status CHART — filtered when a status filter is active, else the same
-    # single result set we already pulled for the KPIs (no extra query).
+    # by_status chart: filtered when a status filter is active, else the same
+    # result set already pulled for the KPIs (no extra query).
     if status_filter:
         by_status = {
             s: int(c)
@@ -180,13 +208,13 @@ def stats(
     else:
         by_status = by_status_global
 
-    # Kept for backward compatibility — the dashboard no longer renders these,
-    # but in-flight clients (older cached JS) may still try to read them.
+    # Kept for backward compatibility: the dashboard no longer renders these,
+    # but cached older clients may still read them.
     project_count = db.scalar(select(func.count(Project.id))) or 0
     user_count = db.scalar(select(func.count(User.id))) or 0
 
-    # Cast keys/values like by_status above (consistency + NULL-key safety): a
-    # bare dict() would leave raw DB ints and could surface a None key that the
+    # Cast keys/values like by_status above (consistency and NULL-key safety): a
+    # bare dict() would leave raw DB ints and could surface a None key the
     # dict[str, int] response model rejects.
     by_priority = {
         str(p): int(c)
@@ -200,11 +228,15 @@ def stats(
             _scoped_f(select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment))
         ).all()
     }
-    # by_type stays global so the tab-count badges stay correct regardless
-    # of which tab is active.
-    by_type = dict(db.execute(
-        select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type)
-    ).all())
+    # by_type stays global so the tab-count badges stay correct regardless of
+    # the active tab. Coerce keys/values (str()/int()) so a NULL item_type can't
+    # surface as a None key the dict[str, int] response model would reject.
+    by_type = {
+        str(t): int(c)
+        for t, c in db.execute(
+            select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type)
+        ).all()
+    }
     events_count = db.scalar(select(func.count(Event.id))) or 0
     by_type["Event"] = int(events_count)
 

@@ -21,6 +21,22 @@ from app.database import SessionLocal  # noqa: E402
 from app.chatbot import rag  # noqa: E402
 
 
+def _misconfig_reasons() -> list[str]:
+    """Reasons RAG indexing can't work at all (vs simply finding nothing)."""
+    from app.config import get_settings
+    s = get_settings()
+    reasons: list[str] = []
+    if not s.SLEUTH_RAG_ENABLED:
+        reasons.append("SLEUTH_RAG_ENABLED is off")
+    if not s.GEMINI_API_KEY:
+        reasons.append("GEMINI_API_KEY is empty")
+    try:
+        import chromadb  # noqa: F401
+    except ImportError:
+        reasons.append("chromadb is not installed")
+    return reasons
+
+
 def main() -> int:
     db = SessionLocal()
     try:
@@ -28,9 +44,16 @@ def main() -> int:
     finally:
         db.close()
     if n == 0:
-        print("Indexed 0 documents — is SLEUTH_RAG_ENABLED set, chromadb "
-              "installed, and GEMINI_API_KEY present?")
-        return 1
+        reasons = _misconfig_reasons()
+        if reasons:
+            # A genuine misconfiguration — fail so a cron/CI wrapper notices.
+            print("Indexed 0 documents — misconfigured: " + "; ".join(reasons))
+            return 1
+        # Correctly configured but nothing to index (new/empty DB, no docs).
+        # A no-op, not a failure: exit 0 so schedulers don't alert on an empty
+        # install.
+        print("Indexed 0 documents — nothing to index yet (empty corpus).")
+        return 0
     print(f"Indexed {n} documents into the Sleuth RAG store.")
     return 0
 

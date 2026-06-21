@@ -3,11 +3,11 @@
 These never hit the network — the provider calls are monkeypatched. They
 pin the safety contract:
 
-  - OFF by default (no key / flag => layer invisible).
-  - Data questions are answered by the SAME deterministic SQL path as the
+  - Off by default (no key / flag => layer invisible).
+  - Data questions are answered by the same deterministic SQL path as the
     rule engine — the model only picks the filter, so numbers are real and
-    identical to a direct rule query ("never guess").
-  - The cloud layer can NEVER initiate a write, even if the model emits a
+    identical to a direct rule query.
+  - The cloud layer can never initiate a write, even if the model emits a
     close/delete/assign canonical query.
   - Gemini failure falls back to OpenRouter.
   - Everything sent outbound is redacted first.
@@ -41,9 +41,9 @@ def _rebind_app_modules():
 
     The conftest `client` fixture purges every `app.*` entry from sys.modules
     (it does `del sys.modules[mod]` to force an engine re-import). Any test
-    running after one of those would otherwise hold a STALE `executor` /
+    running after one of those would otherwise hold a stale `executor` /
     `cloud_llm` / `engine`, while executor's internal `import cloud_llm`
-    resolves to a fresh generation — so a mock placed on our reference would
+    resolves to a fresh generation, so a mock placed on our reference would
     be invisible inside execute(), and the seeded DB (our engine) would differ
     from the one executor queries. Re-importing all of them together each test
     guarantees one consistent generation. (Production never purges modules;
@@ -128,7 +128,7 @@ def test_data_question_uses_real_sql_not_a_guess(db, enabled, monkeypatch):
     direct = executor.execute("open bugs", db, db.actor)
     assert cloud_resp is not None
     assert cloud_resp.intent.startswith("cloud_data:")
-    # Identical rows to the deterministic rule query → numbers are real.
+    # Identical rows to the deterministic rule query.
     cloud_tables = [b for b in cloud_resp.blocks if b.kind == "table"]
     direct_tables = [b for b in direct.blocks if b.kind == "table"]
     assert cloud_tables and direct_tables
@@ -194,9 +194,9 @@ def test_answer_mode_returns_conversational_text(db, enabled, monkeypatch):
 
 
 def test_cloud_preempts_weak_classifier_in_execute(db, enabled, monkeypatch):
-    # Regression for the "dumb chatbot" screenshot: a conversational message
-    # that the rules don't parse used to be caught by the classifier (a weak
-    # guess) before the AI. With cloud ON, execute() must return the AI answer.
+    # A conversational message the rules don't parse should reach the cloud
+    # layer rather than being caught by the weaker classifier. With cloud
+    # enabled, execute() returns the AI answer.
     _gemini_returns(monkeypatch,
                     '{"mode":"answer","text":"Happy to help with your bugs!"}')
     resp = executor.execute("be smart, not dumb", db, db.actor)
@@ -205,9 +205,9 @@ def test_cloud_preempts_weak_classifier_in_execute(db, enabled, monkeypatch):
 
 
 def test_ai_first_beats_greedy_rule_match(db, enabled, monkeypatch):
-    # Regression for the "Found 1 admins" screenshot: a conversational
-    # permissions question contains the word "admin", which the keyword rules
-    # greedily match to list_users. With cloud ON the AI must answer first.
+    # A conversational permissions question contains the word "admin", which
+    # the keyword rules greedily match to list_users. With cloud enabled the
+    # AI answers first.
     _gemini_returns(
         monkeypatch,
         '{"mode":"answer","text":"No - only an admin can revoke sessions, '

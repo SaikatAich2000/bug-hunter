@@ -1,7 +1,7 @@
-"""Tests for the v3.0 per-user in-app notifications feature.
+"""Tests for the per-user in-app notifications feature.
 
 Covers: trigger creation (assignment / report / comment / status update),
-per-user isolation (you only ever see/mutate your own), unread count,
+per-user isolation (each user only sees and mutates their own), unread count,
 mark-read / read-all, delete, unauthenticated rejection, and the additive
 schema (init_db twice leaves the table intact).
 """
@@ -84,8 +84,7 @@ def test_assignment_creates_notification_for_assignee(client):
 
 
 def test_self_assignment_notifies_actor(client):
-    """Assigning a work item to yourself still lands in your own bell — being
-    put on the hook is meaningful even when self-initiated."""
+    """Assigning a work item to yourself still creates a notification for you."""
     _admin(client)
     proj = _mk_project(client, "Self Proj")
     me = client.get("/api/auth/me").json()
@@ -96,8 +95,8 @@ def test_self_assignment_notifies_actor(client):
 
 
 def test_actor_is_not_notified_of_own_update(client):
-    """A self-made change that is NOT an assignment (e.g. a status edit) does
-    not notify the actor — only the assignment itself pings you."""
+    """A self-made change that is not an assignment (e.g. a status edit) does
+    not notify the actor; only the assignment itself notifies you."""
     _admin(client)
     proj = _mk_project(client, "Own Update Proj")
     me = client.get("/api/auth/me").json()
@@ -173,9 +172,8 @@ def test_event_create_notifies_managers_not_actor(client):
 
 
 def test_event_create_notifies_self_when_self_managed(client):
-    """Making YOURSELF a manager while creating an event still lights up your
-    own bell — being on the hook is meaningful even when self-assigned (mirrors
-    a bug self-assignment)."""
+    """Making yourself a manager while creating an event still creates a
+    notification for you (mirrors a bug self-assignment)."""
     _admin(client)
     me = client.get("/api/auth/me").json()
     ev = _mk_event(client, "My Own Standup", [me["id"]])

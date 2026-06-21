@@ -4,18 +4,18 @@ Public entry points:
   Filters.from_dict({...})        — parse a user-supplied filter blob.
   run_report(key, filters, db)    — run the named report, return ReportResult.
 
-Design notes:
+Notes:
 
-  * Every report respects the SAME Filters dataclass. Reports decide
-    which filters are meaningful (e.g. environment is Bug-only; a
-    "throughput by user" report ignores reporter_id).
-  * No new columns are added to the schema. "Who resolved this bug and
-    when" is derived from the activity_log table by parsing the detail
-    string written by routes/bugs.py::_persist_update (the format is a
-    stable contract — see RESOLUTION_DETAIL_RE below).
-  * The engine is pure read-side. No INSERT / UPDATE / DELETE.
+  * Every report uses the same Filters dataclass. Reports decide which filters
+    are meaningful (e.g. environment is Bug-only; a "throughput by user" report
+    ignores reporter_id).
+  * No new columns are added to the schema. "Who resolved this bug and when" is
+    derived from the activity_log table by parsing the detail string written by
+    routes/bugs.py::_persist_update (the format is a stable contract; see
+    RESOLUTION_DETAIL_RE below).
+  * The engine is read-only. No INSERT / UPDATE / DELETE.
   * Queries are eager-loaded where the result row needs related objects
-    (project / reporter / assignees) so we don't N+1 on the wire.
+    (project / reporter / assignees) to avoid N+1 queries.
 
 Per-item-type resolution map:
   Bug         → Resolved, Closed
@@ -90,6 +90,15 @@ RESOLUTION_DETAIL_RE = re.compile(
     r"status:\s*['‘’][^'‘’]*['‘’]\s*"
     r"[→—\->]+\s*"
     r"['‘’]([^'‘’]+)['‘’]",
+    re.IGNORECASE,
+)
+
+# Companion that captures the old (pre-arrow) status, so throughput can ignore
+# transitions between two already-resolved states (e.g. Resolved → Closed) and
+# credit only genuine open→resolved crossings; otherwise one real resolution
+# would be scored twice (and possibly to two different users).
+RESOLUTION_OLD_STATUS_RE = re.compile(
+    r"status:\s*['‘’]([^'‘’]*)['‘’]\s*[→—\->]+\s*['‘’][^'‘’]+['‘’]",
     re.IGNORECASE,
 )
 
@@ -457,15 +466,26 @@ def _is_open_status(status: str, item_type: str) -> bool:
 
 
 def _parse_resolution_status(detail: str) -> Optional[str]:
-    """Pull the NEW status from an activity_log detail string. Returns
+    """Pull the new status from an activity_log detail string. Returns
     None if the detail isn't a status_changed row or doesn't parse."""
     if not detail:
         return None
-    # The structured "status: 'old' → 'new'" clause is always the LAST segment
-    # of the detail line; a bug TITLE embedded earlier can itself contain a
-    # "status: 'x' → 'y'" lookalike, so take the RIGHTMOST match — otherwise a
-    # crafted title silently hides the item from every resolution report.
+    # The structured "status: 'old' → 'new'" clause is always the last segment
+    # of the detail line; a bug title embedded earlier can contain a
+    # "status: 'x' → 'y'" lookalike, so take the rightmost match, otherwise a
+    # crafted title would hide the item from every resolution report.
     matches = RESOLUTION_DETAIL_RE.findall(detail)
+    if not matches:
+        return None
+    return matches[-1].strip()
+
+
+def _parse_prior_status(detail: str) -> Optional[str]:
+    """Pull the old (pre-arrow) status from an activity_log detail string.
+    Rightmost match, for the same reason as _parse_resolution_status."""
+    if not detail:
+        return None
+    matches = RESOLUTION_OLD_STATUS_RE.findall(detail)
     if not matches:
         return None
     return matches[-1].strip()
@@ -475,10 +495,10 @@ def _fetch_resolution_info(
     db: Session,
     bug_ids: list[int],
 ) -> dict[int, tuple[Optional[str], Optional[datetime]]]:
-    """For each bug id, return (resolver_name, resolved_at) — the most
-    recent status_changed activity that transitioned the bug INTO a
-    resolved state for its item_type. Empty values when never resolved
-    (still open) or when no audit row matches.
+    """For each bug id, return (resolver_name, resolved_at): the most recent
+    status_changed activity that transitioned the bug into a resolved state
+    for its item_type. Empty values when never resolved or when no audit row
+    matches.
     """
     if not bug_ids:
         return {}
@@ -504,7 +524,7 @@ def _fetch_resolution_info(
     for bug_id, actor_name, created_at, detail, item_type, current_status in rows:
         if bug_id in seen:
             continue
-        # Only attribute a resolution when the bug is CURRENTLY resolved — a
+        # Only attribute a resolution when the bug is currently resolved: a
         # reopened (now-open) bug must not show a stale resolved_at / resolver
         # or an understated days_open in item-detail / project-breakdown.
         if not _is_resolved_status(current_status or "", item_type or "Bug"):
@@ -563,7 +583,7 @@ def _detail_cap() -> int:
 
     +1 over the configured MAX_REPORT_ROWS lets the export route detect "there
     were more" and return 413 instead of letting run_report build an unbounded
-    result (and the XLSX workbook from it) in RAM. EVERY report applies this to
+    result (and the XLSX workbook from it) in RAM. Every report applies this to
     its row/detail-producing query so the OOM guard can't be outrun.
     """
     return get_settings().MAX_REPORT_ROWS + 1
@@ -721,6 +741,12 @@ def _fold_throughput_row(
     it = item_type or "Bug"
     new_status = _parse_resolution_status(detail or "")
     if not new_status or not _is_resolved_status(new_status, it):
+        return
+    # Skip a transition that was already in a resolved state (e.g. a Bug going
+    # Resolved → Closed): it's not a new resolution, so crediting it would
+    # double-count one real resolution. Only open→resolved crossings count.
+    old_status = _parse_prior_status(detail or "")
+    if old_status and _is_resolved_status(old_status, it):
         return
     name = actor_name or "(deleted user)"
     # Keep distinct deleted users distinct: actor_user_id is NULL once a user is
@@ -1013,6 +1039,31 @@ def _report_aging(db: Session, filters: Filters) -> ReportResult:
     )
 
 
+def _utc_date(db: Session, col):
+    """``func.date()`` of a timestamp column, forced to UTC so per-day bucketing
+    lines up with the UTC window boundaries on BOTH backends. On Postgres
+    ``func.date(timestamptz)`` truncates in the SESSION timezone (which may not
+    be UTC), shifting created-vs-resolved counts by a day; coerce to UTC there.
+    SQLite stores naive-UTC, so plain ``func.date()`` is already UTC."""
+    try:
+        dialect = db.get_bind().dialect.name
+    except Exception:  # pragma: no cover - defensive; bind is always present in practice
+        dialect = ""
+    if dialect == "postgresql":
+        return func.date(func.timezone("UTC", col))
+    return func.date(col)
+
+
+def _utc_day_key(value) -> str:
+    """ISO date string of a timestamp normalized to UTC — matches _utc_date's
+    SQL bucketing so the Python-side resolved counts align with the created
+    counts and the zero-filled window keys."""
+    if isinstance(value, datetime):
+        v = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc).date().isoformat()
+    return value.isoformat()
+
+
 def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     """Per-day counts of created vs resolved within the window. If no
     date range is provided, defaults to the last 30 days."""
@@ -1028,7 +1079,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
         start = end - timedelta(days=_MAX_TIMELINE_DAYS)
     # Created: bugs.created_at in [start, end]
     created_stmt = _apply_bug_filters(
-        select(func.date(Bug.created_at), func.count(Bug.id)),
+        select(_utc_date(db, Bug.created_at), func.count(Bug.id)),
         Filters(
             date_from=start, date_to=end,
             item_types=filters.item_types, statuses=[],   # don't filter status
@@ -1041,7 +1092,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
             include_not_a_bug=filters.include_not_a_bug,
             text_search=filters.text_search,
         ),
-    ).group_by(func.date(Bug.created_at))
+    ).group_by(_utc_date(db, Bug.created_at))
     created_by_day = {str(d): int(c) for d, c in db.execute(created_stmt).all()}
     # Resolved: rely on the throughput query, then bucket per day.
     res_filters = Filters(
@@ -1058,7 +1109,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     )
     resolved_by_day: dict[str, int] = {}
     # Bound the resolved-side scan the same way every other report query is
-    # bounded — the 366-day window clamps the date span but NOT the number of
+    # bounded: the 366-day window clamps the date span but not the number of
     # status-change rows in it, so without this cap a busy instance streams the
     # entire activity history into memory here.
     res_rows = db.execute(
@@ -1069,7 +1120,10 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
          item_type, *_rest) in res_rows:
         ns = _parse_resolution_status(detail or "")
         if ns and _is_resolved_status(ns, item_type or "Bug"):
-            key = (created_at.date() if isinstance(created_at, datetime) else created_at).isoformat()
+            # Bucket on the UTC day to match the created side (_utc_date) and the
+            # UTC window keys below — otherwise created/resolved land on
+            # different days for a non-UTC session.
+            key = _utc_day_key(created_at)
             resolved_by_day[key] = resolved_by_day.get(key, 0) + 1
     rows: list[dict[str, Any]] = []
     day = start

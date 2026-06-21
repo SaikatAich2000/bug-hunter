@@ -14,10 +14,9 @@ import { activityIcon, formatDate } from "../lib/format";
 import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import type { AuditRow } from "../types";
 
-// Page the audit trail in smaller chunks (the "Load more" offset affordance
-// pulls the next page on demand). Loading thousands of detail-rich rows up
-// front was the largest single payload + serialization cost; 300/page keeps
-// the first paint light while staying well under the backend cap.
+// Page the audit trail in chunks; the "Load more" button pulls the next page
+// on demand. 300/page keeps the first paint light while staying under the
+// backend cap.
 const AUDIT_PAGE_SIZE = 300;
 
 // Each audit row is memoized so typing in the search box (which only changes
@@ -83,7 +82,14 @@ export default function AuditView() {
     try {
       const page = await api<AuditRow[]>(`/audit?${params.toString()}`);
       loadedCountRef.current += page.length;
-      setRows((prev) => (clean ? page : [...prev, ...page]));
+      // Appended pages can overlap rows already shown (offset paging over a
+      // table that grew under us), producing duplicate React keys. De-duplicate
+      // by id when appending, dropping any row whose id is already present.
+      setRows((prev) => {
+        if (clean) return page;
+        const seen = new Set(prev.map((r) => r.id));
+        return [...prev, ...page.filter((r) => !seen.has(r.id))];
+      });
       setDrained(page.length < AUDIT_PAGE_SIZE);
     } catch (err) {
       toastError(err);

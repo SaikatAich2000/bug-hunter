@@ -1,15 +1,14 @@
-"""Tests for the v3.3 Sleuth admin document-ingest feature (conversational).
+"""Tests for the Sleuth admin document-ingest feature (conversational).
 
-The flow is deliberately two-step and NEVER auto-creates on upload:
-  1. POST /api/chat/ingest reads the document and STAGES the candidate items,
-     replying with a preview ("found N — reply 'create them'"). Nothing is
-     created yet.
+The flow is two-step and does not auto-create on upload:
+  1. POST /api/chat/ingest reads the document and stages the candidate items,
+     replying with a preview. Nothing is created yet.
   2. A follow-up chat ("create them" / "yes") creates the staged items; "cancel"
      discards them.
 
-Two layers are covered: the endpoint + executor flow, and the parser
-(app/chatbot/ingest.py) unit-tested directly for full branch coverage including
-the fuzzy column-name matching that makes real-world spreadsheets read well.
+Covers two layers: the endpoint plus executor flow, and the parser
+(app/chatbot/ingest.py) unit-tested directly, including the fuzzy column-name
+matching used to read real-world spreadsheets.
 """
 from __future__ import annotations
 
@@ -96,7 +95,7 @@ def test_upload_previews_without_creating(admin_client):
     j = _upload(admin_client, "bugs.txt", doc, "text/plain", proj["id"])
     assert j["intent"] == "ingest_preview"
     assert len(_table_rows(j)) == 3
-    # NOTHING created yet.
+    # Nothing created yet.
     assert admin_client.get(f"/api/bugs?project_id={proj['id']}").json()["total"] == 0
 
 
@@ -136,7 +135,7 @@ def test_create_more_than_50_shows_remainder(admin_client):
 
 
 def test_create_them_without_a_staged_doc_is_not_an_ingest(admin_client):
-    # No upload first → "create them" is NOT treated as an ingest-create.
+    # No upload first, so "create them" is not treated as an ingest-create.
     r = admin_client.post(_ASK, json={"message": "create them"})
     assert r.json()["intent"] not in ("ingest_done", "ingest_cancelled")
 
@@ -163,7 +162,7 @@ def test_csv_with_header_previews(admin_client):
     assert j["intent"] == "ingest_preview"
     rows = _table_rows(j)
     assert ["Dark mode", "Low", "Requirement"] in rows
-    # header row is NOT one of the items
+    # header row is not one of the items
     assert not any(r[0].lower() == "title" for r in rows)
 
 
@@ -180,8 +179,8 @@ def test_json_array_previews(admin_client):
 
 
 def test_xlsx_nonstandard_header_not_treated_as_item(admin_client):
-    # The reported bug: an Excel sheet whose header words don't exactly match —
-    # the header must NOT become an item, and the columns still map.
+    # An Excel sheet whose header words don't exactly match: the header must not
+    # become an item, and the columns still map.
     proj = _mk_project(admin_client, "XlsxProj")
     data = _xlsx_bytes([["Bug Summary", "Sev"], ["Login fails on Safari", "Critical"],
                         ["Checkout total wrong", "High"]])
@@ -191,7 +190,7 @@ def test_xlsx_nonstandard_header_not_treated_as_item(admin_client):
     titles = [r[0] for r in rows]
     assert "Login fails on Safari" in titles
     assert "Bug Summary" not in titles          # header skipped
-    assert ["Login fails on Safari", "Critical", "Bug"] in rows  # "Sev" → priority
+    assert ["Login fails on Safari", "Critical", "Bug"] in rows  # "Sev" maps to priority
 
 
 def test_upload_defaults_to_first_project(admin_client):
@@ -235,7 +234,7 @@ def test_large_preview_truncates(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# AI extraction path (stubbed, no network) — incl. reading an xlsx as text
+# AI extraction path (stubbed, no network), including reading an xlsx as text
 # ---------------------------------------------------------------------------
 def test_ingest_uses_ai_when_available(admin_client, monkeypatch):
     import app.chatbot.cloud_llm as cloud
@@ -263,7 +262,7 @@ def test_ai_reads_xlsx_as_text(admin_client, monkeypatch):
     data = _xlsx_bytes([["Title", "Pri"], ["Row one cell", "High"]])
     _upload(admin_client, "s.xlsx", data,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", proj["id"])
-    # The AI received the spreadsheet rendered as text (so it can read the rows).
+    # The AI receives the spreadsheet rendered as text so it can read the rows.
     assert "Row one cell" in captured["user"]
 
 
@@ -310,7 +309,7 @@ def test_parser_invalid_json_falls_through_to_lines(admin_client):
 
 def test_parser_csv_single_column_no_header(admin_client):
     from app.chatbot import ingest
-    # One column, no header word → every row is a title.
+    # One column, no header word, so every row is a title.
     specs = ingest.parse_document("x.csv", b"first only here\nsecond only here")
     assert [s["title"] for s in specs] == ["first only here", "second only here"]
 
@@ -322,7 +321,7 @@ def test_parser_csv_blank_rows_yield_nothing(admin_client):
 
 def test_parser_fuzzy_column_mapping(admin_client):
     from app.chatbot import ingest
-    # Multi-word headers map by word ("Bug Summary" → title, "Sev." → priority).
+    # Multi-word headers map by word ("Bug Summary" to title, "Sev." to priority).
     specs = ingest._rows_to_specs([["Bug Summary", "Sev."], ["My title row", "high"]])
     assert specs[0]["title"] == "My title row"
     assert specs[0]["priority"] == "High"
@@ -330,9 +329,9 @@ def test_parser_fuzzy_column_mapping(admin_client):
 
 def test_parser_fuzzy_column_skips_empty_cells(admin_client):
     from app.chatbot import ingest
-    # A leading, non-matching column with an EMPTY value forces the fuzzy
-    # matcher to skip a blank cell (ingest.py:108-109) before it reaches the
-    # word-matching column ("Bug Summary" → title) further along the row.
+    # A leading, non-matching column with an empty value forces the fuzzy
+    # matcher to skip a blank cell before it reaches the word-matching column
+    # ("Bug Summary" to title) further along the row.
     specs = ingest._rows_to_specs([["Notes", "Bug Summary"], ["", "My real title here"]])
     assert specs[0]["title"] == "My real title here"
 
@@ -392,8 +391,8 @@ def test_parser_xlsx_empty_sheet(admin_client):
 
 def test_document_text_empty_xlsx_returns_blank(admin_client):
     from app.chatbot import ingest
-    # An xlsx with no rows yields no text (ingest.py:347-348), so extract_specs
-    # won't feed an empty document to the AI layer.
+    # An xlsx with no rows yields no text, so extract_specs won't feed an empty
+    # document to the AI layer.
     assert ingest._document_text("x.xlsx", _xlsx_bytes([])) == ""
 
 
@@ -415,7 +414,7 @@ def test_document_text_for_text_file(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# create_bugs_from_specs (direct) — cap + project resolution
+# create_bugs_from_specs (direct): cap and project resolution
 # ---------------------------------------------------------------------------
 def test_create_from_specs_caps_and_resolves_default_project(admin_client, monkeypatch):
     from app.chatbot import ingest

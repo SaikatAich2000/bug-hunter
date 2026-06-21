@@ -1,7 +1,6 @@
-"""Global audit-trail endpoint — every action across the system.
+"""Global audit-trail endpoint.
 
-Hidden from regular users. Managers and admins can read the trail; everyone
-else gets 403."""
+Managers and admins can read the trail; everyone else gets 403."""
 from __future__ import annotations
 
 import re
@@ -40,30 +39,24 @@ def list_audit(
     entity_type: Optional[str] = None,
     actor_user_id: Optional[int] = None,
     q: Optional[str] = Query(default=None, max_length=200),
-    # The ceiling is 10 000 (a firm upper bound to keep the response size
-    # sane) so operators reviewing very old activity on long-running
-    # deployments can still reach it. The SPA asks for 5000 by default, with a
-    # "Load more" affordance for the rare case a user needs to dig further.
+    # Ceiling of 10000 bounds the response size; the SPA requests 5000 by
+    # default and offers a "Load more" control for older activity.
     limit: int = Query(default=5000, le=10000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: User = Depends(require_manager_or_admin),
 ) -> list[Activity]:
-    """Returns audit events filtered by entity, actor and a free-text search.
+    """Return audit events filtered by entity, actor and a free-text search.
 
-    The search query (`q`) is broad on purpose so operators can paste in
-    anything: bug numbers (`#42` / `42` / `bug 42`), user names, item
-    titles, actions, entity types, item types ("task", "requirement") —
-    they should all hit. We OR every plausible column together rather than
-    parsing the query into a structured form.
+    The search query (`q`) is matched broadly: bug numbers (`#42` / `42` /
+    `bug 42`), user names, item titles, actions, entity types, and item types
+    are all ORed together rather than parsed into a structured form.
 
-    Performance: searching by text needs the current bug title, which an
-    OUTER JOIN on bugs supplies for rows still linked to a live bug. The
-    join is added only when `q` is present, so plain paginated browsing
-    (the common case) doesn't pay for it. It is OUTER because most audit
-    rows aren't bug-related and even those that are may have been detached
-    (bug_id NULL) on bug delete — those rows still carry the original
-    title in `detail`."""
+    A text search needs the current bug title, supplied by an OUTER JOIN on
+    bugs that is added only when `q` is present, so plain paginated browsing
+    doesn't pay for it. The join is OUTER because most audit rows aren't
+    bug-related and bug-related rows may have been detached (bug_id NULL) on
+    bug delete; those rows still carry the original title in `detail`."""
     stmt = select(Activity)
     if entity_type:
         stmt = stmt.where(Activity.entity_type == entity_type)
@@ -87,10 +80,9 @@ def list_audit(
             # so typing the type word filters down to that flavor of item.
             Bug.item_type.ilike(like, escape="\\"),
         ]
-        # Numeric IDs — strip "#", "bug", "issue", "ticket" prefixes so
-        # "#42", "bug 42" and "ticket #42" all behave like a search for
-        # entity_id = 42. We OR a `cast(entity_id) LIKE` clause too so
-        # partial-id searches ("4" → 4, 40, 41, …, 422) still work.
+        # Numeric IDs: extract the digit run so "#42", "bug 42" and
+        # "ticket #42" all search for entity_id = 42. A cast(entity_id) LIKE
+        # clause is ORed in so partial-id searches ("4" -> 4, 40, 41, 422) work.
         digits_match = re.search(r"\d+", raw)
         if digits_match:
             digits = digits_match.group(0)
@@ -102,9 +94,8 @@ def list_audit(
                 clauses.append(Activity.entity_id == entity_id_val)
                 # Also catch rows still attached to the bug via bug_id.
                 clauses.append(Activity.bug_id == entity_id_val)
-            # Substring match on the entity_id column as text — lets the
-            # user type "4" and find ids 4, 40, 41, … (handy when they
-            # half-remember a bug number).
+            # Substring match on the entity_id column as text, so typing "4"
+            # finds ids 4, 40, 41, and so on.
             digit_like = f"%{_like_escape(digits)}%"
             clauses.append(cast(Activity.entity_id, String).ilike(digit_like, escape="\\"))
         stmt = stmt.where(or_(*clauses))

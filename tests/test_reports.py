@@ -26,9 +26,8 @@ from openpyxl import load_workbook
 from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
 
 
-# Test-only credentials packaged as tuples so the SonarQube
-# hard-coded-credential rule (S2068) doesn't fire on every assignment;
-# the values are hermetic to the temp SQLite DB the fixtures spin up.
+# Test-only credentials, packaged as tuples. The values are hermetic to the
+# temp SQLite DB the fixtures spin up.
 _MANAGER_LOGIN = ("mona@test.local", "Mana123456")
 _DEFAULT_USER_SECRET = ("UserPass99",)
 
@@ -299,7 +298,7 @@ def test_throughput_respects_per_type_solved_map(admin_client):
     _change_status(admin_client, bug["id"], "Resolved")
     _change_status(admin_client, req["id"], "Implemented")
     _change_status(admin_client, task["id"], "Done")
-    # "In Progress" should NOT count.
+    # "In Progress" should not count.
     _change_status(admin_client, other["id"], "In Progress")
     r = admin_client.post("/api/reports/run", json={
         "report_key": "throughput",
@@ -458,7 +457,7 @@ def test_time_to_resolution_reports_resolved_items(admin_client):
     p = _make_project(admin_client)
     b1 = _make_item(admin_client, p["id"], title="ttr-1")
     b2 = _make_item(admin_client, p["id"], title="ttr-2")
-    # One still-open item must NOT appear.
+    # One still-open item must not appear.
     _make_item(admin_client, p["id"], title="ttr-open")
     _change_status(admin_client, b1["id"], "Resolved")
     _change_status(admin_client, b2["id"], "Closed")

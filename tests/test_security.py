@@ -1,4 +1,4 @@
-"""Security tests covering the hardening items from the OWASP audit.
+"""Security tests covering the application's hardening features.
 
 Covers:
 
@@ -237,7 +237,7 @@ class TestBodySizeMiddleware:
         response = asyncio.run(middleware.dispatch(request, call_next))
         assert response.status_code == 400
         body = response.body.decode("utf-8")
-        assert "Content-Length" in body or "invalid" in body.lower()
+        assert "try again" in body.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ class TestXffTrustGate:
 
     def test_xff_ignored_when_trust_disabled(self, admin_client):
         # Default TRUST_PROXY_FORWARDED_FOR = False (see config.py).
-        # An X-Forwarded-For header on a login should NOT influence the
+        # An X-Forwarded-For header on a login should not influence the
         # session-row IP.
         admin_client.post("/api/auth/logout")
         res = admin_client.post(
@@ -439,8 +439,10 @@ class TestXffTrustGate:
         )
 
     def test_xff_honoured_when_trust_enabled(self, tmp_path, monkeypatch):
-        """With TRUST_PROXY_FORWARDED_FOR=true (set BEFORE app load),
-        the leftmost XFF entry is recorded on the session row."""
+        """With TRUST_PROXY_FORWARDED_FOR=true (set before app load), the
+        right-most XFF entry — the address the trusted proxy appended — is
+        recorded on the session row. The left-most entry is client-controlled
+        and must not be trusted."""
         import sys
         db_file = tmp_path / "xff.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
@@ -449,6 +451,7 @@ class TestXffTrustGate:
         monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
         monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "Admin1234")
         monkeypatch.setenv("TRUST_PROXY_FORWARDED_FOR", "true")
+        monkeypatch.setenv("TRUST_PROXY_HOP_COUNT", "1")
         for mod in list(sys.modules):
             if mod == "app" or mod.startswith("app."):
                 del sys.modules[mod]
@@ -460,12 +463,16 @@ class TestXffTrustGate:
             res = c.post(
                 "/api/auth/login",
                 json={"email": "admin@test.local", "password": "Admin1234"},
+                # "<attacker-forged>, <real proxy-appended peer>"
                 headers={"X-Forwarded-For": "198.51.100.7, 10.0.0.1"},
             )
             assert res.status_code == 200, res.text
             sessions = c.get("/api/sessions").json()
-            assert any(s["ip_address"] == "198.51.100.7" for s in sessions), (
-                f"XFF was NOT honoured despite TRUST=true: {sessions}"
+            assert any(s["ip_address"] == "10.0.0.1" for s in sessions), (
+                f"right-most XFF was NOT honoured despite TRUST=true: {sessions}"
+            )
+            assert not any(s["ip_address"] == "198.51.100.7" for s in sessions), (
+                f"client-controlled left-most XFF must NOT be trusted: {sessions}"
             )
 
 
@@ -650,12 +657,12 @@ class TestPasswordBreachCheck:
         return f"{digest[5:]}:9999\n"
 
     def test_unit_changeme_allowlisted_despite_breach_match(self):
-        """The legacy default 'changeme' is ALWAYS accepted (mirrors
-        schemas._check_password_strength), even though it is obviously in the
-        breach corpus — so the breach gate must whitelist it, case-insensitively
-        and before any network call."""
+        """The legacy default 'changeme' is always accepted (mirrors
+        schemas._check_password_strength), even though it is in the breach
+        corpus — so the breach gate must whitelist it, case-insensitively and
+        before any network call."""
         from app import password_breach
-        body = self._force_match("changeme")  # this body WOULD match its suffix
+        body = self._force_match("changeme")  # this body would match its suffix
         with mock.patch.object(password_breach, "_fetch_range", return_value=body) as m:
             assert password_breach.is_password_breached("changeme") is False
             assert password_breach.is_password_breached("CHANGEME") is False

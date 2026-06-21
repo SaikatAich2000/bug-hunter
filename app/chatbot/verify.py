@@ -21,7 +21,10 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 # Matches "#42", "bug 42", "bug #42", "issue 42", "issue #42" (case-insensitive).
-_CITE_RE = re.compile(r"(?:#|\bbug\s*#?|\bissue\s*#?)(\d{1,9})", re.IGNORECASE)
+# The trailing (?!\d) ensures a longer run (e.g. a 13-digit timestamp like
+# #1700000000000) is not truncated to its first 9 digits and mistaken for a
+# citation.
+_CITE_RE = re.compile(r"(?:#|\bbug\s*#?|\bissue\s*#?)(\d{1,9})(?!\d)", re.IGNORECASE)
 
 _CAVEAT = (
     "\n\n_Note: I could not ground {refs} in the records I retrieved — "

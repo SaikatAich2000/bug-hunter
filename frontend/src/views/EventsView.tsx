@@ -120,15 +120,22 @@ function itemMatchesAssignees(item: BugOut, assignees: Set<string>): boolean {
   return ids.some((id) => assignees.has(id));
 }
 
-function itemMatchesQuery(item: BugOut, q: string): boolean {
+function itemMatchesQuery(item: BugOut, q: string, idExact: boolean): boolean {
   if (!q) return true;
+  // A leading "#<n>" search targets the id specifically (exact match).
+  if (idExact) return String(item.id) === q;
   const hay = `${item.title || ""} ${item.description || ""}`.toLowerCase();
+  // Plain numeric text ORs an id match with a substring match.
   if (/^\d+$/.test(q)) return String(item.id) === q || hay.includes(q);
   return hay.includes(q);
 }
 
 function filterEventItems(items: BugOut[], f: EventDetailFilter): BugOut[] {
-  const q = (f.q || "").trim().toLowerCase().replace(/^#/, "");
+  const raw = (f.q || "").trim().toLowerCase();
+  // Detect (and strip) a leading "#<digits>" id search before normalizing.
+  const idMatch = /^#(\d+)$/.exec(raw);
+  const idExact = idMatch !== null;
+  const q = idExact ? idMatch[1] : raw.replace(/^#/, "");
   const statuses = new Set(f.status);
   const priorities = new Set(f.priority);
   const assignees = new Set(f.assignee_id.map(String));
@@ -137,7 +144,7 @@ function filterEventItems(items: BugOut[], f: EventDetailFilter): BugOut[] {
       (!statuses.size || statuses.has(b.status)) &&
       (!priorities.size || priorities.has(b.priority)) &&
       itemMatchesAssignees(b, assignees) &&
-      itemMatchesQuery(b, q),
+      itemMatchesQuery(b, q, idExact),
   );
 }
 
@@ -377,9 +384,9 @@ export default function EventsView() {
   const openedEventIdRef = useRef<number | null>(null);
   const openEventDetail = useCallback(async (eventId: number) => {
     if (openedEventIdRef.current !== eventId) {
-      // Opening a DIFFERENT event → drop the previous event's filters/search so
+      // Opening a different event drops the previous event's filters/search so
       // they don't carry over (and orphan an assignee chip absent from the new
-      // event). A same-event refresh (poll / after-save) keeps the filters.
+      // event). A same-event refresh (poll or after-save) keeps the filters.
       setDetailFilters(EMPTY_DETAIL_FILTER);
       setDetailQInput("");
     }
@@ -397,8 +404,8 @@ export default function EventsView() {
     }
   }, []);
 
-  // Silent detail refetch for the live poll — unlike openEventDetail it does
-  // NOT toggle detailLoading, so a background tick won't flash "Loading…"
+  // Silent detail refetch for the live poll. Unlike openEventDetail it does
+  // not toggle detailLoading, so a background tick won't flash "Loading…"
   // over the open table.
   const refreshDetailSilently = useCallback(async (id: number) => {
     try {
@@ -551,6 +558,20 @@ export default function EventsView() {
   }
   const statusOptions: [string, string][] = meta.statuses.map((s) => [s, s]);
   const priorityOptions: [string, string][] = meta.priorities.map((p) => [p, p]);
+
+  // Prune any selected assignee_id that no longer exists in the recomputed
+  // option pool (e.g. the only item they were on left the event), so the
+  // filter can't reference an orphaned id with no chip to clear it.
+  const assigneeOptionKey = assigneeOptions.map(([v]) => v).join(",");
+  useEffect(() => {
+    const valid = new Set(assigneeOptions.map(([v]) => v));
+    setDetailFilters((f) => {
+      if (f.assignee_id.every((id) => valid.has(id))) return f;
+      return { ...f, assignee_id: f.assignee_id.filter((id) => valid.has(id)) };
+    });
+    // assigneeOptionKey captures the option-set identity for the dep array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assigneeOptionKey]);
 
   const toggleDetailFilter = (key: "status" | "priority" | "assignee_id") => (value: string) => {
     setDetailFilters((f) => {

@@ -7,10 +7,9 @@
  *   controlled JSX.
  * - Output flows through the onChange prop and the getHtml()/setHtml()
  *   imperative handle; pasted files flow through the onPasteFile prop.
- * - execCommand appears only as a last-resort fallback. Every browser still
- *   implements it, and the primary paths here are manual DOM code for
- *   cross-browser correctness; those helpers are load-bearing and must not be
- *   "modernized".
+ * - execCommand appears only as a last-resort fallback. The primary paths are
+ *   manual DOM code for cross-browser correctness; those helpers are
+ *   load-bearing.
  * - Styling comes from the .bh-rt-* rules in styles.css (including the
  *   :empty::before data-placeholder empty-state).
  */
@@ -24,16 +23,18 @@ import {
 } from "react";
 import type {
   ClipboardEvent as ReactClipboardEvent,
+  DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
+import { fileTooLargeMessage } from "../lib/upload";
 import { toast } from "../lib/toast";
 
 // ---------------------------------------------------------------------------
-// Unsafe-file paste filter. Block anything whose extension or MIME would let
-// the user trick a colleague into opening a hostile payload from the
-// attachments grid. The list mirrors the Windows "potentially dangerous" set
-// plus the obvious cross-platform binaries.
+// Unsafe-file paste filter. Block extensions or MIME types that could let a
+// pasted attachment deliver an executable payload from the attachments grid.
+// The list mirrors the Windows "potentially dangerous" set plus common
+// cross-platform binaries.
 // ---------------------------------------------------------------------------
 const UNSAFE_EXTS = new Set<string>([
   "exe", "bat", "cmd", "com", "scr", "pif", "msi", "msp", "msc",
@@ -77,9 +78,9 @@ function describeError(err: unknown): string {
 // Editor constants
 // ---------------------------------------------------------------------------
 
-// Inline-style commands toggled via manual wrappers (Chrome 148 silently
-// no-ops execCommand("bold") inside certain stacking-context / overflow
-// ancestors, so Bold/Italic/Underline/Strike are pure DOM code).
+// Inline-style commands toggled via manual wrappers. execCommand("bold") can
+// silently no-op inside certain stacking-context / overflow ancestors, so
+// Bold/Italic/Underline/Strike are pure DOM code.
 const INLINE_TOGGLE: Record<string, string> = {
   bold: "b",
   italic: "i",
@@ -159,10 +160,10 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   const savedRangeRef = useRef<Range | null>(null);
 
   // Snapshot-based undo/redo state. Custom history instead of the browser's
-  // contenteditable undo stack because our toolbar helpers mutate the DOM
-  // directly (range.insertNode, createElement, ...) — those mutations are
-  // NOT recorded on the native undo stack, so Ctrl+Z would skip every
-  // formatting operation in between.
+  // contenteditable undo stack because the toolbar helpers mutate the DOM
+  // directly (range.insertNode, createElement, ...); those mutations are not
+  // recorded on the native undo stack, so Ctrl+Z would skip every formatting
+  // operation in between.
   const historyRef = useRef<HistoryState>({
     stack: [],
     idx: -1,
@@ -171,10 +172,10 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   });
 
   // Uncontrolled seeding: initialHtml is read once on mount; later changes to
-  // the prop (including `disabled`) are intentionally ignored. To change content
-  // or read-only state on an already-mounted editor, callers MUST use the
-  // imperative setHtml() handle or force a remount with a changing `key`
-  // (BugModal does both) — otherwise the surface would keep stale content.
+  // the prop (including `disabled`) are ignored. To change content or read-only
+  // state on an already-mounted editor, callers must use the imperative
+  // setHtml() handle or force a remount with a changing `key` (BugModal does
+  // both); otherwise the surface keeps stale content.
   const initialHtmlRef = useRef(initialHtml);
 
   // Latest-prop refs so DOM-driven callbacks never go stale.
@@ -189,16 +190,30 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // Empty heuristic: contenteditable inserts a leading <br> or empty <div>
   // when the user clears all text. Treat "<br>" / "<div><br></div>" as empty
-  // so length-1 validation downstream still rejects them.
+  // so length-1 validation downstream still rejects them. The inline-toggle
+  // path arms styling via a zero-width space (U+200B); a wrapper containing
+  // only ZWSP (and no <img>) is still empty, and .trim() does not remove ZWSP,
+  // so check it explicitly via textContent.
   const computeHtml = (): string => {
     const editor = editorRef.current;
     if (!editor) return "";
     const html = editor.innerHTML;
+    // If there's a real embedded image, it's never empty regardless of text.
+    const hasImg = editor.querySelector("img") !== null;
+    // textContent with ZWSP removed — this catches inline-only wrappers like
+    // "<b>​</b>" that the structural-tag strip below would miss.
+    const text = (editor.textContent ?? "").replace(/​/g, "").trim();
+    if (!hasImg && text === "") return "";
+    // Belt-and-braces: also treat pure structural scaffolding as empty.
     const stripped = html
+      .replace(/​/g, "")
       .replace(/<br\s*\/?>/gi, "")
       .replace(/<\/?(?:div|p)>/gi, "")
       .trim();
-    return stripped ? html : "";
+    if (!hasImg && stripped === "") return "";
+    // Non-empty: strip stray ZWSP from the persisted HTML (the caret-arming
+    // ZWSP is transient typing state).
+    return html.replace(/​/g, "");
   };
 
   const sync = (): void => {
@@ -395,11 +410,10 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- inline formatting ---------------------------------------------------
 
-  // For inline-style commands on a COLLAPSED caret, Chrome's typing-state
-  // model is fragile: the reliable cross-browser workaround is to manually
-  // toggle a wrapper element around a zero-width placeholder, then drop the
-  // caret inside it — the next character lands inside the wrapper and
-  // inherits its styling.
+  // For inline-style commands on a collapsed caret, the browser typing-state
+  // model is unreliable. The cross-browser workaround is to manually toggle a
+  // wrapper element around a zero-width placeholder, then drop the caret inside
+  // it, so the next character lands in the wrapper and inherits its styling.
   const toggleInlineAtCaret = (tag: string): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -409,11 +423,11 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (!editor.contains(r.commonAncestorContainer)) return false;
     if (!r.collapsed) return false; // the wrap path handles the non-empty case
     // Look for an existing wrapper of the same tag among the caret's
-    // ancestors. If found, "exit" it: insert a ZWSP text node AFTER the
-    // wrapper and place the caret after that ZWSP — unambiguously outside
-    // the wrapper, so subsequent typing lands in unstyled text. (Chrome
-    // greedily extends an adjacent inline element when the caret sits right
-    // after its close tag, so setStartAfter(<b>) alone isn't enough.)
+    // ancestors. If found, exit it: insert a ZWSP text node after the wrapper
+    // and place the caret after that ZWSP, unambiguously outside the wrapper,
+    // so subsequent typing lands in unstyled text. (Browsers greedily extend
+    // an adjacent inline element when the caret sits right after its close
+    // tag, so setStartAfter(<b>) alone isn't enough.)
     let n: Node | null = r.startContainer;
     while (n && n !== editor) {
       if (n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName.toLowerCase() === tag) {
@@ -428,8 +442,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       }
       n = n.parentNode;
     }
-    // Not in wrapper → insert `<tag>ZWSP</tag>` and put the caret BETWEEN
-    // the ZWSP and the end of the wrapper so the next key appears inside.
+    // Not in wrapper: insert `<tag>ZWSP</tag>` and put the caret between the
+    // ZWSP and the end of the wrapper so the next key appears inside.
     const wrapEl = document.createElement(tag);
     const zw = document.createTextNode(ZWSP);
     wrapEl.appendChild(zw);
@@ -442,10 +456,10 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     return true;
   };
 
-  // When the user clicks Bold (or Italic / Underline / Strike) with NO text
-  // selected but with content in the editor, the natural expectation is
-  // "make the word I just typed bold". This auto-selects the word at the
-  // caret. Returns true if a selection was made (or one already existed).
+  // When the user clicks Bold (or Italic / Underline / Strike) with no text
+  // selected but content in the editor, the expectation is to format the word
+  // just typed. This auto-selects the word at the caret. Returns true if a
+  // selection was made or one already existed.
   const selectWordAtCaret = (): boolean => {
     const s = window.getSelection();
     if (!s || s.rangeCount === 0) return false;
@@ -488,10 +502,9 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     return true;
   };
 
-  // Manual wrap/unwrap for inline styles — Chrome 148 silently no-ops
-  // document.execCommand("bold") inside certain stacking-context / overflow
-  // ancestors, so toggling Bold/Italic/Underline/Strike is done entirely in
-  // DOM code here.
+  // Manual wrap/unwrap for inline styles. document.execCommand("bold") can
+  // silently no-op inside certain stacking-context / overflow ancestors, so
+  // toggling Bold/Italic/Underline/Strike is done entirely in DOM code here.
   const applyInlineWrap = (tag: string): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -519,17 +532,20 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       const wrapEl = startAnc;
       const parent = wrapEl.parentNode;
       if (!parent) return false;
-      // Capture inner text so we can re-select it after unwrap.
-      const txt = wrapEl.textContent ?? "";
+      // Capture references to the first and last children before moving them
+      // out. Building the re-selection from these exact node refs is robust
+      // even when the unwrapped content has multiple children or the parent
+      // already had adjacent text.
+      const firstMoved = wrapEl.firstChild;
+      const lastMoved = wrapEl.lastChild;
       while (wrapEl.firstChild) parent.insertBefore(wrapEl.firstChild, wrapEl);
       wrapEl.remove();
-      // Re-select the unwrapped text so the user can re-toggle without
-      // re-selecting it manually.
-      const first = parent.firstChild;
-      if (first && first.nodeType === Node.TEXT_NODE && first.textContent === txt) {
+      // Re-select from the first moved node's start to the last moved node's
+      // end so the user can re-toggle without re-selecting manually.
+      if (firstMoved && lastMoved) {
         const re = document.createRange();
-        re.setStart(first, 0);
-        re.setEnd(first, txt.length);
+        re.setStartBefore(firstMoved);
+        re.setEndAfter(lastMoved);
         s.removeAllRanges();
         s.addRange(re);
       }
@@ -580,16 +596,43 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       }
       return null;
     })();
-    // Already in a LI of the same list type → unwrap to a <p>.
+    // Already in a LI of the same list type: unwrap to a <p>, splitting the
+    // list in place at the LI's document position. Items before the LI stay in
+    // the original list, the unwrapped <p> takes the LI's slot, and items after
+    // it move into a new sibling list inserted right after the <p>, preserving
+    // order.
     if (block && block.tagName === "LI") {
       const list = block.parentElement;
       if (list && list.tagName === listTag.toUpperCase()) {
+        const parent = list.parentNode;
         const p = document.createElement("p");
         while (block.firstChild) p.appendChild(block.firstChild);
-        list.parentNode?.insertBefore(p, list);
+
+        // Collect the LIs that follow `block` in this list.
+        const after: ChildNode[] = [];
+        let sib = block.nextSibling;
+        while (sib) {
+          after.push(sib);
+          sib = sib.nextSibling;
+        }
+
+        if (parent) {
+          // Insert the <p> immediately after the original list…
+          parent.insertBefore(p, list.nextSibling);
+          // …and if there were trailing items, move them into a fresh list
+          // placed after the <p>, preserving order.
+          if (after.length) {
+            const rest = document.createElement(listTag);
+            for (const node of after) rest.appendChild(node);
+            parent.insertBefore(rest, p.nextSibling);
+          }
+        }
         block.remove();
+        // If the original list is now empty (un-listed the only/first item),
+        // drop it.
         if (!list.firstChild) list.remove();
-        // Place caret at start of new <p>
+
+        // Place caret at start of new <p>.
         const re = document.createRange();
         re.setStart(p, 0);
         re.collapse(true);
@@ -771,10 +814,10 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   };
 
   // Open a hidden file picker and route the chosen file through onPasteFile.
-  // We DO NOT embed images inline in the contenteditable — the surface can't
-  // reliably resize <img> elements or position a caret after them. By
-  // treating the image as just another attachment the editor stays text-only
-  // and the file surfaces in the parent form's attachment grid.
+  // Images are not embedded inline in the contenteditable: the surface can't
+  // reliably resize <img> elements or position a caret after them. Treating the
+  // image as another attachment keeps the editor text-only and surfaces the
+  // file in the parent form's attachment grid.
   const pickFileAsAttachment = (): void => {
     const handler = onPasteFileRef.current;
     if (!handler) {
@@ -877,12 +920,11 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- toolbar events ------------------------------------------------------------
 
-  // Both capture-selection and preventDefault must run on mousedown.
-  // preventDefault stops the browser from shifting focus away from the
-  // contenteditable to the button — without it, the editor's typing state is
-  // wiped before the user can type anything. The command also runs on
-  // mousedown for immediate feedback, and the click handler's mouse path is
-  // swallowed entirely.
+  // Both capture-selection and preventDefault run on mousedown. preventDefault
+  // stops the browser from shifting focus away from the contenteditable to the
+  // button; without it the editor's typing state is wiped before the user can
+  // type. The command runs on mousedown for immediate feedback, and the click
+  // handler's mouse path is swallowed.
   const handleToolbarMouseDown = (e: ReactMouseEvent<HTMLDivElement>): void => {
     const target = e.target instanceof Element ? e.target : null;
     const btn = target?.closest<HTMLButtonElement>("button[data-cmd]");
@@ -952,9 +994,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return;
     const key = e.key.toLowerCase();
-    // Undo / redo — runs against OUR snapshot history so formatting changes
-    // from toolbar buttons are tracked too. The browser-native undo would
-    // miss them entirely.
+    // Undo / redo runs against the snapshot history so formatting changes from
+    // toolbar buttons are tracked too; the browser-native undo would miss them.
     if (key === "z" && !e.shiftKey) {
       e.preventDefault();
       undoEdit();
@@ -995,11 +1036,41 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     }
   };
 
-  // File paste: intercept clipboard FILES (image / PDF / anything except
-  // the unsafe blocklist) and hand them to onPasteFile — the caller decides
-  // whether to upload immediately or stage for submit. We never embed the
-  // file inline in the editor HTML. Plain-text/HTML paste falls through to
-  // the browser default.
+  // Route dropped or pasted files to onPasteFile (the caller stages or uploads
+  // them). Image / PDF / anything not on the unsafe blocklist is accepted;
+  // oversized files are stopped here with a clear message. Files are never
+  // embedded inline in the editor HTML.
+  const routeFiles = (files: File[]): void => {
+    const handler = onPasteFileRef.current;
+    for (const f of files) {
+      if (isUnsafeExt(f.name) || isUnsafeMime(f.type)) {
+        toast(`"${f.name || f.type}" can't be attached — for safety, programs and scripts aren't allowed.`, "error");
+        continue;
+      }
+      const tooBig = fileTooLargeMessage(f);
+      if (tooBig) {
+        toast(tooBig, "error");
+        continue;
+      }
+      if (!handler) {
+        toast(`There's nowhere to attach "${f.name || "this file"}" here.`, "info");
+        continue;
+      }
+      try {
+        const result: unknown = handler(f);
+        if (result instanceof Promise) {
+          result.catch((err: unknown) => {
+            toast(`Couldn't attach "${f.name || "file"}": ${describeError(err)}`, "error");
+          });
+        }
+      } catch (err) {
+        toast(`Couldn't attach "${f.name || "file"}": ${describeError(err)}`, "error");
+      }
+    }
+  };
+
+  // File paste: intercept clipboard files. Plain-text/HTML paste falls through
+  // to the browser default.
   const handlePaste = (e: ReactClipboardEvent<HTMLDivElement>): void => {
     const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
     const files: File[] = [];
@@ -1011,27 +1082,26 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     }
     if (!files.length) return; // plain-text paste: let the browser handle it.
     e.preventDefault();
-    const handler = onPasteFileRef.current;
-    for (const f of files) {
-      if (isUnsafeExt(f.name) || isUnsafeMime(f.type)) {
-        toast(`Blocked unsafe file: ${f.name || f.type}`, "error");
-        continue;
-      }
-      if (!handler) {
-        toast(`No attachment target for ${f.name || "file"}`, "info");
-        continue;
-      }
-      try {
-        const result: unknown = handler(f);
-        if (result instanceof Promise) {
-          result.catch((err: unknown) => {
-            toast(`Paste failed for ${f.name || "file"}: ${describeError(err)}`, "error");
-          });
-        }
-      } catch (err) {
-        toast(`Paste failed for ${f.name || "file"}: ${describeError(err)}`, "error");
-      }
-    }
+    routeFiles(files);
+  };
+
+  // Accept a dragged photo/video/file dropped onto the editor and attach it,
+  // rather than letting the browser drop it inline as an image or navigate
+  // away. A non-file drag (selected text/HTML) falls through to the default.
+  const handleDragOver = (e: ReactDragEvent<HTMLDivElement>): void => {
+    if (disabled) return;
+    const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
+    if (!types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDrop = (e: ReactDragEvent<HTMLDivElement>): void => {
+    if (disabled) return;
+    const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
+    if (!files.length) return; // not a file drop: let the browser handle it.
+    e.preventDefault();
+    routeFiles(files);
   };
 
   // ----- lifecycle ------------------------------------------------------------------
@@ -1075,9 +1145,9 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       if (!editor) return;
       editor.innerHTML = html || "";
       sync();
-      // The editor content was replaced wholesale — drop the snapshot
-      // history and seed a fresh one. Otherwise Ctrl+Z would jump the user
-      // back to unrelated previous content.
+      // The editor content was replaced wholesale, so drop the snapshot
+      // history and seed a fresh one; otherwise Ctrl+Z would jump back to
+      // unrelated previous content.
       resetHistory();
     },
     getHtml(): string {
@@ -1157,6 +1227,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
         onFocus={handleFocus}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       />
     </div>
   );

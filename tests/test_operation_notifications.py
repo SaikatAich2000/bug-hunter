@@ -1,22 +1,22 @@
 """Every mutating operation on a work item notifies its stakeholders.
 
-The product rule: "all operations performed in Bug Hunter must trigger a
-notification (and feed the email digest) to the assignees." The create / update
-/ assign / comment-add paths were already covered (test_notifications.py); this
-file pins the operations that were previously silent:
+The product rule is that all operations must trigger a notification (and feed
+the email digest) to the assignees. The create / update / assign / comment-add
+paths are covered in test_notifications.py; this file covers the remaining
+operations:
 
-  - link add / remove (BOTH endpoints' assignees, not just the source's)
+  - link add / remove (both endpoints' assignees, not just the source's)
   - attachment add / delete
   - comment edit / delete
-  - bug delete — single AND bulk (notification survives the row via a NULL
+  - bug delete, single and bulk (notification survives the row via a NULL
     bug_id deep-link)
 
-Plus one end-to-end digest check: with EMAIL_DIGEST_ENABLED, one of these new
+Plus one end-to-end digest check: with EMAIL_DIGEST_ENABLED, one of these
 operations is batched into the daily digest email for the assignee.
 
 All assertions read the Notification table directly (the notify layer commits
-synchronously on the request session), so no second login / rate-limit dance is
-needed — recipients are isolated per-test by a unique assignee email.
+synchronously on the request session), so no second login is needed;
+recipients are isolated per-test by a unique assignee email.
 """
 from __future__ import annotations
 
@@ -229,9 +229,9 @@ def test_bulk_delete_notifies_assignee_and_survives(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# Link notifies BOTH endpoints — the target item's assignees are told too, since
-# a link (a "blocks" edge especially) changes the target item as much as the
-# source. Previously only the source's stakeholders were notified.
+# Link notifies both endpoints: the target item's assignees are notified too,
+# since a link (a "blocks" edge especially) changes the target item as much as
+# the source.
 # ---------------------------------------------------------------------------
 def test_link_add_notifies_both_endpoint_assignees(admin_client):
     proj, bob, bug = _setup(admin_client, "linkboth")

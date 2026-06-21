@@ -1,4 +1,4 @@
-"""Tests for the v3.3 bulk-actions endpoint (POST /api/bugs/bulk).
+"""Tests for the bulk-actions endpoint (POST /api/bugs/bulk).
 
 Covers: every action (set_status / set_priority / set_environment / delete),
 the updated/skipped/not-found tally, per-type status

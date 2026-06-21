@@ -7,17 +7,13 @@ Two endpoints:
   GET  /api/chat/download/{token}   — streams a staged Excel workbook.
 
 Both require an authenticated user (same cookie as the rest of the SPA),
-so the chatbot honors session revocation and forced-logout exactly like
-the rest of the app — a revoked admin can't keep using the chatbot.
+so the chatbot honors session revocation and forced-logout like the rest
+of the app — a revoked admin can't keep using the chatbot.
 
-Why a separate router (instead of folding into routes/bugs.py)?
-
-  - It's a different surface — natural-language vs structured CRUD —
-    and shoving NLU inside the bugs router would muddle both.
-  - The chat code is read-only and deserves a clear boundary so a
-    future contributor can't accidentally introduce a write path.
-  - The download endpoint has its own caching / streaming behavior
-    that doesn't belong next to the bug attachment downloads.
+Kept as a separate router from routes/bugs.py: it's a different surface
+(natural language vs structured CRUD), keeping the read-only chat path
+behind a clear boundary, and the download endpoint has its own caching /
+streaming behavior distinct from the bug attachment downloads.
 """
 from __future__ import annotations
 
@@ -46,7 +42,7 @@ logger = logging.getLogger("bug_hunter.chatbot")
 # it keeps the injection out of the parameter default.
 DbDep = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
-# The document-ingest endpoint is the ONE admin-only write surface in Sleuth.
+# The document-ingest endpoint is the one admin-only write surface in Sleuth.
 AdminUser = Annotated[User, Depends(require_admin)]
 
 
@@ -80,7 +76,7 @@ def _persist_turn(db: Session, actor: User, user_msg: str,
             engine = "cloud"
         elif resp.intent in {"unknown", "error"}:
             engine = ""
-        # Store what the assistant actually SAID (first text block) so the
+        # Store what the assistant actually said (first text block) so the
         # cloud layer's rolling history is meaningful; fall back to the
         # one-line summary for table/file-only replies.
         said = next(
@@ -101,9 +97,8 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
 
 # ---------------------------------------------------------------------------
-# Per-user soft rate limit. We only need the lightest of guards here — the
-# rule engine is cheap, but Excel exports do real CPU work and we don't
-# want a malformed loop on the client to hammer the box.
+# Per-user soft rate limit. The rule engine is cheap, but Excel exports do
+# real CPU work, so this bounds how often a client can trigger them.
 # ---------------------------------------------------------------------------
 _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_REQUESTS = 30   # 30 chat asks / minute / user
@@ -178,8 +173,7 @@ def ask(
         # Auth / role exceptions from underlying calls — pass through.
         raise
     except Exception as exc:   # noqa: BLE001 — we deliberately never crash the chat
-        # Log with a stack trace, but reply gracefully so the chat stays
-        # usable. A panic here looks bad to a user typing innocent input.
+        # Log with a stack trace, but reply gracefully so the chat stays usable.
         logger.exception("Sleuth executor failed: %s", exc)
         return ChatOut(
             blocks=[_BlockOut(kind="text", payload={
@@ -204,10 +198,10 @@ def ask(
 # ---------------------------------------------------------------------------
 # /api/chat/ingest  — admin uploads a document; Sleuth turns it into bugs.
 #
-# This is Sleuth's single deliberate WRITE surface and it is ADMIN-ONLY (the
-# AdminUser dependency 403s everyone else). The heavy lifting — AI / parser
-# extraction and item creation — lives in app/chatbot/ingest.py; this endpoint
-# is just upload plumbing + a chat-shaped reply the panel renders inline.
+# Sleuth's single write surface, admin-only (the AdminUser dependency 403s
+# everyone else). The extraction and item creation live in
+# app/chatbot/ingest.py; this endpoint is upload plumbing plus a chat-shaped
+# reply the panel renders inline.
 # ---------------------------------------------------------------------------
 _INGEST_CHUNK = 256 * 1024
 
@@ -236,8 +230,8 @@ def _ingest_text_reply(text: str, intent: str) -> ChatOut:
 
 
 def _ingest_preview_reply(specs: list, method: str, filename: str, project_name: str) -> ChatOut:
-    """Conversational preview — Sleuth shows what it READ and asks before
-    creating anything. The actual creation happens later, when the admin replies
+    """Conversational preview — Sleuth shows what it read and asks before
+    creating anything. Creation happens later, when the admin replies
     'create them' (handled by the executor)."""
     n = len(specs)
     how = "read it with AI" if method == "ai" else "parsed it"
@@ -277,7 +271,7 @@ async def ingest_document(
     file: Annotated[UploadFile, File()],
     project_id: Annotated[Optional[int], Form()] = None,
 ) -> ChatOut:
-    """Admin-only: READ an uploaded document (xlsx / CSV / JSON / text) and tell
+    """Admin-only: read an uploaded document (xlsx / CSV / JSON / text) and tell
     the admin what work items it contains. Nothing is created here — Sleuth
     stages the candidates and only creates them when the admin replies
     'create them' in the chat (see the executor's ingest-create handler)."""
@@ -325,10 +319,14 @@ def download_staged(
 ):
     """Stream a previously-staged Excel workbook.
 
-    The token is opaque and cryptographically random (24 url-safe bytes)
-    so guessing it is computationally infeasible. We still require an
-    authenticated session — the token alone is not a capability."""
-    entry = excel.fetch_staged(token)
+    The token is opaque and cryptographically random (24 url-safe bytes). Each
+    staged file is also bound to the user who created it: fetch_staged only
+    returns it to that owner, so a leaked/shared token can't be redeemed by
+    another authenticated user (a staged report may contain data they aren't
+    authorized to see). Mismatch returns 404 (no existence enumeration).
+    Rate-limited like the other chat endpoints to bound repeated pulls."""
+    _check_rate(_user.id)
+    entry = excel.fetch_staged(token, _user.id)
     if entry is None:
         raise HTTPException(
             status_code=404,
@@ -336,10 +334,8 @@ def download_staged(
         )
     payload, filename = entry
 
-    # Force a download with the suggested filename. We intentionally do
-    # NOT inline xlsx in the browser even though Chromium can preview it
-    # — keeping it as an attachment matches user expectation when they
-    # asked for a file.
+    # Force a download with the suggested filename rather than inlining the
+    # xlsx, so it's saved as a file as the user asked.
     safe_filename = filename.replace('"', "_").replace("\r", "").replace("\n", "")
     return StreamingResponse(
         iter([payload]),

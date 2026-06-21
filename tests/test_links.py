@@ -1,4 +1,4 @@
-"""Tests for the v3.3 item-linking feature.
+"""Tests for the item-linking feature.
 
 Covers: creating directed links with the right inverse label on each side, all
 three link types, idempotent re-linking, self-link / unknown-target / missing
@@ -163,7 +163,7 @@ def test_remove_link_from_either_end(admin_client):
     b = _mk_bug(admin_client, proj["id"], "Item B")
     link = admin_client.post(f"/api/bugs/{a['id']}/links",
                              json={"target_bug_id": b["id"], "link_type": "blocks"}).json()
-    # Remove via the TARGET endpoint (B owns the path here).
+    # Remove via the target endpoint (B owns the path here).
     assert admin_client.delete(f"/api/bugs/{b['id']}/links/{link['id']}").status_code == 200
     assert admin_client.get(f"/api/bugs/{a['id']}/links").json() == []
 
@@ -174,7 +174,7 @@ def test_remove_link_via_source(admin_client):
     b = _mk_bug(admin_client, proj["id"], "Item B")
     link = admin_client.post(f"/api/bugs/{a['id']}/links",
                              json={"target_bug_id": b["id"], "link_type": "blocks"}).json()
-    # Remove via the SOURCE endpoint (a owns the path) — the other branch of
+    # Remove via the source endpoint (a owns the path) — the other branch of
     # the source/target resolution in remove_link.
     assert admin_client.delete(f"/api/bugs/{a['id']}/links/{link['id']}").status_code == 200
     assert admin_client.get(f"/api/bugs/{b['id']}/links").json() == []

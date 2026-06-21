@@ -1,7 +1,7 @@
-"""GET /api/stats?status=... scopes the CHART breakdowns but keeps the headline
-KPI counts global — this is what makes the Analytics view filter in place when a
-KPI tile is clicked, without the KPI strip numbers collapsing to the filtered
-subset (so every tile stays visible and toggleable).
+"""GET /api/stats?status=... scopes the chart breakdowns but keeps the headline
+KPI counts global. This lets the Analytics view filter in place when a KPI tile
+is clicked without the KPI strip numbers collapsing to the filtered subset, so
+every tile stays visible and toggleable.
 """
 from __future__ import annotations
 
@@ -49,12 +49,12 @@ def test_status_filter_scopes_charts_but_not_kpis(client):
     # Filter the charts to the "open" statuses.
     filt = client.get("/api/stats", params={"status": ["New", "In Progress", "Reopened"]}).json()
 
-    # KPI counts stay GLOBAL (unchanged) so the strip remains toggleable.
+    # KPI counts stay global (unchanged) so the strip remains toggleable.
     assert filt["bugs"] == glob["bugs"]
     assert filt["open"] == glob["open"]
     assert filt["resolved"] == glob["resolved"]
 
-    # ...but the by_status CHART now only contains open statuses.
+    # ...but the by_status chart now only contains open statuses.
     assert "Resolved" not in filt["by_status"], filt["by_status"]
     assert filt["by_status"].get("New", 0) >= 2
 

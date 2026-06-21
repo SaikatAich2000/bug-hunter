@@ -21,8 +21,6 @@ from app.schemas import ProjectIn, ProjectOut
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-
-# Extracted to a module constant to avoid duplicating the literal.
 _DETAIL_PROJECT_NOT_FOUND = "Project not found"
 
 def _audit(db: Session, actor: User, action: str, entity_id: int, detail: str) -> None:
@@ -115,7 +113,15 @@ def delete_project(
     db: Session = Depends(get_db),
     actor: User = Depends(require_admin),
 ) -> dict[str, str]:
-    p = db.get(Project, project_id)
+    # Lock the project row FOR UPDATE before the count-then-delete. A concurrent
+    # POST /api/bugs for this project takes a FOR KEY SHARE lock on the parent
+    # row to satisfy its FK, which conflicts with this FOR UPDATE — so the two
+    # serialize: either the insert commits first and our count sees it (→ 409),
+    # or we delete first and the insert then fails its FK. Without the lock the
+    # count-then-cascade-delete could silently destroy a just-added bug. (SQLite
+    # has a single writer, so it's already serialized there; with_for_update is
+    # a harmless no-op.)
+    p = db.get(Project, project_id, with_for_update=True)
     if p is None:
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
 

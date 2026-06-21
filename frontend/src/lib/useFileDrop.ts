@@ -49,9 +49,14 @@ export function useFileDrop(onFiles: (files: File[]) => void): FileDrop {
       },
       onDrop: (e) => {
         if (!hasFiles(e)) return;
+        // An inner drop target (e.g. the rich-text editor) may have already
+        // claimed this drop and called preventDefault. In that case clear our
+        // own highlight but don't add the files a second time.
+        const claimed = e.isDefaultPrevented();
         e.preventDefault();
         depth.current = 0;
         setDragging(false);
+        if (claimed) return;
         const files = Array.from(e.dataTransfer?.files ?? []);
         if (files.length) onFiles(files);
       },

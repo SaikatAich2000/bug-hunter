@@ -4,7 +4,7 @@
   2. KPI strip of total / open / resolved / closed / resolve_later
      (with `users` and `projects` kept for backward compat).
   3. Multi-select filters via repeated query params (?status=A&status=B).
-  4. "Not a Bug" rows are EXCLUDED from the `bugs` total.
+  4. "Not a Bug" rows are excluded from the `bugs` total.
   5. The list endpoint serves the page in a single attachment-count query
      instead of N+1 queries.
 """
@@ -14,7 +14,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Helpers (mirror style of existing test_fixes/test_regression helpers)
+# Helpers
 # ---------------------------------------------------------------------------
 def _make_project(client, name="P-status"):
     r = client.post("/api/projects", json={"name": name, "color": "#abcdef"})
@@ -126,7 +126,7 @@ class TestStatsShape:
         assert body["by_status"].get("Not a Bug", 0) >= 1
 
     def test_resolved_kpi_is_just_resolved_status(self, admin_client):
-        """`resolved` is JUST the Resolved status; Closed has its own KPI."""
+        """`resolved` is only the Resolved status; Closed has its own KPI."""
         p = _make_project(admin_client, "KP-RES")
         _make_bug(admin_client, p["id"], status="Resolved", title="resolved-1")
         _make_bug(admin_client, p["id"], status="Closed", title="closed-1")

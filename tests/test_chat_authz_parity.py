@@ -1,15 +1,14 @@
-"""Regression: the Sleuth chat write-path must enforce the SAME v2.3 per-type
-edit rules as the REST API.
+"""The chat write-path must enforce the same per-type edit rules as the REST
+API.
 
-Before the fix, app/chatbot/actions._check_can_edit_bug called can_edit_bug
-WITHOUT item_type, so it defaulted to 'Bug' and returned True for everyone —
-letting a regular user edit Tasks/Requirements via chat that PUT /api/bugs/{id}
-forbids with 403 (a real broken-access-control / IDOR escalation). These tests
-lock chat/REST parity at the permission-helper level, where the fix lives, so
-they're independent of NLU / confirm-flow parsing.
+app/chatbot/actions._check_can_edit_bug must call can_edit_bug with the item
+type; otherwise it defaults to 'Bug' and returns True for everyone, letting a
+regular user edit Tasks/Requirements via chat that PUT /api/bugs/{id} forbids
+with 403. These tests check chat/REST parity at the permission-helper level,
+independent of NLU and confirm-flow parsing.
 
-Imports are done INSIDE each test because conftest's `client` fixture re-imports
-all app.* modules between tests; importing at call time always binds the current
+Imports are done inside each test because the `client` fixture re-imports all
+app.* modules between tests; importing at call time binds the current
 generation of the helper.
 """
 from __future__ import annotations

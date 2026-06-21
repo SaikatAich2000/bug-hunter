@@ -199,9 +199,9 @@ function readLs(key: string, fallback: string): string {
 }
 
 /** Shallow-compare the MeOut fields the session poll can change, so an
- *  unchanged /auth/me tick keeps the SAME currentUser object and React bails
- *  out of re-rendering every useApp() consumer. MeOut has exactly these five
- *  fields (id/name/email/role/is_active) — keep this in sync with types.ts. */
+ *  unchanged /auth/me tick keeps the same currentUser object and React bails
+ *  out of re-rendering every useApp() consumer. Keep the compared fields in
+ *  sync with MeOut in types.ts. */
 function sameMe(a: MeOut, b: MeOut): boolean {
   return (
     a.id === b.id &&
@@ -261,6 +261,11 @@ export function AppProvider({
   // Latest values for stable callbacks/pollers.
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
+  // Latest notifications for callbacks that must read current state outside a
+  // setState updater (a side effect inside an updater double-fires under
+  // StrictMode's intentional double-invoke).
+  const notificationsRef = useRef(notifications);
+  notificationsRef.current = notifications;
   const pageRef = useRef(page);
   pageRef.current = page;
   const tabRef = useRef(activeTab);
@@ -272,7 +277,7 @@ export function AppProvider({
   const lastBugsSig = useRef("");
   const lastStatsSig = useRef("");
   // Same guard for the directory poll: users/projects change rarely, so an
-  // unchanged 10s tick must NOT hand back fresh array identities (that busts
+  // unchanged 10s tick must not hand back fresh array identities (that busts
   // the memoized context value and re-renders every consumer).
   const lastUsersSig = useRef("");
   const lastProjectsSig = useRef("");
@@ -627,7 +632,7 @@ export function AppProvider({
     setBugModal({ open: false, bug: null });
   }, []);
 
-  // Live refresh of the OPEN bug modal so comments / attachments / activity /
+  // Live refresh of the open bug modal so comments / attachments / activity /
   // status from concurrent edits appear without a manual reload. reloadBugModal
   // merges into modal state with no spinner and preserves in-progress form
   // fields (the BugModal seed is keyed on [open, bugId]). Keyed on the numeric
@@ -695,11 +700,13 @@ export function AppProvider({
 
   const deleteNotification = useCallback(async (id: number) => {
     notifSeqRef.current++;
-    setNotifications((prev) => {
-      const gone = prev.find((n) => n.id === id);
-      if (gone && !gone.read_at) setUnreadCount((c) => Math.max(0, c - 1));
-      return prev.filter((n) => n.id !== id);
-    });
+    // Decide whether the deleted item was unread outside the updater (matches
+    // markNotificationRead): the setNotifications updater stays pure, and the
+    // unread count is adjusted exactly once after.
+    const gone = notificationsRef.current.find((n) => n.id === id);
+    const wasUnread = !!gone && !gone.read_at;
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    if (wasUnread) setUnreadCount((c) => Math.max(0, c - 1));
     try {
       await api(`/notifications/${id}`, { method: "DELETE" });
     } catch (err) {

@@ -1,18 +1,17 @@
 """Per-user in-app notifications.
 
 The in-app counterpart to app/email_service.py. Where a route sends an email
-about an event, it ALSO writes one notification row per recipient via
-``notify()`` — to the SAME recipients the email layer targets (reporter +
+about an event, it also writes one notification row per recipient via
+``notify()`` to the same recipients the email layer targets (reporter +
 assignees minus the actor, event managers, etc.). Notifications are therefore
-inherently per-user and role-respecting: a row is only ever created for a user
-already entitled to know about the event, and no endpoint exposes another
-user's notifications.
+per-user and role-respecting: a row is only ever created for a user already
+entitled to know about the event, and no endpoint exposes another user's
+notifications.
 
 Unlike the email layer (which runs in a BackgroundTask off primitive
-snapshots), notifications are tiny DB inserts, so they are written
-synchronously on the request's own Session and committed with it. That keeps
-them transactional with the change that caused them and makes them
-immediately assertable in tests.
+snapshots), notifications are small DB inserts written synchronously on the
+request's own Session and committed with it. That keeps them transactional
+with the change that caused them and immediately assertable in tests.
 """
 from __future__ import annotations
 
@@ -42,23 +41,23 @@ def notify(
     background: "BackgroundTasks | None" = None,
 ) -> list[int]:
     """Queue an in-app notification for each distinct recipient, and (when a
-    ``background`` task runner is given) schedule an IMMEDIATE web push to the
+    ``background`` task runner is given) schedule an immediate web push to the
     same recipients.
 
-    Rows are ``db.add``-ed but NOT committed — the caller commits as part of
-    the same transaction as the triggering change. ``None`` ids, the ``exclude``
-    id (the actor — you don't notify yourself), and duplicates are all skipped.
-    Returns the list of recipient user ids actually queued.
+    Rows are ``db.add``-ed but not committed; the caller commits as part of the
+    same transaction as the triggering change. ``None`` ids, the ``exclude`` id
+    (the actor), and duplicates are skipped. Returns the list of recipient user
+    ids actually queued.
 
-    The web push (if scheduled) fires right away regardless of the email-digest
-    setting — push is the real-time channel; the digest only batches *email*.
+    The web push (if scheduled) fires regardless of the email-digest setting:
+    push is the real-time channel, the digest only batches email.
     """
     # Email-obligation marker. In immediate-email mode every operation's email
-    # goes out right now (from the route's BackgroundTask), so the row is born
-    # already-emailed — this is what guarantees that turning the daily digest ON
-    # later never re-sends an old operation. In digest mode we leave it NULL so
-    # the daily job picks the operation up exactly once. (read_at — the in-app
-    # read state — is independent of this.)
+    # goes out now (from the route's BackgroundTask), so the row is born
+    # already-emailed, which guarantees that enabling the daily digest later
+    # never re-sends an old operation. In digest mode it stays NULL so the daily
+    # job picks the operation up exactly once. (read_at, the in-app read state,
+    # is independent of this.)
     emailed_at = None if get_settings().EMAIL_DIGEST_ENABLED else _utcnow()
 
     seen: set[int] = set()

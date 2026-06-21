@@ -1,28 +1,19 @@
 """Sleuth Excel writer.
 
-Generates an xlsx in memory and stages it under a short-lived random
-token. The /api/chat/download/{token} endpoint streams it to the browser
-exactly once (or until TTL expires, whichever is first) and then drops
-the bytes from the in-memory cache.
+Generates an xlsx in memory and stages it under a short-lived random token.
+The /api/chat/download/{token} endpoint streams it to the browser and drops
+the bytes from the in-memory cache once the TTL expires.
 
-Why staging instead of returning the bytes inline?
+Staging (rather than returning the bytes inline) keeps the /api/chat/ask
+JSON payload small, lets the user re-download by re-clicking the link within
+the TTL without rebuilding the workbook, and bounds the cache by row count
+and TTL so spreadsheet bytes don't accumulate.
 
-  - Keeps the JSON payload of /api/chat/ask small and snappy. The chat
-    bubble appears immediately while the file lives in a background slot.
-  - Lets the user re-download by re-clicking the link within the TTL
-    without rebuilding the workbook.
-  - The cache is per-process and bounded by both row count and TTL, so
-    on the 1-vCPU / 2 GB target box we never accumulate spreadsheet bytes
-    indefinitely.
+Memory budget: each row is roughly 0.5 KB serialized; exports are capped at
+5000 rows (executor.py), about 2.5 MB per workbook plus openpyxl overhead.
 
-Memory budget: each row is roughly 0.5 KB serialized. We cap exports at
-5000 rows (executor.py), which is ~2.5 MB per workbook plus openpyxl
-overhead — comfortably below the 512 MB container ceiling even with
-several recent exports cached.
-
-Concurrency: a `threading.Lock` guards the cache. The chat router is
-ASGI but the cache itself is sync; lock overhead is negligible
-(microseconds) and avoids subtle races where two requests evict the
+Concurrency: a `threading.Lock` guards the cache. The chat router is ASGI
+but the cache is sync; the lock avoids races where two requests evict the
 same token mid-read.
 """
 from __future__ import annotations
@@ -33,8 +24,7 @@ import threading
 import time
 from typing import Any, Optional
 
-# openpyxl is the lightest pure-Python xlsx writer that isn't a giant
-# dependency. ~3 MB on disk, cold-import ~80 ms — fine on the target box.
+# openpyxl is a lightweight pure-Python xlsx writer.
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -48,9 +38,7 @@ class ExcelGenerationError(Exception):
     """Raised when the workbook can't be built (e.g. openpyxl missing)."""
 
 
-# How long a staged file stays around. Tuned to be long enough that a
-# distracted user can still click the link, short enough that we don't
-# leak memory across sessions.
+# How long a staged file stays available before it is evicted.
 _TTL_SECONDS = 30 * 60   # 30 minutes
 # Hard cap on the number of staged files at any time. Older entries are
 # evicted FIFO-by-creation when this is exceeded.
@@ -58,13 +46,13 @@ _MAX_ENTRIES = 50
 
 
 _cache_lock = threading.Lock()
-_cache: dict[str, tuple[bytes, str, float]] = {}
-# token -> (xlsx_bytes, filename, expires_at_epoch)
+_cache: dict[str, tuple[bytes, str, float, int]] = {}
+# token -> (xlsx_bytes, filename, expires_at_epoch, owner_user_id)
 
 
 def _evict_expired_locked(now: float) -> None:
     """Drop expired entries. Caller must hold _cache_lock."""
-    dead = [tok for tok, (_, _, exp) in _cache.items() if exp <= now]
+    dead = [tok for tok, (_, _, exp, _owner) in _cache.items() if exp <= now]
     for tok in dead:
         _cache.pop(tok, None)
 
@@ -169,17 +157,19 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
 # Public API
 # ---------------------------------------------------------------------------
 def stage_workbook(rows: list[dict[str, Any]], filename: str,
-                   description: str = "") -> tuple[str, int]:
-    """Build the workbook and stash it under a fresh download token.
+                   owner_id: int, description: str = "") -> tuple[str, int]:
+    """Build the workbook and stash it under a fresh download token, bound to
+    ``owner_id`` (only that user may later fetch it).
 
     Returns (token, size_bytes). Raises ExcelGenerationError on failure.
     """
     payload = _build_workbook(rows, description)
-    return stage_bytes(payload, filename)
+    return stage_bytes(payload, filename, owner_id)
 
 
-def stage_bytes(payload: bytes, filename: str) -> tuple[str, int]:
-    """Stash already-built xlsx bytes under a fresh download token.
+def stage_bytes(payload: bytes, filename: str, owner_id: int) -> tuple[str, int]:
+    """Stash already-built xlsx bytes under a fresh download token, bound to
+    ``owner_id``.
 
     Lets callers that built the workbook elsewhere (e.g. the reports
     engine in app/reports/xlsx.py) reuse the chat router's download
@@ -192,16 +182,20 @@ def stage_bytes(payload: bytes, filename: str) -> tuple[str, int]:
     with _cache_lock:
         _evict_expired_locked(time.time())
         _evict_oldest_locked()
-        _cache[token] = (payload, filename, expires)
+        _cache[token] = (payload, filename, expires, owner_id)
     return token, len(payload)
 
 
-def fetch_staged(token: str) -> Optional[tuple[bytes, str]]:
-    """Return (bytes, filename) if the token is still valid, else None.
+def fetch_staged(token: str, owner_id: int) -> Optional[tuple[bytes, str]]:
+    """Return (bytes, filename) if the token is valid AND owned by ``owner_id``,
+    else None.
 
-    The entry stays in the cache after a fetch — this lets a user click
-    the same download link a second time within TTL (e.g. accidental
-    close of the download dialog) without re-running the query.
+    The owner check makes the token a per-user capability: a staged report can
+    contain data the requester was authorized to see (manager/admin reports), so
+    another authenticated user who learns/guesses the token cannot download it.
+    A mismatch returns None (the router 404s — no existence enumeration). The
+    entry stays in the cache after a fetch so the owner can click the link again
+    within TTL.
     """
     if not token:
         return None
@@ -211,9 +205,11 @@ def fetch_staged(token: str) -> Optional[tuple[bytes, str]]:
         entry = _cache.get(token)
         if entry is None:
             return None
-        payload, filename, expires = entry
+        payload, filename, expires, entry_owner = entry
         if expires <= now:
             _cache.pop(token, None)
+            return None
+        if entry_owner != owner_id:
             return None
         return payload, filename
 

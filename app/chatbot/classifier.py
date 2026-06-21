@@ -1,33 +1,23 @@
 """Sleuth Layer 2 — statistical intent classifier.
 
-The rule-based parser in nlu.py handles the queries it can recognize
-verbatim. This module catches paraphrases the rules miss. It runs in
-pure Python with no external model files, no GPU, and a tiny memory
-footprint — the entire trained state is the corpus dict below plus a
-handful of tiny floats.
+Catches paraphrases the rule-based parser in nlu.py misses. Pure Python,
+no external model files or GPU; the trained state is the corpus dict below
+plus the IDF weights.
 
 How it works:
 - A small hand-curated corpus maps example phrasings to intent labels.
-- We compute IDF weights once at import time over the corpus.
-- For each incoming message, tokenize + normalize + compute a TF-IDF
-  vector and find the highest cosine-similarity intent.
-- A confidence threshold gates whether we trust the prediction. Below
-  threshold → return None and let the caller fall through to LLM (if
-  installed) or return "unknown".
+- IDF weights are computed once at import time over the corpus.
+- For each incoming message, tokenize + normalize, compute a TF-IDF
+  vector, and find the highest cosine-similarity intent.
+- A confidence threshold gates the prediction. Below threshold, return
+  None so the caller falls through to the LLM (if installed) or "unknown".
 
-Why this works:
-- Bug-tracker vocabulary is finite. "show me the open ones" / "list all
-  open" / "what's still open" all share enough overlapping tokens that
-  IDF cosine similarity ranks them next to each other.
-- It's deterministic, debuggable, and runs in microseconds on a single
-  CPU core. Adding new examples to the corpus is the way to "train" it.
-
-Why not a neural model:
-- Loading a real classifier (DistilBERT, MiniLM) takes 100-500MB RAM
-  for marginal benefit on this constrained vocabulary. On a 2 GB box
-  every megabyte spent on the model is a megabyte not available for
-  the database connection pool, the request workers, or the OS file
-  cache. A 5 KB corpus is a much better trade.
+A finite bug-tracker vocabulary makes this effective: paraphrases like
+"show me the open ones" / "list all open" / "what's still open" share
+enough overlapping tokens that IDF cosine similarity ranks them together.
+Add examples to the corpus to extend coverage. A neural classifier
+(DistilBERT, MiniLM) would cost 100-500 MB RAM for little benefit on this
+constrained vocabulary and is not worth it on a 2 GB box.
 """
 from __future__ import annotations
 
@@ -257,6 +247,13 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
     trades coverage for precision."""
     tokens = _tokenize(message)
     if not tokens:
+        return None
+    # Reject degenerate inputs that carry no real signal: a message whose ONLY
+    # tokens are the <num> placeholder (e.g. "is it 5?" → ['<num>']) has
+    # near-zero IDF mass yet can spuriously cross the threshold against any doc
+    # that also contains <num>. Out-of-vocabulary words still flow through to
+    # the normal cosine/threshold gate below (which correctly returns None).
+    if all(t == "<num>" for t in tokens):
         return None
     qc, q_norm = _vec(tokens, _MODEL.idf)
 

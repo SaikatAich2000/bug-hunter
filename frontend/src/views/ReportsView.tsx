@@ -33,9 +33,13 @@ const REPORTS_DEFAULT_PRESETS: Record<string, number> = {
   last_30_days: 30,
 };
 
-/** "YYYY-MM-DD" in UTC. */
+/** "YYYY-MM-DD" for the local calendar day. Not UTC: toISOString() would
+ *  shift the date by a day for users west of UTC late in the day. */
 function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 /** Only "right" alignment is honoured. */
@@ -43,11 +47,23 @@ function colAlign(col: ReportColumn): "left" | "right" {
   return col.align === "right" ? "right" : "left";
 }
 
-/** 200-char truncation with ellipsis. */
+/** Render any cell value legibly: Yes/No for booleans, a field/JSON for
+ *  objects (never "[object Object]"), with 200-char truncation. */
 function reportCellText(value: unknown): string {
   if (value === null || value === undefined) return "";
-  if (typeof value === "string" && value.length > 200) return value.slice(0, 197) + "…";
-  return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  let text: string;
+  if (typeof value === "object") {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = "";
+    }
+  } else {
+    text = String(value);
+  }
+  if (text.length > 200) return text.slice(0, 197) + "…";
+  return text;
 }
 
 /** Toggle a value in an array (chip check/uncheck). */
@@ -495,7 +511,7 @@ export default function ReportsView() {
               <div className="reports-summary-card" key={k}>
                 <div className="reports-summary-label">{k.replaceAll("_", " ")}</div>
                 <div className="reports-summary-value">
-                  {v !== null && typeof v === "object" ? "—" : String(v)}
+                  {reportCellText(v)}
                 </div>
               </div>
             ))}

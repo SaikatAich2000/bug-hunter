@@ -5,34 +5,16 @@ branch = true
 omit = [
     "tests/*",
     "*/__pycache__/*",
-    # Sleuth's OPTIONAL external-AI layers. Each only runs when wired to a
-    # live external dependency the hermetic test suite deliberately never
-    # provisions — local llama.cpp + a GGUF model (llm), the Gemini /
-    # OpenRouter cloud APIs (cloud_llm), and a chromadb vector store (rag).
-    # "Sleuth runs out of the box with NO config" (.env.example), so these
-    # paths are unreachable without network/model files. They are still
-    # fully SonarQube-scanned for code quality — only excluded from the
-    # unit-test coverage denominator (mirrors how the frontend is handled).
-    "app/chatbot/llm.py",
-    "app/chatbot/cloud_llm.py",
-    "app/chatbot/rag.py",
-    # The FCM web-push transport — only runs against a live Firebase project
-    # (service-account + network) the test suite never provisions; the
-    # orchestration around it (app/push_service.py) IS covered, with the
-    # transport mocked.
-    "app/fcm_transport.py",
 ]
 
 [tool.coverage.report]
-# CI gate: fail the run if total coverage falls below this floor.
+# Fail the run if total coverage falls below this floor.
 fail_under = 99
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
-    # `if TYPE_CHECKING:` blocks hold import-only type aliases that never
-    # execute at runtime, so they can't be covered by tests — exclude them
-    # from the denominator (standard coverage.py practice).
+    # TYPE_CHECKING blocks hold import-only type aliases that never run.
     "if TYPE_CHECKING:",
 ]
 
@@ -48,11 +30,8 @@ markers = [
     "slow: long-running tests",
     "migration: legacy-database re-import tests",
 ]
-# Python 3.14 + pytest-cov: gzip-buffered coverage files get finalized
-# after their underlying file is closed, raising ValueError inside
-# __del__. Pytest catches these via sys.unraisablehook and turns them
-# into PytestUnraisableExceptionWarning. They're harmless — coverage
-# data lands correctly — but they flood the output. Silence the noise.
+# On Python 3.14, pytest-cov can raise a harmless PytestUnraisableExceptionWarning
+# when gzip-buffered coverage files finalize after close; silence the noise.
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

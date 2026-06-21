@@ -58,11 +58,11 @@ export default function Shell() {
     else if (view === "analytics") void refreshStats();
   }, [view, refreshAll, refreshStats]);
 
-  // Role gate: hiding the nav button isn't enough — if `view` is ever set to a
+  // Role gate: hiding the nav button isn't enough. If `view` is ever set to a
   // privileged view (deep link, stale state, a notification), the view would
-  // still mount AND fire its on-entry fetch (+ error toast) for an
+  // still mount and fire its on-entry fetch (and error toast) for an
   // under-privileged user. Compute denial, bounce back to the list, and refuse
-  // to render the gated branch even for one frame. The backend stays the real
+  // to render the gated branch even for one frame. The backend is the real
   // authority (these routes are role-gated server-side).
   const need = VIEW_MIN_ROLE[view];
   const denied = need != null && roleRank(currentUser.role) < roleRank(need);

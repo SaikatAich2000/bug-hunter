@@ -111,9 +111,17 @@ if echo "${SONAR_HOST_URL}" | grep -qE '://(localhost|127\.0\.0\.1)(:|/|$)'; the
   fi
 fi
 
+# On Git Bash / MSYS (Windows), `pwd` yields an MSYS path (/c/…) that Docker
+# Desktop can't mount. Convert to a Windows mixed path (C:/…) when cygpath is
+# available; elsewhere the original path is already Docker-compatible.
+MOUNT_SRC="${ROOT}"
+if command -v cygpath >/dev/null 2>&1; then
+  MOUNT_SRC="$(cygpath -m "${ROOT}")"
+fi
+
 docker run --rm \
   "${SCANNER_ARGS[@]}" \
-  -v "${ROOT}:/usr/src" \
+  -v "${MOUNT_SRC}:/usr/src" \
   sonarsource/sonar-scanner-cli:latest
 
 info "Done. Browse results at ${SONAR_HOST_URL}/dashboard?id=Bug_Hunter"

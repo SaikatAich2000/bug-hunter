@@ -36,14 +36,13 @@ CT_JSON = "application/json"
 CT_MULTIPART = "multipart/form-data"
 CT_FORM = "application/x-www-form-urlencoded"
 
-# Placeholder values used ONLY when emitting docs/Postman/curl examples.
-# They are not real secrets — `_BOOT_DEFAULT` is the bootstrap admin's seed
-# value (also published in README.md and .env.example so an operator can
-# log in on first boot), the others are invented strings used as form
-# placeholders. Constant names deliberately avoid credential-keyword
-# tokens so static analysers don't false-positive them as hard-coded
-# secrets in a developer-tool script that lives outside `sonar.sources`.
-_BOOT_DEFAULT = "changeme"
+# Placeholder values used only when emitting docs/Postman/curl examples.
+# They are not real secrets: `_BOOT_DEFAULT` is the bootstrap admin's seed
+# value (also published in README.md and .env.example so an operator can log
+# in on first boot), the others are invented strings used as form
+# placeholders. Constant names avoid credential-keyword tokens so they aren't
+# flagged as hard-coded secrets in this developer-tool script.
+_BOOT_DEFAULT = "ChangeMe123!"  # real bootstrap admin seed (config.BOOTSTRAP_ADMIN_PASSWORD)
 _RESET_DEFAULT = "BetterPass1"
 _USER_DEFAULT = "SecurePass1"
 
@@ -340,7 +339,7 @@ new cookies; `-b` sends them.
 ```bash
 curl -c "$COOKIES" -X POST "$BASE/api/auth/login" \\
   -H "Content-Type: application/json" \\
-  -d '{"email":"admin@example.com","password":"changeme"}'
+  -d '{"email":"admin@example.com","password":"ChangeMe123!"}'
 ```
 
 For mutating calls (POST/PUT/PATCH/DELETE on `/api/*`, except `/api/auth/login`)

@@ -1,33 +1,28 @@
 """Sleuth actions — the write-side of the assistant.
 
 Where executor.py is read-only (queries, exports, summaries), this module
-performs MUTATIONS the user requested in natural language. Every action:
+performs the mutations the user requested in natural language. Every action:
 
   1. Re-validates the actor's permission against the same rules used by
      the REST API. The chat path is not a back door.
   2. Applies the change in a single short transaction.
-  3. Writes an Activity row so the audit log knows who did what — exactly
-     like the REST routes do.
-  4. Returns a Response of blocks the router can serialize back to the
-     user.
+  3. Writes an Activity row so the audit log records who did what, like
+     the REST routes do.
+  4. Returns a Response of blocks the router serializes back to the user.
 
-The supported ActionKind list is deliberately conservative. We ship the
-operations that map cleanly to single-bug edits and comments. Anything
-destructive (delete bug, delete user, password reset, role change) is NOT
-exposed via chat — those stay UI-only for the foreseeable future, where
-the user clicks through an explicit confirm dialog.
+The supported ActionKind list is conservative: operations that map cleanly
+to single-bug edits and comments. Destructive operations (delete bug, delete
+user, password reset, role change) are not exposed via chat and stay UI-only.
 
 Confirmation flow:
   - Risky writes (status change to Closed, assignee changes, due-date
-    changes) are STAGED, not executed, on the first turn. The handler
-    returns a Response containing a "confirm" block. The frontend renders
-    Yes/No buttons. On Yes, the same plan is executed via a
-    follow-up message ("yes" / "confirm") which the router resolves by
-    calling memory.take_pending() and dispatching to apply_pending().
-  - Safe writes (add comment, set priority on a low-priority bug) can be
-    configured to skip the confirm. They are all kept confirmable for now —
-    an accidental write from a misparse is far more annoying than one
-    extra click.
+    changes) are staged, not executed, on the first turn. The handler
+    returns a Response with a "confirm" block; the frontend renders Yes/No
+    buttons. On Yes, the same plan is executed via a follow-up message
+    ("yes" / "confirm") which the router resolves by calling
+    memory.take_pending() and dispatching to apply_pending().
+  - All writes are kept confirmable, since an accidental write from a
+    misparse is worse than one extra click.
 """
 from __future__ import annotations
 
@@ -44,12 +39,30 @@ from app.auth import (
     can_manage_projects, can_edit_bug, ROLE_ADMIN,
 )
 from app.models import Activity, Bug, Comment, Project, User
-from app.schemas import ALLOWED_ENVIRONMENTS, ALLOWED_PRIORITIES, statuses_for_type
+from app.schemas import (
+    ALLOWED_ENVIRONMENTS,
+    ALLOWED_PRIORITIES,
+    normalize_choice,
+    sanitize_html,
+    statuses_for_type,
+)
 
 from app.chatbot.executor import Block, Response
 
 # Fallback label when an assign/unassign plan carries ids but no display names.
 _UNKNOWN_USERS = "user(s)"
+
+# Intent returned when a write resolved to a genuine no-op (value already set,
+# nobody actually added/removed). Distinct from "action_done" so _apply_bulk
+# counts it as "skipped" (not "updated") and the single path can message it.
+_INTENT_NOOP = "action_noop"
+
+# Plan kinds that _apply_bulk can fan across many bug ids. execute_plan only
+# routes to the bulk path for these — a plan carrying bug_ids with any OTHER
+# kind (e.g. add_comment/create_bug) must not be multiplied across items.
+_BULK_KINDS = frozenset({
+    "assign", "unassign", "set_status", "set_priority", "set_environment",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +81,7 @@ class ActionPlan:
     ]
     actor_user_id: int
     bug_id: Optional[int] = None
-    # Bulk target: when non-empty, the action applies to EVERY id here (e.g.
+    # Bulk target: when non-empty, the action applies to every id here (e.g.
     # "assign all the bugs to Alice"). bug_id stays None for a bulk plan.
     bug_ids: list[int] = field(default_factory=list)
     target_user_ids: list[int] = field(default_factory=list)
@@ -239,13 +252,19 @@ def _itype_of(bug: Bug) -> str:
 
 def _notify_chat_op(db: Session, bug: Bug, actor: User, *, kind: str,
                     title: str, body: str, extra_user_ids: Iterable[int] = ()) -> None:
-    """Write an in-app notification for a Sleuth write, so EVERY operation
+    """Write an in-app notification for a Sleuth write, so every operation
     surfaces in the bell. Recipients are the item's stakeholders (reporter +
     assignees) plus the actor and any extras (e.g. just-removed assignees).
 
-    The actor is deliberately INCLUDED (no exclude): the person driving Sleuth
-    wants confirmation of what it just did. Rows are added on ``db`` and the
-    caller commits them with the change."""
+    The actor is included (not excluded) so the person driving Sleuth gets
+    confirmation of what it did. Rows are added on ``db`` and the caller
+    commits them with the change.
+
+    Scope: Sleuth writes raise in-app (bell) notifications only — no
+    ``background`` is threaded through the chat path, so they do not fire an
+    immediate per-operation email or web push the way the REST routes do. With
+    the daily digest enabled the operation is still emailed in the next digest;
+    in immediate-email mode chat-driven changes are in-app-only by design."""
     recipients: set[int] = {actor.id}
     if bug.reporter_id is not None:
         recipients.add(bug.reporter_id)
@@ -257,39 +276,66 @@ def _notify_chat_op(db: Session, bug: Bug, actor: User, *, kind: str,
     )
 
 
+def _resolve_targets(db: Session, ids: list[int]) -> tuple[list[User], Optional[str]]:
+    """Resolve user ids to active users, mirroring the REST API: an unknown id
+    is a hard error (not silently dropped), and a deactivated user can't be a
+    new assignee. Returns (users, error_or_None)."""
+    if not ids:
+        return [], "Couldn't find the user(s) to assign"
+    users = list(db.scalars(select(User).where(User.id.in_(ids))).all())
+    found = {u.id for u in users}
+    missing = [i for i in ids if i not in found]
+    if missing:
+        return [], f"Couldn't find user(s) with id(s): {', '.join(map(str, missing))}"
+    inactive = [u.name for u in users if not u.is_active]
+    if inactive:
+        return [], f"Cannot assign a deactivated user: {', '.join(inactive)}"
+    return users, None
+
+
 def _apply_assign(db: Session, plan: ActionPlan, actor: User,
-                  notify: bool = True) -> Response:
+                  notify: bool = True, commit: bool = True) -> Response:
     bug = _load_bug(db, plan.bug_id) if plan.bug_id else None
     if bug is None:
         return _error_response(f"Bug #{plan.bug_id} not found")
     err = _check_can_edit_bug(actor, bug)
     if err:
         return _error_response(err)
-    targets = list(db.scalars(
-        select(User).where(User.id.in_(plan.target_user_ids))
-    ).all()) if plan.target_user_ids else []
-    if not targets:
-        return _error_response("Couldn't find the user(s) to assign")
+    targets, terr = _resolve_targets(db, plan.target_user_ids)
+    if terr:
+        return _error_response(terr)
 
     before = sorted(a.name for a in bug.assignees)
     already = {a.id for a in bug.assignees}
     added = [t for t in targets if t.id not in already]
-    new_set = list(bug.assignees) + added
-    bug.assignees = new_set
+    if not added:
+        # Everyone requested is already assigned — a genuine no-op. Don't write
+        # an audit row or bump version, and signal "skipped" to the bulk caller.
+        return _success_response(
+            f"No change — those user(s) are already assigned to bug #{bug.id}",
+            intent=_INTENT_NOOP, bug_id=bug.id,
+        )
+    bug.assignees = list(bug.assignees) + added
+    # Bump optimistic-concurrency version: an assignee-only change doesn't touch
+    # a column on the Bug row, so without this a version-tracking client would
+    # never see the change and could clobber it.
+    bug.version = (bug.version or 1) + 1
     after = sorted(a.name for a in bug.assignees)
-    detail = f"Assignees: {before} -> {after}"
-    _audit(db, bug.id, actor, "bug_update", detail)
-    # In-app notification (skip on bulk: the bulk caller emits ONE aggregate
+    # Mirror the REST audit verb so audit-by-action and analytics line up.
+    _audit(db, bug.id, actor, "assignees_changed",
+           f"#{bug.id} '{bug.title}' — assignees: {before} -> {after}")
+    # In-app notification (skip on bulk: the bulk caller emits one aggregate
     # notification instead of one per item).
-    if notify and added:
+    if notify:
         names = ", ".join(t.name for t in added)
         _notify_chat_op(
             db, bug, actor, kind="assigned",
             title=f"Assigned to {_itype_of(bug)} #{bug.id}",
             body=f"{actor.name} assigned {names} to “{bug.title}”.",
             extra_user_ids=[t.id for t in added])
-    db.commit()
-    names = ", ".join(t.name for t in targets)
+    if commit:
+        db.commit()
+    names = ", ".join(t.name for t in added)
     return _success_response(
         f"Done — assigned **{names}** to bug #{bug.id} (*{bug.title[:60]}*)",
         bug_id=bug.id,
@@ -297,7 +343,7 @@ def _apply_assign(db: Session, plan: ActionPlan, actor: User,
 
 
 def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
-                    notify: bool = True) -> Response:
+                    notify: bool = True, commit: bool = True) -> Response:
     bug = _load_bug(db, plan.bug_id) if plan.bug_id else None
     if bug is None:
         return _error_response(f"Bug #{plan.bug_id} not found")
@@ -309,11 +355,15 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
     bug.assignees = [a for a in bug.assignees if a.id not in drop_ids]
     after = sorted(a.name for a in bug.assignees)
     if before == after:
-        return _error_response(
-            "Nothing changed — those users weren't assigned to this bug"
+        # No-op — those users weren't assigned. Signal "skipped" to the bulk
+        # caller (not an error) and write nothing.
+        return _success_response(
+            "Nothing changed — those users weren't assigned to this bug",
+            intent=_INTENT_NOOP, bug_id=bug.id,
         )
-    detail = f"Assignees: {before} -> {after}"
-    _audit(db, bug.id, actor, "bug_update", detail)
+    bug.version = (bug.version or 1) + 1
+    _audit(db, bug.id, actor, "assignees_changed",
+           f"#{bug.id} '{bug.title}' — assignees: {before} -> {after}")
     if notify:
         names = ", ".join(plan.target_user_names) or _UNKNOWN_USERS
         _notify_chat_op(
@@ -321,7 +371,8 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
             title=f"Unassigned from {_itype_of(bug)} #{bug.id}",
             body=f"{actor.name} unassigned {names} from “{bug.title}”.",
             extra_user_ids=drop_ids)
-    db.commit()
+    if commit:
+        db.commit()
     names = ", ".join(plan.target_user_names) or _UNKNOWN_USERS
     return _success_response(
         f"Done — removed **{names}** from bug #{bug.id}",
@@ -349,7 +400,8 @@ def _validate_field_value(bug: Bug, field_name: str, value: Any) -> Optional[str
 
 
 def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
-                     field_name: str, label: str, notify: bool = True) -> Response:
+                     field_name: str, label: str, notify: bool = True,
+                     commit: bool = True) -> Response:
     bug = _load_bug(db, plan.bug_id) if plan.bug_id else None
     if bug is None:
         return _error_response(f"Bug #{plan.bug_id} not found")
@@ -362,19 +414,27 @@ def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
     if invalid:
         return _error_response(invalid)
     if old == new:
+        # Genuine no-op — signal "skipped" so the bulk caller doesn't count it
+        # as updated, and don't write an audit row.
         return _success_response(
             f"Bug #{bug.id} {label} is already **{old}** — nothing to do",
-            bug_id=bug.id,
+            intent=_INTENT_NOOP, bug_id=bug.id,
         )
     setattr(bug, field_name, new)
-    detail = f"{field_name}: {old!r} -> {new!r}"
-    _audit(db, bug.id, actor, "bug_update", detail)
+    bug.version = (bug.version or 1) + 1
+    # Use the REST per-field audit verb (status_changed / priority_changed /
+    # environment_changed / due_date_changed) with the REST detail format so the
+    # resolution / time-to-resolution reports (which match action=='status_changed'
+    # and parse "status: 'old' -> 'new'") pick up chat-driven status changes too.
+    _audit(db, bug.id, actor, f"{field_name}_changed",
+           f"#{bug.id} '{bug.title}' — {field_name}: {old!r} -> {new!r}")
     if notify:
         _notify_chat_op(
             db, bug, actor, kind="updated",
             title=f"{_itype_of(bug).capitalize()} #{bug.id} updated",
             body=f"{actor.name} changed {label} to {new}.")
-    db.commit()
+    if commit:
+        db.commit()
     return _success_response(
         f"Done — bug #{bug.id} {label} changed from **{old}** to **{new}**",
         bug_id=bug.id,
@@ -382,18 +442,22 @@ def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
 
 
 def _apply_add_comment(db: Session, plan: ActionPlan, actor: User,
-                       notify: bool = True) -> Response:
+                       notify: bool = True, commit: bool = True) -> Response:
     bug = _load_bug(db, plan.bug_id) if plan.bug_id else None
     if bug is None:
         return _error_response(f"Bug #{plan.bug_id} not found")
-    body = (plan.comment_body or "").strip()
-    if not body:
+    raw = (plan.comment_body or "").strip()
+    if not raw:
         return _error_response(
             "I don't have any comment text to post. Try: "
             "*comment on #5: this is fixed in commit abc*"
         )
-    if len(body) > 4000:
+    if len(raw) > 4000:
         return _error_response("Comment too long — keep it under 4000 chars")
+    # Sanitize like the REST CommentIn validator. Comments are rendered as
+    # HTML, so an unsanitized body (e.g. <img onerror=…>) would be stored XSS
+    # firing for every viewer.
+    body = sanitize_html(raw)
     c = Comment(bug_id=bug.id, author_user_id=actor.id,
                 author_name=actor.name, body=body)
     db.add(c)
@@ -406,7 +470,8 @@ def _apply_add_comment(db: Session, plan: ActionPlan, actor: User,
             db, bug, actor, kind="comment",
             title=f"New comment on {_itype_of(bug)} #{bug.id}",
             body=f"{actor.name}: {snippet}")
-    db.commit()
+    if commit:
+        db.commit()
     preview = body if len(body) < 120 else body[:117] + "..."
     return _success_response(
         f"Comment posted on bug #{bug.id}: \"{preview}\"",
@@ -438,16 +503,27 @@ def _apply_create_bug(db: Session, plan: ActionPlan, actor: User) -> Response:
         project_id = first.id
     elif db.get(Project, project_id) is None:
         return _error_response("That project doesn't exist anymore")
-    # Mirror the REST POST: never persist an out-of-enum priority. The
-    # field-setter path validates; the create path must too.
-    priority = (plan.new_value or "Medium")
-    if priority not in ALLOWED_PRIORITIES:
+    # Mirror the REST POST exactly: normalize_choice (case-insensitive → canonical)
+    # is the same validator the create payload uses, so chat and REST accept the
+    # same casings and never persist an out-of-enum priority.
+    try:
+        priority = normalize_choice(plan.new_value or "Medium", ALLOWED_PRIORITIES, "priority")
+    except ValueError:
         return _error_response(
-            f"'{priority}' isn't a valid priority. Allowed: {', '.join(ALLOWED_PRIORITIES)}"
+            f"'{plan.new_value}' isn't a valid priority. Allowed: {', '.join(ALLOWED_PRIORITIES)}"
         )
+    # Resolve assignees with the same strictness as REST: unknown id is an
+    # error, deactivated user can't be assigned — not silently dropped.
+    assignees: list[User] = []
+    if plan.target_user_ids:
+        assignees, terr = _resolve_targets(db, plan.target_user_ids)
+        if terr:
+            return _error_response(terr)
     bug = Bug(
         title=title,
-        description=(plan.new_description or ""),
+        # Sanitize the description like the REST BugCreate validator;
+        # descriptions render as HTML, so an unsanitized body is stored XSS.
+        description=sanitize_html((plan.new_description or "").strip()),
         status="New",
         priority=priority,
         environment="DEV",
@@ -456,12 +532,10 @@ def _apply_create_bug(db: Session, plan: ActionPlan, actor: User) -> Response:
     )
     db.add(bug)
     db.flush()
-    if plan.target_user_ids:
-        targets = list(db.scalars(
-            select(User).where(User.id.in_(plan.target_user_ids))
-        ).all())
-        bug.assignees = targets
-    _audit(db, bug.id, actor, "bug_create",
+    if assignees:
+        bug.assignees = assignees
+    # REST uses the "bug_created" verb (audit-by-action / the bug_created index).
+    _audit(db, bug.id, actor, "bug_created",
            f"Created bug #{bug.id}: {title[:80]}")
     _notify_chat_op(
         db, bug, actor, kind="created",
@@ -494,7 +568,7 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
     proj = Project(name=name, description=(plan.new_description or ""))
     db.add(proj)
     db.flush()
-    _audit(db, None, actor, "project_create",
+    _audit(db, None, actor, "project_created",
            f"Created project '{name}'",
            entity_type="project", entity_id=proj.id)
     # No reporter/assignees on a project — notify the actor so the operation
@@ -517,13 +591,13 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
 # Public dispatch
 # ---------------------------------------------------------------------------
 def sleuth_write_denied(actor: User) -> Optional[str]:
-    """Return a refusal string if this actor may NOT perform write/edit actions
+    """Return a refusal string if this actor may not perform write/edit actions
     through Sleuth, else None.
 
-    Policy: Sleuth is a full read/write/edit assistant for ADMINS only
-    (everything except delete — Sleuth has no delete action at all). Managers
-    and regular users get read/lookup access only; they still edit through the
-    app where their role allows, but the assistant won't mutate data for them.
+    Policy: Sleuth is a read/write/edit assistant for admins only (everything
+    except delete — Sleuth has no delete action). Managers and regular users
+    get read/lookup access only; they still edit through the app where their
+    role allows, but the assistant won't mutate data for them.
     """
     if actor.role == ROLE_ADMIN:
         return None
@@ -535,25 +609,26 @@ def sleuth_write_denied(actor: User) -> Optional[str]:
 
 
 def _dispatch_single(plan: ActionPlan, db: Session, actor: User,
-                     notify: bool = True) -> Response:
+                     notify: bool = True, commit: bool = True) -> Response:
     """Apply one single-bug (or no-bug) action and return its Response.
 
     ``notify`` lets the bulk caller suppress per-item notifications (it emits a
-    single aggregate one instead)."""
+    single aggregate one instead). ``commit=False`` lets the bulk caller defer
+    the commit so the whole batch is one atomic transaction."""
     if plan.kind == "assign":
-        return _apply_assign(db, plan, actor, notify=notify)
+        return _apply_assign(db, plan, actor, notify=notify, commit=commit)
     if plan.kind == "unassign":
-        return _apply_unassign(db, plan, actor, notify=notify)
+        return _apply_unassign(db, plan, actor, notify=notify, commit=commit)
     if plan.kind == "set_status":
-        return _apply_set_field(db, plan, actor, "status", "status", notify=notify)
+        return _apply_set_field(db, plan, actor, "status", "status", notify=notify, commit=commit)
     if plan.kind == "set_priority":
-        return _apply_set_field(db, plan, actor, "priority", "priority", notify=notify)
+        return _apply_set_field(db, plan, actor, "priority", "priority", notify=notify, commit=commit)
     if plan.kind == "set_environment":
-        return _apply_set_field(db, plan, actor, "environment", "environment", notify=notify)
+        return _apply_set_field(db, plan, actor, "environment", "environment", notify=notify, commit=commit)
     if plan.kind == "set_due_date":
-        return _apply_set_field(db, plan, actor, "due_date", "due date", notify=notify)
+        return _apply_set_field(db, plan, actor, "due_date", "due date", notify=notify, commit=commit)
     if plan.kind == "add_comment":
-        return _apply_add_comment(db, plan, actor, notify=notify)
+        return _apply_add_comment(db, plan, actor, notify=notify, commit=commit)
     if plan.kind == "create_bug":
         return _apply_create_bug(db, plan, actor)
     if plan.kind == "create_project":
@@ -582,26 +657,45 @@ def _notify_bulk(db: Session, plan: ActionPlan, actor: User, updated: int) -> No
 
 
 def _apply_bulk(plan: ActionPlan, db: Session, actor: User) -> Response:
-    """Apply a plan's action to EVERY id in plan.bug_ids, aggregating the
-    outcome. Each item is committed independently (mirrors the REST bulk
-    endpoint), so one bad row never rolls back the rest. Per-item notifications
-    are suppressed in favor of ONE aggregate bell entry."""
+    """Apply a plan's action to every id in plan.bug_ids in one transaction.
+
+    Each item is applied with commit deferred (commit=False) and the whole
+    batch is committed once at the end — like the REST bulk endpoint — so a
+    failure midway rolls the whole batch back rather than leaving a partial,
+    half-applied change committed. Per-item notifications are suppressed in
+    favour of one aggregate bell entry. Genuine no-ops (value already set,
+    nobody added/removed) count as 'skipped', matching REST."""
     updated = skipped = 0
     for bid in plan.bug_ids:
+        # Copy all plan fields and re-point to a single id, rather than hand-
+        # copying a subset (which would drop new_title/new_description/
+        # new_project_id/summary_human and misbehave if bulk ever covered a kind
+        # that uses them). bug_ids is cleared so the per-item plan is
+        # unambiguously single-target.
         one = ActionPlan(
             kind=plan.kind, actor_user_id=actor.id, bug_id=bid,
             target_user_ids=list(plan.target_user_ids),
             target_user_names=list(plan.target_user_names),
             new_value=plan.new_value, comment_body=plan.comment_body,
+            # Carry all value-bearing fields, not a subset, so adding a new
+            # _BULK_KIND that uses these doesn't drop them mid-batch.
+            new_title=plan.new_title, new_description=plan.new_description,
+            new_project_id=plan.new_project_id, new_project_name=plan.new_project_name,
+            summary_human=plan.summary_human,
         )
-        resp = _dispatch_single(one, db, actor, notify=False)
+        resp = _dispatch_single(one, db, actor, notify=False, commit=False)
         if resp.intent == "action_done":
             updated += 1
         else:
             skipped += 1
     if updated:
         _notify_bulk(db, plan, actor, updated)
+    # Single commit for the whole batch (atomic). If nothing changed, the
+    # rollback discards any flushed no-op state cleanly.
+    if updated:
         db.commit()
+    else:
+        db.rollback()
     tail = f", {skipped} skipped" if skipped else ""
     return _success_response(
         f"Done — {plan.summary_human}: **{updated}** updated{tail}.",
@@ -614,14 +708,21 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
     plan really came from this user (we still re-check actor.id below)."""
     if plan.actor_user_id != actor.id:
         return _error_response("That action was staged for a different user")
-    # The admin-only Sleuth-write policy is enforced UPSTREAM in the executor
-    # handlers (a non-admin never gets a plan staged, so never reaches here
-    # through the chat flow). The per-action _check_can_edit_bug /
-    # _check_can_create_bug below re-authorize the REST permission — the real
-    # security boundary — at execute time for any direct caller, so a demoted
-    # actor can still only do what their current role allows.
+    # Re-enforce the admin-only Sleuth-write policy at execute time, not just
+    # when the plan was staged. A plan can sit in memory for minutes between
+    # staging and the "yes" confirm; if the actor was demoted from admin in that
+    # window they must not be able to execute it (a time-of-check/time-of-use
+    # gap otherwise). This also protects any direct caller of this public
+    # function. The per-action _check_can_edit_bug below still enforces the REST
+    # per-type permission.
+    denied = sleuth_write_denied(actor)
+    if denied is not None:
+        return _error_response(denied)
     try:
-        if plan.bug_ids:
+        # Only fan across bug_ids for kinds the bulk path supports. A plan that
+        # carries bug_ids with a non-bulk kind (e.g. add_comment/create_bug) —
+        # reconstructable via from_dict — must not be multiplied across items.
+        if plan.bug_ids and plan.kind in _BULK_KINDS:
             return _apply_bulk(plan, db, actor)
         return _dispatch_single(plan, db, actor)
     except (SQLAlchemyError, ValueError, KeyError, TypeError, AttributeError) as exc:

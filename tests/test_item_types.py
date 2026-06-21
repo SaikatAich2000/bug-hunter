@@ -150,9 +150,8 @@ def test_stats_includes_by_type(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# XLSX export — the Reports view replaced the legacy CSV path. The same
-# "the type column is present and a Task row carries Task" invariant is
-# now verified against the Item Detail report.
+# XLSX export — the type column is present and a Task row carries Task,
+# verified against the Item Detail report.
 # ---------------------------------------------------------------------------
 def test_xlsx_export_includes_type_column(admin_client):
     import io
@@ -174,8 +173,7 @@ def test_xlsx_export_includes_type_column(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# Email subject / body uses the work-item TYPE (was the user's bug report:
-# "I created a task but the email said I was assigned a bug")
+# Email subject / body uses the work-item type
 # ---------------------------------------------------------------------------
 def test_email_subject_uses_item_type(monkeypatch):
     """notify_assignment must say 'task' / 'requirement' / 'bug' based on the
@@ -204,7 +202,7 @@ def test_email_subject_uses_item_type(monkeypatch):
             item_type=item_type,
         )
 
-    # CREATE — subject and body should NOT say "bug" when the row is a Task
+    # CREATE — subject and body should not say "bug" when the row is a Task
     sent.clear()
     notify_bug_created(snap("Task"), actor_user_id=None)
     assert sent, "expected exactly one email for create"
@@ -212,7 +210,7 @@ def test_email_subject_uses_item_type(monkeypatch):
     assert "task" in subj.lower(), subj
     assert "new task" in subj.lower(), subj
     assert "Type:        Task" in body
-    # Must NOT report it as a bug.
+    # Must not report it as a bug.
     assert "new bug" not in subj.lower()
     assert "a new bug" not in body.lower()
 
@@ -228,7 +226,7 @@ def test_email_subject_uses_item_type(monkeypatch):
     subj, _, body = sent[-1]
     assert "new bug" in subj.lower(), subj  # back-compat preserved
 
-    # ASSIGNMENT — the exact case the user complained about
+    # ASSIGNMENT
     sent.clear()
     notify_assignment(snap("Task"), [assignee], actor_name="Alice")
     subj, _, body = sent[-1]
@@ -258,7 +256,7 @@ def test_email_subject_uses_item_type(monkeypatch):
 # Audit-log detail strings carry the right noun
 # ---------------------------------------------------------------------------
 def test_audit_log_detail_uses_item_type(admin_client):
-    """The audit row written when an item is CREATED says e.g. 'Task created
+    """The audit row written when an item is created says e.g. 'Task created
     with status …', not 'Bug created with status …'."""
     p = _make_project(admin_client)
     row = _make_item(admin_client, p["id"], item_type="Task")
@@ -301,9 +299,9 @@ def test_init_db_is_idempotent(admin_client):
 
 
 def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch):
-    """Simulate a row that was inserted BEFORE the item_type column existed:
+    """Simulate a row that was inserted before the item_type column existed:
     the ALTER TABLE must add the column with DEFAULT 'Bug' so the row is
-    interpreted as a Bug — the same guarantee the live production database
+    interpreted as a Bug, the same guarantee the live production database
     gets on upgrade."""
     # Build a minimal "old" SQLite DB that has a bugs table without the
     # item_type column, then point the engine at it and call init_db().

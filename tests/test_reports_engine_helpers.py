@@ -1,9 +1,7 @@
-"""Unit tests for the reports-engine helpers extracted during the Sonar
-S3776 cognitive-complexity refactor.
+"""Unit tests for the reports-engine helpers.
 
-These exercise the new helper functions directly (no DB round-trip) so the
-new-code coverage stays above the quality gate, and they pin the behaviour
-the refactor must preserve:
+These exercise the helper functions directly (no DB round-trip) and pin their
+behavior:
 
   * _days_open_value      — open-duration in whole days, tz-coercion
   * _bug_scalar_fields    — plain bug columns with defaults
@@ -20,8 +18,8 @@ The throughput query tuple shape (see _build_throughput_query) is:
 
 `_bug_scalar_fields` / `_bug_relation_fields` are typed to accept a Bug, so
 the tests build real (transient, never-flushed) Bug/Project/User/Event
-instances rather than duck-typed stand-ins — column defaults only apply at
-flush, so unset attributes read back as None / [].
+instances rather than duck-typed stand-ins. Column defaults only apply at
+flush, so unset attributes read back as None or [].
 """
 from __future__ import annotations
 
@@ -205,7 +203,7 @@ def test_fold_throughput_row_counts_resolution():
 
 def test_fold_throughput_row_deleted_actor_bucketed_by_name():
     # Deleted users (NULL actor_user_id) are bucketed by their preserved
-    # snapshot name, NOT collapsed onto one -1 sentinel — so two distinct
+    # snapshot name, not collapsed onto one -1 sentinel, so two distinct
     # ex-employees' work never gets merged under one name.
     from app.reports.engine import _fold_throughput_row
     per_user, details = {}, []

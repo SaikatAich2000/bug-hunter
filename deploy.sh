@@ -105,8 +105,11 @@ docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --remove-orphans
 # ── Health wait ───────────────────────────────────────────────────────────────
 info "Waiting for bugtracker_db to be healthy..."
 RETRIES=20
+# grep -qx (whole-line match): a plain `grep -q healthy` ALSO matches the literal
+# "unhealthy" status, declaring a failing DB ready. -qx requires the status to be
+# exactly "healthy".
 until docker inspect --format='{{.State.Health.Status}}' bugtracker_db 2>/dev/null \
-      | grep -q "healthy"; do
+      | grep -qx "healthy"; do
   RETRIES=$((RETRIES - 1))
   [[ $RETRIES -le 0 ]] && abort "bugtracker_db did not become healthy in time."
   sleep 3
@@ -114,8 +117,10 @@ done
 
 info "Waiting for bugtracker_app to be running..."
 RETRIES=20
+# -qx again: a crash-looping container momentarily shows "restarting"; plain
+# `grep running` could also match unexpected substrings. Require exactly "running".
 until docker inspect --format='{{.State.Status}}' bugtracker_app 2>/dev/null \
-      | grep -q "running"; do
+      | grep -qx "running"; do
   RETRIES=$((RETRIES - 1))
   [[ $RETRIES -le 0 ]] && abort "bugtracker_app did not start in time."
   sleep 3

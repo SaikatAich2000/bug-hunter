@@ -1,29 +1,27 @@
-"""Events API — containers for work items (standups, sprint meetings).
+"""Events API: containers for work items (standups, sprint meetings).
 
-An event groups any number of items (Bug / Requirement / Task) so the
-morning standup can be tracked as a first-class entity. Items are linked
-via `Bug.event_id` (nullable). The link is fully editable:
+An event groups any number of items (Bug / Requirement / Task), linked via
+`Bug.event_id` (nullable). The link is editable:
 
   - Create an item directly under an event:  POST /api/bugs with event_id
   - Move an existing item into an event:     PUT  /api/bugs/{id} {event_id: N}
   - Take an item back out:                   PUT  /api/bugs/{id} {event_id: null}
 
-Deleting an event preserves its items — the FK is set to NULL via the
-SQL ``ondelete="SET NULL"`` on the model column. The audit trail records
-every create/update/delete on the event itself plus, separately, every
-item-side change of event_id (which routes/bugs.py picks up as a normal
-field change).
+Deleting an event preserves its items via ``ondelete="SET NULL"`` on the model
+column. The audit trail records every create/update/delete on the event itself
+plus, separately, every item-side change of event_id (which routes/bugs.py
+picks up as a normal field change).
 
 Permissions:
   - create / edit: admin or manager
   - delete:        admin only
   - regular user:  read-only
 
-Managers (event_managers M2M): admin/manager-role users who own the
-event. They receive event-level notification emails (create / update /
-delete). Per-task assignment emails fan out only to that task's
-assignees — they do NOT cc event managers, so adding someone as a
-manager doesn't subscribe them to every task inside.
+Managers (event_managers M2M) are admin/manager-role users who own the event
+and receive event-level notification emails (create / update / delete).
+Per-task assignment emails fan out only to that task's assignees and do not cc
+event managers, so adding someone as a manager doesn't subscribe them to every
+task inside.
 """
 from __future__ import annotations
 
@@ -51,8 +49,6 @@ from app.schemas import (
 router = APIRouter(prefix="/api/events", tags=["events"])
 
 
-
-# Extracted to a module constant to avoid duplicating the literal.
 _DETAIL_EVENT_NOT_FOUND = "Event not found"
 
 # ---------------------------------------------------------------------------
@@ -173,10 +169,9 @@ def _bug_to_brief(bug: Bug, actor: User, attachment_count: int = 0) -> dict:
 
 
 def _resolve_managers(db: Session, ids: list[int]) -> list[User]:
-    """Validate and return the User rows that match `ids`. Every id must
-    point at an existing user whose role is admin or manager — regular
-    users can't be set as event managers because the permission model
-    means they couldn't act on the event anyway.
+    """Validate and return the User rows that match `ids`. Every id must point
+    at an existing admin or manager user; regular users can't be event managers
+    since they couldn't act on the event anyway.
     """
     if not ids:
         return []
@@ -230,16 +225,17 @@ def list_events(
     stmt = select(Event).options(
         selectinload(Event.managers),
     ).order_by(
-        Event.scheduled_for.desc().nullslast() if hasattr(Event.scheduled_for.desc(), "nullslast")
-        else Event.scheduled_for.desc(),
+        # Events with no scheduled_for sort to the bottom; id desc is the stable
+        # tiebreaker. nullslast() is available on SQLAlchemy 2.x and emulated on
+        # SQLite.
+        Event.scheduled_for.desc().nullslast(),
         Event.id.desc(),
     )
     if scheduled_for:
         stmt = stmt.where(Event.scheduled_for == scheduled_for)
-    # Hard row ceiling (+ optional pagination) so this list can't grow
-    # unbounded as standups/sprints accrue — mirrors the caps on /bugs and
-    # /audit. The default page_size (500) returns every event for any realistic
-    # board, so the SPA and existing callers are unaffected.
+    # Row ceiling with optional pagination so this list can't grow unbounded as
+    # standups/sprints accrue. The default page_size (500) covers any realistic
+    # board.
     stmt = stmt.limit(page_size).offset((page - 1) * page_size)
     rows = list(db.scalars(stmt).all())
     item_counts, assignee_counts = _event_list_aggregates(
@@ -264,11 +260,10 @@ def list_events(
 # ---------------------------------------------------------------------------
 # Detail (event + its items)
 # ---------------------------------------------------------------------------
-# Hard ceiling on items serialized for one event-detail response. Any user can
-# add an item to an event, so without a cap a large event would stream its
-# entire (eager-loaded) item set into one response — the same row-bound guard
-# every other list endpoint applies. The exact count is still shown via a
-# separate COUNT, so truncation is visible, not silent.
+# Ceiling on items serialized for one event-detail response. Any user can add
+# an item to an event, so without a cap a large event would stream its entire
+# eager-loaded item set into one response. The exact count is still shown via a
+# separate COUNT, so truncation is visible.
 _EVENT_ITEMS_MAX = 1000
 
 
@@ -288,8 +283,7 @@ def get_event(
         selectinload(Bug.reporter),
         selectinload(Bug.assignees),
         selectinload(Bug.event),
-    # Newest task at the top so the most recently updated item is what the user
-    # sees first when they open an event.
+    # Newest item first, so the most recently updated item is at the top.
     ).where(Bug.event_id == event_id).order_by(
         Bug.updated_at.desc(), Bug.id.desc(),
     ).limit(_EVENT_ITEMS_MAX)
@@ -308,10 +302,13 @@ def get_event(
         ).all())
     else:
         att_counts = {}
-    # We already loaded every item — pass the count so _event_brief doesn't
-    # re-issue a COUNT(*) for the detail view (it would otherwise fall back).
+    # Pass the count so _event_brief doesn't re-issue a COUNT(*) for the detail
+    # view.
     payload = _event_brief(db, ev, item_count=total_items)
     payload["items"] = [_bug_to_brief(b, user, int(att_counts.get(b.id, 0))) for b in items]
+    # Surface when the item list was capped at _EVENT_ITEMS_MAX so the client
+    # can show "showing N of M" rather than a silently lossy view.
+    payload["items_truncated"] = total_items > len(items)
     return payload
 
 
@@ -341,9 +338,8 @@ def create_event(
          f"Event created: {ev.name}"
          + (f" (scheduled for {ev.scheduled_for})" if ev.scheduled_for else ""))
     # In-app notifications to the managers. No exclude=actor: being made a
-    # manager is meaningful even for a creator who added themselves (same rule
-    # as a bug self-assignment), so the creator's own bell lights up too if
-    # they're in the manager list.
+    # manager is meaningful even for a creator who added themselves, so the
+    # creator is notified if they're in the manager list.
     if managers:
         notification_service.notify(
             db, [m.id for m in managers], kind="event", background=background,
@@ -423,13 +419,18 @@ def update_event(
     fields = payload.model_dump(exclude_unset=True)
     changes = _compute_event_changes(ev, fields)
     new_manager_ids = fields.pop("manager_ids", None)
+    # Capture the manager set before the diff so a just-removed manager, whose
+    # removal is the change being logged, is still notified rather than dropped
+    # from the recipient list.
+    old_manager_ids = [m.id for m in ev.managers]
     for k, v in fields.items():
         setattr(ev, k, v)
     _apply_event_manager_diff(ev, db, new_manager_ids, changes)
-    if changes and ev.managers:
+    recipient_ids = sorted({*old_manager_ids, *(m.id for m in ev.managers)})
+    if changes and recipient_ids:
         _summary = ", ".join(f for f, _, _ in changes)
         notification_service.notify(
-            db, [m.id for m in ev.managers], kind="event", background=background,
+            db, recipient_ids, kind="event", background=background,
             title=f"Event “{ev.name}” updated",
             body=f"{actor.name} changed {_summary}.",
             event_id=ev.id, actor_name=actor.name, exclude=actor.id,
@@ -470,17 +471,19 @@ def delete_event(
     name = ev.name
     manager_ids = [m.id for m in (ev.managers or [])]
     snap = _event_snapshot(ev) if ev.managers else None
-    # Items keep existing — the FK is declared with ondelete='SET NULL' but
-    # we also explicitly null them here so SQLite (which doesn't always
-    # honour the FK ondelete with declarative-style attached relationships
-    # on a populated session) does the right thing.
+    # Items keep existing. The FK is declared ondelete='SET NULL', but they are
+    # also explicitly nulled here because SQLite doesn't always honour the FK
+    # ondelete for attached relationships on a populated session.
     db.query(Bug).filter(Bug.event_id == event_id).update(
         {Bug.event_id: None}, synchronize_session=False,
     )
     db.delete(ev)
-    _log(db, None, actor, "event_deleted",
+    # Pass event_id (not None) so the deletion is findable by the audit screen's
+    # entity-id lookup ("event N"); entity_id is plain metadata, so it can point
+    # at the now-deleted event.
+    _log(db, event_id, actor, "event_deleted",
          f"Deleted event #{event_id}: {name}")
-    # No event_id on these rows — the event is gone and the FK CASCADE would
+    # No event_id on these rows: the event is gone and the FK cascade would
     # immediately delete any notification that referenced it.
     if manager_ids:
         notification_service.notify(

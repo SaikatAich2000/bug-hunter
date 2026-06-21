@@ -12,13 +12,13 @@ from app.chatbot.redaction import redact
 # ---------------------------------------------------------------------------
 def test_redact_empty_and_none():
     assert redact("") == ""
-    assert redact(None) == ""  # type: ignore[arg-type]  # NOSONAR - negative-path test
+    assert redact(None) == ""  # type: ignore[arg-type]  # negative-path test
 
 
 def test_redact_scrubs_common_secret_shapes():
     jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123456"
     samples = {
-        "password: hunter2": "[REDACTED]",  # NOSONAR - synthetic test fixture, not a real credential
+        "password: hunter2": "[REDACTED]",  # synthetic test fixture, not a real credential
         "api_key = sk-abcdefghijklmnop1234": "[REDACTED]",
         "Authorization: Bearer abcdef.ghijkl": "[REDACTED]",
         f"token {jwt}": "[REDACTED]",
@@ -30,6 +30,19 @@ def test_redact_scrubs_common_secret_shapes():
     for text, marker in samples.items():
         assert marker in redact(text), text
 
+    # Assert the actual secret value is gone from the output, not just that the
+    # marker is present. Checking only for the marker would miss an
+    # "Authorization: Bearer <token>" leak where the token is left in the clear
+    # while the word "Bearer" is scrubbed.
+    leak_checks = {
+        "Authorization: Bearer abcdef.ghijkl": "abcdef.ghijkl",
+        "api_key = sk-abcdefghijklmnop1234": "sk-abcdefghijklmnop1234",
+        "github_pat_11ABCDEFG0123456789abcdef": "github_pat_11ABCDEFG0123456789abcdef",
+        "bearer sk-zzzzzzzzzzzzzzzzzzzz": "sk-zzzzzzzzzzzzzzzzzzzz",
+    }
+    for text, secret in leak_checks.items():
+        assert secret not in redact(text), text
+
 
 def test_redact_pem_private_key_block():
     # Obviously-fake body — exists only to exercise the PEM-block regex.
@@ -37,7 +50,7 @@ def test_redact_pem_private_key_block():
         "-----BEGIN RSA PRIVATE KEY-----\n"
         "NOT-A-REAL-KEY-THIS-IS-ONLY-TEST-FIXTURE-PADDING-XXXXXXXXXXXX\n"
         "-----END RSA PRIVATE KEY-----"
-    )  # NOSONAR - synthetic, not a real private key
+    )  # synthetic, not a real private key
     assert "[REDACTED]" in redact(pem)
     assert "BEGIN RSA PRIVATE KEY" not in redact(pem)
 
@@ -76,10 +89,10 @@ def test_remember_bug_user_and_filter():
     s.remember_filter(5, src)
     src["priority"] = ["High"]       # add a top-level key after storing
     sess = s.get(5)
+    # remember_filter takes a shallow copy, so the later top-level key added to
+    # src must not appear in the stored filter.
     assert sess.last_bug_id == 99
     assert sess.last_user_id == 7 and sess.last_user_name == "Carol"
-    # remember_filter takes a (shallow) copy, so the later top-level key
-    # we added to src must NOT appear in the stored filter.
     assert sess.last_filter == {"status": ["New"]}
 
 
@@ -120,7 +133,7 @@ def test_capacity_eviction_drops_lru(monkeypatch):
         s.touch(i)
     assert len(s._all_sessions_for_test()) == mem._MAX_SESSIONS
     clock["t"] += 1
-    s.touch(10_000)                            # over cap → drops the LRU (uid 0)
+    s.touch(10_000)                            # over cap, drops the least-recently-used (uid 0)
     sessions = s._all_sessions_for_test()
     assert len(sessions) == mem._MAX_SESSIONS
     assert 0 not in sessions and 10_000 in sessions

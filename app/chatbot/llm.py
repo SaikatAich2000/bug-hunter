@@ -1,36 +1,31 @@
 """Sleuth Layer 3 — optional local LLM via llama.cpp.
 
-This module exists for the ~5% of queries the rules + classifier can't
-handle: free-form sentences with weird phrasing, multi-step requests,
-or domain language we didn't anticipate. It never calls an external
-API. The whole inference loop runs on this server, against a GGUF model
-file the operator drops into `models/`.
+Handles the queries the rules + classifier can't: free-form sentences with
+unusual phrasing, multi-step requests, or unanticipated domain language. It
+makes no external API calls; inference runs on this server against a GGUF
+model file the operator drops into `models/`.
 
-Hardware reality check:
-- The deployment target is 1 CPU, 2 GB RAM, no GPU.
+Hardware notes (target: 1 CPU, 2 GB RAM, no GPU):
 - A 0.5B-parameter GGUF model at Q4_K_M quantization is ~350 MB on disk
-  and roughly the same in RAM once loaded. That fits — barely.
-- Inference speed on a single modern x86 core: 5-15 tokens/second. A
-  structured JSON response of ~80 tokens lands in 6-15 seconds, inside
-  the 5-10s budget for hard cases.
-- We DO NOT load the model at startup. Loading is lazy and triggered
-  only by the first call. The model stays loaded between calls so we
-  don't pay the load cost twice.
-- After 10 minutes of idle we unload the model so the RAM goes back to
-  the database / web workers for cold paths.
+  and roughly the same in RAM once loaded.
+- Inference on a single modern x86 core runs at 5-15 tokens/second; an
+  ~80-token JSON response takes 6-15 seconds.
+- The model loads lazily on the first call, not at startup, and stays
+  loaded between calls to avoid paying the load cost twice.
+- After 10 minutes of idle it is unloaded so the RAM returns to the
+  database / web workers.
 
 Operator setup:
 - `pip install llama-cpp-python` (CPU build, no GPU deps).
 - Drop a GGUF file at `models/sleuth.gguf`. The README in `models/`
-  recommends Qwen2.5-0.5B-Instruct-Q4_K_M.gguf as a small, capable
-  starting point. Larger models (Phi-3 mini Q4 ~2.5 GB, etc.) will not
-  fit in 2 GB RAM with FastAPI + Postgres also resident — measure first.
-- That's it. Sleuth detects the file at runtime via `is_available()`.
+  recommends Qwen2.5-0.5B-Instruct-Q4_K_M.gguf as a small starting point.
+  Larger models (Phi-3 mini Q4 ~2.5 GB, etc.) will not fit in 2 GB RAM
+  with FastAPI + Postgres also resident — measure first.
+- Sleuth detects the file at runtime via `is_available()`.
 
-If anything in this layer fails — model file missing, llama-cpp-python
-not installed, model corrupted, inference times out — the executor
-swallows the exception and falls back to "unknown". The chat path NEVER
-goes down because of an LLM problem.
+If anything in this layer fails — model file missing, llama-cpp-python not
+installed, model corrupted, inference times out — the executor swallows the
+exception and falls back to "unknown", so the chat path stays up.
 """
 from __future__ import annotations
 
@@ -167,7 +162,7 @@ def _detect_available_mb() -> int:
     """
     # In a container with a memory limit, the cgroup ceiling is binding —
     # MemAvailable from /proc/meminfo reflects the host's RAM, which the
-    # OOM killer will NOT let us touch. So we use the smaller of the two.
+    # OOM killer will not let us touch, so use the smaller of the two.
     cg = _detect_container_limit_mb()
     mem_kb = _read_meminfo_kb("MemAvailable")
     if cg is not None and mem_kb is not None:
@@ -255,7 +250,7 @@ def is_available() -> bool:
             )
             _shortfall_warned = True
         return False
-    budget = memory_budget()
+    budget = _cached_budget()
     if budget is not None and not budget.sufficient:
         if not _shortfall_warned:
             logger.warning(
@@ -279,13 +274,20 @@ def is_available() -> bool:
 # Lazy load state
 # ---------------------------------------------------------------------------
 _lock = threading.Lock()
+# A separate lock held across the whole llm(...) decode. The single shared Llama
+# instance has one internal context/KV-cache and its __call__ is not thread-safe;
+# the chat endpoint is a sync def so concurrent requests run on the anyio
+# threadpool and would otherwise interleave decodes, corrupting the cache
+# (garbled JSON / native crash). Distinct from _lock (load/unload) so a decode
+# doesn't block the idle-unload bookkeeping.
+_inference_lock = threading.Lock()
 _llm: Any = None             # the Llama instance, or None
 _loaded_at: float = 0.0      # epoch seconds when we last loaded
 _last_used_at: float = 0.0   # epoch seconds of last inference call
 
 
 def _ensure_loaded() -> Any:
-    """Lazy-load the model. Caller must NOT hold _lock; we acquire it.
+    """Lazy-load the model. Caller must not hold _lock; this acquires it.
 
     Returns the Llama instance, or raises if loading fails.
     """
@@ -320,6 +322,7 @@ def _ensure_loaded() -> Any:
         )
         _loaded_at = time.time()
         logger.info("Sleuth LLM loaded in %.2fs", _loaded_at - t0)
+        _ensure_reaper()   # free the RAM again once this load goes idle
         return _llm
 
 
@@ -328,6 +331,79 @@ def _unload() -> None:
     global _llm
     with _lock:
         _llm = None
+
+
+# ---------------------------------------------------------------------------
+# Idle reaper — frees RAM while idle, not only on the next request.
+#
+# The lazy-unload in _ensure_loaded only triggers when a new request arrives,
+# so without this the model stays resident after a usage burst. A daemon thread
+# (started once, on the first successful load) periodically unloads the model
+# once it has been idle past _IDLE_UNLOAD_S, returning the ~350 MB to Postgres
+# / web workers.
+# ---------------------------------------------------------------------------
+_reaper_started = False
+
+
+def _maybe_unload_idle() -> bool:
+    """Unload the model if idle past _IDLE_UNLOAD_S. Returns True if it
+    unloaded. Acquires _lock; safe to call from the reaper thread."""
+    global _llm
+    with _lock:
+        if (_llm is not None and _last_used_at > 0
+                and (time.time() - _last_used_at) > _IDLE_UNLOAD_S):
+            logger.info("Sleuth LLM idle past %.0fs — unloading (reaper)", _IDLE_UNLOAD_S)
+            _llm = None
+            return True
+    return False
+
+
+def _reaper_loop() -> None:  # pragma: no cover - infinite background daemon loop
+    # Wake at a fraction of the idle window (bounded to a sane range) so we free
+    # RAM within roughly _IDLE_UNLOAD_S of the last use without busy-spinning.
+    interval = min(60.0, max(5.0, _IDLE_UNLOAD_S / 4.0))
+    while True:
+        time.sleep(interval)
+        try:
+            _maybe_unload_idle()
+        except Exception:  # noqa: BLE001 - a reaper hiccup must never crash the app
+            logger.debug("Sleuth LLM reaper iteration failed", exc_info=True)
+
+
+def _ensure_reaper() -> None:
+    """Start the idle-reaper daemon once. No-op if already running."""
+    global _reaper_started
+    if _reaper_started:
+        return
+    _reaper_started = True
+    threading.Thread(target=_reaper_loop, name="sleuth-llm-reaper",
+                     daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Memory-budget cache — is_available() runs on every chat message, but the
+# budget (model file size, cgroup limit, MemAvailable) is essentially static
+# after startup. Memoize it briefly so we don't re-parse /proc + sysfs and
+# re-stat the model on every request. Cleared by _reset_caches_for_test().
+# ---------------------------------------------------------------------------
+_BUDGET_TTL_S = 300.0
+_budget_cache: Optional[tuple[float, Optional["_MemoryBudget"]]] = None
+
+
+def _cached_budget() -> Optional["_MemoryBudget"]:
+    global _budget_cache
+    now = time.time()
+    if _budget_cache is not None and (now - _budget_cache[0]) < _BUDGET_TTL_S:
+        return _budget_cache[1]
+    budget = memory_budget()
+    _budget_cache = (now, budget)
+    return budget
+
+
+def _reset_caches_for_test() -> None:
+    """Clear the memoized budget (test hook; production never needs this)."""
+    global _budget_cache
+    _budget_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -389,13 +465,13 @@ def _extract_json(raw: str) -> Optional[dict[str, Any]]:
         try:
             obj, _end = decoder.raw_decode(s[idx:])
         except ValueError:
-            # json.JSONDecodeError is a ValueError subclass.
+            # json.JSONDecodeError is a ValueError subclass — this '{' didn't
+            # start valid JSON, so try the next one.
             idx = s.find("{", idx + 1)
             continue
-        if isinstance(obj, dict):
-            return obj
-        # Non-dict at this brace — keep scanning subsequent braces.
-        idx = s.find("{", idx + 1)
+        # A JSON value that starts at '{' always decodes to an object (dict),
+        # so the first one that parses is our result.
+        return obj
     return None
 
 
@@ -412,14 +488,17 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
     prompt = _build_prompt(message)
     t0 = time.time()
     try:
-        out = llm(
-            prompt,
-            max_tokens=_MAX_NEW_TOKENS,
-            temperature=0.0,    # deterministic — we want stable JSON
-            top_p=1.0,
-            stop=["<|user|>", "<|system|>", "</s>"],
-            echo=False,
-        )
+        # Serialize the decode: only one inference may touch the shared Llama
+        # instance at a time (its KV-cache is not concurrency-safe).
+        with _inference_lock:
+            out = llm(
+                prompt,
+                max_tokens=_MAX_NEW_TOKENS,
+                temperature=0.0,    # deterministic — we want stable JSON
+                top_p=1.0,
+                stop=["<|user|>", "<|system|>", "</s>"],
+                echo=False,
+            )
     except Exception as exc:
         logger.warning("Sleuth LLM inference failed: %s", exc)
         return None
@@ -466,6 +545,13 @@ def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
     bid = parsed.get("bug_id")
     if isinstance(bid, int) and bid > 0:
         pq.bug_id = bid
+    # The compact LLM JSON schema has no role/time fields, so role and
+    # time-window filters from the user's phrasing ("managers only", "activity
+    # yesterday") would otherwise be silently dropped on the LLM-routed read
+    # path. Recover them deterministically from the raw message via the same
+    # rule helpers the NLU uses, so list_users / recent_activity stay scoped.
+    _nlu._populate_role_filter(message, pq)
+    pq.time_window = _nlu._parse_time_window(message)
     return pq
 
 
@@ -499,9 +585,9 @@ def try_understand(message: str, db: Session, actor: User) -> Optional[Response]
     and return a Response. Returns None if the LLM is unavailable, fails,
     or the predicted intent is "unknown".
 
-    This intentionally only routes to READ handlers. We never let the
-    LLM trigger writes — writes go through the rule-based parser so the
-    user always sees a confirmation prompt before anything mutates."""
+    This routes only to read handlers. The LLM never triggers writes —
+    writes go through the rule-based parser so the user always sees a
+    confirmation prompt before anything mutates."""
     if not is_available():
         return None
     parsed = _run_inference(message)

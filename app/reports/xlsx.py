@@ -46,12 +46,11 @@ _ZEBRA_FILL = "F2F4F8"
 
 
 # Formula-injection defense: Excel / LibreOffice / Numbers interpret a cell
-# whose value starts with one of these characters as a FORMULA, not text. A
+# whose value starts with one of these characters as a formula, not text. A
 # bug title like `=cmd|'/c calc.exe'!A1` would therefore execute when the
-# workbook is opened — the same attack surface the CSV export guards against.
-# Prefixing such cells with a single quote (OWASP-recommended) neutralizes it;
-# the quote is consumed by Excel on display, so the user still sees the
-# original text.
+# workbook is opened. Prefixing such cells with a single quote (OWASP-
+# recommended) neutralizes it; the quote is consumed by Excel on display, so
+# the user still sees the original text.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
@@ -108,8 +107,10 @@ def _write_table(
     """Write a banner + header + rows. Returns the next free row index."""
     ncols = max(1, len(columns))
 
-    # Banner row.
-    banner_cell = ws.cell(row=start_row, column=1, value=banner)
+    # Banner row. Defanged too: although the banner is a server constant today,
+    # routing it (and the header labels below) through _defang_formula_text
+    # removes a guard that silently depended on that staying true.
+    banner_cell = ws.cell(row=start_row, column=1, value=_defang_formula_text(banner))
     banner_cell.font = Font(bold=True, color=_BANNER_FG, size=12)
     banner_cell.fill = PatternFill("solid", fgColor=_BANNER_FILL)
     banner_cell.alignment = Alignment(horizontal="left", vertical="center")
@@ -124,7 +125,7 @@ def _write_table(
     header_fill = PatternFill("solid", fgColor=_HEADER_FILL)
     header_font = Font(bold=True, color=_HEADER_FG)
     for idx, col in enumerate(columns, start=1):
-        cell = ws.cell(row=header_row, column=idx, value=col.label)
+        cell = ws.cell(row=header_row, column=idx, value=_defang_formula_text(col.label))
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="left", vertical="center")

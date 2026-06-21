@@ -56,10 +56,6 @@ python -m playwright install chromium
 python -m pytest -m ui
 ```
 
-Static analysis is configured in `sonar-project.properties` and run with
-`scripts/sonar-scan.sh` (or `scripts/sonar-scan.ps1`). It reads `coverage.xml`
-and never touches the runtime database.
-
 ## Code style
 
 - Match the surrounding code; the repo has consistent patterns.
@@ -77,7 +73,7 @@ and never touches the runtime database.
 - One concern per pull request.
 - Describe the change in a short paragraph and list any DB or config
   implications.
-- The test suite must pass and the SonarQube quality gate must stay green.
+- The test suite must pass and coverage must stay at or above the gate.
 - Reference the related issue, if any.
 
 ## Security

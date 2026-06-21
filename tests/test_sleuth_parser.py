@@ -1,8 +1,8 @@
-"""
-Spins up a fresh SQLite DB, seeds users / projects / bugs, exercises the
-parser, executor, Excel generator, classifier, and HTTP route. Read-only
-by design at this stage — write-action tests live in _action_test.py.
-Run from the bug-hunter root: python3 _chatbot_test.py
+"""Sleuth read-path coverage.
+
+Spins up a fresh SQLite DB, seeds users, projects, and bugs, then exercises the
+NLU parser, executor, Excel generator, classifier, and HTTP route. Read-only by
+design; write-action behavior is covered separately.
 """
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 # developer's local .env that enables it).
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
-# Force a fresh app import bound to THIS file's dedicated DB (see the long note
-# in test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
-# engine bound to an earlier-collected module's torn-down DB.
+# Force a fresh app import bound to this file's dedicated DB. Avoids a
+# full-suite "no such table" from a shared engine bound to an earlier-collected
+# module's torn-down DB.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -52,8 +52,8 @@ def _rebind_and_seed():
     """Re-bind this file's module-level app.* references to the current import
     generation each test, then seed its dedicated DB. conftest's `client`
     fixture purges `app.*` to rebind the engine per test; without re-binding and
-    re-seeding here, parser's reads would hit a stale or empty engine. (Under
-    pytest the ``__main__`` block that seeds in standalone mode never runs.)"""
+    re-seeding here, reads would hit a stale or empty engine. (Under pytest the
+    ``__main__`` block that seeds in standalone mode never runs.)"""
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -267,7 +267,7 @@ def test_executor() -> None:
         fb = next((b for b in resp.blocks if b.kind == "file"), None)
         check("export apollo — file block present", fb is not None)
         if fb:
-            data = excel.fetch_staged(fb.payload["download_token"])
+            data = excel.fetch_staged(fb.payload["download_token"], admin.id)
             check("export apollo — fetchable", data is not None)
             if data:
                 check("export apollo — non-empty", len(data[0]) > 500)
@@ -401,17 +401,19 @@ def test_excel() -> None:
          "assignees": "", "due_date": "", "created_at": "2025-01-01",
          "updated_at": "2025-01-02"},
     ]
-    token, size = excel.stage_workbook(rows, "test.xlsx", "Filter: any")
+    token, size = excel.stage_workbook(rows, "test.xlsx", 1, "Filter: any")
     check("excel — token returned", isinstance(token, str) and len(token) > 8)
     check("excel — size > 500", size > 500)
-    fetched = excel.fetch_staged(token)
+    fetched = excel.fetch_staged(token, 1)
     check("excel — fetched OK", fetched is not None)
     if fetched:
         b, fn = fetched
         check("excel — filename", fn == "test.xlsx")
         check("excel — len matches size", len(b) == size)
-    bad = excel.fetch_staged("nope-xyz")
+    bad = excel.fetch_staged("nope-xyz", 1)
     check("excel — unknown token None", bad is None)
+    # A DIFFERENT user must NOT be able to fetch another user's staged file.
+    check("excel — cross-user fetch denied", excel.fetch_staged(token, 999) is None)
     if fetched:
         import io
         import openpyxl as _opx

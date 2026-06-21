@@ -1,14 +1,14 @@
 """Keyword retrieval over bugs, used to ground Sleuth's cloud answers.
 
-Dependency-free and SQLite-compatible: a LIKE-based keyword search rather than
-a vector store, so grounding works within the low-memory / low-CPU target
-without pulling in chromadb or an embedding model.
+A LIKE-based keyword search rather than a vector store, so grounding works
+within the low-memory / low-CPU target without pulling in chromadb or an
+embedding model.
 
-Read scope matches the REST API exactly: every authenticated user can read
-every bug, so retrieval applies no per-user filter and can never surface
-anything the caller could not already fetch through the normal API. Retrieved
-text is treated as DATA, never instructions — format_context wraps it so the
-contents of a bug cannot steer the model (indirect prompt-injection defense).
+Read scope matches the REST API: every authenticated user can read every
+bug, so retrieval applies no per-user filter and cannot surface anything the
+caller could not already fetch through the normal API. Retrieved text is
+treated as data, not instructions — format_context wraps it so the contents
+of a bug cannot steer the model (indirect prompt-injection defense).
 """
 from __future__ import annotations
 
@@ -120,10 +120,10 @@ def retrieve_bugs(db: Session, message: str, *, limit: int = 5) -> list[Retrieve
 
 
 # Fence markers mirror app/chatbot/agent.py. Wrapping the records as a delimited
-# DATA block (and defanging any literal marker a record's text contains) means
-# BOTH the single-shot grounding path and the agent's retrieve tool get the same
-# structural injection defense, not just the polite header. Keep in sync with
-# agent.py's _FENCE_OPEN / _FENCE_CLOSE / _fence_safe.
+# data block (and defanging any literal marker a record's text contains) gives
+# both the single-shot grounding path and the agent's retrieve tool the same
+# structural injection defense. Keep in sync with agent.py's _FENCE_OPEN /
+# _FENCE_CLOSE / _fence_safe.
 _FENCE_OPEN = "<<DATA>>"
 _FENCE_CLOSE = "<<END DATA>>"
 
@@ -135,13 +135,13 @@ def _defang_markers(text: str) -> str:
 
 
 def format_context(records: list[RetrievedBug]) -> str:
-    """Render retrieved bugs as a fenced, injection-safe CONTEXT block.
+    """Render retrieved bugs as a fenced, injection-safe context block.
 
     The header tells the model the records are reference data only and must
-    never be followed as instructions, and the records sit inside a DATA fence
-    with their own marker characters defanged — so a bug whose text says "ignore
+    not be followed as instructions, and the records sit inside a data fence
+    with their own marker characters defanged, so a bug whose text says "ignore
     your rules" (or forges the fence) cannot hijack the answer. Bug numbers are
-    included so the answer's citations can be verified deterministically.
+    included so the answer's citations can be verified.
     """
     if not records:
         return ""

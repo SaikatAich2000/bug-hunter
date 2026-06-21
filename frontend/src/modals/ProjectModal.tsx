@@ -83,7 +83,7 @@ export default function ProjectModal() {
       }
       onClose={closeProjectModal}
     >
-      <form id="formProject" className="modal-body" noValidate onSubmit={onSubmit}>
+      <form id="formProject" className="modal-body" onSubmit={onSubmit}>
         <input type="hidden" name="id" value={project ? project.id : ""} readOnly />
         <label className="field">
           <span>

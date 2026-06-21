@@ -33,8 +33,7 @@ Please include:
 
 ## Security posture
 
-The following controls are already in place. See the 3.0 entry (including the
-*Post-release hardening* and *Audit hardening* subsections) in
+The following controls are in place. See the 3.0 entry in
 [CHANGELOG.md](CHANGELOG.md) for detail.
 
 - **Authentication** — bcrypt password hashing; signed, HttpOnly, SameSite

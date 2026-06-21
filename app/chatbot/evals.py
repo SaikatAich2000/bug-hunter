@@ -3,14 +3,14 @@
 When SLEUTH_EVAL_ENABLED is set, a second, independent model call scores a draft
 answer for grounding (is every claim supported by the retrieved records?) and
 faithfulness (does it contradict or invent anything?). A weak verdict only
-appends a short "please verify" caveat — the judge can NEVER rewrite the answer,
+appends a short "please verify" caveat; the judge cannot rewrite the answer,
 block the reply, or trigger a write, and a judge failure fails open (the answer
 is returned unchanged). It complements the deterministic citation check in
-verify.py, which always runs; this catches the subtler unfaithfulness a
-citation match cannot.
+verify.py, which always runs, by catching subtler unfaithfulness a citation
+match cannot.
 
-Like agent.py, the logic here is pure: the model call is injected, so the judge
-is unit-tested without a network. The same function doubles as an offline eval
+Like agent.py, the logic is pure: the model call is injected, so the judge is
+unit-tested without a network. The same function doubles as an offline eval
 primitive — feed it stored (question, context, answer) cases to score a batch.
 """
 from __future__ import annotations
@@ -67,6 +67,29 @@ def build_judge_prompt(question: str, context: str, answer: str) -> str:
     )
 
 
+def _as_bool(value: object, default: bool) -> bool:
+    """Coerce a model-supplied verdict flag to bool.
+
+    LLMs (especially via OpenRouter's json_object mode) frequently emit booleans
+    as strings, and bool('false') is True because any non-empty string is
+    truthy, which would flip an explicitly-unsafe verdict ('grounded': 'false')
+    to safe and suppress the caveat. Map the common false/true spellings
+    explicitly; fall back to ``default`` only when the value is absent/None or
+    unrecognized, so a missing field still defaults to 'fine'."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    s = str(value).strip().lower()
+    if s in ("false", "no", "0", "n", "f", "off"):
+        return False
+    if s in ("true", "yes", "1", "y", "t", "on"):
+        return True
+    return default
+
+
 def parse_verdict(raw: Optional[dict]) -> Optional[Verdict]:
     """Coerce a model reply into a Verdict.
 
@@ -81,8 +104,8 @@ def parse_verdict(raw: Optional[dict]) -> Optional[Verdict]:
         score = 0.0
     score = min(1.0, max(0.0, score))
     return Verdict(
-        grounded=bool(raw.get("grounded", True)),
-        faithful=bool(raw.get("faithful", True)),
+        grounded=_as_bool(raw.get("grounded"), True),
+        faithful=_as_bool(raw.get("faithful"), True),
         score=score,
         issues=str(raw.get("issues") or "").strip(),
     )

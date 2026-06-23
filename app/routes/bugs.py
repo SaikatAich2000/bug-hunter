@@ -404,6 +404,18 @@ def _load_accessible_bug(db: Session, bug_id: int, accessible) -> Bug:
     return bug
 
 
+def _assert_attachment_in_scope(db: Session, accessible, bug_id: int) -> None:
+    """404 (like a missing file) when the attachment's owning bug is outside the
+    actor's project scope. Unrestricted actors (``accessible is None``, i.e.
+    admins) skip the project lookup entirely — keeping it off the hot Range-
+    request path that video seeking hammers."""
+    if accessible is None:
+        return
+    proj_id = db.scalar(select(Bug.project_id).where(Bug.id == bug_id))
+    if proj_id is None or proj_id not in accessible:
+        raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
+
+
 def _like_escape(needle: str) -> str:
     """Escape SQL LIKE wildcards so a user typing `_` or `%` matches the
     literal characters. Paired with `escape='\\\\'` on the LIKE clause."""
@@ -1553,13 +1565,9 @@ def download_attachment(
     if meta is None or meta[0] != bug_id:
         raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
     # Project scope: a restricted actor can't download an attachment on a bug
-    # outside their projects. Only fetch the owning project's id when restricted
-    # (admins skip the extra query). Surfaced as a 404 like a missing file.
-    accessible = accessible_project_ids(db, _user)
-    if accessible is not None:
-        proj_id = db.scalar(select(Bug.project_id).where(Bug.id == bug_id))
-        if proj_id is None or proj_id not in accessible:
-            raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
+    # outside their projects (surfaced as a 404 like a missing file). Admins
+    # skip the lookup — see the helper.
+    _assert_attachment_in_scope(db, accessible_project_ids(db, _user), bug_id)
     _att_bug_id, att_filename, att_content_type, att_size = meta
 
     # Decide content-type and disposition.

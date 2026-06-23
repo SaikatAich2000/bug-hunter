@@ -109,3 +109,9 @@ docs/api/openapi.json
 docs/api/openapi.yaml
 docs/api/Bug-Hunter.postman_collection.json
 docs/api/curl.md
+
+# --- Deployment guide (rendered PDF) ---
+# The pretty PDF can carry environment-specific details (server names, hosts),
+# so it is NOT committed. The canonical, public deployment doc is the plain
+# DEPLOYMENT.md in the repo root; the PDF is generated/kept locally only.
+docs/DEPLOYMENT.pdf

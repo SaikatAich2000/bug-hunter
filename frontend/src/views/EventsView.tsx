@@ -256,6 +256,7 @@ function EventCard({ ev, onOpen }: Readonly<{ ev: EventOut; onOpen: (id: number)
           {ev.item_count} item{ev.item_count === 1 ? "" : "s"}
         </span>
         <span className="event-card-people">👥 {ev.assignee_count}</span>
+        {ev.project_name ? <span className="muted small">📁 {ev.project_name}</span> : null}
         {ev.created_by_name ? <span className="muted small">by {ev.created_by_name}</span> : null}
       </div>
     </section>
@@ -265,6 +266,7 @@ function EventCard({ ev, onOpen }: Readonly<{ ev: EventOut; onOpen: (id: number)
 /** Detail header meta: bits line, description, manager chips. */
 function EventDetailMeta({ detail }: Readonly<{ detail: EventDetail }>) {
   const metaBits = [
+    ...(detail.project_name ? [`📁 ${detail.project_name}`] : []),
     ...(detail.scheduled_for ? [`📅 ${detail.scheduled_for}`] : []),
     ...(detail.created_by_name ? [`by ${detail.created_by_name}`] : []),
     `${detail.item_count} item${detail.item_count === 1 ? "" : "s"}`,

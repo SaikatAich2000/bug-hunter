@@ -353,3 +353,73 @@ def test_legacy_db_gets_event_id_column(tmp_path, monkeypatch):
               json={"event_id": ev["id"]})
         re = c.get(f"/api/events/{ev['id']}").json()
         assert re["item_count"] == 1
+
+
+def test_legacy_events_table_gets_project_id_column(tmp_path, monkeypatch):
+    """A legacy SQLite DB whose `events` table predates the project_id column:
+    init_db must ALTER TABLE events ADD COLUMN project_id (nullable) without
+    touching existing rows. The pre-existing event ends up project-less
+    (visible to admins only); new events can carry a project."""
+    import sqlite3
+    db_file = tmp_path / "legacy_events.db"
+    con = sqlite3.connect(db_file)
+    con.executescript(
+        """
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT '#c9764f',
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        );
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            scheduled_for TEXT,
+            created_by_user_id INTEGER,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        );
+        INSERT INTO projects (name, created_at, updated_at)
+            VALUES ('legacy', '2026-01-01', '2026-01-01');
+        INSERT INTO events (name, created_at, updated_at)
+            VALUES ('pre-project event', '2026-01-01', '2026-01-01');
+        """
+    )
+    con.commit(); con.close()
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
+    monkeypatch.setenv("API_KEY", "")
+    monkeypatch.setenv("EMAIL_BACKEND", "disabled")
+    monkeypatch.setenv("SESSION_SECRET", "legacy_proj_secret")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "Admin1234")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "Admin")
+
+    import sys
+    for mod in list(sys.modules):
+        if mod == "app" or mod.startswith("app."):
+            del sys.modules[mod]
+    from app.config import get_settings
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as c:
+        r = c.post("/api/auth/login", json={
+            "email": "admin@test.local", "password": "Admin1234",
+        })
+        assert r.status_code == 200, r.text
+        # The legacy event survived and is now project-less (project_id NULL).
+        evs = c.get("/api/events").json()
+        assert len(evs) == 1
+        assert evs[0]["name"] == "pre-project event"
+        assert evs[0]["project_id"] is None
+        # A new event can carry a project against the migrated schema.
+        proj = c.get("/api/projects").json()[0]
+        ev = c.post("/api/events", json={
+            "name": "with project", "project_id": proj["id"],
+        }).json()
+        assert ev["project_id"] == proj["id"]

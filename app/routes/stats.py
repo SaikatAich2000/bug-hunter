@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.access import accessible_project_ids, scope_bug_query, scope_event_query
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Bug, Event, Project, User, bug_assignees
@@ -30,37 +31,44 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 _VALID_TYPES = {"Bug", "Requirement", "Task"}
 
 
-def _by_project_stmt(item_type: Optional[str], status_filter: list[str]):
+def _by_project_stmt(item_type: Optional[str], status_filter: list[str], accessible):
     """Bugs-per-project, scoped to item_type + status. Uses an OUTER join so
     projects with zero matching items still appear with count 0, which means
-    every scope predicate goes on the join condition, not a WHERE clause."""
+    every scope predicate goes on the join condition, not a WHERE clause. A
+    restricted actor only sees their own projects (a WHERE on Project.id)."""
     join_cond = Bug.project_id == Project.id
     if item_type is not None:
         join_cond &= Bug.item_type == item_type
     if status_filter:
         join_cond &= Bug.status.in_(status_filter)
-    return (
+    stmt = (
         select(Project.id, Project.name, Project.color, func.count(Bug.id))
         .outerjoin(Bug, join_cond)
         .group_by(Project.id, Project.name, Project.color)
         .order_by(func.count(Bug.id).desc())
     )
+    if accessible is not None:
+        stmt = stmt.where(Project.id.in_(accessible))
+    return stmt
 
 
-def _by_assignee_stmt(item_type: Optional[str], status_filter: list[str]):
+def _by_assignee_stmt(item_type: Optional[str], status_filter: list[str], accessible):
     """Top-10 assignees by item count, scoped to item_type + status. The Bug
-    table is joined only when a scope is active; the unscoped path counts
-    assignment rows directly."""
+    table is joined whenever a Bug-level scope is active (item_type, status, or a
+    project restriction); the unscoped path counts assignment rows directly."""
     stmt = (
         select(User.id, User.name, User.email, func.count(bug_assignees.c.bug_id))
         .join(bug_assignees, bug_assignees.c.user_id == User.id)
     )
-    if item_type is not None or status_filter:
+    if item_type is not None or status_filter or accessible is not None:
         stmt = stmt.join(Bug, Bug.id == bug_assignees.c.bug_id)
         if item_type is not None:
             stmt = stmt.where(Bug.item_type == item_type)
         if status_filter:
             stmt = stmt.where(Bug.status.in_(status_filter))
+        # Project scope (no-op for admins, but the branch is only entered with a
+        # restriction or another scope active).
+        stmt = scope_bug_query(stmt, accessible)
     return (
         stmt.group_by(User.id, User.name, User.email)
         .order_by(func.count(bug_assignees.c.bug_id).desc())
@@ -129,7 +137,7 @@ def _derive_kpis(
 @router.get("", response_model=StatsOut)
 def stats(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     item_type: Optional[str] = Query(
         default=None,
         description=(
@@ -163,10 +171,15 @@ def stats(
     # Normalize the status filter (drop blanks). Empty means no chart scoping.
     status_filter = [s for s in (status or []) if s]
 
+    # Project scope: a restricted manager/user only sees stats for their
+    # projects (an untagged one sees all-zeros); an admin is unrestricted.
+    accessible = accessible_project_ids(db, user)
+
     # Type-tab scoping: when item_type is set, every Bug-table aggregation
-    # filters on Bug.item_type. by_type and the Event count stay global, since
-    # the tab badges rely on the unfiltered totals.
+    # filters on Bug.item_type. Project scope is folded in here too, so it
+    # applies to the KPIs, by_status and (via _scoped_f) the charts and timeline.
     def _scoped(stmt):
+        stmt = scope_bug_query(stmt, accessible)
         if item_type is not None:
             return stmt.where(Bug.item_type == item_type)
         return stmt
@@ -209,8 +222,13 @@ def stats(
         by_status = by_status_global
 
     # Kept for backward compatibility: the dashboard no longer renders these,
-    # but cached older clients may still read them.
-    project_count = db.scalar(select(func.count(Project.id))) or 0
+    # but cached older clients may still read them. project_count is scoped to
+    # what the actor can see (their membership count when restricted); user_count
+    # stays global (a bare team-size number, not project-sensitive).
+    if accessible is not None:
+        project_count = len(accessible)
+    else:
+        project_count = db.scalar(select(func.count(Project.id))) or 0
     user_count = db.scalar(select(func.count(User.id))) or 0
 
     # Cast keys/values like by_status above (consistency and NULL-key safety): a
@@ -228,23 +246,31 @@ def stats(
             _scoped_f(select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment))
         ).all()
     }
-    # by_type stays global so the tab-count badges stay correct regardless of
-    # the active tab. Coerce keys/values (str()/int()) so a NULL item_type can't
-    # surface as a None key the dict[str, int] response model would reject.
+    # by_type spans all item types (the tab badges) but is still PROJECT-scoped
+    # so a restricted actor's tab counts only reflect their projects. Coerce
+    # keys/values (str()/int()) so a NULL item_type can't surface as a None key
+    # the dict[str, int] response model would reject.
     by_type = {
         str(t): int(c)
         for t, c in db.execute(
-            select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type)
+            scope_bug_query(
+                select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type),
+                accessible,
+            )
         ).all()
     }
-    events_count = db.scalar(select(func.count(Event.id))) or 0
+    # Events are scoped by their own project, so the Event badge matches what the
+    # Events view shows the actor.
+    events_count = db.scalar(
+        scope_event_query(select(func.count(Event.id)), accessible)
+    ) or 0
     by_type["Event"] = int(events_count)
 
     by_project_rows = db.execute(
-        _by_project_stmt(item_type, status_filter)
+        _by_project_stmt(item_type, status_filter, accessible)
     ).all()
     by_assignee_rows = db.execute(
-        _by_assignee_stmt(item_type, status_filter)
+        _by_assignee_stmt(item_type, status_filter, accessible)
     ).all()
 
     timeline = _timeline_14d(db, _scoped_f)

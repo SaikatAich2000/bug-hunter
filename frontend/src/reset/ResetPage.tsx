@@ -3,6 +3,7 @@
 // No inline scripts/styles (strict CSP); the theme bootstrap lives in main.tsx.
 import { useState } from "react";
 import type { FormEvent } from "react";
+import PasswordInput from "../components/PasswordInput";
 import { PASSWORD_HINT, validatePassword } from "../lib/constants";
 
 type AlertKind = "error" | "success";
@@ -113,9 +114,8 @@ export default function ResetPage() {
             <span>
               New password <em>*</em>
             </span>
-            <input
+            <PasswordInput
               name="new_password"
-              type="password"
               required
               minLength={8}
               maxLength={200}
@@ -129,9 +129,8 @@ export default function ResetPage() {
             <span>
               Confirm new password <em>*</em>
             </span>
-            <input
+            <PasswordInput
               name="confirm_password"
-              type="password"
               required
               minLength={8}
               maxLength={200}

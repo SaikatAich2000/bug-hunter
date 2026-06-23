@@ -23,10 +23,15 @@ def _login(client, email, password):
 
 def _make_user(client, name, role="user", email=None):
     email = email or f"{name.lower()}@x.test"
-    r = client.post("/api/users", json={
-        "name": name, "email": email, "role": role,
-        "password": "User12345Aa",
-    })
+    body = {"name": name, "email": email, "role": role, "password": "User12345Aa"}
+    # Project-scoped access: tag the new user to every existing project so these
+    # (pre-scoping) per-type permission tests keep exercising the flat model —
+    # the user must be able to SEE an item to then be 403'd on editing the wrong
+    # TYPE. An untagged non-admin would 404 instead.
+    pids = [p["id"] for p in client.get("/api/projects").json()]
+    if pids:
+        body["project_ids"] = pids
+    r = client.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 

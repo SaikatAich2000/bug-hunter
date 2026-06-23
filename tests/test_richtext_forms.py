@@ -414,10 +414,15 @@ class TestSanitiserStillBlocksUnsafe:
 class TestAdminOnlyMutations:
 
     def _make_user(self, client, name, role="user"):
-        r = client.post("/api/users", json={
-            "name": name, "email": f"{name.lower()}@x.test",
-            "role": role, "password": "User12345Aa",
-        })
+        body = {"name": name, "email": f"{name.lower()}@x.test",
+                "role": role, "password": "User12345Aa"}
+        # Project-scoped access: tag the new user to every existing project so
+        # these pre-scoping admin-only-mutation tests keep exercising the flat
+        # model (the user must SEE the bug before the admin-only rule applies).
+        pids = [p["id"] for p in client.get("/api/projects").json()]
+        if pids:
+            body["project_ids"] = pids
+        r = client.post("/api/users", json=body)
         assert r.status_code == 201, r.text
         return r.json()
 

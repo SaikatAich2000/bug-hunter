@@ -18,6 +18,9 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.access import (
+    accessible_project_ids, can_access_project, scope_bug_query,
+)
 from app.auth import (
     can_delete_attachment, can_delete_bug, can_delete_comment, can_edit_bug,
     can_edit_comment, get_current_user,
@@ -363,6 +366,44 @@ def _attachment_count(db: Session, bug_id: int) -> int:
     ) or 0
 
 
+# ---------------------------------------------------------------------------
+# Project-scoped access. A manager/regular user only acts on items in their
+# projects; an admin (accessible is None) is unrestricted. A bug outside scope
+# is surfaced as 404 / "does not exist" so the restriction never leaks which
+# items or projects exist.
+# ---------------------------------------------------------------------------
+def _assert_bug_accessible(accessible, bug: Bug) -> None:
+    """404 when ``bug`` is outside the actor's project scope."""
+    if not can_access_project(accessible, bug.project_id):
+        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+
+
+def _assert_project_accessible(db: Session, accessible, project_id: int) -> None:
+    """400 'Project does not exist' when the project is missing OR outside the
+    actor's scope (a project you can't see is treated as nonexistent)."""
+    if db.get(Project, project_id) is None or not can_access_project(accessible, project_id):
+        raise HTTPException(status_code=400, detail="Project does not exist")
+
+
+def _assert_event_accessible(db: Session, accessible, event_id: int) -> None:
+    """400 'Event does not exist' when the event is missing OR its owning
+    project is outside the actor's scope."""
+    ev = db.get(Event, event_id)
+    if ev is None or not can_access_project(accessible, ev.project_id):
+        raise HTTPException(status_code=400, detail="Event does not exist")
+
+
+def _load_accessible_bug(db: Session, bug_id: int, accessible) -> Bug:
+    """Load a bug (no eager options) and 404 if it's missing or out of scope.
+    Used by the per-bug sub-resource endpoints that only need an existence +
+    access gate before reading/writing the bug's children."""
+    bug = db.get(Bug, bug_id)
+    if bug is None:
+        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    _assert_bug_accessible(accessible, bug)
+    return bug
+
+
 def _like_escape(needle: str) -> str:
     """Escape SQL LIKE wildcards so a user typing `_` or `%` matches the
     literal characters. Paired with `escape='\\\\'` on the LIKE clause."""
@@ -511,6 +552,13 @@ def list_bugs(
         reporter_id=reporter_id, due_date=due_date, event_id=event_id, q=q,
     )
 
+    # Project-scope the whole list: a restricted manager/user only sees items in
+    # their projects (an untagged one sees nothing); an admin is unrestricted.
+    # Applied to both the page and the count so totals/pagination stay correct.
+    accessible = accessible_project_ids(db, _user)
+    stmt = scope_bug_query(stmt, accessible)
+    count_stmt = scope_bug_query(count_stmt, accessible)
+
     total = db.scalar(count_stmt) or 0
     offset = (page - 1) * page_size
     # Skip the query when the requested page is past the end: it returns the
@@ -572,6 +620,8 @@ def get_bug(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Project scope: a bug outside the actor's projects reads as not-found.
+    _assert_bug_accessible(accessible_project_ids(db, user), bug)
 
     # Bounded loads instead of the unbounded relationships. Newest first, which
     # matches the Bug.comments / Bug.activities relationship ordering.
@@ -641,8 +691,10 @@ def create_bug(
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> BugOut:
-    if db.get(Project, payload.project_id) is None:
-        raise HTTPException(status_code=400, detail="Project does not exist")
+    # Project scope: a restricted creator can only file into their own projects;
+    # an inaccessible (or missing) project reads as "does not exist".
+    accessible = accessible_project_ids(db, actor)
+    _assert_project_accessible(db, accessible, payload.project_id)
 
     # Per-type policy: only admins/managers may create Tasks/Requirements
     # (regular users get Bugs only), the same rule can_edit_bug enforces on
@@ -669,10 +721,9 @@ def create_bug(
     # Don't route new work to a deactivated reporter/assignee.
     _reject_inactive([reporter, *assignees])
 
-    # Validate optional event link.
+    # Validate optional event link (must exist and be in the creator's scope).
     if payload.event_id is not None:
-        if db.get(Event, payload.event_id) is None:
-            raise HTTPException(status_code=400, detail="Event does not exist")
+        _assert_event_accessible(db, accessible, payload.event_id)
 
     bug = Bug(
         project_id=payload.project_id,
@@ -848,10 +899,11 @@ def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
         )
 
 
-def _normalize_update_event_id(fields: dict, db: Session) -> None:
+def _normalize_update_event_id(fields: dict, db: Session, accessible) -> None:
     if "event_id" in fields and fields["event_id"]:
-        if db.get(Event, fields["event_id"]) is None:
-            raise HTTPException(status_code=400, detail="Event does not exist")
+        # Must exist and be in the actor's scope (an out-of-scope event is
+        # surfaced as "does not exist").
+        _assert_event_accessible(db, accessible, fields["event_id"])
     if "event_id" in fields and fields["event_id"] == 0:
         # Treat 0 as "unlink" for clients that can't easily send JSON null.
         fields["event_id"] = None
@@ -890,11 +942,11 @@ def _validate_update_status(fields: dict, bug: Bug) -> None:
     )
 
 
-def _validate_update_payload(fields: dict, bug: Bug, db: Session) -> None:
+def _validate_update_payload(fields: dict, bug: Bug, db: Session, accessible) -> None:
     if "project_id" in fields and fields["project_id"] is not None:
-        if db.get(Project, fields["project_id"]) is None:
-            raise HTTPException(status_code=400, detail="Project does not exist")
-    _normalize_update_event_id(fields, db)
+        # Can't move an item into a project outside the actor's scope.
+        _assert_project_accessible(db, accessible, fields["project_id"])
+    _normalize_update_event_id(fields, db, accessible)
     _validate_update_status(fields, bug)
 
 
@@ -1109,6 +1161,10 @@ def update_bug(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Project scope first: an item outside the actor's projects reads as
+    # not-found (404), never a 403, so the restriction doesn't leak existence.
+    accessible = accessible_project_ids(db, actor)
+    _assert_bug_accessible(accessible, bug)
     # Authorize before the optimistic-concurrency check so an unauthorized
     # caller gets a clean 403, never a 409. Checking the version first would let
     # a caller with no edit rights probe a protected item's version/existence
@@ -1118,7 +1174,7 @@ def update_bug(
     # last-seen version/timestamp before mutating, so concurrent writers to the
     # same item serialize and the stale one gets a clean 409.
     _enforce_optimistic_concurrency(db, bug_id, expected_version, expected_updated_at)
-    _validate_update_payload(fields, bug, db)
+    _validate_update_payload(fields, bug, db, accessible)
     # Over-post guard: block converting a Bug into a Task/Requirement the caller
     # can't edit (the auth check above only saw the CURRENT type).
     _authorize_item_type_change(fields, bug, actor)
@@ -1258,8 +1314,8 @@ def list_comments(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
-    if db.get(Bug, bug_id) is None:
-        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Existence + project scope (out-of-scope bug reads as not-found).
+    _load_accessible_bug(db, bug_id, accessible_project_ids(db, _user))
     # Newest comments first (matches the detail endpoint's ordering).
     comments = list(db.scalars(
         select(Comment).where(Comment.bug_id == bug_id)
@@ -1294,6 +1350,8 @@ def add_comment(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Project scope: can't comment on (or learn of) a bug outside your projects.
+    _assert_bug_accessible(accessible_project_ids(db, author), bug)
     # Same per-type policy as edit/link: a regular user can discuss a Bug but
     # not a Task/Requirement they have no edit rights on.
     _validate_update_authorization(bug, author)
@@ -1369,6 +1427,8 @@ async def upload_attachment(
     bug = db.get(Bug, bug_id)
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Project scope: can't attach to a bug outside your projects.
+    _assert_bug_accessible(accessible_project_ids(db, uploader), bug)
     # Same per-type policy as edit/link: regular users can attach to a Bug but
     # not to a Task/Requirement they can't edit.
     _validate_update_authorization(bug, uploader)
@@ -1492,6 +1552,14 @@ def download_attachment(
     ).first()
     if meta is None or meta[0] != bug_id:
         raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
+    # Project scope: a restricted actor can't download an attachment on a bug
+    # outside their projects. Only fetch the owning project's id when restricted
+    # (admins skip the extra query). Surfaced as a 404 like a missing file.
+    accessible = accessible_project_ids(db, _user)
+    if accessible is not None:
+        proj_id = db.scalar(select(Bug.project_id).where(Bug.id == bug_id))
+        if proj_id is None or proj_id not in accessible:
+            raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
     _att_bug_id, att_filename, att_content_type, att_size = meta
 
     # Decide content-type and disposition.
@@ -1700,8 +1768,8 @@ def list_activity(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[Activity]:
-    if db.get(Bug, bug_id) is None:
-        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Existence + project scope (out-of-scope bug reads as not-found).
+    _load_accessible_bug(db, bug_id, accessible_project_ids(db, _user))
     return list(db.scalars(
         select(Activity).where(Activity.bug_id == bug_id)
         .order_by(Activity.created_at.desc(), Activity.id.desc())
@@ -1718,8 +1786,8 @@ def list_links(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
-    if db.get(Bug, bug_id) is None:
-        raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Existence + project scope (out-of-scope bug reads as not-found).
+    _load_accessible_bug(db, bug_id, accessible_project_ids(db, _user))
     return _bug_links(db, bug_id)
 
 
@@ -1793,11 +1861,16 @@ def add_link(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Project scope: both ends must be in the actor's projects. The source reads
+    # as not-found; an out-of-scope target reads as "does not exist", so a
+    # restricted user can only link within their own projects.
+    accessible = accessible_project_ids(db, actor)
+    _assert_bug_accessible(accessible, bug)
     _validate_update_authorization(bug, actor)
     if payload.target_bug_id == bug_id:
         raise HTTPException(status_code=400, detail="An item can't be linked to itself")
     target = db.scalar(_eager_bug().where(Bug.id == payload.target_bug_id))
-    if target is None:
+    if target is None or not can_access_project(accessible, target.project_id):
         raise HTTPException(status_code=400, detail="Target item does not exist")
     _require_can_edit_link_endpoint(target, actor)
     _reject_inverse_directional_link(db, bug_id, target, payload.link_type)
@@ -1876,6 +1949,8 @@ def remove_link(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
+    # Project scope: the path bug must be in the actor's projects.
+    _assert_bug_accessible(accessible_project_ids(db, actor), bug)
     _validate_update_authorization(bug, actor)
     other_id = link.target_bug_id if link.source_bug_id == bug_id else link.source_bug_id
     other = db.scalar(_eager_bug().where(Bug.id == other_id))
@@ -2040,9 +2115,17 @@ def bulk_action(
     # the relationship loads across all of them) instead of a fresh eager query
     # per id. Iterate the caller's id order against the map so the not-found
     # tally stays accurate.
+    # Project scope: out-of-scope ids simply don't load, so they fall through to
+    # the not-found tally below — a restricted actor can't bulk-act outside their
+    # projects even by guessing ids.
     by_id = {
         b.id: b
-        for b in db.scalars(_eager_bug().where(Bug.id.in_(payload.ids))).all()
+        for b in db.scalars(
+            scope_bug_query(
+                _eager_bug().where(Bug.id.in_(payload.ids)),
+                accessible_project_ids(db, actor),
+            )
+        ).all()
     }
     for bug_id in payload.ids:
         bug = by_id.get(bug_id)

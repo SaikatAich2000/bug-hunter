@@ -35,6 +35,14 @@ for _flag in (
 ):
     os.environ[_flag] = "0"
 
+# Force the email digest OFF regardless of a developer's local .env (which may
+# set EMAIL_DIGEST_ENABLED=true). With the digest on, the immediate notify_*
+# email functions defer to the batch job instead of sending, so the unit tests
+# that assert on the immediate emails (test_item_types / test_events) would see
+# nothing delivered. Hard-set like the Sleuth flags above; the digest tests opt
+# back in per-test via monkeypatch.setattr(get_settings(), ...).
+os.environ["EMAIL_DIGEST_ENABLED"] = "false"
+
 
 BOOTSTRAP_EMAIL = "admin@test.local"
 BOOTSTRAP_PASSWORD = "Admin1234"

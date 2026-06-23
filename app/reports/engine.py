@@ -130,6 +130,14 @@ class Filters:
     # Free-form label users can add to identify a saved or downloaded run.
     label: str = ""
 
+    # Internal-only project restriction, set by the route from the actor's
+    # accessible projects — NEVER user-supplied, so a restricted manager can't
+    # widen their scope through the payload. None = unrestricted (an admin); a
+    # set (possibly empty, meaning "see nothing") ANDs `Bug.project_id IN (...)`
+    # onto every report query. Deliberately omitted from `from_dict` and
+    # `to_meta` since it isn't a user-chosen filter.
+    restrict_project_ids: Optional[set[int]] = None
+
     # ------------------------------------------------------------------
     # Parsing helpers
     # ------------------------------------------------------------------
@@ -321,6 +329,10 @@ def _apply_entity_filters(stmt, filters: Filters):
         stmt = stmt.where(Bug.reporter_id.in_(filters.reporter_ids))
     if filters.event_id is not None:
         stmt = stmt.where(Bug.event_id == filters.event_id)
+    # Project-scope restriction (route-set). None = unrestricted; an empty set
+    # matches nothing, so a tagless manager's report comes back empty.
+    if filters.restrict_project_ids is not None:
+        stmt = stmt.where(Bug.project_id.in_(filters.restrict_project_ids))
     return stmt
 
 
@@ -713,6 +725,10 @@ def _build_throughput_query(filters: Filters):
         stmt = stmt.where(Bug.item_type.in_(filters.item_types))
     if filters.project_ids:
         stmt = stmt.where(Bug.project_id.in_(filters.project_ids))
+    # Project-scope restriction (route-set) — applies to the throughput /
+    # timeline-resolved / time-to-resolution reports that key off the audit log.
+    if filters.restrict_project_ids is not None:
+        stmt = stmt.where(Bug.project_id.in_(filters.restrict_project_ids))
     if filters.event_id is not None:
         stmt = stmt.where(Bug.event_id == filters.event_id)
     if filters.assignee_ids:
@@ -1091,6 +1107,9 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
             event_id=filters.event_id,
             include_not_a_bug=filters.include_not_a_bug,
             text_search=filters.text_search,
+            # Preserve the route-set project restriction across the internal
+            # Filters rebuild, or the timeline would leak other projects' counts.
+            restrict_project_ids=filters.restrict_project_ids,
         ),
     ).group_by(_utc_date(db, Bug.created_at))
     created_by_day = {str(d): int(c) for d, c in db.execute(created_stmt).all()}
@@ -1106,6 +1125,8 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
         event_id=filters.event_id,
         include_not_a_bug=filters.include_not_a_bug,
         text_search=filters.text_search,
+        # Carry the route-set project restriction onto the resolved-side scan too.
+        restrict_project_ids=filters.restrict_project_ids,
     )
     resolved_by_day: dict[str, int] = {}
     # Bound the resolved-side scan the same way every other report query is

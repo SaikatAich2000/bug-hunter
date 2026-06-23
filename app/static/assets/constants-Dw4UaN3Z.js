@@ -1,0 +1,1 @@
+const e=8,a="At least 8 characters, including a letter and a number";function s(t){return t.toLowerCase()==="changeme"?null:t.length<8?"Password must be at least 8 characters":!/[A-Za-z]/.test(t)||!/\d/.test(t)?"Password must include at least one letter and one number":null}function n(t){return/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)}export{e as P,a,n as i,s as v};

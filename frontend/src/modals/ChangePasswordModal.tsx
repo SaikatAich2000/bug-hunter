@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
+import PasswordInput from "../components/PasswordInput";
 import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
@@ -80,9 +81,8 @@ export default function ChangePasswordModal() {
           <span>
             Current password <em>*</em>
           </span>
-          <input
+          <PasswordInput
             name="current_password"
-            type="password"
             required
             autoComplete="current-password"
             ref={currentRef}
@@ -94,9 +94,8 @@ export default function ChangePasswordModal() {
           <span>
             New password <em>*</em>
           </span>
-          <input
+          <PasswordInput
             name="new_password"
-            type="password"
             required
             minLength={8}
             maxLength={200}
@@ -110,9 +109,8 @@ export default function ChangePasswordModal() {
           <span>
             Confirm new password <em>*</em>
           </span>
-          <input
+          <PasswordInput
             name="confirm_password"
-            type="password"
             required
             minLength={8}
             maxLength={200}

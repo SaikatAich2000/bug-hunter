@@ -13,9 +13,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.access import accessible_project_ids, add_user_project, can_access_project
 from app.auth import get_current_user, require_admin, require_manager_or_admin
 from app.database import get_db
-from app.models import Activity, Bug, Project, User
+from app.models import ROLE_ADMIN, Activity, Bug, Project, User
 from app.schemas import ProjectIn, ProjectOut
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -34,13 +35,19 @@ def _audit(db: Session, actor: User, action: str, entity_id: int, detail: str) -
 @router.get("", response_model=list[ProjectOut])
 def list_projects(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[Project]:
+    # Project-scoped: a restricted manager/user only sees the projects they
+    # belong to (so every project dropdown, sidebar list and filter is scoped
+    # for free); an admin (accessible is None) sees them all. A restricted user
+    # with no memberships gets an empty set → an empty list.
+    accessible = accessible_project_ids(db, user)
+    stmt = select(Project).order_by(func.lower(Project.name))
+    if accessible is not None:
+        stmt = stmt.where(Project.id.in_(accessible))
     # Hard row ceiling so this list can't grow unbounded; projects is a small,
     # admin/manager-managed table, so 500 is far above any realistic count.
-    return list(db.scalars(
-        select(Project).order_by(func.lower(Project.name)).limit(500)
-    ).all())
+    return list(db.scalars(stmt.limit(500)).all())
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -56,6 +63,11 @@ def create_project(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Project name already exists") from exc
+    # Auto-enroll a non-admin creator (a manager) in the project they just made,
+    # so a project-restricted manager doesn't immediately lose sight of it.
+    # Admins aren't restricted, so they need no membership row.
+    if actor.role != ROLE_ADMIN:
+        add_user_project(db, actor.id, p.id)
     _audit(db, actor, "project_created", p.id, f"Created project '{p.name}'")
     db.commit()
     db.refresh(p)
@@ -66,10 +78,12 @@ def create_project(
 def get_project(
     project_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> Project:
     p = db.get(Project, project_id)
-    if p is None:
+    # A project outside the actor's scope is reported as "not found" (404) so the
+    # restriction never leaks which projects exist.
+    if p is None or not can_access_project(accessible_project_ids(db, user), project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     return p
 
@@ -82,7 +96,9 @@ def update_project(
     actor: User = Depends(require_manager_or_admin),
 ) -> Project:
     p = db.get(Project, project_id)
-    if p is None:
+    # Scope check before the not-found wording so a restricted manager can't edit
+    # (or probe the existence of) a project outside their projects.
+    if p is None or not can_access_project(accessible_project_ids(db, actor), project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     # exclude_unset so a partial PUT only touches the fields the client actually
     # sent. Without it, omitting description/color would silently reset them to

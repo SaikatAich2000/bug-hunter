@@ -354,11 +354,26 @@ class UserIn(BaseModel):
     role: str = Field(default="user")
     password: str
     is_active: bool = True
+    # Projects this user may access (optional, multi-select). A manager/regular
+    # user is restricted to these projects; leaving it empty creates an untagged
+    # user who (for non-admin roles) sees nothing until tagged. Tags don't
+    # restrict an admin. Validated for existence + the creator's own access in
+    # the route. max_length bounds an abusive payload.
+    project_ids: list[int] = Field(default_factory=list, max_length=1000)
 
     @field_validator("name")
     @classmethod
     def _strip_name(cls, v: str) -> str:
         return _strip_and_check_min_length(v, MIN_NAME_LENGTH, "Name")
+
+    @field_validator("project_ids")
+    @classmethod
+    def _dedup_projects(cls, v: list[int]) -> list[int]:
+        seen: list[int] = []
+        for x in v or []:
+            if x not in seen:
+                seen.append(x)
+        return seen
 
     @field_validator("role")
     @classmethod
@@ -384,12 +399,26 @@ class UserUpdate(BaseModel):
     # Optional password reset by admin. If present, replaces the current
     # hash. Use None / omit to leave password unchanged.
     password: Optional[str] = None
+    # Replace the user's project memberships. None / omit = leave unchanged;
+    # an empty list = clear all memberships (untag the user). Validated for
+    # existence + the editor's own access in the route.
+    project_ids: Optional[list[int]] = Field(default=None, max_length=1000)
 
     @field_validator("name")
     @classmethod
     def _strip_name(cls, v: Optional[str]) -> Optional[str]:
         if v is None: return None
         return _strip_and_check_min_length(v, MIN_NAME_LENGTH, "Name")
+
+    @field_validator("project_ids")
+    @classmethod
+    def _dedup_projects(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+        if v is None: return None
+        seen: list[int] = []
+        for x in v:
+            if x not in seen:
+                seen.append(x)
+        return seen
 
     @field_validator("role")
     @classmethod
@@ -420,6 +449,11 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # Projects this user is tagged to (ascending ids). Populated explicitly by
+    # the route from the user_projects table; defaults to [] for any path that
+    # doesn't fill it. An empty list means "untagged" (a non-admin sees nothing;
+    # an admin sees everything regardless).
+    project_ids: list[int] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -924,6 +958,13 @@ class EventCreate(BaseModel):
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=10000)
     scheduled_for: Optional[str] = None  # YYYY-MM-DD
+    # Owning project. Scopes who can see the event: project-restricted
+    # managers/users only see events for their projects. Optional at the API
+    # level so a project-less event stays possible (it is then visible to admins
+    # only — "restrict strictly by project" means no project ⇒ no non-admin sees
+    # it). The SPA requires a project on the create form. When provided, the
+    # route validates the project exists and that the creator may access it.
+    project_id: Optional[int] = None
     # User IDs (admin or manager role) to set as event managers. These
     # users receive notifications when the event is created / updated /
     # deleted, but not when individual tasks inside the event are filed.
@@ -965,6 +1006,9 @@ class EventUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=10000)
     scheduled_for: Optional[str] = None
     manager_ids: Optional[list[int]] = Field(default=None, max_length=200)
+    # Move the event to a different project. None / omit = leave unchanged. The
+    # route validates existence + the editor's access to the new project.
+    project_id: Optional[int] = None
 
     @field_validator("name")
     @classmethod
@@ -1003,6 +1047,10 @@ class EventOut(BaseModel):
     name: str
     description: str
     scheduled_for: Optional[str] = None
+    # Owning project. Nullable so legacy events (created before this column)
+    # still serialize; project_name is resolved by the route for display.
+    project_id: Optional[int] = None
+    project_name: Optional[str] = None
     created_by_user_id: Optional[int] = None
     created_by_name: Optional[str] = None
     item_count: int = 0

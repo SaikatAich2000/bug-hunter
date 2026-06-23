@@ -10,9 +10,13 @@ from pathlib import Path
 
 
 def _make_user(c, name="Some User", email="user@x.com", role="user", password="TestUserPwd9X"):
-    r = c.post("/api/users", json={
-        "name": name, "email": email, "role": role, "password": password,
-    })
+    body = {"name": name, "email": email, "role": role, "password": password}
+    # Project-scoped access: tag the new user to every existing project so these
+    # pre-scoping tests keep exercising the flat "see everything" model.
+    pids = [p["id"] for p in c.get("/api/projects").json()]
+    if pids:
+        body["project_ids"] = pids
+    r = c.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 

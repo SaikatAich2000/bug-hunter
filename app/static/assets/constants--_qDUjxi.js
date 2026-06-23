@@ -1,1 +1,0 @@
-const a=8,s="At least 8 characters, including a letter and a number";function e(t){return t.length<8?"Password must be at least 8 characters":!/[A-Za-z]/.test(t)||!/\d/.test(t)?"Password must include at least one letter and one number":null}function n(t){return/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)}export{a as P,s as a,n as i,e as v};

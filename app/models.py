@@ -86,6 +86,29 @@ event_managers = Table(
 # a user is deleted. Added additively by init_db's _add_missing_indexes.
 Index("idx_event_managers_user_id", event_managers.c.user_id)
 
+# user_projects: many-to-many between users and the projects they may access.
+# Project-scoped access control: a manager or regular user sees only the work
+# items, events, stats, reports and audit entries belonging to the projects
+# they're a member of. Admins are NEVER restricted (they see everything,
+# regardless of membership). A manager/user with no rows here is "untagged" and
+# sees nothing until an admin tags them. Existing accounts carry zero rows after
+# the additive upgrade — the restriction is opt-in per deployment, exactly as a
+# fresh install with no memberships starts locked down for non-admins. Both FKs
+# are ON DELETE CASCADE so a membership row can't outlive its user or project.
+# Created by init_db()'s create_all() on next boot; adds no column to any
+# existing table and modifies no existing row.
+user_projects = Table(
+    "user_projects",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
+    Column("project_id", Integer, ForeignKey(_FK_PROJECTS_ID, ondelete="CASCADE"), primary_key=True),
+)
+# project_id is the trailing column of the (user_id, project_id) PK, so Postgres
+# can't seek on it alone. A standalone index backs "members of project X"
+# lookups and the ON DELETE CASCADE that fires when a project is deleted. Added
+# additively by init_db's _add_missing_indexes.
+Index("idx_user_projects_project_id", user_projects.c.project_id)
+
 
 # ---------------------------------------------------------------------------
 # User
@@ -206,6 +229,16 @@ class Event(Base):
     # YYYY-MM-DD; matches the date-only format used for Bug.due_date so
     # filtering by date is consistent across the app.
     scheduled_for: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Owning project. Tying an event to a project scopes who can see it:
+    # project-restricted managers/users only see events for their projects.
+    # Nullable so the additive upgrade leaves existing events with no project
+    # (visible to admins only until an admin assigns one), and so a brand-new
+    # column can be ALTER-ADDed to a populated table without a backfill.
+    # ondelete=SET NULL keeps the event if its project is deleted, mirroring how
+    # items survive an event deletion.
+    project_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey(_FK_PROJECTS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
+    )
     created_by_user_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
@@ -224,10 +257,14 @@ class Event(Base):
     managers: Mapped[list["User"]] = relationship(
         "User", secondary=event_managers, lazy="selectin",
     )
+    # Owning project (nullable). Eager-loaded where the event is serialized so
+    # the response can carry project_name without an N+1.
+    project: Mapped["Project | None"] = relationship("Project")
 
     __table_args__ = (
         Index("idx_events_scheduled_for", "scheduled_for"),
         Index("idx_events_created_by", "created_by_user_id"),
+        Index("idx_events_project_id", "project_id"),
     )
 
 

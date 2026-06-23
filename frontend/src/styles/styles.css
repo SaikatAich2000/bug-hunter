@@ -2075,6 +2075,34 @@ fieldset.field > legend {
   margin-bottom: 4px;
 }
 .field input[type="color"] { padding: 2px; height: 38px; cursor: pointer; }
+
+/* Password reveal — an eye toggle button overlaid on the right of a password
+   field. <PasswordInput> renders <div.pw-wrap><input/><button.pw-toggle/></div>
+   inside a .field, so the input keeps its normal .field styling; we only carve
+   out room on the right for the button. */
+.pw-wrap { position: relative; display: flex; width: 100%; }
+.field .pw-wrap input { padding-right: 42px; }
+.pw-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0 7px 7px 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color 0.15s ease, box-shadow 0.15s ease;
+}
+.pw-toggle:hover { color: var(--text); }
+.pw-toggle:focus-visible { outline: none; color: var(--accent); box-shadow: var(--shadow-focus); }
+.pw-toggle svg { width: 18px; height: 18px; display: block; }
 .field.check-row {
   flex-direction: row;
   align-items: center;

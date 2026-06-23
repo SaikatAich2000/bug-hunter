@@ -7,13 +7,14 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import cast, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, cast, or_, select
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.types import String
 
+from app.access import accessible_project_ids
 from app.auth import require_manager_or_admin
 from app.database import get_db
-from app.models import Activity, Bug, User
+from app.models import Activity, Bug, Event, User
 from app.schemas import ActivityOut
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -34,6 +35,31 @@ def _like_escape(needle: str) -> str:
     )
 
 
+def _scope_to_projects(stmt, accessible):
+    """Restrict the audit trail to a manager's projects.
+
+    A restricted manager sees only rows about a bug in one of their projects, or
+    an event in one of their projects. Admins (``accessible is None``) are
+    unrestricted; an untagged manager (empty set) matches nothing. Rows that
+    can't be tied to a project — system events, or bug/event rows detached on
+    deletion (bug_id NULL / the entity gone) — are not shown to a restricted
+    manager, only to admins. Aliased subqueries so this composes cleanly with
+    the optional OUTER JOIN on bugs the text search adds."""
+    if accessible is None:
+        return stmt
+    sbug = aliased(Bug)
+    sevent = aliased(Event)
+    return stmt.where(or_(
+        Activity.bug_id.in_(select(sbug.id).where(sbug.project_id.in_(accessible))),
+        and_(
+            Activity.entity_type == "event",
+            Activity.entity_id.in_(
+                select(sevent.id).where(sevent.project_id.in_(accessible))
+            ),
+        ),
+    ))
+
+
 @router.get("", response_model=list[ActivityOut])
 def list_audit(
     entity_type: Optional[str] = None,
@@ -44,7 +70,7 @@ def list_audit(
     limit: int = Query(default=5000, le=10000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_manager_or_admin),
 ) -> list[Activity]:
     """Return audit events filtered by entity, actor and a free-text search.
 
@@ -58,6 +84,9 @@ def list_audit(
     bug-related and bug-related rows may have been detached (bug_id NULL) on
     bug delete; those rows still carry the original title in `detail`."""
     stmt = select(Activity)
+    # Project scope: a manager only sees audit entries for their projects; an
+    # admin is unrestricted. Applied before the optional text-search join below.
+    stmt = _scope_to_projects(stmt, accessible_project_ids(db, user))
     if entity_type:
         stmt = stmt.where(Activity.entity_type == entity_type)
     if actor_user_id is not None:

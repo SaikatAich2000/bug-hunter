@@ -7,11 +7,14 @@ import io
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X"):
+def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X",
+               project_ids=None):
     email = email or f"{name.lower()}@example.com"
-    r = client.post("/api/users", json={
-        "name": name, "email": email, "role": role, "password": password,
-    })
+    body = {"name": name, "email": email, "role": role, "password": password}
+    # Project-scoped access: a non-admin only sees the projects tagged here.
+    if project_ids is not None:
+        body["project_ids"] = project_ids
+    r = client.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -218,6 +221,9 @@ def test_user_creates_bug_can_edit_true(user_client):
         "email": "admin@test.local", "password": "Admin1234",
     })
     p = _make_project(user_client, name="UserProject")
+    # Tag the regular user to the project so they can see/create bugs in it
+    # (project-scoped access: an untagged non-admin sees nothing).
+    user_client.put(f"/api/users/{me['id']}", json={"project_ids": [p["id"]]})
     # Switch back to user
     user_client.post("/api/auth/logout")
     user_client.post("/api/auth/login", json={
@@ -235,9 +241,9 @@ def test_user_can_edit_others_bugs_but_cannot_delete(admin_client):
     bug = _make_bug(admin_client, p["id"], title="Admin's bug")
     bug_id = bug["id"]
 
-    # Create a regular user
+    # Create a regular user, tagged to the bug's project so they can see it.
     _make_user(admin_client, name="Bob", email="bob@example.com",
-               role="user", password="Bob1234567")
+               role="user", password="Bob1234567", project_ids=[p["id"]])
     # Log out, log in as Bob
     admin_client.post("/api/auth/logout")
     admin_client.post("/api/auth/login", json={
@@ -261,7 +267,7 @@ def test_user_can_edit_others_bugs_but_cannot_delete(admin_client):
 def test_user_can_edit_own_bug(admin_client):
     p = _make_project(admin_client, name="ProjB")
     _make_user(admin_client, name="Carol", email="carol@example.com",
-               role="user", password="Carol1234")
+               role="user", password="Carol1234", project_ids=[p["id"]])
     admin_client.post("/api/auth/logout")
     admin_client.post("/api/auth/login", json={
         "email": "carol@example.com", "password": "Carol1234",
@@ -277,7 +283,7 @@ def test_manager_can_edit_anyones_bug(admin_client):
     p = _make_project(admin_client, name="ProjC")
     bug = _make_bug(admin_client, p["id"], title="Admin's bug")
     _make_user(admin_client, name="Mgr", email="mgr@example.com",
-               role="manager", password="Mgr1234567")
+               role="manager", password="Mgr1234567", project_ids=[p["id"]])
     admin_client.post("/api/auth/logout")
     admin_client.post("/api/auth/login", json={
         "email": "mgr@example.com", "password": "Mgr1234567",

@@ -49,6 +49,9 @@ export interface UserOut {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /** Projects this user may access (ascending ids). Empty = untagged: a
+   *  non-admin sees nothing until tagged; tags don't restrict an admin. */
+  project_ids: number[];
 }
 
 /** Mirrors app/schemas.py UserBrief (embedded reporter / assignees / managers). */
@@ -190,6 +193,10 @@ export interface EventOut {
   name: string;
   description: string;
   scheduled_for: string | null;
+  /** Owning project. Scopes who can see the event. project_name is resolved
+   *  server-side for display; project_id is null only for legacy events. */
+  project_id: number | null;
+  project_name: string | null;
   created_by_user_id: number | null;
   created_by_name: string | null;
   item_count: number;

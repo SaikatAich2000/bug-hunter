@@ -173,6 +173,16 @@ def _add_missing_columns(conn) -> None:
         _add_column_safely(conn,
             f"ALTER TABLE notifications ADD COLUMN emailed_at {tstype}")
 
+    # events.project_id — optional owning project for project-scoped access.
+    # Nullable + no FK at the ALTER level (SQLite can't add FKs to an existing
+    # table via ALTER, and on Postgres a missing FK constraint beats a blocking
+    # migration). The ORM relationship and route-layer validation enforce
+    # referential integrity in code. Existing events keep project_id NULL, so
+    # they stay visible to admins only until an admin assigns a project.
+    event_cols = _column_names(inspector, "events")
+    if event_cols and "project_id" not in event_cols:
+        _add_column_safely(conn, "ALTER TABLE events ADD COLUMN project_id INTEGER")
+
 
 def _add_missing_indexes(conn) -> None:
     """CREATE any indexes the model declares but the DB lacks (idempotent).

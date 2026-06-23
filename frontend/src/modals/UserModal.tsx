@@ -7,7 +7,9 @@
  * success: close, reload users, refresh bugs/stats, toast.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import ChipPicker from "../components/ChipPicker";
 import Modal from "../components/Modal";
+import PasswordInput from "../components/PasswordInput";
 import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
@@ -30,7 +32,7 @@ const HINTS = {
 } as const;
 
 export default function UserModal() {
-  const { userModal, closeUserModal, loadUsers, refreshAll, canManage, isAdmin } = useApp();
+  const { userModal, closeUserModal, loadUsers, refreshAll, canManage, isAdmin, projects } = useApp();
   const { open, user } = userModal;
   const isEdit = user != null;
 
@@ -39,6 +41,10 @@ export default function UserModal() {
   const [role, setRole] = useState<Role>("user");
   const [isActive, setIsActive] = useState(true);
   const [password, setPassword] = useState("");
+  // Project tags this user may access. Empty = untagged (a non-admin sees
+  // nothing). The picker only offers projects the current actor can see, which
+  // is exactly the set the backend will let them grant.
+  const [projectIds, setProjectIds] = useState<number[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
 
   // Reset and prefill on every open, then focus the name input.
@@ -49,9 +55,16 @@ export default function UserModal() {
     setRole(user ? user.role || "user" : "user");
     setIsActive(user ? user.is_active : true);
     setPassword("");
+    setProjectIds(user?.project_ids ?? []);
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, user]);
+
+  function toggleProject(pid: number): void {
+    setProjectIds((cur) =>
+      cur.includes(pid) ? cur.filter((x) => x !== pid) : [...cur, pid],
+    );
+  }
 
   // Fail-closed: only admins/managers may create/update users, independent of
   // whoever set the open state. The backend enforces this too
@@ -72,11 +85,15 @@ export default function UserModal() {
       role: Role;
       is_active: boolean;
       password?: string;
+      project_ids: number[];
     } = {
       name: name.trim(),
       email: trimmedEmail,
       role,
       is_active: isActive,
+      // Always sent: on edit this replaces the user's memberships with exactly
+      // what the picker shows (idempotent when unchanged).
+      project_ids: projectIds,
     };
     // Only include password if the user typed one (on edit, blank = keep current)
     if (password) {
@@ -171,9 +188,8 @@ export default function UserModal() {
             Password{" "}
             <em className={isEdit ? "js-required hidden" : "js-required"}>*</em>
           </span>
-          <input
+          <PasswordInput
             name="password"
-            type="password"
             required={!isEdit}
             minLength={8}
             maxLength={200}
@@ -195,6 +211,20 @@ export default function UserModal() {
           />
           <span>Active (can log in)</span>
         </label>
+        <div className="field" id="userProjectsField">
+          <span>Projects</span>
+          <ChipPicker
+            id="userProjects"
+            items={projects.map((p) => ({ id: p.id, label: p.name }))}
+            selected={projectIds}
+            onToggle={toggleProject}
+          />
+          <small className="hint">
+            Managers and users only see the bugs, requirements, tasks and events
+            in the projects tagged here. Leave empty for no access. Admins always
+            see everything, regardless of tags.
+          </small>
+        </div>
         <div className="modal-foot">
           <button
             type="button"

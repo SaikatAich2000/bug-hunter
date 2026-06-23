@@ -32,12 +32,15 @@ interface Props {
 }
 
 export default function EventModal({ open, event, onClose, onSaved }: Readonly<Props>) {
-  const { users } = useApp();
+  const { users, projects } = useApp();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [scheduledFor, setScheduledFor] = useState("");
   const [managerIds, setManagerIds] = useState<number[]>([]);
+  // Owning project (required). "" = nothing picked yet. The dropdown only offers
+  // projects the current actor can see — exactly the set the backend allows.
+  const [projectId, setProjectId] = useState<number | "">("");
   const nameRef = useRef<HTMLInputElement>(null);
 
   // Seed the form whenever the modal opens.
@@ -48,12 +51,16 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
       setDescription(event.description || "");
       setScheduledFor(event.scheduled_for || "");
       setManagerIds(event.managers.map((m) => m.id));
+      setProjectId(event.project_id ?? "");
     } else {
       setName("");
       setDescription("");
       // Default scheduled date to today so the morning-standup case is one click.
       setScheduledFor(new Date().toISOString().slice(0, 10));
       setManagerIds([]);
+      // Default to the first project the actor can see (projects are loaded at
+      // app boot, so this is populated by the time the modal opens).
+      setProjectId(projects[0]?.id ?? "");
     }
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
@@ -79,16 +86,22 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const id = event?.id ?? null;
-    const payload = {
-      name: name.trim(),
-      description,
-      scheduled_for: scheduledFor || null,
-      manager_ids: managerIds,
-    };
-    if (!payload.name) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       toast("Event name is required", "error");
       return;
     }
+    if (projectId === "") {
+      toast("Pick a project for this event", "error");
+      return;
+    }
+    const payload = {
+      name: trimmedName,
+      description,
+      scheduled_for: scheduledFor || null,
+      project_id: projectId,
+      manager_ids: managerIds,
+    };
     try {
       await withLoader(async () => {
         const result = id
@@ -131,6 +144,29 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+        </label>
+        <label className="field">
+          <span>
+            Project <em>*</em>
+          </span>
+          <select
+            name="project_id"
+            required
+            value={projectId === "" ? "" : String(projectId)}
+            onChange={(e) => setProjectId(e.target.value ? Number(e.target.value) : "")}
+          >
+            <option value="" disabled>
+              Select a project…
+            </option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <small className="hint">
+            Only people with access to this project will see the event and its items.
+          </small>
         </label>
         <label className="field">
           <span>Scheduled for</span>

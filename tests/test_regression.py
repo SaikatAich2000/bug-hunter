@@ -39,10 +39,15 @@ def _create_user(c, name, email, role="user", password="TestUserPwd9X", is_activ
     # check (no common passwords, sufficient length, mix of classes).
     if len(name) < 2:                # safety: server requires name>=2
         name = name + "_user"
-    r = c.post("/api/users", json={
-        "name": name, "email": email, "role": role,
-        "password": password, "is_active": is_active,
-    })
+    body = {"name": name, "email": email, "role": role,
+            "password": password, "is_active": is_active}
+    # Project-scoped access: tag the new user to every existing project so these
+    # pre-scoping regression tests keep exercising the flat "see everything"
+    # model (a non-admin must SEE a bug before the per-type/role rules apply).
+    pids = [p["id"] for p in c.get("/api/projects").json()]
+    if pids:
+        body["project_ids"] = pids
+    r = c.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 

@@ -29,6 +29,9 @@ from typing import Any, Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.access import (
+    accessible_project_ids, can_access_project, scope_bug_query,
+)
 from app.models import (
     Activity,
     Attachment,
@@ -476,19 +479,24 @@ def _handle_list_users(db: Session, pq: ParsedQuery) -> Response:
     )
 
 
-def _handle_list_projects(db: Session) -> Response:
-    rows = list(db.scalars(
-        select(Project).order_by(func.lower(Project.name)).limit(_CHAT_LIST_CAP)
-    ).all())
+def _handle_list_projects(db: Session, accessible=None) -> Response:
+    # Project scope: a restricted manager/user only sees their own projects.
+    stmt = select(Project).order_by(func.lower(Project.name))
+    if accessible is not None:
+        stmt = stmt.where(Project.id.in_(accessible))
+    rows = list(db.scalars(stmt.limit(_CHAT_LIST_CAP)).all())
     if not rows:
         return Response(
             blocks=[Block("text", {"text": "There are no projects yet"})],
             summary="0 projects",
             intent="list_projects",
         )
-    # Per-project bug counts in one grouped query.
+    # Per-project bug counts in one grouped query (scoped to match).
     counts = dict(db.execute(
-        select(Bug.project_id, func.count(Bug.id)).group_by(Bug.project_id)
+        scope_bug_query(
+            select(Bug.project_id, func.count(Bug.id)).group_by(Bug.project_id),
+            accessible,
+        )
     ).all())
     headers = ["Name", "Bugs", "Description"]
     data = [
@@ -505,9 +513,11 @@ def _handle_list_projects(db: Session) -> Response:
     )
 
 
-def _handle_bug_detail(db: Session, pq: ParsedQuery) -> Response:
+def _handle_bug_detail(db: Session, pq: ParsedQuery, accessible=None) -> Response:
     bug = db.scalar(_eager_bug_query().where(Bug.id == pq.bug_id))
-    if bug is None:
+    # A bug outside the actor's project scope reads as "not found", so Sleuth
+    # can't reveal items from projects the user can't access.
+    if bug is None or not can_access_project(accessible, bug.project_id):
         return Response(
             blocks=[Block("text", {"text":
                 f"I couldn't find a bug with ID **#{pq.bug_id}**. "
@@ -554,18 +564,31 @@ def _handle_bug_detail(db: Session, pq: ParsedQuery) -> Response:
     )
 
 
-def _handle_recent_activity(db: Session, pq: ParsedQuery, actor: User) -> Response:
-    # Audit is restricted — non-admin/manager users see only their own
-    # bug-related activity. We mirror that boundary here so the chatbot
-    # can't be a side door around the global audit policy.
-    stmt = select(Activity).order_by(
-        Activity.created_at.desc(), Activity.id.desc()
-    )
+def _scope_recent_activity(stmt, actor: User, accessible):
+    """Apply the recent-activity visibility rule to ``stmt``.
+
+    A non-admin/manager user sees only their own actions (mirrors the global
+    audit policy that hides the trail from regular users). A project-restricted
+    manager sees only activity on their projects' bugs (an untagged one, empty
+    set, matches nothing); an admin is unrestricted."""
     if actor.role not in ("admin", "manager"):
-        # Limit to their own actions OR activities on bugs they reported /
-        # are assigned to. Cheaper approximation: just their own actions —
-        # bug-level activity for their bugs is reachable from each bug.
-        stmt = stmt.where(Activity.actor_user_id == actor.id)
+        return stmt.where(Activity.actor_user_id == actor.id)
+    if accessible is not None:
+        return stmt.where(
+            Activity.bug_id.in_(select(Bug.id).where(Bug.project_id.in_(accessible)))
+        )
+    return stmt
+
+
+def _handle_recent_activity(db: Session, pq: ParsedQuery, actor: User,
+                            accessible=None) -> Response:
+    # Visibility (own actions for users, project-scoped for managers, all for
+    # admins) is applied by _scope_recent_activity so the chatbot can't be a
+    # side door around the global audit policy.
+    stmt = _scope_recent_activity(
+        select(Activity).order_by(Activity.created_at.desc(), Activity.id.desc()),
+        actor, accessible,
+    )
     if pq.time_window:
         if pq.time_window.start:
             stmt = stmt.where(Activity.created_at >= pq.time_window.start)
@@ -606,17 +629,20 @@ def _handle_recent_activity(db: Session, pq: ParsedQuery, actor: User) -> Respon
     )
 
 
-def _handle_stats(db: Session) -> Response:
+def _handle_stats(db: Session, accessible=None) -> Response:
     """Lightweight stats — mirrors the dashboard KPIs.
 
     Uses GROUP BY scans of the bugs table (one each for status, priority,
     environment) plus the top-assignees join, so each KPI group costs a
-    single DB round-trip rather than one per cell."""
+    single DB round-trip rather than one per cell. Every scan is project-scoped
+    so a restricted manager/user only sees their own projects' numbers."""
     excluded = ["Not a Bug"]
 
     by_status: dict[str, int] = {}
     for s, c in db.execute(
-        select(Bug.status, func.count(Bug.id)).group_by(Bug.status)
+        scope_bug_query(
+            select(Bug.status, func.count(Bug.id)).group_by(Bug.status), accessible,
+        )
     ).all():
         by_status[s] = int(c)
 
@@ -627,10 +653,14 @@ def _handle_stats(db: Session) -> Response:
     later = by_status.get("Resolve Later", 0)
 
     crit = int(db.scalar(
-        select(func.count(Bug.id)).where(Bug.priority == "Critical")
+        scope_bug_query(
+            select(func.count(Bug.id)).where(Bug.priority == "Critical"), accessible,
+        )
     ) or 0)
     prod = int(db.scalar(
-        select(func.count(Bug.id)).where(Bug.environment == "PROD")
+        scope_bug_query(
+            select(func.count(Bug.id)).where(Bug.environment == "PROD"), accessible,
+        )
     ) or 0)
 
     text = (
@@ -643,15 +673,18 @@ def _handle_stats(db: Session) -> Response:
         f"- **Critical**: {crit}\n"
         f"- **In PROD**: {prod}\n"
     )
-    # Top 5 assignees with open bugs.
+    # Top 5 assignees with open bugs (scoped to the actor's projects).
     top = db.execute(
-        select(User.name, func.count(bug_assignees.c.bug_id))
-        .join(bug_assignees, bug_assignees.c.user_id == User.id)
-        .join(Bug, Bug.id == bug_assignees.c.bug_id)
-        .where(Bug.status.in_(OPEN_STATUSES))
-        .group_by(User.id, User.name)
-        .order_by(func.count(bug_assignees.c.bug_id).desc())
-        .limit(5)
+        scope_bug_query(
+            select(User.name, func.count(bug_assignees.c.bug_id))
+            .join(bug_assignees, bug_assignees.c.user_id == User.id)
+            .join(Bug, Bug.id == bug_assignees.c.bug_id)
+            .where(Bug.status.in_(OPEN_STATUSES))
+            .group_by(User.id, User.name)
+            .order_by(func.count(bug_assignees.c.bug_id).desc())
+            .limit(5),
+            accessible,
+        )
     ).all()
     blocks = [Block("text", {"text": text})]
     if top:
@@ -835,16 +868,21 @@ def _list_bugs_order(pq: ParsedQuery):
 
 
 def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = None,
-                      owner_id: int = 0) -> Response:
+                      owner_id: int = 0, accessible=None) -> Response:
     """Run the parsed bug filter and render either count / list / file.
 
     ``owner_id`` is the requesting user; it's stamped on any staged XLSX so only
-    that user can download it (see excel.stage_workbook)."""
+    that user can download it (see excel.stage_workbook). ``accessible`` is the
+    actor's project scope (None = unrestricted); it bounds the result so a
+    restricted manager/user can't list (or export) other projects' bugs."""
     clarify = _clarify_ambiguous_names(pq) or _clarify_unresolved_user(pq, ctx)
     if clarify is not None:
         return clarify
 
     stmt, count_stmt = _apply_bug_filters(_eager_bug_query(), select(func.count(Bug.id)), pq)
+    # Project scope applies to both the page and the count (and thus the export).
+    stmt = scope_bug_query(stmt, accessible)
+    count_stmt = scope_bug_query(count_stmt, accessible)
     total = db.scalar(count_stmt) or 0
     descr = describe_filters(pq) or "(no filters)"
 
@@ -1092,7 +1130,7 @@ def _try_stage_file_block(result, report_key: str, owner_id: int) -> Optional[Bl
     })
 
 
-def _handle_report(db: Session, pq: ParsedQuery, actor: User) -> Response:
+def _handle_report(db: Session, pq: ParsedQuery, actor: User, accessible=None) -> Response:
     """Run a report engine query and reply with a summary table + file
     block the user can download as XLSX.
 
@@ -1106,6 +1144,9 @@ def _handle_report(db: Session, pq: ParsedQuery, actor: User) -> Response:
     from app.reports import REPORT_CATALOG, run_report
     meta = REPORT_CATALOG.get(report_key, {})
     filters = _filters_from_parsed(pq)
+    # Project scope: a restricted manager's report only covers their projects
+    # (mirrors the REST reports route). None = unrestricted (admin).
+    filters.restrict_project_ids = accessible
     try:
         result = run_report(report_key, filters, db)
     except (ValueError, KeyError) as exc:
@@ -1660,7 +1701,7 @@ def _remember_detail_bug(actor: User, pq, read_only: bool) -> None:
 
 
 def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx,
-                          read_only: bool = False) -> Optional[Response]:
+                          read_only: bool = False, accessible=None) -> Optional[Response]:
     """Dispatch a read-side parser intent to its handler.
     Returns None if the intent isn't a known read intent.
 
@@ -1684,18 +1725,18 @@ def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx,
     if intent == "list_users":
         return _handle_list_users(db, pq)
     if intent == "list_projects":
-        return _handle_list_projects(db)
+        return _handle_list_projects(db, accessible)
     if intent == "bug_detail":
         _remember_detail_bug(actor, pq, read_only)
-        return _handle_bug_detail(db, pq)
+        return _handle_bug_detail(db, pq, accessible)
     if intent == "stats":
-        return _handle_stats(db)
+        return _handle_stats(db, accessible)
     if intent == "recent_activity":
-        return _handle_recent_activity(db, pq, actor)
+        return _handle_recent_activity(db, pq, actor, accessible)
     if intent == "list_bugs":
-        return _handle_list_bugs(db, pq, ctx, owner_id=actor.id)
+        return _handle_list_bugs(db, pq, ctx, owner_id=actor.id, accessible=accessible)
     if intent == "report":
-        return _handle_report(db, pq, actor)
+        return _handle_report(db, pq, actor, accessible)
     return None
 
 
@@ -1714,14 +1755,15 @@ def _classifier_action_invalid(pred_intent: str) -> Response:
     )
 
 
-def _try_classifier(message: str, db: Session, pq, actor: User, ctx) -> Optional[Response]:
+def _try_classifier(message: str, db: Session, pq, actor: User, ctx,
+                    accessible=None) -> Optional[Response]:
     """Layer 2 fallback: ask the statistical classifier whether the message
     looks like a known read intent. Returns the handler's Response or None."""
     from app.chatbot import classifier as _clf
     pred = _clf.predict(message)
     if pred is None:
         return None
-    read_resp = _dispatch_read_intent(pred.intent, db, pq, actor, ctx)
+    read_resp = _dispatch_read_intent(pred.intent, db, pq, actor, ctx, accessible=accessible)
     if read_resp is not None:
         return read_resp
     if pred.intent.startswith("action_"):
@@ -1781,6 +1823,11 @@ def execute(message: str, db: Session, actor: User,
     now = now or datetime.now(timezone.utc)
     ctx = build_context(db)
     pq = parse(message, ctx, now=now)
+    # The actor's project scope (None = unrestricted admin). Threaded into every
+    # read handler so a restricted manager/user can't read other projects' data
+    # through chat. Sleuth writes are already admin-only, so the write path needs
+    # no scoping.
+    accessible = accessible_project_ids(db, actor)
 
     _resolve_pronouns(pq, actor)
     _resolve_me_pronoun(pq, actor)
@@ -1826,11 +1873,11 @@ def execute(message: str, db: Session, actor: User,
         if cloud_resp is not None:
             return cloud_resp
 
-    read_resp = _dispatch_read_intent(pq.intent, db, pq, actor, ctx)
+    read_resp = _dispatch_read_intent(pq.intent, db, pq, actor, ctx, accessible=accessible)
     if read_resp is not None:
         return read_resp
 
-    classifier_resp = _try_classifier(message, db, pq, actor, ctx)
+    classifier_resp = _try_classifier(message, db, pq, actor, ctx, accessible)
     if classifier_resp is not None:
         return classifier_resp
 

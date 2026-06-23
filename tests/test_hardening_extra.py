@@ -35,9 +35,16 @@ def _make_item(client, project_id, **extra):
 
 
 def _become_regular_user(admin_client, email="linker@test.local"):
-    """Create a regular user (as admin) then log the same client in as them."""
-    r = admin_client.post("/api/users", json={
-        "name": "Linker", "email": email, "role": "user", "password": "User12345"})
+    """Create a regular user (as admin) then log the same client in as them.
+
+    The user is tagged to every existing project so these pre-scoping tests keep
+    exercising the flat "see everything" model — the user must be able to SEE an
+    item before the per-type / admin-only rules can be asserted on it."""
+    pids = [p["id"] for p in admin_client.get("/api/projects").json()]
+    body = {"name": "Linker", "email": email, "role": "user", "password": "User12345"}
+    if pids:
+        body["project_ids"] = pids
+    r = admin_client.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     admin_client.post("/api/auth/logout")
     r = admin_client.post("/api/auth/login", json={"email": email, "password": "User12345"})
@@ -495,7 +502,8 @@ def test_stats_buckets_are_int_typed(admin_client):
 def test_event_item_can_edit_per_user(admin_client):
     p = _make_project(admin_client)
     ev = admin_client.post("/api/events", json={
-        "name": "Standup v31", "scheduled_for": "2026-05-28"}).json()
+        "name": "Standup v31", "scheduled_for": "2026-05-28",
+        "project_id": p["id"]}).json()
     task = _make_item(admin_client, p["id"], item_type="Task", event_id=ev["id"])
     admin_view = admin_client.get(f"/api/events/{ev['id']}").json()
     assert next(i for i in admin_view["items"] if i["id"] == task["id"])["can_edit"] is True

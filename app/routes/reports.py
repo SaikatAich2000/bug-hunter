@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from app.access import accessible_project_ids
 from app.auth import require_manager_or_admin
 from app.config import get_settings
 from app.database import get_db
@@ -124,7 +125,7 @@ def _build_filters(payload: ReportRunIn) -> Filters:
     return Filters.from_dict(payload.filters.model_dump())
 
 
-def _run_or_400(payload: ReportRunIn, db: Session):
+def _run_or_400(payload: ReportRunIn, db: Session, user: User):
     if payload.report_key not in REPORT_CATALOG:
         raise HTTPException(
             status_code=400,
@@ -134,6 +135,10 @@ def _run_or_400(payload: ReportRunIn, db: Session):
             ),
         )
     filters = _build_filters(payload)
+    # Project scope: restrict the report to the actor's projects (None for an
+    # admin = unrestricted). Set on the engine's internal-only field so a
+    # restricted manager can't widen scope by sending project_ids in the payload.
+    filters.restrict_project_ids = accessible_project_ids(db, user)
     try:
         return run_report(payload.report_key, filters, db), filters
     except UnknownReportError as exc:
@@ -144,14 +149,14 @@ def _run_or_400(payload: ReportRunIn, db: Session):
 def run(
     payload: ReportRunIn,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_manager_or_admin),
 ) -> dict[str, Any]:
     """Run a report and return JSON. For driving the on-screen table.
 
     Inline rendering is capped at 1000 rows to keep payloads sensible —
     the XLSX export endpoint has no cap (see below).
     """
-    result, _filters = _run_or_400(payload, db)
+    result, _filters = _run_or_400(payload, db, user)
     api = result.to_api()
     rendered_cap = 1000
     if len(api["rows"]) > rendered_cap:
@@ -180,7 +185,7 @@ def _safe_filename(report_key: str, label: str) -> str:
 def export_xlsx(
     payload: ReportRunIn,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_manager_or_admin),
 ) -> StreamingResponse:
     """Run the report and stream the resulting workbook.
 
@@ -190,7 +195,7 @@ def export_xlsx(
     caller to narrow the filters — generous enough for real audit / compliance
     exports while removing the unbounded worst case.
     """
-    result, filters = _run_or_400(payload, db)
+    result, filters = _run_or_400(payload, db, user)
     # Resource guard: cap by the dominant row driver (detail reports key off
     # `rows`; aggregated reports off the `detail_rows` drill-down).
     settings = get_settings()

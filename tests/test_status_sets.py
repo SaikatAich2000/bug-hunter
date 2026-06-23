@@ -27,9 +27,13 @@ def _login(client, email, password):
 
 def _make_user(client, name, role="user", email=None, password="User12345Aa"):
     email = email or f"{name.lower()}@x.test"
-    r = client.post("/api/users", json={
-        "name": name, "email": email, "role": role, "password": password,
-    })
+    body = {"name": name, "email": email, "role": role, "password": password}
+    # Project-scoped access: tag the new user to every existing project so these
+    # pre-scoping tests keep exercising the flat "see everything" model.
+    pids = [p["id"] for p in client.get("/api/projects").json()]
+    if pids:
+        body["project_ids"] = pids
+    r = client.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 

@@ -32,6 +32,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import notification_service
+from app.access import (
+    accessible_project_ids, can_access_project, scope_bug_query, scope_event_query,
+)
 from app.auth import can_delete_event, can_edit_bug, can_edit_event, get_current_user
 from app.database import get_db
 from app.email_service import (
@@ -40,7 +43,7 @@ from app.email_service import (
 )
 from app.models import (
     ROLE_ADMIN, ROLE_MANAGER,
-    Activity, Attachment, Bug, Event, User, bug_assignees,
+    Activity, Attachment, Bug, Event, Project, User, bug_assignees,
 )
 from app.schemas import (
     EventCreate, EventDetail, EventOut, EventUpdate,
@@ -128,6 +131,8 @@ def _event_brief(
         "name": ev.name,
         "description": ev.description,
         "scheduled_for": ev.scheduled_for,
+        "project_id": ev.project_id,
+        "project_name": ev.project.name if ev.project else None,
         "created_by_user_id": ev.created_by_user_id,
         "created_by_name": creator_name,
         "item_count": int(item_count),
@@ -211,6 +216,14 @@ def _require_edit(actor: User) -> None:
         )
 
 
+def _validate_event_project(db: Session, accessible, project_id: int) -> None:
+    """The event's owning project must exist and be in the actor's scope. An
+    inaccessible (or missing) project is reported as "does not exist" so a
+    restricted manager can't attach an event to a project they can't see."""
+    if db.get(Project, project_id) is None or not can_access_project(accessible, project_id):
+        raise HTTPException(status_code=400, detail="Project does not exist")
+
+
 # ---------------------------------------------------------------------------
 # List
 # ---------------------------------------------------------------------------
@@ -220,10 +233,11 @@ def list_events(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=500, ge=1, le=500),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[dict]:
     stmt = select(Event).options(
         selectinload(Event.managers),
+        selectinload(Event.project),
     ).order_by(
         # Events with no scheduled_for sort to the bottom; id desc is the stable
         # tiebreaker. nullslast() is available on SQLAlchemy 2.x and emulated on
@@ -231,6 +245,10 @@ def list_events(
         Event.scheduled_for.desc().nullslast(),
         Event.id.desc(),
     )
+    # Project scope: a restricted manager/user only sees events for their
+    # projects; an admin sees all. Project-less (legacy) events match no
+    # restricted set, so they stay admin-only.
+    stmt = scope_event_query(stmt, accessible_project_ids(db, user))
     if scheduled_for:
         stmt = stmt.where(Event.scheduled_for == scheduled_for)
     # Row ceiling with optional pagination so this list can't grow unbounded as
@@ -273,10 +291,13 @@ def get_event(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
+    accessible = accessible_project_ids(db, user)
     ev = db.scalar(
-        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+        select(Event).options(selectinload(Event.managers), selectinload(Event.project))
+        .where(Event.id == event_id)
     )
-    if ev is None:
+    # An event outside the actor's scope reads as not-found.
+    if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
     items_stmt = select(Bug).options(
         selectinload(Bug.project),
@@ -287,9 +308,14 @@ def get_event(
     ).where(Bug.event_id == event_id).order_by(
         Bug.updated_at.desc(), Bug.id.desc(),
     ).limit(_EVENT_ITEMS_MAX)
+    # Defense in depth: an event may hold items from other projects, so still
+    # filter the items themselves to the actor's scope (no-op for admins).
+    items_stmt = scope_bug_query(items_stmt, accessible)
     items = list(db.scalars(items_stmt).all())
     total_items = db.scalar(
-        select(func.count(Bug.id)).where(Bug.event_id == event_id)
+        scope_bug_query(
+            select(func.count(Bug.id)).where(Bug.event_id == event_id), accessible,
+        )
     ) or 0
     # One aggregate query for attachment counts across every item — avoids
     # an N+1 round-trip when the event has many tasks.
@@ -323,11 +349,17 @@ def create_event(
     actor: User = Depends(get_current_user),
 ) -> dict:
     _require_edit(actor)
+    # When a project is supplied it must exist and be in the creator's scope. A
+    # project-less event is allowed (it ends up admin-only); the SPA always
+    # supplies one.
+    if payload.project_id is not None:
+        _validate_event_project(db, accessible_project_ids(db, actor), payload.project_id)
     managers = _resolve_managers(db, payload.manager_ids or [])
     ev = Event(
         name=payload.name,
         description=payload.description,
         scheduled_for=payload.scheduled_for,
+        project_id=payload.project_id,
         created_by_user_id=actor.id,
     )
     if managers:
@@ -410,13 +442,21 @@ def update_event(
     actor: User = Depends(get_current_user),
 ) -> dict:
     _require_edit(actor)
+    accessible = accessible_project_ids(db, actor)
     ev = db.scalar(
-        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+        select(Event).options(selectinload(Event.managers), selectinload(Event.project))
+        .where(Event.id == event_id)
     )
-    if ev is None:
+    # Can't edit (or probe the existence of) an event outside the actor's scope.
+    if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
 
     fields = payload.model_dump(exclude_unset=True)
+    # project_id is handled specially: validate the new project is in scope, then
+    # apply it as a tracked change. Popped so the generic setattr loop skips it.
+    new_project_id = fields.pop("project_id", None)
+    if new_project_id is not None:
+        _validate_event_project(db, accessible, new_project_id)
     changes = _compute_event_changes(ev, fields)
     new_manager_ids = fields.pop("manager_ids", None)
     # Capture the manager set before the diff so a just-removed manager, whose
@@ -425,6 +465,9 @@ def update_event(
     old_manager_ids = [m.id for m in ev.managers]
     for k, v in fields.items():
         setattr(ev, k, v)
+    if new_project_id is not None and ev.project_id != new_project_id:
+        changes.append(("project", str(ev.project_id or ""), str(new_project_id)))
+        ev.project_id = new_project_id
     _apply_event_manager_diff(ev, db, new_manager_ids, changes)
     recipient_ids = sorted({*old_manager_ids, *(m.id for m in ev.managers)})
     if changes and recipient_ids:
@@ -438,7 +481,8 @@ def update_event(
     _persist_event_update(db, ev, actor, changes)
 
     ev = db.scalar(
-        select(Event).options(selectinload(Event.managers)).where(Event.id == event_id)
+        select(Event).options(selectinload(Event.managers), selectinload(Event.project))
+        .where(Event.id == event_id)
     )
     if changes and ev.managers:
         snap = _event_snapshot(ev)

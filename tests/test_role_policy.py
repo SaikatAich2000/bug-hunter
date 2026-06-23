@@ -21,9 +21,14 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X"):
     email = email or f"{name.lower()}@example.com"
-    r = client.post("/api/users", json={
-        "name": name, "email": email, "role": role, "password": password,
-    })
+    body = {"name": name, "email": email, "role": role, "password": password}
+    # Project-scoped access: tag the new user to every existing project so these
+    # pre-scoping role/permission tests keep exercising the flat "see
+    # everything" model. An untagged non-admin would otherwise see nothing.
+    pids = [p["id"] for p in client.get("/api/projects").json()]
+    if pids:
+        body["project_ids"] = pids
+    r = client.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 

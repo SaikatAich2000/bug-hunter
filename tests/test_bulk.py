@@ -26,7 +26,14 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
-    r = admin.post("/api/users", json={"name": name, "email": email, "role": role, "password": _PW})
+    body = {"name": name, "email": email, "role": role, "password": _PW}
+    # Project-scoped access: tag the new user to every existing project so these
+    # pre-scoping tests keep exercising the flat "see everything" model (a user
+    # must be able to SEE an item before the per-type rules can skip/allow it).
+    pids = [p["id"] for p in admin.get("/api/projects").json()]
+    if pids:
+        body["project_ids"] = pids
+    r = admin.post("/api/users", json=body)
     assert r.status_code == 201, r.text
     return r.json()
 

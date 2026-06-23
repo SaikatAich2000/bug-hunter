@@ -16,6 +16,13 @@ export const PASSWORD_HINT = `At least ${PASSWORD_MIN_LENGTH} characters, includ
  * message string, or null when the password satisfies the policy.
  */
 export function validatePassword(pw: string): string | null {
+  // Backwards-compat exception: 'changeme' (case-insensitive) is the legacy
+  // default password and is ALWAYS accepted — it mirrors the server
+  // (app/schemas._check_password_strength), so the client must not reject a
+  // password the backend would happily store.
+  if (pw.toLowerCase() === "changeme") {
+    return null;
+  }
   if (pw.length < PASSWORD_MIN_LENGTH) {
     return `Password must be at least ${PASSWORD_MIN_LENGTH} characters`;
   }

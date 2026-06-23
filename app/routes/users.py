@@ -21,12 +21,15 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.access import (
+    accessible_project_ids, project_ids_for_user, set_user_projects,
+)
 from app.auth import (
     get_current_user, hash_password, invalidate_outstanding_reset_tokens,
     require_admin, require_manager_or_admin,
 )
 from app.database import get_db
-from app.models import Activity, User
+from app.models import Activity, Project, User, user_projects
 from app.password_breach import is_password_breached
 from app.schemas import UserIn, UserOut, UserUpdate
 
@@ -76,13 +79,64 @@ def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> 
     return db.scalar(stmt) is not None
 
 
+def _validate_assignable_projects(db: Session, actor: User, project_ids: list[int]) -> None:
+    """Validate a set of project tags an actor wants to grant a user.
+
+    Every id must reference an existing project. A non-admin actor (a manager)
+    can only grant projects they themselves can access — otherwise a
+    project-restricted manager could hand out (or, by editing, peek at the
+    existence of) projects outside their own scope. An admin may grant any."""
+    if not project_ids:
+        return
+    existing = set(db.scalars(
+        select(Project.id).where(Project.id.in_(project_ids))
+    ).all())
+    missing = [pid for pid in project_ids if pid not in existing]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown project ids: {sorted(missing)}")
+    accessible = accessible_project_ids(db, actor)
+    if accessible is not None:
+        outside = [pid for pid in project_ids if pid not in accessible]
+        if outside:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only assign projects you have access to.",
+            )
+
+
+def _user_out(db: Session, user: User) -> dict:
+    """Serialize a user for the API including their project tags."""
+    return {
+        "id": user.id, "name": user.name, "email": user.email,
+        "role": user.role, "is_active": user.is_active,
+        "created_at": user.created_at, "updated_at": user.updated_at,
+        "project_ids": project_ids_for_user(db, user.id),
+    }
+
+
+def _projects_by_user(db: Session, user_ids: list[int]) -> dict[int, list[int]]:
+    """Batch map {user_id: [project_id, ...]} for a page of users — one query
+    instead of one per row."""
+    if not user_ids:
+        return {}
+    rows = db.execute(
+        select(user_projects.c.user_id, user_projects.c.project_id)
+        .where(user_projects.c.user_id.in_(user_ids))
+        .order_by(user_projects.c.project_id)
+    ).all()
+    out: dict[int, list[int]] = {}
+    for uid, pid in rows:
+        out.setdefault(int(uid), []).append(int(pid))
+    return out
+
+
 @router.get("", response_model=list[UserOut])
 def list_users(
     include_inactive: bool = Query(default=True),
     q: Optional[str] = Query(default=None, max_length=200),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
-) -> list[User]:
+) -> list[dict]:
     stmt = select(User)
     if not include_inactive:
         stmt = stmt.where(User.is_active.is_(True))
@@ -100,7 +154,19 @@ def list_users(
     # Row ceiling so this picker list can't grow unbounded; the users table is
     # bounded by team size, so 500 is well above any realistic count.
     stmt = stmt.order_by(func.lower(User.name)).limit(500)
-    return list(db.scalars(stmt).all())
+    rows = list(db.scalars(stmt).all())
+    # Attach each user's project tags in one batch query (not N+1). The user list
+    # itself is NOT project-scoped: managers still need to see everyone to pick
+    # assignees/reporters, exactly as before.
+    proj_map = _projects_by_user(db, [u.id for u in rows])
+    return [
+        {
+            "id": u.id, "name": u.name, "email": u.email, "role": u.role,
+            "is_active": u.is_active, "created_at": u.created_at,
+            "updated_at": u.updated_at, "project_ids": proj_map.get(u.id, []),
+        }
+        for u in rows
+    ]
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -108,7 +174,7 @@ def create_user(
     payload: UserIn,
     db: Session = Depends(get_db),
     actor: User = Depends(require_manager_or_admin),
-) -> User:
+) -> dict:
     # Managers can create users but can't grant the admin role; only admins can.
     if payload.role == "admin" and actor.role != "admin":
         raise HTTPException(
@@ -117,6 +183,9 @@ def create_user(
         )
     # Reject an initial password that appears in HIBP.
     _reject_if_breached(payload.password)
+    # Validate the optional project tags before creating anything (existence +
+    # the creator's own access), so a bad/forbidden id is a clean 400/403.
+    _validate_assignable_projects(db, actor, payload.project_ids)
     if _email_in_use(db, payload.email):
         raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
     user = User(
@@ -132,11 +201,15 @@ def create_user(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS) from exc
+    if payload.project_ids:
+        set_user_projects(db, user.id, payload.project_ids)
+    proj_note = (f"; projects: {sorted(payload.project_ids)}"
+                 if payload.project_ids else "")
     _audit(db, actor, "user_created", user.id,
-           f"Created user '{user.name}' <{user.email}> ({user.role})")
+           f"Created user '{user.name}' <{user.email}> ({user.role}){proj_note}")
     db.commit()
     db.refresh(user)
-    return user
+    return _user_out(db, user)
 
 
 @router.get("/{user_id}", response_model=UserOut)
@@ -144,11 +217,11 @@ def get_user(
     user_id: int,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
-) -> User:
+) -> dict:
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail=_DETAIL_USER_NOT_FOUND)
-    return user
+    return _user_out(db, user)
 
 
 def _check_manager_role_limits(actor: User, target: User, fields: dict) -> None:
@@ -216,6 +289,24 @@ def _apply_user_field_changes(user: User, fields: dict, changes: list[str]) -> N
             setattr(user, key, value)
 
 
+def _apply_project_tag_changes(db: Session, user_id: int,
+                               new_project_ids: Optional[list[int]],
+                               changes: list[str]) -> None:
+    """Replace a user's project memberships when the update supplied a new set.
+
+    None = the field was omitted, leave memberships untouched. A list (including
+    an empty one, which clears all tags) replaces them. Records the diff for the
+    audit line and is a no-op when the set is unchanged."""
+    if new_project_ids is None:
+        return
+    old = set(project_ids_for_user(db, user_id))
+    new = set(new_project_ids)
+    if old == new:
+        return
+    set_user_projects(db, user_id, new_project_ids)
+    changes.append(f"projects: {sorted(old)} → {sorted(new)}")
+
+
 def _apply_admin_password_reset(user: User, db: Session, new_password: str,
                                 changes: list[str]) -> None:
     """An admin password-reset is a security event: kick existing sessions and
@@ -235,18 +326,24 @@ def update_user(
     payload: UserUpdate,
     db: Session = Depends(get_db),
     actor: User = Depends(require_manager_or_admin),
-) -> User:
+) -> dict:
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail=_DETAIL_USER_NOT_FOUND)
 
     fields = payload.model_dump(exclude_unset=True)
     new_password = fields.pop("password", None)
+    # project_ids isn't a User column — pop it out before the generic field
+    # applier (which setattr()s every remaining key). None = leave memberships
+    # unchanged; a list (incl. empty) = replace them.
+    new_project_ids = fields.pop("project_ids", None)
     changes: list[str] = []
 
     _check_manager_role_limits(actor, user, fields)
     _check_self_edit_guardrails(actor, user_id, fields)
     _check_last_admin_guardrail(db, user, user_id, fields)
+    if new_project_ids is not None:
+        _validate_assignable_projects(db, actor, new_project_ids)
 
     new_email = fields.get("email")
     if new_email and _email_in_use(db, new_email, exclude_id=user_id):
@@ -257,6 +354,7 @@ def update_user(
         user.session_version = (user.session_version or 0) + 1
 
     _apply_user_field_changes(user, fields, changes)
+    _apply_project_tag_changes(db, user_id, new_project_ids, changes)
 
     if new_password:
         _apply_admin_password_reset(user, db, new_password, changes)
@@ -272,7 +370,7 @@ def update_user(
                f"Updated user '{user.name}': " + "; ".join(changes))
     db.commit()
     db.refresh(user)
-    return user
+    return _user_out(db, user)
 
 
 @router.delete("/{user_id}")

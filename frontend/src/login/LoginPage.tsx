@@ -9,6 +9,7 @@
 //    'self', no 'unsafe-inline'). The theme bootstrap lives in main.tsx.
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, MouseEvent as ReactMouseEvent } from "react";
+import PasswordInput from "../components/PasswordInput";
 
 type AlertKind = "error" | "success";
 
@@ -193,9 +194,8 @@ export default function LoginPage() {
             <span>
               Password <em>*</em>
             </span>
-            <input
+            <PasswordInput
               name="password"
-              type="password"
               required
               autoComplete="current-password"
             />

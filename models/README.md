@@ -1,16 +1,14 @@
 # Local LLM models for Sleuth
 
-This directory holds the optional local LLM for Sleuth's third intelligence
-layer. Drop a GGUF model file here and install `llama-cpp-python`, and Sleuth
-uses it as a fallback for queries the rule parser and statistical classifier
-can't resolve.
+This folder holds the optional local LLM — Sleuth's third layer. Drop a GGUF
+model file here and install `llama-cpp-python`, and Sleuth uses it as a fallback
+for queries the rule parser and the classifier can't handle.
 
 Model files are large and are **not committed** — `models/*.gguf`, `*.bin`, and
 `*.safetensors` are gitignored. Each deployment downloads its own model.
 
-If you skip this, Sleuth still works: the rule parser and classifier handle the
-large majority of queries, and the LLM is consulted only when both are
-uncertain.
+You can skip this entirely: the rule parser and classifier handle most queries,
+and the LLM is only consulted when both are unsure.
 
 ## Choosing a model
 
@@ -56,5 +54,5 @@ fallback query. Leave this directory empty to disable LLM fallback entirely.
 
 The local LLM runs entirely on this server; no data leaves the box on this path.
 A separate, off-by-default cloud layer (`SLEUTH_CLOUD_ENABLED=1`) can send
-free-form questions to Gemini or OpenRouter — the only path that egresses data,
+free-form questions to Gemini or OpenRouter — the only path that sends data out,
 and only after secret redaction. See the README *Sleuth* section.

@@ -1,8 +1,8 @@
 # Contributing
 
-Thanks for considering a contribution. Bug Hunter is a self-hosted tracker
-designed to run on a small box with no external dependencies, so changes that
-keep it small and self-contained are easiest to land.
+Thanks for considering a contribution. Bug Hunter is built to run on a small
+server with no external dependencies, so changes that keep it small and
+self-contained are the easiest to merge.
 
 ## Setup
 
@@ -40,8 +40,8 @@ npm run build
 
 ## Tests
 
-The full suite must stay green for every pull request. Coverage is enforced
-(`fail_under = 99`); `addopts` does not add `--cov`, so pass it explicitly:
+The full suite must pass for every pull request. Coverage is enforced
+(`fail_under = 99`). `addopts` doesn't add `--cov`, so pass it yourself:
 
 ```bash
 python -m pytest -m "not ui" --cov=app      # backend suite + coverage gate
@@ -58,11 +58,11 @@ python -m pytest -m ui
 
 ## Code style
 
-- Match the surrounding code; the repo has consistent patterns.
-- Default to no comments unless the *why* is non-obvious (a hidden constraint, a
-  subtle invariant, or a workaround for a specific bug).
+- Match the surrounding code; the repo follows consistent patterns.
+- Skip comments unless the *why* isn't obvious (a hidden constraint, a subtle
+  rule, or a workaround for a specific bug).
 - New routes get tests; new schemas get validators.
-- Database changes must be strictly additive — see *Live-data safety* in
+- Database changes must only *add* — see *Live-data safety* in
   [README.md](README.md). No destructive migrations.
 - If you add or change an API route, regenerate the docs with
   `python scripts/gen-api-docs.py` (the artifacts under `docs/api/` are

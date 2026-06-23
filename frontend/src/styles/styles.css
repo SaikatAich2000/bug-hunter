@@ -692,6 +692,19 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   max-height: 220px;
   overflow-y: auto;
 }
+/* Let the LAST entity list grow to fill the rail — the Team list for
+   managers/admins, or Projects for regular users — instead of capping at
+   220px and leaving dead space above the collapse button. Earlier sections
+   (e.g. Projects when Team is present) keep the 220px cap and scroll. */
+.sidebar > .side-section:last-of-type {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.sidebar > .side-section:last-of-type > .side-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
 .side-item {
   display: flex;
   align-items: center;

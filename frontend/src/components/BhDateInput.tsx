@@ -15,11 +15,17 @@
  *     </div>
  *   </div>
  *
- * The popover renders in-place but is `position: fixed`, placed by placePop so
- * it escapes overflow-clipping ancestors. The value is fully controlled via
- * props.
+ * The popover is portaled to <body> and positioned with `position: fixed` by
+ * placePop, so its coordinates are viewport-relative no matter what ancestor it
+ * was triggered from. Rendered in-place, any ancestor with a transform / filter
+ * / contain (a view-entrance animation, a modal's backdrop-filter, etc.) becomes
+ * the containing block and the panel lands in the wrong spot — and, sitting
+ * inside the scrolling <main>, inflates its scroll height and stutters on
+ * scroll. popRef still points at the real node, so the outside-click guard and
+ * placePop math keep working unchanged. The value is fully controlled via props.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 const MONTHS = [
@@ -247,67 +253,69 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
           ×
         </button>
       ) : null}
-      {open && (
-        <div
-          className="bh-date-pop"
-          role="dialog"
-          aria-label="Pick a date"
-          ref={popRef}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.stopPropagation();
-              setOpen(false);
-            }
-          }}
-        >
-          <div className="bh-date-head">
-            <button
-              type="button"
-              className="bh-date-nav"
-              data-nav="prev"
-              aria-label="Previous month"
-              onClick={(e) => { e.stopPropagation(); navMonth(-1); }}
-            >
-              ‹
-            </button>
-            <span className="bh-date-title">{MONTHS[view.m]} {view.y}</span>
-            <button
-              type="button"
-              className="bh-date-nav"
-              data-nav="next"
-              aria-label="Next month"
-              onClick={(e) => { e.stopPropagation(); navMonth(1); }}
-            >
-              ›
-            </button>
-          </div>
-          <div className="bh-date-grid">
-            {DOW.map((d, i) => (
-              <span key={i} className="bh-date-dow">{d}</span>
-            ))}
-            {cells.map((c) => (
+      {open &&
+        createPortal(
+          <div
+            className="bh-date-pop"
+            role="dialog"
+            aria-label="Pick a date"
+            ref={popRef}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setOpen(false);
+              }
+            }}
+          >
+            <div className="bh-date-head">
               <button
                 type="button"
-                key={c.iso}
-                className={c.cls}
-                data-iso={c.iso}
-                onClick={(e) => { e.stopPropagation(); commit(c.iso); }}
+                className="bh-date-nav"
+                data-nav="prev"
+                aria-label="Previous month"
+                onClick={(e) => { e.stopPropagation(); navMonth(-1); }}
               >
-                {c.dayNum}
+                ‹
               </button>
-            ))}
-          </div>
-          <div className="bh-date-foot">
-            <button
-              type="button"
-              className="bh-date-today"
-              onClick={(e) => { e.stopPropagation(); commit(isoDate(new Date())); }}
-            >
-              Today
-            </button>
-          </div>
-        </div>
-      )}
+              <span className="bh-date-title">{MONTHS[view.m]} {view.y}</span>
+              <button
+                type="button"
+                className="bh-date-nav"
+                data-nav="next"
+                aria-label="Next month"
+                onClick={(e) => { e.stopPropagation(); navMonth(1); }}
+              >
+                ›
+              </button>
+            </div>
+            <div className="bh-date-grid">
+              {DOW.map((d, i) => (
+                <span key={i} className="bh-date-dow">{d}</span>
+              ))}
+              {cells.map((c) => (
+                <button
+                  type="button"
+                  key={c.iso}
+                  className={c.cls}
+                  data-iso={c.iso}
+                  onClick={(e) => { e.stopPropagation(); commit(c.iso); }}
+                >
+                  {c.dayNum}
+                </button>
+              ))}
+            </div>
+            <div className="bh-date-foot">
+              <button
+                type="button"
+                className="bh-date-today"
+                onClick={(e) => { e.stopPropagation(); commit(isoDate(new Date())); }}
+              >
+                Today
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -1,13 +1,11 @@
-"""Direct coverage for app/fcm_transport.py — the optional Firebase Cloud
-Messaging transport.
+"""Tests for app/fcm_transport.py — the optional Firebase Cloud Messaging transport.
 
-The real module imports ``firebase_admin`` lazily inside its functions and is
-written to never raise (every failure is caught + logged). These tests inject a
-fake ``firebase_admin`` (and its ``credentials`` / ``messaging`` submodules) so
-every branch — init success/failure, the dead-token prune, the https-only
-webpush link, the never-raises guarantees — runs without a live Firebase
-project. ``app.push_service`` still mocks ``send()`` wholesale in its own tests;
-this file exercises the transport itself.
+firebase_admin is imported lazily and every failure is caught and logged rather
+than raised. A fake firebase_admin (with credentials and messaging submodules)
+is injected so all branches — init success/failure, dead-token pruning, the
+https-only webpush link, never-raises guarantees — run without a live Firebase
+project. app.push_service mocks send() wholesale in its own tests; this file
+exercises the transport layer directly.
 """
 from __future__ import annotations
 
@@ -63,7 +61,7 @@ def _make_messaging(*, multicast=None, send_raises=False):
 
 
 def _install_fake_firebase(monkeypatch, *, init_raises=False, messaging=None):
-    """Install a fake firebase_admin (+ credentials, + optional messaging)."""
+    """Install a fake firebase_admin with credentials and optional messaging submodule."""
     fa = types.ModuleType("firebase_admin")
     creds = types.ModuleType("firebase_admin.credentials")
     creds.Certificate = lambda path: ("cert", path)
@@ -87,7 +85,7 @@ def _install_fake_firebase(monkeypatch, *, init_raises=False, messaging=None):
 
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch):
-    """Each test starts with the module's init-latch cleared."""
+    """Reset the module's init-latch before each test."""
     monkeypatch.setattr(fcm_transport, "_state", {"app": None, "init_failed": False})
     yield
 
@@ -134,8 +132,8 @@ def test_ensure_app_init_exception_latches(monkeypatch):
 
 
 def test_ensure_app_double_check_app_inside_lock(monkeypatch):
-    """Another thread set _state['app'] between the outer check and the lock —
-    the inner re-check returns it (covers the in-lock app branch)."""
+    """Simulate another thread setting _state['app'] between the outer check and lock
+    acquisition; the inner re-check inside the lock should return it."""
     _fake_settings(monkeypatch)
     sentinel = object()
 
@@ -215,8 +213,8 @@ def test_send_app_none_returns_empty(monkeypatch):
 
 
 def test_send_messaging_import_fails_returns_empty(monkeypatch):
-    # _ensure_app yields an app, but firebase_admin has no usable messaging
-    # submodule, so the lazy import raises and send returns [] (never raises).
+    # _ensure_app succeeds, but firebase_admin.messaging is not importable,
+    # so the lazy import raises. send() must return [] and not propagate.
     sentinel = object()
     monkeypatch.setattr(fcm_transport, "_ensure_app", lambda: sentinel)
     fa = types.ModuleType("firebase_admin")  # no .messaging, not a package
@@ -255,7 +253,7 @@ def test_send_none_url_normalized(monkeypatch):
     monkeypatch.setattr(fcm_transport, "_ensure_app", lambda: sentinel)
     messaging = _make_messaging(multicast=_Multicast([_Resp(True)]))
     _install_fake_firebase(monkeypatch, messaging=messaging)
-    # url=None must not raise (startswith would AttributeError) — never-raises.
+    # url=None would cause AttributeError on startswith if not guarded first.
     fcm_transport.send(["tok1"], title="t", body="b", url=None)
     assert messaging._captured["message"][1]["data"]["url"] == "/"
 

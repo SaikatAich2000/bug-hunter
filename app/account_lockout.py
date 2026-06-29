@@ -36,7 +36,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Configuration knobs — env-overridable for ops.
+# All three limits are overridable via environment variables.
 _LOGIN_FAIL_LIMIT = _env_int("LOGIN_FAIL_LIMIT", 10)
 _LOGIN_FAIL_WINDOW_SECONDS = _env_int("LOGIN_FAIL_WINDOW_SECONDS", 900)  # 15 min
 _LOGIN_LOCKOUT_SECONDS = _env_int("LOGIN_LOCKOUT_SECONDS", 900)          # 15 min
@@ -131,11 +131,9 @@ def record_failure(email: str) -> None:
         bucket.fails.append(now)
         if len(bucket.fails) >= _LOGIN_FAIL_LIMIT:
             bucket.locked_until = now + _LOGIN_LOCKOUT_SECONDS
-            # Clear the accumulated failures so that when the lock expires the
-            # account isn't immediately re-locked by stale timestamps still
-            # inside a window longer than the lockout
-            # (LOGIN_FAIL_WINDOW_SECONDS > LOGIN_LOCKOUT_SECONDS). A fresh
-            # failure run is required to lock again.
+            # Clear stale timestamps so the account isn't immediately
+            # re-locked when the lockout expires (relevant when
+            # LOGIN_FAIL_WINDOW_SECONDS > LOGIN_LOCKOUT_SECONDS).
             bucket.fails.clear()
 
 

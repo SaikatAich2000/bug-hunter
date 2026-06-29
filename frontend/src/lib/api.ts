@@ -1,12 +1,10 @@
 /**
  * Typed fetch wrapper for the JSON API.
  *
- *  - Sends same-origin cookies (credentials: include).
- *  - A 401 redirects to /login.html once, even when several in-flight calls
- *    return 401 after a session revoke.
- *  - 204 resolves to null; JSON is parsed otherwise.
- *  - Surfaces FastAPI's {detail} (string or Pydantic list) as a readable
- *    message on ApiError.
+ * Sends same-origin cookies. A 401 triggers a single redirect to /login.html
+ * (deduplicated so concurrent in-flight requests don't double-redirect after a
+ * session revoke). 204 resolves to null. FastAPI's {detail} field — string or
+ * Pydantic validation list — is unwrapped into ApiError.message.
  */
 
 export const API = "/api";
@@ -34,13 +32,13 @@ export function bounceToLogin(): void {
   location.replace(`/login.html?next=${next}`);
 }
 
-/** Extract a human message from a FastAPI error body. */
+/** Pull a readable message out of a FastAPI error body. */
 function detailToMessage(body: unknown, fallback: string): string {
   if (!body || typeof body !== "object") return fallback;
   const detail = (body as { detail?: unknown }).detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
-    // Pydantic validation list: [{loc, msg, type}, ...].
+    // Pydantic validation errors: [{loc, msg, type}, ...]
     const msgs = detail
       .map((d) =>
         d && typeof d === "object" && "msg" in d
@@ -54,9 +52,9 @@ function detailToMessage(body: unknown, fallback: string): string {
 }
 
 export interface ApiOptions extends Omit<RequestInit, "body"> {
-  /** JSON-serialised into the body with Content-Type: application/json. */
+  /** Serialised as JSON; sets Content-Type automatically. */
   json?: unknown;
-  /** Raw body (FormData for uploads, etc.); takes precedence over `json`. */
+  /** Raw body (e.g. FormData); takes precedence over `json`. */
   body?: BodyInit;
 }
 
@@ -79,7 +77,7 @@ export async function api<T = unknown>(
 
   if (res.status === 401) {
     bounceToLogin();
-    // Silent: the page is navigating away, so callers don't toast this.
+    // Page is navigating away; suppress any caller-side toast.
     throw new ApiError("Session expired", 401, true);
   }
 
@@ -102,7 +100,7 @@ export async function api<T = unknown>(
   return parsed as T;
 }
 
-/** Fetch a binary endpoint (report XLSX export). Returns blob + filename. */
+/** Fetch a binary endpoint (e.g. XLSX export). Returns blob + filename. */
 export async function apiBlob(
   path: string,
   opts: ApiOptions = {},
@@ -126,14 +124,14 @@ export async function apiBlob(
     try {
       msg = detailToMessage(await res.json(), msg);
     } catch {
-      /* binary error body; keep fallback */
+      /* binary body; keep fallback message */
     }
     throw new ApiError(msg, res.status);
   }
   const cd = res.headers.get("Content-Disposition") || "";
-  // Prefer RFC 5987 filename*=UTF-8''… (percent-encoded, non-ASCII safe). The
-  // plain fallback's first char excludes '*' so it can't partially capture the
-  // filename* form into a garbled name.
+  // RFC 5987 filename* takes priority (percent-encoded, handles non-ASCII).
+  // The plain regex excludes '*' as its first char to avoid a partial match
+  // against the filename* form that would produce a garbled name.
   const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(cd);
   const plain = /filename="?([^";*][^";]*)"?/i.exec(cd);
   let raw = "";
@@ -142,8 +140,7 @@ export async function apiBlob(
   } else if (plain) {
     raw = plain[1].trim();
   }
-  // Strip any path components a server or proxy might place in the filename so
-  // it can't influence where a saved download lands.
+  // Strip path separators so a server-supplied name can't influence download location.
   const filename: string | null = raw ? (raw.replace(/[\\/]/g, "_").trim() || null) : null;
   return { blob: await res.blob(), filename };
 }

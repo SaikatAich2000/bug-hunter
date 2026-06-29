@@ -1,21 +1,15 @@
 """Edge-case and branch tests for the Reports subsystem.
 
-Covers behavior in:
-  * app/reports/engine.py
-  * app/routes/reports.py
-  * app/reports/xlsx.py
-  * app/reports/catalog.py
+Covers branches in app/reports/engine.py, app/routes/reports.py,
+app/reports/xlsx.py, and app/reports/catalog.py that the main behavior suites
+(test_reports.py and test_reports_engine_helpers.py) do not reach.
 
-that the broader behavior suite (tests/test_reports.py and
-tests/test_reports_engine_helpers.py) does not. Every test is hermetic: it
-talks to the temp SQLite DB the `client`/`admin_client` fixtures spin up, and
-the few cases that need a non-DB unit call the engine/xlsx helpers directly.
+Every test is hermetic and uses the temp SQLite DB the `client`/`admin_client`
+fixtures provide. The few unit-level cases call engine/xlsx helpers directly.
 
-Some app.* modules are imported inside the test bodies because the `client`
-fixture deletes and re-imports every app.* module per test, so a module
-captured at this file's top level goes stale. Importing inside the test, and
-for config patching the config.Settings class attribute, pins the exact
-generation the running app reads.
+app.* imports are placed inside test bodies rather than at module level because
+the `client` fixture tears down and re-imports every app.* module between tests,
+making top-level imports go stale.
 """
 from __future__ import annotations
 
@@ -29,9 +23,7 @@ from openpyxl import load_workbook
 from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
 
 
-# ---------------------------------------------------------------------------
-# Small API helpers (mirror tests/test_reports.py so behaviour stays aligned)
-# ---------------------------------------------------------------------------
+# Small API helpers, mirroring tests/test_reports.py for consistency.
 def _make_project(client, name="CovProj"):
     r = client.post("/api/projects", json={"name": name, "color": "#123456"})
     assert r.status_code == 201, r.text
@@ -67,19 +59,13 @@ def _run(client, report_key, filters=None):
     return r.json()
 
 
-# ---------------------------------------------------------------------------
-# engine: _parse_resolution_status with empty and non-matching detail;
-# run_report raises on an unknown key (direct unit calls).
-# ---------------------------------------------------------------------------
+# engine: _parse_resolution_status edge cases and run_report unknown-key error.
 def test_cov_parse_resolution_status_edge_cases():
     from app.reports.engine import _parse_resolution_status
-    # Falsy detail -> None.
     assert _parse_resolution_status("") is None
     assert _parse_resolution_status(None) is None
-    # Present but non-matching detail -> None.
     assert _parse_resolution_status("created the bug") is None
     assert _parse_resolution_status("assigned to Bob") is None
-    # A real status line still parses.
     assert _parse_resolution_status(
         "#5 'X' — status: 'New' → 'Resolved'") == "Resolved"
 
@@ -91,10 +77,9 @@ def test_cov_run_report_unknown_key_raises():
 
 
 def test_cov_run_route_maps_unknown_report_error_to_400(admin_client, monkeypatch):
-    """When the catalog gate passes for a valid key but run_report itself
-    raises UnknownReportError, the route turns it into a 400. This is
-    unreachable through pure HTTP (catalog and _DISPATCH are kept in sync),
-    so the test forces run_report to raise.
+    """The route maps UnknownReportError to 400. This path is unreachable via
+    normal HTTP (catalog and _DISPATCH are kept in sync), so we force the error
+    by patching run_report directly.
     """
     import app.routes.reports as reports_route
     from app.reports.engine import UnknownReportError
@@ -111,9 +96,7 @@ def test_cov_run_route_maps_unknown_report_error_to_400(admin_client, monkeypatc
     assert "forced unknown" in r.json()["detail"]
 
 
-# ---------------------------------------------------------------------------
-# catalog: get_report_meta hit and miss
-# ---------------------------------------------------------------------------
+# catalog: get_report_meta — hit and miss.
 def test_cov_catalog_get_report_meta():
     from app.reports.catalog import get_report_meta
     meta = get_report_meta("item_detail")            # hit
@@ -121,10 +104,8 @@ def test_cov_catalog_get_report_meta():
     assert get_report_meta("nope_not_real") is None  # miss
 
 
-# ---------------------------------------------------------------------------
 # xlsx: _coerce type branches, _defang_formula_text, and the empty-summary
-# early return in _write_summary_block (via the full pipeline).
-# ---------------------------------------------------------------------------
+# early-return in _write_summary_block.
 def test_cov_xlsx_coerce_branches():
     from app.reports.xlsx import _coerce, _defang_formula_text
     assert _coerce(None) == ""
@@ -133,17 +114,15 @@ def test_cov_xlsx_coerce_branches():
     assert _coerce(3.5) == 3.5
     dt = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     assert _coerce(dt) == dt.isoformat(timespec="seconds")
-    # Other types are stringified and defanged.
     assert _coerce(["a", "b"]) == "['a', 'b']"
-    # Formula-leading text gets quoted.
+    # Formula-leading characters are prefixed with a quote to prevent injection.
     assert _defang_formula_text("=cmd|calc") == "'=cmd|calc"
     assert _coerce("=danger") == "'=danger"
 
 
 def test_cov_xlsx_build_workbook_with_empty_summary():
-    """A ReportResult whose summary is empty exercises the early return in
-    _write_summary_block. No report produces an empty summary in practice, so
-    the result is built by hand and run through the real writer."""
+    """An empty summary dict exercises the early return in _write_summary_block.
+    No real report produces an empty summary, so we construct one by hand."""
     from app.reports.engine import ReportColumn, ReportResult
     from app.reports.xlsx import build_workbook_bytes
     result = ReportResult(
@@ -158,7 +137,7 @@ def test_cov_xlsx_build_workbook_with_empty_summary():
     data = build_workbook_bytes(result)
     wb = load_workbook(io.BytesIO(data), read_only=True)
     assert "Filters Applied" in wb.sheetnames
-    # No "Summary" header row should appear because the block returned early.
+    # The summary block returned early, so no "Summary" header row should exist.
     fws = wb["Filters Applied"]
     dump = " ".join(
         str(v) for row in fws.iter_rows(values_only=True)
@@ -167,14 +146,11 @@ def test_cov_xlsx_build_workbook_with_empty_summary():
     assert "Summary" not in dump
 
 
-# ---------------------------------------------------------------------------
-# routes: statuses validator via /run
-# ---------------------------------------------------------------------------
+# routes: statuses validator via /run.
 def test_cov_run_statuses_filter_validator(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="new-one")  # status defaults to New
-    # Mix a valid status with a bogus one; the validator keeps only the
-    # allowed one, and the status filter then applies.
+    # The validator strips unknown statuses; "New" survives, "TotallyBogusStatus" is dropped.
     body = _run(admin_client, "item_detail",
                 {"statuses": ["New", "TotallyBogusStatus"]})
     titles = {row["title"] for row in body["rows"]}
@@ -182,73 +158,65 @@ def test_cov_run_statuses_filter_validator(admin_client):
     assert body["rows"][0]["status"] == "New"
 
 
-# ---------------------------------------------------------------------------
-# engine: _apply_date_range one-sided windows. item_detail routes through
-# _apply_date_range (throughput uses its own).
-# ---------------------------------------------------------------------------
+# engine: _apply_date_range with one-sided windows (item_detail uses the shared
+# helper; throughput has its own).
 def test_cov_item_detail_one_sided_date_windows(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="dated")
     today = datetime.now(timezone.utc).date().isoformat()
-    # date_from only (date_to branch skipped).
+    # date_from only.
     b_from = _run(admin_client, "item_detail", {"date_from": today})
     assert any(r["title"] == "dated" for r in b_from["rows"])
-    # date_to only (date_from branch skipped).
+    # date_to only.
     b_to = _run(admin_client, "item_detail", {"date_to": today})
     assert any(r["title"] == "dated" for r in b_to["rows"])
-    # A date_to in the far past excludes today's row (proves the bound binds).
+    # A date_to in the far past should exclude today's row.
     b_old = _run(admin_client, "item_detail", {"date_to": "2000-01-01"})
     assert b_old["total"] == 0
 
 
-# ---------------------------------------------------------------------------
-# engine: resolution-info dedup via item_detail, the time_to_resolution
-# seen-bug and row-None skips, and the timeline non-resolution branch, all
-# from one twice-resolved bug.
-# ---------------------------------------------------------------------------
+# engine: resolution dedup in item_detail, seen-bug and row-None skips in
+# time_to_resolution, and the non-resolution branch in timeline — all driven
+# from a single twice-resolved bug.
 def test_cov_twice_resolved_bug_resolution_paths(admin_client):
     p = _make_project(admin_client)
     b = _make_item(admin_client, p["id"], title="flap")
-    # New -> Resolved (resolution #1) -> Reopened (non-res) -> Resolved (#2).
+    # New -> Resolved -> Reopened -> Resolved (two resolution events).
     _change_status(admin_client, b["id"], "Resolved")
     _change_status(admin_client, b["id"], "Reopened")
     _change_status(admin_client, b["id"], "Resolved")
-    # A second bug that only ever goes to a non-resolved state: its single
-    # status_changed row reaches _ttr_row for an as-yet-unseen bug, which
-    # returns None, exercising the row-is-None skip.
+    # A second bug that only reaches a non-resolved state. Its status_changed
+    # row exercises the row-is-None path in _ttr_row (non-resolved transition
+    # for an unseen bug).
     wip = _make_item(admin_client, p["id"], title="wip-only")
     _change_status(admin_client, wip["id"], "In Progress")
 
-    # item_detail: _fetch_resolution_info sees 3 status_changed rows for the
-    # same bug. The newest resolution is captured and the rest hit the
-    # already-seen continue. The row must still surface with a resolver.
+    # _fetch_resolution_info sees 3 rows for the same bug; the newest
+    # resolution is kept and the earlier ones hit the already-seen continue.
     detail = _run(admin_client, "item_detail", {})
     row = next(r for r in detail["rows"] if r["title"] == "flap")
     assert row["resolved_by"] == "Test Admin"
     assert row["resolved_at"]  # non-empty
 
-    # time_to_resolution: for that bug the query yields 3 rows ordered by
-    # created_at asc. The first Resolved builds a row and marks the bug seen;
-    # Reopened yields None from _ttr_row; the second Resolved is skipped
-    # because the bug_id is already seen. Exactly one TTR row results.
+    # The query yields 3 rows for that bug (ordered by created_at asc). The
+    # first Resolved builds a TTR row and marks the bug seen; Reopened yields
+    # None from _ttr_row; the second Resolved is skipped because the bug is
+    # already seen. Exactly one TTR row results.
     ttr = _run(admin_client, "time_to_resolution", {})
     flap_rows = [r for r in ttr["rows"] if r["title"] == "flap"]
     assert len(flap_rows) == 1
     assert ttr["summary"]["count"] == 1
 
-    # timeline: the Reopened status change is a non-resolution row, so the
-    # resolved-bucketing condition is False for it. The two Resolved
-    # transitions both count (timeline tallies every resolution event and does
-    # not dedup by bug), so total_resolved == 2.
+    # The Reopened transition is a non-resolution row (condition is False).
+    # Timeline counts every resolution event without deduping by bug, so both
+    # Resolved transitions are tallied.
     tl = _run(admin_client, "timeline", {})
     assert tl["summary"]["total_resolved"] == 2  # both Resolved transitions
     assert tl["summary"]["total_created"] == 2   # flap + wip-only filed today
 
 
-# ---------------------------------------------------------------------------
-# engine: pending_snapshot statuses-intersection, the empty early return, and
-# by_assignee accumulation.
-# ---------------------------------------------------------------------------
+# engine: pending_snapshot statuses intersection, empty-open-set early return,
+# and by_assignee accumulation.
 def test_cov_pending_snapshot_status_filter_and_assignee(admin_client):
     me = admin_client.get("/api/auth/me").json()
     p = _make_project(admin_client)
@@ -256,23 +224,20 @@ def test_cov_pending_snapshot_status_filter_and_assignee(admin_client):
     _make_item(admin_client, p["id"], title="open-assigned",
                assignee_ids=[me["id"]])
 
-    # A statuses filter that intersects the open set keeps "New".
+    # "New" intersects the open set, so the item appears.
     body = _run(admin_client, "pending_snapshot", {"statuses": ["New"]})
     titles = {r["title"] for r in body["rows"]}
     assert "open-assigned" in titles
     assert body["summary"]["by_assignee"].get("Test Admin", 0) >= 1
 
-    # A statuses filter that does not intersect the open set yields an empty
-    # open set and an early-return ReportResult. "Closed" is never open.
+    # "Closed" never appears in the open set, so the result is the early-return
+    # empty ReportResult.
     empty = _run(admin_client, "pending_snapshot", {"statuses": ["Closed"]})
     assert empty["total"] == 0
     assert empty["summary"]["total_items"] == 0
 
 
-# ---------------------------------------------------------------------------
-# engine: throughput query filter branches, exercising every bug-side filter
-# at once.
-# ---------------------------------------------------------------------------
+# engine: throughput with every optional filter applied at once.
 def test_cov_throughput_all_query_filters(admin_client):
     me = admin_client.get("/api/auth/me").json()
     p = _make_project(admin_client, name="ThruProj")
@@ -297,57 +262,48 @@ def test_cov_throughput_all_query_filters(admin_client):
     assert admin_row["bugs"] == 1
 
 
-# ---------------------------------------------------------------------------
-# engine: project_breakdown not-open branch plus resolved and final
-# increments, which need a resolved Bug in the set.
-# ---------------------------------------------------------------------------
+# engine: project_breakdown — not-open, resolved, and final counter increments.
 def test_cov_project_breakdown_resolved_and_final(admin_client):
     p = _make_project(admin_client, name="PBProj")
-    _make_item(admin_client, p["id"], title="pb-open")       # stays New (open)
+    _make_item(admin_client, p["id"], title="pb-open")       # stays New
     done = _make_item(admin_client, p["id"], title="pb-done")
-    _change_status(admin_client, done["id"], "Resolved")     # resolved + final
+    _change_status(admin_client, done["id"], "Resolved")     # hits resolved + final counters
     body = _run(admin_client, "project_breakdown", {})
     row = next(r for r in body["rows"] if r["project"] == "PBProj")
     assert row["created"] == 2
-    assert row["open"] == 1        # the New item
-    assert row["resolved"] == 1    # the Resolved item
+    assert row["open"] == 1        # New item
+    assert row["resolved"] == 1    # Resolved item
     assert row["final"] == 1       # Resolved is a final status
 
 
-# ---------------------------------------------------------------------------
-# engine: aging statuses-intersection and the empty-open-set path that skips
-# the status WHERE clause.
-# ---------------------------------------------------------------------------
+# engine: aging statuses intersection and the empty-open-set path.
 def test_cov_aging_status_filter_intersection_and_empty(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="aging-open")     # New (open)
     closed = _make_item(admin_client, p["id"], title="aging-closed")
     _change_status(admin_client, closed["id"], "Closed")
 
-    # statuses intersects the open set: only the New item qualifies.
+    # "New" intersects the open set; only the New item qualifies.
     inter = _run(admin_client, "aging", {"statuses": ["New"]})
     titles = {r["title"] for r in inter["rows"]}
     assert titles == {"aging-open"}
 
-    # statuses with NO overlap with the open set -> an "open items" report has
-    # nothing to show (mirrors pending_snapshot), rather than silently leaking
-    # closed items stamped with a bogus age.
+    # No overlap with the open set: the report returns nothing rather than
+    # leaking closed items with a meaningless age.
     empty_set = _run(admin_client, "aging", {"statuses": ["Closed"]})
     assert empty_set["rows"] == []
 
 
-# ---------------------------------------------------------------------------
-# routes: export.xlsx label that sanitizes to empty, and the zebra-fill path
-# with two or more main-sheet rows.
-# ---------------------------------------------------------------------------
+# routes: export.xlsx with a label that sanitizes to empty, and the zebra-fill
+# path triggered by two or more data rows.
 def test_cov_export_xlsx_blank_label_and_zebra(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="zebra-one")
     _make_item(admin_client, p["id"], title="zebra-two")  # second row triggers zebra fill
     r = admin_client.post("/api/reports/export.xlsx", json={
         "report_key": "item_detail",
-        # label is all formula/non-safe chars, sanitizing to "", so the
-        # `if suffix:` guard in _safe_filename is False.
+        # All chars sanitize away, leaving an empty suffix. The `if suffix:`
+        # guard in _safe_filename is False, so no label is appended.
         "filters": {"label": "@@@!!!"},
     })
     assert r.status_code == 200
@@ -357,22 +313,17 @@ def test_cov_export_xlsx_blank_label_and_zebra(admin_client):
     wb = load_workbook(io.BytesIO(r.content), read_only=True)
     main_ws = wb[wb.sheetnames[0]]
     rows = list(main_ws.iter_rows(values_only=True))
-    # banner + header + 2 data rows.
-    assert len(rows) >= 4
+    assert len(rows) >= 4  # banner + header + 2 data rows
 
 
-# ---------------------------------------------------------------------------
-# routes: 413 when the row count exceeds MAX_REPORT_ROWS. Seed a handful of
-# rows, then patch the class attribute down to 1.
-# ---------------------------------------------------------------------------
+# routes: 413 when row count exceeds MAX_REPORT_ROWS (patched down to 1).
 def test_cov_export_xlsx_over_row_limit_returns_413(admin_client, monkeypatch):
     import app.config as config
     p = _make_project(admin_client)
     for i in range(3):
         _make_item(admin_client, p["id"], title=f"cap-{i}")
-    # Patch the Settings class attribute so the freshly-built get_settings()
-    # instance the route reads sees the tiny cap (module-level refs are stale
-    # under the per-test reimport).
+    # Patch the class attribute directly; module-level refs go stale under the
+    # per-test reimport, but the route's get_settings() call picks this up.
     monkeypatch.setattr(config.Settings, "MAX_REPORT_ROWS", 1)
     r = admin_client.post("/api/reports/export.xlsx", json={
         "report_key": "item_detail",
@@ -382,18 +333,15 @@ def test_cov_export_xlsx_over_row_limit_returns_413(admin_client, monkeypatch):
     assert "row" in r.json()["detail"].lower()
 
 
-# ---------------------------------------------------------------------------
 # routes: inline /run truncation when rows exceed the 1000 render cap.
-# Bulk-insert via the app's own session so the test stays fast (1001 HTTP
-# POSTs would be needlessly slow) and hermetic. MAX_REPORT_ROWS keeps its
-# default so the engine LIMIT doesn't trim below 1000.
-# ---------------------------------------------------------------------------
+# We bulk-insert via the app's DB session (1001 HTTP POSTs would be too slow).
+# MAX_REPORT_ROWS is left at its default so the engine LIMIT doesn't trim below 1000.
 def test_cov_run_inline_render_cap_truncates(admin_client):
     p = _make_project(admin_client, name="BulkProj")
     from app.database import SessionLocal
     from app.models import Bug
-    # 1001 items: the engine returns them all (limit = MAX_REPORT_ROWS+1), and
-    # the route caps the rendered payload at 1000 and flags it truncated.
+    # 1001 items so the engine returns them all (limit = MAX_REPORT_ROWS+1),
+    # and the route then caps the rendered payload at 1000.
     db = SessionLocal()
     try:
         db.add_all([
@@ -406,34 +354,28 @@ def test_cov_run_inline_render_cap_truncates(admin_client):
     finally:
         db.close()
     body = _run(admin_client, "item_detail", {})
-    # `total` reflects the full result (computed before the route trims); the
-    # rendered `rows` list is capped at 1000 and flagged truncated.
+    # total comes from to_api() before the route trims; rows are capped at 1000.
     assert body["total"] == 1001               # full count from to_api()
     assert len(body["rows"]) == 1000           # rows capped at the render cap
     assert body["truncated"] is True
     assert body["truncated_cap"] == 1000
 
 
-# ---------------------------------------------------------------------------
-# routes: XlsxBuildError maps to 500, and xlsx _ensure_openpyxl raises.
-# Simulate a server with openpyxl unavailable by flipping the module flag the
-# live build path reads.
-# ---------------------------------------------------------------------------
+# routes: XlsxBuildError maps to 500. Simulate a missing openpyxl by flipping
+# the module-level flag that the live build path checks.
 def test_cov_export_xlsx_build_error_returns_500(admin_client, monkeypatch):
     import app.reports.xlsx as xlsx
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="boom")
-    # build_workbook_bytes calls _ensure_openpyxl(), which reads
-    # OPENPYXL_AVAILABLE live; forcing it False raises XlsxBuildError, which
-    # the route maps to a 500.
+    # _ensure_openpyxl() reads OPENPYXL_AVAILABLE at call time, so patching it
+    # here causes build_workbook_bytes to raise XlsxBuildError -> 500.
     monkeypatch.setattr(xlsx, "OPENPYXL_AVAILABLE", False)
     r = admin_client.post("/api/reports/export.xlsx", json={
         "report_key": "item_detail",
         "filters": {},
     })
     assert r.status_code == 500
-    # The 500 body is generic; the dependency-state cause is logged
-    # server-side, not echoed to the client.
+    # The error is logged server-side; the response body is intentionally generic.
     detail = r.json()["detail"].lower()
     assert "openpyxl" not in detail
     assert "workbook" in detail

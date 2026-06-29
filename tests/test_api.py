@@ -11,7 +11,7 @@ def _make_user(client, name="Alice", email=None, role="user", password="TestUser
                project_ids=None):
     email = email or f"{name.lower()}@example.com"
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Project-scoped access: a non-admin only sees the projects tagged here.
+    # Non-admins only see projects they are explicitly tagged to.
     if project_ids is not None:
         body["project_ids"] = project_ids
     r = client.post("/api/users", json=body)
@@ -42,7 +42,7 @@ def _make_bug(client, project_id, **extra):
 # Public meta endpoints (no auth)
 # ---------------------------------------------------------------------------
 def test_health_and_meta_no_auth(client):
-    """/api/health and /api/meta deliberately don't require auth."""
+    """/api/health and /api/meta are intentionally unauthenticated."""
     r = client.get("/api/health")
     assert r.status_code == 200 and r.json()["status"] == "ok"
     body = client.get("/api/meta").json()
@@ -69,7 +69,6 @@ def test_login_with_wrong_password(client):
 
 
 def test_login_logout_me(client):
-    # Login
     r = client.post("/api/auth/login", json={
         "email": "admin@test.local", "password": "Admin1234",
     })
@@ -78,15 +77,13 @@ def test_login_logout_me(client):
     assert me["email"] == "admin@test.local"
     assert me["role"] == "admin"
 
-    # /me works
     r = client.get("/api/auth/me")
     assert r.status_code == 200
 
-    # Logout
     r = client.post("/api/auth/logout")
     assert r.status_code == 204
 
-    # /me now 401
+    # Session is gone after logout.
     r = client.get("/api/auth/me")
     assert r.status_code == 401
 
@@ -98,14 +95,12 @@ def test_admin_can_change_password(admin_client):
     })
     assert r.status_code == 204
 
-    # Old password fails
     admin_client.post("/api/auth/logout")
     r = admin_client.post("/api/auth/login", json={
         "email": "admin@test.local", "password": "Admin1234",
     })
-    assert r.status_code == 401
+    assert r.status_code == 401  # old password no longer valid
 
-    # New one works
     r = admin_client.post("/api/auth/login", json={
         "email": "admin@test.local", "password": "NewerPass456",
     })
@@ -121,10 +116,9 @@ def test_change_password_requires_correct_current(admin_client):
 
 
 def test_forgot_password_does_not_leak_account_existence(client):
-    """Security default (FORGOT_PASSWORD_ENUMERATION_SAFE=True): the endpoint
-    returns 204 whether or not the email maps to an account, so an anonymous
-    caller can't enumerate registered addresses. A reset email is only queued
-    for a real, active account; the 'no account' attempt is still audited.
+    """The endpoint always returns 204 regardless of whether the email exists,
+    preventing account enumeration. A reset email is only queued for a real,
+    active account; unknown-address attempts are still audited.
     """
     r = client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
     assert r.status_code == 204
@@ -139,7 +133,7 @@ def test_user_crud_admin(admin_client):
     u = _make_user(admin_client, name="Alice", email="alice@example.com",
                    role="user", password="Alice1234")
     assert u["role"] == "user"
-    assert "password_hash" not in u  # never serialized
+    assert "password_hash" not in u  # must never be serialized
 
     r = admin_client.put(f"/api/users/{u['id']}", json={"role": "manager"})
     assert r.status_code == 200 and r.json()["role"] == "manager"
@@ -170,15 +164,13 @@ def test_admin_cannot_demote_self_to_user(admin_client):
 
 
 def test_cannot_remove_last_admin(admin_client):
-    """Even if a different admin tries to demote/delete the last admin, it's blocked."""
-    # Right now there's only one admin (the bootstrap). Create another one,
-    # then try to demote the bootstrap admin.
+    """Demoting or deleting the last admin account is always blocked."""
+    # Only one admin exists (the bootstrap). Add a second so a demotion is allowed,
+    # then remove that second admin and confirm the last one can't be demoted.
     other = _make_user(admin_client, name="Other", email="other@example.com",
                        role="admin", password="Other1234")
-    # Now demoting any single admin is OK because there are 2.
     r = admin_client.put(f"/api/users/{other['id']}", json={"role": "user"})
     assert r.status_code == 200
-    # But demoting the now-only-admin fails
     me = admin_client.get("/api/auth/me").json()
     r = admin_client.put(f"/api/users/{me['id']}", json={"role": "user"})
     assert r.status_code == 400
@@ -213,18 +205,15 @@ def test_admin_creates_bug_can_edit_true(admin_client):
 
 
 def test_user_creates_bug_can_edit_true(user_client):
-    # Set up: admin needs to make a project first
     me = user_client.get("/api/auth/me").json()
-    # Log out user, log in as admin to create a project
+    # Projects can only be created by admins, so switch temporarily.
     user_client.post("/api/auth/logout")
     user_client.post("/api/auth/login", json={
         "email": "admin@test.local", "password": "Admin1234",
     })
     p = _make_project(user_client, name="UserProject")
-    # Tag the regular user to the project so they can see/create bugs in it
-    # (project-scoped access: an untagged non-admin sees nothing).
+    # Tag the regular user to the project; untagged non-admins see nothing.
     user_client.put(f"/api/users/{me['id']}", json={"project_ids": [p["id"]]})
-    # Switch back to user
     user_client.post("/api/auth/logout")
     user_client.post("/api/auth/login", json={
         "email": "user@test.local", "password": "User12345",
@@ -235,31 +224,26 @@ def test_user_creates_bug_can_edit_true(user_client):
 
 
 def test_user_can_edit_others_bugs_but_cannot_delete(admin_client):
-    """Regular users can edit and reassign any bug, but only admins can
-    delete."""
+    """Regular users can edit any bug, but deletion is admin-only."""
     p = _make_project(admin_client, name="ProjA")
     bug = _make_bug(admin_client, p["id"], title="Admin's bug")
     bug_id = bug["id"]
 
-    # Create a regular user, tagged to the bug's project so they can see it.
+    # Tag Bob to the project so he can see the bug.
     _make_user(admin_client, name="Bob", email="bob@example.com",
                role="user", password="Bob1234567", project_ids=[p["id"]])
-    # Log out, log in as Bob
     admin_client.post("/api/auth/logout")
     admin_client.post("/api/auth/login", json={
         "email": "bob@example.com", "password": "Bob1234567",
     })
 
-    # Bob sees can_edit=True on the admin's bug (everyone can edit any bug)
     r = admin_client.get(f"/api/bugs/{bug_id}")
     assert r.json()["can_edit"] is True
 
-    # Bob can update it (title, status, priority — any field)
     r = admin_client.put(f"/api/bugs/{bug_id}", json={"title": "Bob edited this"})
     assert r.status_code == 200
     assert r.json()["title"] == "Bob edited this"
 
-    # Bob cannot delete it — admin-only
     r = admin_client.delete(f"/api/bugs/{bug_id}")
     assert r.status_code == 403
 
@@ -289,7 +273,6 @@ def test_manager_can_edit_anyones_bug(admin_client):
         "email": "mgr@example.com", "password": "Mgr1234567",
     })
 
-    # Manager can edit
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"priority": "Critical"})
     assert r.status_code == 200
 
@@ -326,7 +309,7 @@ def test_stats(admin_client):
 
 
 def test_audit_records_login(admin_client):
-    """Logging in should appear in the audit log."""
+    """Login events must appear in the audit log."""
     r = admin_client.get("/api/audit")
     assert r.status_code == 200
     rows = r.json()

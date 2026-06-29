@@ -1,10 +1,9 @@
 /**
- * Sessions admin view.
+ * Admin view listing all active sessions.
  *
- * Lists every active session row with user, role, IP, browser, when it was
- * created, when it was last seen, when it expires. Admin-only — the nav button
- * is role-gated and the API enforces 403 for non-admins. Your own current
- * session shows "This is you" and its Revoke button is disabled.
+ * Shows user, role, IP, browser, created/last-seen/expiry times. API and nav
+ * are both admin-only. The current session is flagged and its Revoke button
+ * is disabled.
  */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
@@ -46,8 +45,7 @@ export default function SessionsView() {
     } catch (err) {
       if (!quiet) toastError(err);
     } finally {
-      // Mark loaded even on failure so the empty-state renders instead of a
-      // permanently blank screen when the very first fetch errors.
+      // Always mark loaded so the empty-state renders on first-fetch failure.
       setLoaded(true);
     }
   }, []);
@@ -56,9 +54,8 @@ export default function SessionsView() {
     void refreshSessions();
   }, [refreshSessions]);
 
-  // Live poll: refetch the session list on the shared cadence so a login /
-  // revoke on another device shows up without a manual reload. Quiet (no error
-  // toast every tick) and paused while the tab is hidden; fires on refocus.
+  // Poll so logins/revokes from other devices appear without a manual reload.
+  // Quiet (no toast per tick), paused while the tab is hidden, fires on refocus.
   useEffect(() => {
     const tick = () => { if (!document.hidden) void refreshSessions(true); };
     const id = setInterval(tick, DATA_POLL_MS);

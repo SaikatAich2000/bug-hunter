@@ -1,18 +1,13 @@
-/**
- * App root: global chrome (blocking loader, toast slot, confirm dialog), the
- * Sleuth chat panel, the shell (sidebar + topbar + views + modals), and the
- * global Escape handler.
- */
+// App root — global chrome (loader, toast, confirm dialog, Sleuth panel) plus
+// the shell and a document-level Escape handler.
 import { lazy, Suspense, useEffect } from "react";
 import Shell from "./shell/Shell";
 import ConfirmHost from "./components/ConfirmHost";
-// Sleuth (the chat assistant + its rules/markdown deps) is a sizeable, secondary
-// feature shown only behind the chat FAB — lazy-load it out of the main bundle.
+// Sleuth is shown only behind the chat FAB, so keep it out of the main bundle.
 const SleuthPanel = lazy(() => import("./sleuth/SleuthPanel"));
 
 export default function App() {
-  // Escape closes the top-most open modal — DOM-driven so it works uniformly
-  // for every modal, and skips when focus is in a text field.
+  // Close the topmost open modal on Escape, but not when focus is in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -38,7 +33,7 @@ export default function App() {
 
   return (
     <>
-      {/* Global blocking loader */}
+      {/* Blocking loader — shown imperatively during async ops */}
       <div
         id="globalLoader"
         className="global-loader"
@@ -56,7 +51,7 @@ export default function App() {
 
       <Shell />
 
-      {/* Single toast element */}
+      {/* Toast — one instance, controlled imperatively */}
       <div id="toast" className="toast" hidden></div>
 
       <ConfirmHost />

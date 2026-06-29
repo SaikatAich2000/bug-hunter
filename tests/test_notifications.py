@@ -1,9 +1,8 @@
-"""Tests for the per-user in-app notifications feature.
+"""Tests for per-user in-app notifications.
 
-Covers: trigger creation (assignment / report / comment / status update),
-per-user isolation (each user only sees and mutates their own), unread count,
-mark-read / read-all, delete, unauthenticated rejection, and the additive
-schema (init_db twice leaves the table intact).
+Covers trigger creation (assignment, comment, status update), per-user
+isolation, unread count, mark-read / read-all, delete, unauthenticated
+rejection, and additive schema safety (init_db twice leaves the table intact).
 """
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ def _admin(c: TestClient) -> None:
 
 
 def _new_client() -> TestClient:
-    """A second TestClient bound to the same (already-imported) app/db."""
+    """Return a second TestClient sharing the already-imported app and DB."""
     from app.main import app
     return TestClient(app)
 
@@ -40,8 +39,8 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
     body = {"name": name, "email": email, "role": role, "password": _PW}
-    # Project-scoped access: tag the new user to every existing project so they
-    # can act on (comment/edit) the bugs these notification tests assign them to.
+    # Grant access to all existing projects so the user can comment/edit the
+    # bugs used in these tests.
     pids = [p["id"] for p in admin.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -90,7 +89,7 @@ def test_assignment_creates_notification_for_assignee(client):
 
 
 def test_self_assignment_notifies_actor(client):
-    """Assigning a work item to yourself still creates a notification for you."""
+    """Self-assignment still produces a notification for the actor."""
     _admin(client)
     proj = _mk_project(client, "Self Proj")
     me = client.get("/api/auth/me").json()
@@ -101,8 +100,8 @@ def test_self_assignment_notifies_actor(client):
 
 
 def test_actor_is_not_notified_of_own_update(client):
-    """A self-made change that is not an assignment (e.g. a status edit) does
-    not notify the actor; only the assignment itself notifies you."""
+    """A non-assignment change (e.g. a status edit) does not notify the actor
+    who made it. Only the initial assignment notifies you."""
     _admin(client)
     proj = _mk_project(client, "Own Update Proj")
     me = client.get("/api/auth/me").json()
@@ -119,19 +118,19 @@ def test_comment_notifies_reporter_not_author(client):
     _admin(client)
     proj = _mk_project(client, "Comment Proj")
     bob = _mk_user(client, "Bob", "bob2@notif.test")
-    # Admin is the reporter; Bob is an assignee.
+    # Admin is the reporter, Bob is the assignee.
     bug = _mk_bug(client, proj["id"], title="Comment bug", assignee_ids=[bob["id"]])
 
     bobc = _new_client()
     _login(bobc, "bob2@notif.test")
-    bobc.get(f"{_NOTIFS}/read-all")  # clear Bob's "assigned" so we isolate the comment
+    bobc.get(f"{_NOTIFS}/read-all")  # clear Bob's "assigned" notification so the comment is isolated
     r = bobc.post(f"/api/bugs/{bug['id']}/comments", json={"body": "<p>Looking into it.</p>"})
     assert r.status_code == 201, r.text
 
-    # Admin (reporter) is notified about the comment...
+    # The reporter (admin) gets notified about the comment...
     admin_notifs = client.get(_NOTIFS).json()
     assert any(n["kind"] == "comment" and n["bug_id"] == bug["id"] for n in admin_notifs), admin_notifs
-    # ...Bob (the comment author) is NOT.
+    # ...but the comment author (Bob) is not.
     bob_notifs = bobc.get(_NOTIFS).json()
     assert not any(n["kind"] == "comment" and n["bug_id"] == bug["id"] for n in bob_notifs), bob_notifs
 
@@ -144,7 +143,7 @@ def test_status_update_notifies_assignee(client):
 
     bobc = _new_client()
     _login(bobc, "bob3@notif.test")
-    bobc.get(f"{_NOTIFS}/read-all")  # clear the "assigned" notification
+    bobc.get(f"{_NOTIFS}/read-all")  # clear the assignment notification before the update
 
     r = client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
     assert r.status_code == 200, r.text
@@ -164,7 +163,7 @@ def _mk_event(admin: TestClient, name: str, manager_ids: list[int]) -> dict:
 
 
 def test_event_create_notifies_managers_not_actor(client):
-    """Creating an event notifies its managers (minus the admin who made it)."""
+    """Creating an event notifies its managers, but not the admin who created it."""
     _admin(client)
     meg = _mk_manager(client, "Meg", "meg@notif.test")
     ev = _mk_event(client, "Sprint Standup", [meg["id"]])
@@ -173,13 +172,13 @@ def test_event_create_notifies_managers_not_actor(client):
     _login(megc, "meg@notif.test")
     notifs = megc.get(_NOTIFS).json()
     assert any(n["kind"] == "event" and n["event_id"] == ev["id"] for n in notifs), notifs
-    # The admin actor is not notified of their own event.
+    # The creating admin should not receive their own event notification.
     assert not any(n["event_id"] == ev["id"] for n in client.get(_NOTIFS).json())
 
 
 def test_event_create_notifies_self_when_self_managed(client):
-    """Making yourself a manager while creating an event still creates a
-    notification for you (mirrors a bug self-assignment)."""
+    """Making yourself a manager on a new event still produces a notification,
+    mirroring the bug self-assignment behaviour."""
     _admin(client)
     me = client.get("/api/auth/me").json()
     ev = _mk_event(client, "My Own Standup", [me["id"]])
@@ -194,7 +193,7 @@ def test_event_update_notifies_managers(client):
 
     megc = _new_client()
     _login(megc, "meg2@notif.test")
-    megc.get(f"{_NOTIFS}/read-all")  # clear the create notification
+    megc.get(f"{_NOTIFS}/read-all")  # clear the creation notification
     r = client.put(f"/api/events/{ev['id']}", json={"name": "Planning (revised)"})
     assert r.status_code == 200, r.text
 
@@ -203,8 +202,8 @@ def test_event_update_notifies_managers(client):
 
 
 def test_event_delete_notifies_managers_without_dangling_fk(client):
-    """Deleting an event notifies managers; the row survives (no event_id, so
-    the CASCADE FK can't erase it)."""
+    """Deleting an event notifies its managers. The notification row survives
+    with event_id set to None so the cascade FK cannot erase it."""
     _admin(client)
     meg = _mk_manager(client, "Meg", "meg3@notif.test")
     ev = _mk_event(client, "Retro", [meg["id"]])
@@ -217,7 +216,7 @@ def test_event_delete_notifies_managers_without_dangling_fk(client):
     notifs = megc.get(_NOTIFS).json()
     deleted = [n for n in notifs if n["kind"] == "event" and "deleted" in n["title"].lower()]
     assert deleted, notifs
-    assert deleted[0]["event_id"] is None  # decoupled from the gone event
+    assert deleted[0]["event_id"] is None  # nulled out after the event is removed
 
 
 # ---------------------------------------------------------------------------
@@ -238,13 +237,13 @@ def test_user_cannot_see_or_mutate_another_users_notifications(client):
 
     carolc = _new_client()
     _login(carolc, "carol@notif.test")
-    # Carol's own list is empty (the bug is none of her business).
+    # Carol has no stake in the bug, so her list is empty.
     assert carolc.get(_NOTIFS).json() == []
     assert carolc.get(f"{_NOTIFS}/unread_count").json()["unread"] == 0
-    # Carol cannot read or delete Bob's notification — 404, not 403 (no leak).
+    # 404 (not 403) prevents leaking that the notification exists at all.
     assert carolc.post(f"{_NOTIFS}/{bob_notif_id}/read").status_code == 404
     assert carolc.delete(f"{_NOTIFS}/{bob_notif_id}").status_code == 404
-    # And Bob's notification is untouched.
+    # Bob's notification must be untouched.
     assert bobc.get(f"{_NOTIFS}/unread_count").json()["unread"] >= 1
     _ = bug  # silence "unused" — keeps the assignment intent explicit
 
@@ -266,10 +265,10 @@ def test_mark_read_and_unread_count(client):
 
     assert bobc.post(f"{_NOTIFS}/{nid}/read").status_code == 200
     assert bobc.get(f"{_NOTIFS}/unread_count").json()["unread"] == before - 1
-    # The row still lists, now with read_at set.
+    # The row is still returned by the default listing, with read_at populated.
     row = next(n for n in bobc.get(_NOTIFS).json() if n["id"] == nid)
     assert row["read_at"] is not None
-    # Only unread_only=false includes it.
+    # With unread_only=true it should be absent.
     assert all(n["id"] != nid for n in bobc.get(f"{_NOTIFS}?unread_only=true").json())
 
 
@@ -277,7 +276,7 @@ def test_read_all_clears_unread(client):
     _admin(client)
     proj = _mk_project(client, "ReadAll Proj")
     bob = _mk_user(client, "Bob", "bob6@notif.test")
-    # Two separate triggers → two notifications.
+    # Two triggers: assignment + status update, so Bob gets at least two notifications.
     b1 = _mk_bug(client, proj["id"], title="One", assignee_ids=[bob["id"]])
     client.put(f"/api/bugs/{b1['id']}", json={"status": "In Progress"})
 
@@ -299,7 +298,7 @@ def test_delete_notification(client):
     nid = bobc.get(_NOTIFS).json()[0]["id"]
     assert bobc.delete(f"{_NOTIFS}/{nid}").status_code == 200
     assert all(n["id"] != nid for n in bobc.get(_NOTIFS).json())
-    # Deleting again is a clean 404.
+    # Second delete returns 404, not 500.
     assert bobc.delete(f"{_NOTIFS}/{nid}").status_code == 404
 
 
@@ -307,7 +306,7 @@ def test_delete_notification(client):
 # Additive schema safety
 # ---------------------------------------------------------------------------
 def test_notifications_table_is_additive_and_idempotent(tmp_path, monkeypatch):
-    """init_db twice must leave the notifications table present and unchanged."""
+    """Running init_db twice must leave the notifications table intact."""
     db_file = tmp_path / "notif_schema.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
     monkeypatch.setenv("EMAIL_BACKEND", "disabled")
@@ -324,7 +323,7 @@ def test_notifications_table_is_additive_and_idempotent(tmp_path, monkeypatch):
 
     init_db()
     assert "notifications" in inspect(engine).get_table_names()
-    init_db()  # second pass must not error or drop anything
+    init_db()  # must not error or drop the table
     insp = inspect(engine)
     assert "notifications" in insp.get_table_names()
     idx = {i["name"] for i in insp.get_indexes("notifications")}

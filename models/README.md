@@ -54,5 +54,5 @@ fallback query. Leave this directory empty to disable LLM fallback entirely.
 
 The local LLM runs entirely on this server; no data leaves the box on this path.
 A separate, off-by-default cloud layer (`SLEUTH_CLOUD_ENABLED=1`) can send
-free-form questions to Gemini or OpenRouter — the only path that sends data out,
+free-form questions to Groq or OpenRouter — the only path that sends data out,
 and only after secret redaction. See the README *Sleuth* section.

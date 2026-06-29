@@ -1,10 +1,9 @@
 /**
  * User create/edit modal.
  *
- * Driven by `userModal` in AppContext: `user == null` means create, otherwise
- * edit. Password is required on create and optional on edit (blank = keep
- * current), with the placeholder/hint/required-mark swapping accordingly. On
- * success: close, reload users, refresh bugs/stats, toast.
+ * `user == null` → create mode; otherwise edit. Password is required on
+ * create, optional on edit (blank keeps the existing hash). On success the
+ * modal closes, users reload, and bugs/stats refresh.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import ChipPicker from "../components/ChipPicker";
@@ -22,8 +21,8 @@ import {
 } from "../lib/constants";
 import type { Role } from "../types";
 
-// UI placeholder strings, not credentials (key names intentionally avoid the
-// word "password"). The create hint states the actual server policy.
+// Placeholder/hint strings. Key names avoid the word "password" to reduce
+// password-manager false-positives. createHint mirrors the server policy.
 const HINTS = {
   editPlaceholder: "Leave blank to keep current",
   editHint: "Leave blank to keep current",
@@ -41,13 +40,12 @@ export default function UserModal() {
   const [role, setRole] = useState<Role>("user");
   const [isActive, setIsActive] = useState(true);
   const [password, setPassword] = useState("");
-  // Project tags this user may access. Empty = untagged (a non-admin sees
-  // nothing). The picker only offers projects the current actor can see, which
-  // is exactly the set the backend will let them grant.
+  // Projects this user can access. Empty = no access for non-admins.
+  // The picker is scoped to what the current actor can see, matching backend grant rules.
   const [projectIds, setProjectIds] = useState<number[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Reset and prefill on every open, then focus the name input.
+  // Reset form state on every open and focus the first field.
   useEffect(() => {
     if (!open) return;
     setName(user ? user.name : "");
@@ -66,9 +64,7 @@ export default function UserModal() {
     );
   }
 
-  // Fail-closed: only admins/managers may create/update users, independent of
-  // whoever set the open state. The backend enforces this too
-  // (require_manager_or_admin); this keeps the form from rendering at all.
+  // Guard matches backend's require_manager_or_admin; keeps the form from rendering for non-managers.
   if (!open || !canManage) return null;
 
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
@@ -91,11 +87,10 @@ export default function UserModal() {
       email: trimmedEmail,
       role,
       is_active: isActive,
-      // Always sent: on edit this replaces the user's memberships with exactly
-      // what the picker shows (idempotent when unchanged).
+      // Always sent; on edit, replaces memberships with the current picker selection.
       project_ids: projectIds,
     };
-    // Only include password if the user typed one (on edit, blank = keep current)
+    // On edit, omitting password keeps the existing hash.
     if (password) {
       const pwErr = validatePassword(password);
       if (pwErr) {
@@ -177,7 +172,7 @@ export default function UserModal() {
           >
             <option value="user">User — only edit own bugs</option>
             <option value="manager">Manager — edit any bug, manage projects</option>
-            {/* Only an admin may grant the admin role; managers cannot. */}
+            {/* Managers cannot grant admin; only admins can. */}
             {(isAdmin || role === "admin") && (
               <option value="admin">Admin — full access including users</option>
             )}

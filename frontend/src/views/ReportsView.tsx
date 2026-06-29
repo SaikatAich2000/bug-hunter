@@ -1,14 +1,12 @@
 /**
- * ReportsView — a reporting workbench: pick a type, set filters, Run, then
- * Download XLSX. Uses the same backend engine that Sleuth uses, so a report
- * run from this UI and the equivalent chatbot query return identical numbers.
+ * Pick a report type, set filters, Run, then Download XLSX.
+ * Shares the same backend engine as Sleuth, so results are identical.
  *
- *  - The catalog (GET /api/reports/types) loads once on first mount.
- *  - Filters are gathered on demand each time Run is clicked, so editing a
- *    chip without pressing Run never silently affects the next download — the
- *    XLSX export reuses the exact filter blob of the last successful run.
- *  - The inline table is capped server-side; the truncation banner mirrors
- *    `truncated` / `truncated_cap` from POST /api/reports/run.
+ * - Catalog loads once on mount (GET /api/reports/types).
+ * - Filters are collected fresh on each Run; the XLSX export reuses the
+ *   filter blob from the last successful run, not the current UI state.
+ * - The inline table is server-side capped; the banner reflects
+ *   `truncated` / `truncated_cap` from POST /api/reports/run.
  */
 import { useEffect, useRef, useState } from "react";
 import { api, apiBlob } from "../lib/api";
@@ -25,7 +23,7 @@ import type {
 } from "../types";
 
 // ---------------------------------------------------------------------------
-// Constants / helpers
+// Helpers
 // ---------------------------------------------------------------------------
 
 const REPORTS_DEFAULT_PRESETS: Record<string, number> = {
@@ -33,8 +31,8 @@ const REPORTS_DEFAULT_PRESETS: Record<string, number> = {
   last_30_days: 30,
 };
 
-/** "YYYY-MM-DD" for the local calendar day. Not UTC: toISOString() would
- *  shift the date by a day for users west of UTC late in the day. */
+/** Local calendar date as "YYYY-MM-DD". Avoids toISOString() which shifts
+ *  the date for users west of UTC late in the evening. */
 function isoDay(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -42,13 +40,13 @@ function isoDay(d: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Only "right" alignment is honoured. */
+/** Only "right" is a meaningful value; everything else falls back to left. */
 function colAlign(col: ReportColumn): "left" | "right" {
   return col.align === "right" ? "right" : "left";
 }
 
-/** Render any cell value legibly: Yes/No for booleans, a field/JSON for
- *  objects (never "[object Object]"), with 200-char truncation. */
+/** Render a cell value as readable text: Yes/No for booleans, JSON for
+ *  objects (avoids "[object Object]"), truncated at 200 chars. */
 function reportCellText(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -66,7 +64,13 @@ function reportCellText(value: unknown): string {
   return text;
 }
 
-/** Toggle a value in an array (chip check/uncheck). */
+/** Plain-object summary values (e.g. by_type: {"Bug": 252}) are rendered
+ *  as labelled lists rather than raw JSON. */
+function isBreakdown(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Toggle a value in an array. */
 function toggleVal<T>(list: readonly T[], v: T): T[] {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 }
@@ -75,7 +79,7 @@ function toggleVal<T>(list: readonly T[], v: T): T[] {
 // Filter state
 // ---------------------------------------------------------------------------
 
-/** One entry per chip container; keys mirror the chip `data-name`s. */
+/** Keys mirror the chip `data-name` attributes. */
 interface ChipState {
   item_type: string[];
   status: string[];
@@ -96,7 +100,7 @@ const EMPTY_CHIPS: ChipState = {
   reporter_id: [],
 };
 
-/** Outbound filter blob — exact keys of app/routes/reports.py FilterIn. */
+/** Matches the FilterIn schema in app/routes/reports.py. */
 interface ReportFilters {
   date_from: string | null;
   date_to: string | null;
@@ -113,7 +117,7 @@ interface ReportFilters {
 }
 
 // ---------------------------------------------------------------------------
-// Chip group
+// ChipGroup
 // ---------------------------------------------------------------------------
 
 interface ChipItem<T extends string | number> {
@@ -147,7 +151,7 @@ function ChipGroup<T extends string | number>({
             checked={checked.includes(it.value)}
             onChange={() => onToggle(it.value)}
           />
-          {/* Checkmark — only visible when the chip is selected (styles.css). */}
+          {/* Visible only when checked — controlled by styles.css. */}
           <span className="reports-chip-indicator" aria-hidden="true">✓</span>
           <span className="reports-chip-label">{it.text}</span>
         </label>
@@ -157,21 +161,21 @@ function ChipGroup<T extends string | number>({
 }
 
 // ---------------------------------------------------------------------------
-// View
+// ReportsView
 // ---------------------------------------------------------------------------
 
 export default function ReportsView() {
   const { projects, users } = useApp();
 
-  // `lastRun` bundles the report key and filters: both are set together on a
-  // successful run, and the download button keys off their presence.
+  // `lastRun` holds the key + filters from the most recent successful run.
+  // The download button is disabled until it is set.
   const [catalog, setCatalog] = useState<ReportTypesOut | null>(null);
   const [reportKey, setReportKey] = useState("");
   const [result, setResult] = useState<ReportRunResult | null>(null);
   const [lastRun, setLastRun] = useState<{ reportKey: string; filters: ReportFilters } | null>(null);
   const runningRef = useRef(false);
 
-  // Filter inputs (controlled).
+  // Filter state.
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [chips, setChips] = useState<ChipState>(EMPTY_CHIPS);
@@ -179,7 +183,7 @@ export default function ReportsView() {
   const [includeNotABug, setIncludeNotABug] = useState(false);
   const [runLabel, setRunLabel] = useState("");
 
-  // ----- per-type defaults -------------------------------------------------
+  // Apply the default date window for the selected report type.
   const applyTypeDefaults = (meta: ReportTypeMeta | undefined) => {
     const win = meta?.default_window || "all_time";
     const days = REPORTS_DEFAULT_PRESETS[win];
@@ -190,13 +194,13 @@ export default function ReportsView() {
       setDateFrom(isoDay(from));
       setDateTo(isoDay(today));
     } else {
-      // all_time
+      // all_time: clear both bounds
       setDateFrom("");
       setDateTo("");
     }
   };
 
-  // ----- catalog load once on first mount ----------------------------------
+  // Load catalog once; strict-mode double-invocation guard via initRef.
   const initRef = useRef(false);
   useEffect(() => {
     if (initRef.current) return;
@@ -205,7 +209,6 @@ export default function ReportsView() {
       try {
         const cat = await api<ReportTypesOut>("/reports/types");
         setCatalog(cat);
-        // Select the first report type by default.
         const first = cat.types[0];
         setReportKey(first ? first.key : "");
         applyTypeDefaults(first);
@@ -218,9 +221,8 @@ export default function ReportsView() {
   const selectedMeta = catalog?.types.find((t) => t.key === reportKey);
   const vocab = catalog?.vocab;
 
-  // ----- payload builder ---------------------------------------------------
-  // project/assignee/reporter checks are pruned against the live lists so a
-  // chip whose entity has since disappeared can't leak into the payload.
+  // Project/assignee/reporter IDs are validated against the live lists so
+  // stale chips from deleted entities don't reach the API.
   const buildFilters = (): ReportFilters => ({
     date_from: dateFrom || null,
     date_to: dateTo || null,
@@ -236,7 +238,7 @@ export default function ReportsView() {
     label: runLabel.trim() || null,
   });
 
-  // ----- reset -------------------------------------------------------------
+  // Reset all filter inputs to per-type defaults.
   const resetFilters = () => {
     setChips(EMPTY_CHIPS);
     setTextSearch("");
@@ -245,7 +247,7 @@ export default function ReportsView() {
     applyTypeDefaults(selectedMeta);
   };
 
-  // ----- presets -----------------------------------------------------------
+  // Quick-fill date range from today back N days.
   const setDatePreset = (days: number) => {
     const today = new Date();
     const from = new Date(today);
@@ -254,7 +256,7 @@ export default function ReportsView() {
     setDateTo(isoDay(today));
   };
 
-  // ----- run ---------------------------------------------------------------
+  // Submit the current filters and store the result + filter snapshot.
   const runReportNow = async () => {
     if (runningRef.current) return;
     if (!reportKey) return;
@@ -276,7 +278,7 @@ export default function ReportsView() {
     }
   };
 
-  // ----- download ----------------------------------------------------------
+  // Export the last run as XLSX using a programmatic anchor click.
   const downloadReportXlsx = async () => {
     if (!lastRun) {
       toast("Run a report first, then download", "info");
@@ -304,8 +306,7 @@ export default function ReportsView() {
     }
   };
 
-  // ----- derived render bits ------------------------------------------------
-  // Result-head meta line (run summary).
+  // Meta line shown beneath the result title.
   const metaBits = lastRun && result
     ? [
         `${result.total} row${result.total === 1 ? "" : "s"}`,
@@ -331,7 +332,7 @@ export default function ReportsView() {
                   value={reportKey}
                   onChange={(v) => {
                     setReportKey(v);
-                    // Re-apply the per-type defaults when the type changes.
+                    // Reset date range to the new type's default window.
                     applyTypeDefaults(catalog?.types.find((t) => t.key === v));
                   }}
                   options={(catalog?.types ?? []).map((t) => ({
@@ -482,7 +483,7 @@ export default function ReportsView() {
           </div>
           <div className="reports-side-actions">
             <button className="btn primary" id="reportRunBtn" type="button" onClick={() => { void runReportNow(); }}>
-              ▶ Run report
+              Run report
             </button>
             <button className="btn ghost" id="reportClearBtn" type="button" onClick={resetFilters}>
               Reset filters
@@ -502,19 +503,35 @@ export default function ReportsView() {
               disabled={!lastRun}
               onClick={() => { void downloadReportXlsx(); }}
             >
-              📥 Download XLSX
+              Download XLSX
             </button>
           </div>
-          {/* Summary cards */}
+          {/* Summary cards — hidden until a run completes */}
           <div className="reports-summary" id="reportSummary" hidden={!summaryEntries.length}>
-            {summaryEntries.map(([k, v]) => (
-              <div className="reports-summary-card" key={k}>
-                <div className="reports-summary-label">{k.replaceAll("_", " ")}</div>
-                <div className="reports-summary-value">
-                  {reportCellText(v)}
+            {summaryEntries.map(([k, v]) => {
+              const breakdown = isBreakdown(v) ? Object.entries(v) : null;
+              return (
+                <div className="reports-summary-card" key={k}>
+                  <div className="reports-summary-label">{k.replaceAll("_", " ")}</div>
+                  {breakdown ? (
+                    breakdown.length ? (
+                      <ul className="reports-summary-breakdown">
+                        {breakdown.map(([sk, sv]) => (
+                          <li key={sk}>
+                            <span className="reports-summary-bd-key">{sk}</span>
+                            <span className="reports-summary-bd-val">{reportCellText(sv)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="reports-summary-value">—</div>
+                    )
+                  ) : (
+                    <div className="reports-summary-value">{reportCellText(v)}</div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {/* Result table */}
           <div className="reports-table-scroll">

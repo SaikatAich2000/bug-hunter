@@ -1,16 +1,11 @@
 """Tests for the daily email-digest job (app/jobs/email_digest.py).
 
-Covers:
-  - one grouped email per user, operations bucketed by category
-  - idempotency (a second run sends nothing — rows are stamped)
-  - the lookback window (old operations age out instead of replaying)
-  - undeliverable recipients are skipped and left un-stamped
-  - main() is a no-op when EMAIL_DIGEST_ENABLED is off, and sends when on
-  - with the digest on the per-operation work-item emails are suppressed,
-    while the password-reset email still sends immediately (security email)
+Covers grouped delivery per user, idempotency, the lookback window, inactive
+user skipping, the global toggle, and the suppression of immediate work-item
+emails (while security emails like password-reset still send immediately).
 
-All direct-DB: we seed notification rows on a real session and call the job
-in-process, capturing email_service.deliver(...) so no SMTP is touched.
+Tests seed notification rows on a real DB session and call the job in-process,
+patching email_service.deliver so no SMTP is touched.
 """
 from __future__ import annotations
 
@@ -23,7 +18,7 @@ BOOTSTRAP_EMAIL = "admin@test.local"
 # Helpers
 # ---------------------------------------------------------------------------
 def _capture_deliver(monkeypatch) -> list[tuple[str, list[str], str]]:
-    """Patch email_service.deliver to record (subject, to, body) calls."""
+    """Record (subject, to, body) for every deliver() call."""
     sent: list[tuple[str, list[str], str]] = []
     monkeypatch.setattr(
         "app.email_service.deliver",
@@ -93,12 +88,12 @@ def test_one_grouped_email_per_user_then_idempotent(admin_client, monkeypatch):
     assert len(sent) == 2
 
     admin_body = next(b for (_s, to, b) in sent if BOOTSTRAP_EMAIL in to)
-    # Two distinct categories present, grouped, in one email.
+    # Two categories bucketed into one email for the admin user.
     assert "Assigned to you" in admin_body
     assert "Comments" in admin_body
     assert "Bug #1" in admin_body
 
-    # Second run sends nothing — the rows were stamped emailed_at.
+    # Second run is a no-op; rows were stamped emailed_at on the first pass.
     sent.clear()
     stats2 = run_digest(db, now=_utcnow())
     assert stats2["emails_sent"] == 0
@@ -131,7 +126,7 @@ def test_inactive_user_is_skipped_unstamped(admin_client, monkeypatch):
     db = _session()
     from app.models import User, _utcnow
     from app.jobs.email_digest import run_digest
-    # Deactivate the user — a deactivated account must not receive a digest.
+    # Deactivated accounts must not receive a digest.
     user = db.get(User, uid)
     user.is_active = False
     db.flush()
@@ -141,7 +136,7 @@ def test_inactive_user_is_skipped_unstamped(admin_client, monkeypatch):
     stats = run_digest(db, now=_utcnow())
     assert stats["emails_sent"] == 0
     assert sent == []
-    # Left un-stamped so nothing is lost — it just ages out of the window.
+    # Left un-stamped so the row ages out naturally rather than being lost.
     db.refresh(row)
     assert row.emailed_at is None
     db.close()
@@ -161,7 +156,7 @@ def test_main_is_noop_when_disabled(admin_client, monkeypatch):
 
     from app.jobs.email_digest import main
     assert main() == 0
-    assert sent == []  # disabled → nothing sent, rows wait for an enabled run
+    assert sent == []  # rows wait untouched for a future enabled run
 
 
 def test_main_sends_when_enabled(admin_client, monkeypatch):
@@ -195,20 +190,20 @@ def test_digest_on_suppresses_work_item_email_but_not_password_reset(
         reporter=email_service.UserSnapshot(1, "Reporter", "rep@test.local"),
         assignees=(),
     )
-    # Operation email is suppressed (the digest will carry it instead).
+    # Work-item email is suppressed; the digest will carry it instead.
     email_service.notify_bug_created(snap, actor_user_id=None)
     assert sent == []
 
-    # Security/transactional email is not suppressed — it must send now.
+    # Security email bypasses suppression and sends immediately.
     email_service.notify_password_reset("user@test.local", "User", "https://x/reset")
     assert len(sent) == 1
     assert "Reset your password" in sent[0][0]
 
 
 def test_immediate_era_operations_are_never_later_digested(admin_client, monkeypatch):
-    """The 'only new, never old' guarantee: an operation recorded while the
-    digest was off is born already-emailed (emailed_at stamped), so turning the
-    digest on later never re-sends it."""
+    """Operations recorded while the digest is off are born already-emailed
+    (emailed_at stamped at creation), so enabling the digest later never
+    re-sends them."""
     _enable_digest(monkeypatch, on=False)  # immediate mode when the op happens
     from app import notification_service
     from app.models import _utcnow
@@ -221,7 +216,7 @@ def test_immediate_era_operations_are_never_later_digested(admin_client, monkeyp
     )
     db.commit()
 
-    # Now the digest runs (e.g. someone enabled it afterwards) — nothing to send.
+    # Digest runs after the fact; already-stamped rows are not resent.
     sent = _capture_deliver(monkeypatch)
     stats = run_digest(db, now=_utcnow())
     assert stats["emails_sent"] == 0
@@ -230,8 +225,8 @@ def test_immediate_era_operations_are_never_later_digested(admin_client, monkeyp
 
 
 def test_digest_era_operations_are_picked_up(admin_client, monkeypatch):
-    """An operation recorded while the digest is on is left un-emailed
-    (emailed_at NULL) and the daily job carries it."""
+    """Operations recorded while the digest is on are left with emailed_at NULL
+    so the daily job picks them up."""
     _enable_digest(monkeypatch, on=True)
     from app import notification_service
     from app.models import _utcnow
@@ -263,6 +258,6 @@ def test_digest_off_keeps_immediate_work_item_email(admin_client, monkeypatch):
         assignees=(),
     )
     email_service.notify_bug_created(snap, actor_user_id=None)
-    # Default behaviour preserved: the immediate email still goes out.
+    # With the digest off, the immediate work-item email should still fire.
     assert len(sent) == 1
     assert "New bug #2" in sent[0][0]

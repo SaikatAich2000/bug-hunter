@@ -1,9 +1,7 @@
 /**
- * useFileDrop — small hook that turns any element into a file drop target.
- * Returns a `dragging` flag (for the drop-zone highlight) and `dropProps` to
- * spread onto the element. Only reacts to dragged FILES (ignores text/element
- * drags), preventDefaults so the browser doesn't navigate to the dropped file,
- * and hands the dropped File[] to `onFiles`.
+ * Hook that turns any element into a file drop target.
+ * Spread `dropProps` on the element; use `dragging` to highlight the zone.
+ * Ignores non-file drags and prevents the browser from navigating to dropped files.
  */
 import { useRef, useState, type DragEvent } from "react";
 
@@ -23,8 +21,7 @@ function hasFiles(e: DragEvent): boolean {
 
 export function useFileDrop(onFiles: (files: File[]) => void): FileDrop {
   const [dragging, setDragging] = useState(false);
-  // Depth counter so dragging over child elements doesn't flicker the highlight
-  // (dragenter/leave fire per descendant).
+  // Counts nested enter/leave events so highlight doesn't flicker over child elements.
   const depth = useRef(0);
 
   return {
@@ -49,9 +46,8 @@ export function useFileDrop(onFiles: (files: File[]) => void): FileDrop {
       },
       onDrop: (e) => {
         if (!hasFiles(e)) return;
-        // An inner drop target (e.g. the rich-text editor) may have already
-        // claimed this drop and called preventDefault. In that case clear our
-        // own highlight but don't add the files a second time.
+        // A nested drop target may have already claimed this event; still clear
+        // the highlight but don't double-add the files.
         const claimed = e.isDefaultPrevented();
         e.preventDefault();
         depth.current = 0;

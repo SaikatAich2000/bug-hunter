@@ -30,10 +30,8 @@ def test_redact_scrubs_common_secret_shapes():
     for text, marker in samples.items():
         assert marker in redact(text), text
 
-    # Assert the actual secret value is gone from the output, not just that the
-    # marker is present. Checking only for the marker would miss an
-    # "Authorization: Bearer <token>" leak where the token is left in the clear
-    # while the word "Bearer" is scrubbed.
+    # Also confirm the raw secret is absent, not just that [REDACTED] appears.
+    # A naive regex could scrub "Bearer" and leave the token itself in the clear.
     leak_checks = {
         "Authorization: Bearer abcdef.ghijkl": "abcdef.ghijkl",
         "api_key = sk-abcdefghijklmnop1234": "sk-abcdefghijklmnop1234",
@@ -45,7 +43,7 @@ def test_redact_scrubs_common_secret_shapes():
 
 
 def test_redact_pem_private_key_block():
-    # Obviously-fake body — exists only to exercise the PEM-block regex.
+    # Fake body; exercises the PEM-block regex without touching a real key.
     pem = (
         "-----BEGIN RSA PRIVATE KEY-----\n"
         "NOT-A-REAL-KEY-THIS-IS-ONLY-TEST-FIXTURE-PADDING-XXXXXXXXXXXX\n"
@@ -87,10 +85,10 @@ def test_remember_bug_user_and_filter():
     s.remember_user(5, 7, "Carol")
     src = {"status": ["New"]}
     s.remember_filter(5, src)
-    src["priority"] = ["High"]       # add a top-level key after storing
+    src["priority"] = ["High"]       # mutate after storing
     sess = s.get(5)
-    # remember_filter takes a shallow copy, so the later top-level key added to
-    # src must not appear in the stored filter.
+    # remember_filter should take a shallow copy, so this later mutation
+    # must not bleed into the stored filter.
     assert sess.last_bug_id == 99
     assert sess.last_user_id == 7 and sess.last_user_name == "Carol"
     assert sess.last_filter == {"status": ["New"]}
@@ -133,7 +131,7 @@ def test_capacity_eviction_drops_lru(monkeypatch):
         s.touch(i)
     assert len(s._all_sessions_for_test()) == mem._MAX_SESSIONS
     clock["t"] += 1
-    s.touch(10_000)                            # over cap, drops the least-recently-used (uid 0)
+    s.touch(10_000)                            # over cap; LRU (uid 0) should be evicted
     sessions = s._all_sessions_for_test()
     assert len(sessions) == mem._MAX_SESSIONS
     assert 0 not in sessions and 10_000 in sessions

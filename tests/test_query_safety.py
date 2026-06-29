@@ -1,14 +1,8 @@
-"""Tests for query-safety and edge-case behavior.
+"""Query safety and edge-case tests.
 
-Covers:
-  - Activity ordering between detail and list endpoints
-  - LIKE-wildcard handling in user search
-  - Project move via update and the resulting edit rights
-  - Updating a bug with reporter_id=null (admin/manager only)
-  - Background email tasks not crashing the request when SMTP fails
-  - Empty-string field handling
-  - Bug update with identical values not triggering an audit
-  - Comment author preserved across deletes
+Covers activity ordering, LIKE-wildcard search, project move rights,
+reporter_id=null semantics, silent SMTP failure, empty-string fields,
+no-op audit suppression, and comment-author preservation.
 """
 from __future__ import annotations
 
@@ -17,8 +11,8 @@ import io
 
 def _make_user(c, name="Someone Long", email="some@x.com", role="user", password="TestUserPwd9X"):
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping tests keep exercising the flat "see everything" model.
+    # Give the new user access to all existing projects so pre-scoping tests
+    # still see everything without needing per-project fixture setup.
     pids = [p["id"] for p in c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -43,17 +37,15 @@ def _make_bug(c, project_id, title="A bug for tests", **extra):
 
 
 # ===========================================================================
-# Activity order: detail vs list-activity ordering with same-second
-# timestamps.
+# Activity order: detail vs list-activity with same-second timestamps
 # ===========================================================================
 class TestActivityOrderingDeep:
     def test_activity_detail_and_list_show_reversed_order_when_clock_is_coarse(self, admin_client):
-        """The relationship orders by created_at DESC only.
-        list_activity orders by (created_at DESC, id DESC).
-        With second-precision timestamps, same-second activities will tie
-        on created_at; SQLite returns them in insertion order (asc id), so
-        the relationship gives oldest-first while list_activity (with id-desc
-        tiebreaker) gives newest-first."""
+        """The detail relationship orders by created_at DESC only; list_activity
+        orders by (created_at DESC, id DESC). When multiple activities land in the
+        same second, SQLite returns them insertion-order (asc id) for the plain
+        ORDER BY, but newest-first for the id-desc tiebreaker. Both endpoints
+        must agree."""
         p = _make_project(admin_client, "AO-Deep")
         bug = _make_bug(admin_client, p["id"], title="Activity-order verify")
         for s in ("In Progress", "Resolved", "Closed", "Reopened"):
@@ -62,9 +54,8 @@ class TestActivityOrderingDeep:
         detail_acts = admin_client.get(f"/api/bugs/{bug['id']}").json()["activities"]
         list_acts   = admin_client.get(f"/api/bugs/{bug['id']}/activity").json()
 
-        # Same set of activities
+        # Same set, same order
         assert {a["id"] for a in detail_acts} == {a["id"] for a in list_acts}
-        # But order must match
         d = [a["id"] for a in detail_acts]
         l = [a["id"] for a in list_acts]
         assert d == l, \
@@ -75,7 +66,7 @@ class TestActivityOrderingDeep:
 
 
 # ===========================================================================
-# Bug.project_id can be changed by anyone with edit rights
+# Moving a bug to a different project
 # ===========================================================================
 class TestBugProjectMove:
     def test_user_can_move_their_bug_to_any_project(self, admin_client):
@@ -88,18 +79,18 @@ class TestBugProjectMove:
             "email": "mover@x.com", "password": "TestUserPwd9X",
         })
         bug = _make_bug(admin_client, p1["id"], title="My bug")
-        # Move to p2 — user has no special rights on p2, but the API permits this
+        # The user has no special role on p2, but the API allows the move.
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"project_id": p2["id"]})
         assert r.status_code == 200
         assert r.json()["project_id"] == p2["id"]
 
 
 # ===========================================================================
-# Reporter unset
+# Clearing the reporter field
 # ===========================================================================
 class TestReporterUnset:
     def test_admin_can_set_reporter_to_null(self, admin_client):
-        """An admin or manager passing reporter_id=null clears the reporter."""
+        """Admin can pass reporter_id=null to clear the reporter."""
         p = _make_project(admin_client, "RU-1")
         bug = _make_bug(admin_client, p["id"])
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": None})
@@ -115,19 +106,17 @@ class TestReporterUnset:
         admin_client.post("/api/auth/login", json={
             "email": "rep@x.com", "password": "TestUserPwd9X",
         })
-        # User tries to unset themselves as reporter, which would orphan the bug.
+        # Regular users can't clear reporter_id; the role check fires on any explicit value.
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": None})
-        # The role check fires for any non-omitted reporter_id.
         assert r.status_code == 403
 
 
 # ===========================================================================
-# Email service silent SMTP failure
+# Silent SMTP failure
 # ===========================================================================
 class TestEmailServiceFailureSilent:
     def test_bug_create_succeeds_even_if_email_backend_disabled(self, admin_client):
-        """EMAIL_BACKEND=disabled in conftest. Verify the request flow doesn't
-        depend on email succeeding (smoke check)."""
+        """EMAIL_BACKEND=disabled in conftest; the request must not fail when email is unavailable."""
         p = _make_project(admin_client, "EM-1")
         u = _make_user(admin_client, name="Recipient", email="recipient@x.com")
         r = admin_client.post("/api/bugs", json={
@@ -139,11 +128,11 @@ class TestEmailServiceFailureSilent:
 
 
 # ===========================================================================
-# Empty-string fields
+# Empty-string field handling
 # ===========================================================================
 class TestEmptyStringFields:
     def test_bug_update_with_empty_description(self, admin_client):
-        """Empty description should be accepted (description has no min_length)."""
+        """Empty description is valid; there is no min_length constraint."""
         p = _make_project(admin_client, "ES-1")
         bug = _make_bug(admin_client, p["id"], description="initial")
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"description": ""})
@@ -151,7 +140,7 @@ class TestEmptyStringFields:
         assert r.json()["description"] == ""
 
     def test_bug_update_with_only_whitespace_description(self, admin_client):
-        """Whitespace-only description is stripped to empty and stored as ''."""
+        """Whitespace-only description gets stripped and stored as ''."""
         p = _make_project(admin_client, "ES-2")
         bug = _make_bug(admin_client, p["id"], description="initial")
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"description": "    "})
@@ -159,7 +148,7 @@ class TestEmptyStringFields:
         assert r.json()["description"] == ""
 
     def test_project_color_with_uppercase_hex(self, admin_client):
-        """Schema regex is `^#[0-9a-fA-F]{6}$` — should accept #ABCDEF."""
+        """Schema regex is `^#[0-9a-fA-F]{6}$`, so uppercase hex like #ABCDEF must be accepted."""
         r = admin_client.post("/api/projects", json={
             "name": "UpperHex", "color": "#ABCDEF",
         })
@@ -168,30 +157,28 @@ class TestEmptyStringFields:
 
 
 # ===========================================================================
-# Audit log: actor_user_id semantics
+# Audit log actor_user_id semantics
 # ===========================================================================
 class TestAuditActorSemantics:
     def test_password_reset_request_audit_has_no_actor(self, admin_client):
-        """A forgot-password request comes from an unauthenticated user, so the
-        audit row's actor_user_id must be NULL and actor_name 'system'."""
+        """Forgot-password is unauthenticated, so the audit row must have
+        actor_user_id=NULL and actor_name='system'."""
         admin_client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
         r = admin_client.get("/api/audit?q=password_reset_requested")
         rows = r.json()
         prr = [r for r in rows if r["action"] == "password_reset_requested"]
         assert prr, "password_reset_requested audit row missing"
-        # An unauthenticated request records actor_name 'system' with a null actor id.
         assert prr[0]["actor_user_id"] is None
         assert prr[0]["actor_name"] == "system"
 
     def test_filtering_audit_by_actor_excludes_anonymous_actions(self, admin_client):
-        """Filtering by actor_user_id naturally hides system-initiated rows.
-        This is a UX gotcha: a user filtering 'their own' audit log won't see
-        the password-reset requests they sent because those have NULL actor."""
+        """Filtering by actor_user_id hides system rows (NULL actor). Worth noting:
+        a user filtering their own audit history won't see their own password-reset
+        requests because those are recorded without an actor."""
         admin_client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
-        # Filter by actor_user_id=1 (admin)
         r = admin_client.get("/api/audit?actor_user_id=1&q=password_reset_requested")
         rows = r.json()
-        # The filter must exclude the system row, even though it's about user 1's email.
+        # System row must be excluded even though it's about user 1's email.
         assert all(row["actor_user_id"] == 1 for row in rows)
         assert not any(row["action"] == "password_reset_requested" for row in rows)
 
@@ -209,7 +196,6 @@ class TestStress:
             r = admin_client.get(f"/api/bugs?page={page}&page_size=10&project_id={p['id']}")
             for b in r.json()["items"]:
                 ids_seen.add(b["id"])
-        # 25 bugs in this project across 3 pages of 10
         assert len(ids_seen) == 25, f"Pagination missed/dup: {len(ids_seen)}/25"
 
     def test_search_with_trailing_whitespace(self, admin_client):
@@ -217,7 +203,7 @@ class TestStress:
         _make_bug(admin_client, p["id"], title="findable thing")
         r = admin_client.get("/api/bugs?q=  findable  ")
         items = r.json()["items"]
-        # The search code does q.strip().lstrip("#"), so trimmed query works
+        # q.strip().lstrip("#") is applied before search, so surrounding whitespace is fine.
         assert any("findable" in b["title"] for b in items)
 
 
@@ -228,18 +214,16 @@ class TestAttachmentEdge:
     def test_attachment_with_no_filename(self, admin_client):
         p = _make_project(admin_client, "AE-1")
         bug = _make_bug(admin_client, p["id"])
-        # multipart with no filename
+        # Empty filename: the server may use a fallback name or reject outright; either is fine.
         files = {"file": ("", io.BytesIO(b"data"), "application/octet-stream")}
         r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
-        # An empty filename either succeeds with a fallback name or is rejected
-        # by multipart parsing; both outcomes are acceptable.
         assert r.status_code in (201, 400, 422)
 
     def test_attachment_with_no_content_type(self, admin_client):
         """Server should fall back to application/octet-stream."""
         p = _make_project(admin_client, "AE-2")
         bug = _make_bug(admin_client, p["id"])
-        # FastAPI/Starlette UploadFile.content_type can be empty
+        # FastAPI/Starlette may leave content_type empty; server should default to octet-stream.
         files = {"file": ("plain.dat", io.BytesIO(b"data"))}
         r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
         assert r.status_code == 201

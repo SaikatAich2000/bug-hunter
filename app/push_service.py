@@ -1,13 +1,12 @@
 """Web push orchestration.
 
-Registers/removes a user's device tokens and fans a single notification out to
-all of a user's devices via FCM, sent immediately when an operation happens
-(wired into the same trigger points as ``notification_service.notify``), never
-batched into the email digest.
+Handles FCM token storage and fans notifications out to all of a user's
+registered devices immediately when an operation happens (same trigger points
+as ``notification_service.notify``). Never batched into the email digest.
 
 The FCM network call lives in ``app.fcm_transport`` (mocked in tests); this
-module is the orchestration: token storage, recipient selection, and pruning
-of tokens FCM reports as dead.
+module owns token storage, recipient selection, and pruning tokens FCM marks
+as dead.
 """
 from __future__ import annotations
 
@@ -58,8 +57,8 @@ def schedule(
 ) -> None:
     """Schedule an immediate push to ``user_ids`` as a background task.
 
-    A no-op (nothing scheduled) when web push is disabled, so callers never pay
-    for it when the feature is off.
+    Does nothing (nothing scheduled) when web push is disabled, so callers never
+    pay for it when the feature is off.
     """
     if not get_settings().WEB_PUSH_ENABLED:
         return
@@ -82,13 +81,11 @@ def register(
 ) -> PushSubscription:
     """Upsert a device's FCM token for ``user_id``.
 
-    Tokens are globally unique per device install. If one already exists for
-    the same user, refresh its metadata/``last_seen_at`` rather than
-    duplicating. If it belongs to a different user, refuse (PushTokenConflict)
-    rather than re-homing it, since re-homing would let anyone who learned a
-    victim's token claim that device's push. On a shared browser the previous
-    user's logout removes the token (see the frontend logout flow), so a
-    legitimate next user gets a clean insert.
+    If the token is already stored for this user, refresh its metadata and
+    ``last_seen_at`` in place. If it belongs to a different user, raise
+    ``PushTokenConflict`` (see that class for the security rationale). On a
+    shared browser, the previous user's logout removes the token, so a
+    subsequent user gets a clean insert.
     """
     def _refresh(sub: PushSubscription) -> PushSubscription:
         sub.platform = platform or "web"
@@ -120,8 +117,8 @@ def register(
     try:
         db.flush()
     except IntegrityError:
-        # A concurrent subscribe of the same globally-unique token won the
-        # insert race — re-home the row that landed instead of 500ing.
+        # A concurrent subscribe for the same token won the insert race;
+        # re-read and resolve it rather than propagating the error.
         db.rollback()
         other = db.scalar(
             select(PushSubscription).where(PushSubscription.token == token)
@@ -165,8 +162,8 @@ def push_to_users(
     of tokens delivered to.
 
     Runs in a FastAPI ``BackgroundTask`` after the request session closed, so
-    it opens its own session. A no-op (returns 0) unless web push is enabled.
-    Tokens FCM reports as dead are pruned.
+    it opens its own session. Returns 0 and does nothing unless web push is
+    enabled. Tokens FCM reports as dead are pruned.
     """
     if not get_settings().WEB_PUSH_ENABLED:
         return 0
@@ -186,9 +183,8 @@ def push_to_users(
                 if sub.token in dead:
                     db.delete(sub)
             db.commit()
-        # Count tokens not reported dead, rather than len(tokens) - len(dead):
-        # if FCM returns a dead token not in our list the subtraction would
-        # overstate successes.
+        # Count via membership rather than len(tokens) - len(dead): if FCM
+        # returns a dead token we don't have, the subtraction would overstate.
         return sum(1 for t in tokens if t not in dead)
     except Exception:  # noqa: BLE001 — push must never break the request flow
         logger.exception("push_to_users failed")

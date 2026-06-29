@@ -62,7 +62,7 @@ services:
         # FROM image without editing the Dockerfile. Default mirrors
         # the Dockerfile's hard-coded fallback.
         BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
-    image: bugtracker_app:3.0
+    image: bugtracker_app:3.1
     container_name: bugtracker_app
     restart: unless-stopped
     depends_on:
@@ -79,7 +79,7 @@ services:
       # body is read. Raise it for larger file uploads.
       MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-62914560}
       APP_NAME: ${APP_NAME:-Bug Hunter}
-      APP_VERSION: ${APP_VERSION:-3.0}
+      APP_VERSION: ${APP_VERSION:-3.1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Empty default = same-origin only (the app's secure default). Set to your
       # concrete origin(s), e.g. https://bugs.example.com, for cross-origin use.
@@ -90,8 +90,9 @@ services:
       # and a key are set in the server's .env. Read from .env via ${...} so
       # the secret value never lives in this committed file.
       SLEUTH_CLOUD_ENABLED: ${SLEUTH_CLOUD_ENABLED:-0}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      # Primary provider — Groq (OpenAI-compatible). Fallback — OpenRouter.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       SLEUTH_RAG_ENABLED: ${SLEUTH_RAG_ENABLED:-0}
       # Read-only grounding / agent / evaluation enhancements (all OFF by
@@ -104,10 +105,22 @@ services:
       SLEUTH_EVAL_ENABLED: ${SLEUTH_EVAL_ENABLED:-0}
       SLEUTH_EVAL_MIN_SCORE: ${SLEUTH_EVAL_MIN_SCORE:-0.5}
       # Cloud-layer tuning (only relevant when the cloud layer is on).
-      GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-text-embedding-004}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen-2.5-7b-instruct:free}
+      # Optional RAG embeddings only (Groq has no embeddings endpoint); the chat
+      # assistant never calls Gemini. Used only when SLEUTH_RAG_ENABLED=1.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-text-embedding-004}
       SLEUTH_CLOUD_TIMEOUT_S: ${SLEUTH_CLOUD_TIMEOUT_S:-20}
       SLEUTH_CLOUD_MAX_TOKENS: ${SLEUTH_CLOUD_MAX_TOKENS:-600}
+      # Sampling: a little temperature + mild penalties on the conversational
+      # path for natural, non-repetitive replies; tool/judge/agent calls stay at
+      # 0 for deterministic routing and scoring. SLEUTH_ANSWER_MAX_CHARS is a
+      # hard app-side ceiling on a free-text answer.
+      SLEUTH_CLOUD_TEMPERATURE: ${SLEUTH_CLOUD_TEMPERATURE:-0.6}
+      SLEUTH_CLOUD_TEMPERATURE_TOOLS: ${SLEUTH_CLOUD_TEMPERATURE_TOOLS:-0.0}
+      SLEUTH_CLOUD_FREQUENCY_PENALTY: ${SLEUTH_CLOUD_FREQUENCY_PENALTY:-0.3}
+      SLEUTH_CLOUD_PRESENCE_PENALTY: ${SLEUTH_CLOUD_PRESENCE_PENALTY:-0.2}
+      SLEUTH_ANSWER_MAX_CHARS: ${SLEUTH_ANSWER_MAX_CHARS:-4000}
       SLEUTH_RAG_TOP_K: ${SLEUTH_RAG_TOP_K:-5}
       # Persist Sleuth conversations to the additive chat_* tables (safe on).
       SLEUTH_CHAT_MEMORY_ENABLED: ${SLEUTH_CHAT_MEMORY_ENABLED:-true}

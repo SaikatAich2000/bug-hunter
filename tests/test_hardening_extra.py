@@ -1,13 +1,13 @@
-"""Further hardening tests across detail caps, console-email redaction,
-partial project updates, image limits, error handling, optimistic concurrency,
-case-insensitive email uniqueness, spreadsheet defang, and related edges.
+"""Hardening tests for detail caps, email redaction, partial updates, image
+limits, error handling, optimistic concurrency, case-insensitive email
+uniqueness, spreadsheet defang, and related edges.
 
-Hermetic: every DB case talks to the temp SQLite DB the ``client`` /
-``admin_client`` fixtures build; non-DB units are called directly.
+All DB tests use the temp SQLite instance that the ``client`` / ``admin_client``
+fixtures create; non-DB units are exercised directly.
 
-``app.*`` modules are imported inside the test bodies on purpose: the
-``client`` fixture deletes and re-imports every ``app.*`` module per test, so a
-module captured at this file's top level would go stale.
+``app.*`` modules are imported inside test bodies, not at the top level,
+because the ``client`` fixture tears down and re-imports every ``app.*`` module
+between tests.
 """
 from __future__ import annotations
 
@@ -16,9 +16,7 @@ import logging
 import sys
 
 
-# ---------------------------------------------------------------------------
 # Small API helpers
-# ---------------------------------------------------------------------------
 def _make_project(client, name="V31Proj"):
     r = client.post("/api/projects", json={"name": name, "color": "#123456"})
     assert r.status_code == 201, r.text
@@ -35,11 +33,10 @@ def _make_item(client, project_id, **extra):
 
 
 def _become_regular_user(admin_client, email="linker@test.local"):
-    """Create a regular user (as admin) then log the same client in as them.
+    """Create a regular user (as admin) and re-login the client as that user.
 
-    The user is tagged to every existing project so these pre-scoping tests keep
-    exercising the flat "see everything" model — the user must be able to SEE an
-    item before the per-type / admin-only rules can be asserted on it."""
+    The user is added to all existing projects so they can see items before the
+    per-type or admin-only rules are tested against them."""
     pids = [p["id"] for p in admin_client.get("/api/projects").json()]
     body = {"name": "Linker", "email": email, "role": "user", "password": "User12345"}
     if pids:
@@ -51,9 +48,8 @@ def _become_regular_user(admin_client, email="linker@test.local"):
     assert r.status_code == 200, r.text
 
 
-# ===========================================================================
-# The OOM caps cover the sibling paths (attachments, activity, comments) too.
-# ===========================================================================
+# Detail-cap tests: attachments, activity, and comments all share the same
+# bounding logic.
 def test_get_bug_attachments_capped_but_count_exact(admin_client, monkeypatch):
     import app.routes.bugs as bugs_mod
     monkeypatch.setattr(bugs_mod, "_DETAIL_ATTACHMENTS_MAX", 1)
@@ -64,8 +60,8 @@ def test_get_bug_attachments_capped_but_count_exact(admin_client, monkeypatch):
                               files={"file": (n, b"hello", "text/plain")})
         assert r.status_code == 201, r.text
     body = admin_client.get(f"/api/bugs/{item['id']}").json()
-    assert len(body["attachments"]) == 1          # loaded set is bounded
-    assert body["attachment_count"] == 2          # ... but count stays exact
+    assert len(body["attachments"]) == 1          # capped
+    assert body["attachment_count"] == 2          # exact total unaffected
 
 
 def test_activity_list_endpoint_capped(admin_client, monkeypatch):
@@ -90,9 +86,8 @@ def test_comments_list_endpoint_capped(admin_client, monkeypatch):
     assert len(rows) == 1
 
 
-# ===========================================================================
-# Console email does not log bodies at INFO; headers are CRLF-stripped.
-# ===========================================================================
+# Console email: body suppressed at INFO to avoid leaking tokens; CRLF stripped
+# from headers to block injection.
 def test_console_email_suppresses_body_at_info(caplog):
     from email.message import EmailMessage
     from app import email_service
@@ -101,8 +96,8 @@ def test_console_email_suppresses_body_at_info(caplog):
     msg.set_content("http://app/reset?token=SUPERSECRET")
     with caplog.at_level(logging.INFO, logger=email_service.logger.name):
         email_service._send_console(msg)
-    assert "SUPERSECRET" not in caplog.text   # body (live reset token) suppressed
-    assert "Reset link" in caplog.text        # routing metadata still logged
+    assert "SUPERSECRET" not in caplog.text   # body suppressed (live reset token)
+    assert "Reset link" in caplog.text        # routing metadata still visible
 
 
 def test_console_email_logs_body_only_at_debug(caplog):
@@ -113,7 +108,7 @@ def test_console_email_logs_body_only_at_debug(caplog):
     msg.set_content("BODYTOKEN123")
     with caplog.at_level(logging.DEBUG, logger=email_service.logger.name):
         email_service._send_console(msg)
-    assert "BODYTOKEN123" in caplog.text       # opt-in full body at DEBUG
+    assert "BODYTOKEN123" in caplog.text       # full body only at DEBUG
 
 
 def test_email_header_safe_strips_crlf():
@@ -124,35 +119,29 @@ def test_email_header_safe_strips_crlf():
     assert "\n" not in str(msg["Subject"]) and "\r" not in str(msg["Subject"])
 
 
-# ===========================================================================
-# Project update is a true partial update (omitted fields untouched).
-# ===========================================================================
+# Project PATCH is a true partial update; omitted fields must not be cleared.
 def test_project_partial_update_keeps_unsent_fields(admin_client):
     r = admin_client.post("/api/projects", json={
         "name": "PartialP", "description": "keep me", "color": "#abcdef"})
     pid = r.json()["id"]
     r2 = admin_client.put(f"/api/projects/{pid}", json={"name": "PartialP2"})
     assert r2.status_code == 200, r2.text
-    assert r2.json()["description"] == "keep me"   # was not reset to ""
+    assert r2.json()["description"] == "keep me"   # not reset to ""
 
 
-# ===========================================================================
-# Oversized raster is skipped from the header read, before decode.
-# ===========================================================================
+# Oversized images must be returned unchanged without being decoded.
 def test_image_oversized_skipped_before_decode(monkeypatch):
     from PIL import Image
     from app import image_strip
     img = Image.new("RGB", (8, 8), (0, 0, 255))
     buf = io.BytesIO(); img.save(buf, format="PNG"); data = buf.getvalue()
-    monkeypatch.setattr(image_strip, "_MAX_IMAGE_PIXELS", 10)   # tiny budget vs a larger image
+    monkeypatch.setattr(image_strip, "_MAX_IMAGE_PIXELS", 10)   # force the oversized path
     out = image_strip.strip_image_metadata(data, "image/png")
-    assert out == data   # returned unchanged, never decoded
+    assert out == data   # returned as-is, not decoded
 
 
-# ===========================================================================
-# Unhandled errors return a clean, header-complete 500; CSRF 403 too. Also
-# exercises get_db's rollback-on-exception path.
-# ===========================================================================
+# Unhandled errors must return a sanitized 500 with security headers present.
+# Also exercises get_db's rollback-on-exception path.
 def test_unhandled_exception_clean_500_with_headers(client):
     from fastapi import Depends
     from sqlalchemy import text as sqltext
@@ -163,27 +152,25 @@ def test_unhandled_exception_clean_500_with_headers(client):
 
     @app.get("/api/_boom_v31")
     def _boom(db: Session = Depends(get_db)):   # noqa: ANN202
-        db.execute(sqltext("SELECT 1"))         # touch the session, then blow up
+        db.execute(sqltext("SELECT 1"))         # touch the session before raising
         raise RuntimeError("kaboom-internal-detail")
 
     c2 = TestClient(app, raise_server_exceptions=False)
     r = c2.get("/api/_boom_v31")
     assert r.status_code == 500
     assert r.json() == {"detail": "Internal server error."}
-    assert "kaboom-internal-detail" not in r.text   # no internal leak
-    assert "Content-Security-Policy" in r.headers    # headers present on 500
+    assert "kaboom-internal-detail" not in r.text   # no internal detail leaked
+    assert "Content-Security-Policy" in r.headers    # security headers on 500
 
 
 def test_csrf_403_carries_security_headers(admin_client):
     r = admin_client.post("/api/projects", json={"name": "x"},
                           headers={"Origin": "https://evil.example.test"})
     assert r.status_code == 403
-    assert "Content-Security-Policy" in r.headers     # short-circuit still hardened
+    assert "Content-Security-Policy" in r.headers     # headers present even on short-circuit
 
 
-# ===========================================================================
-# Interactive docs are open in dev but disabled under COOKIE_SECURE.
-# ===========================================================================
+# Docs are exposed in dev mode but must be disabled in production (COOKIE_SECURE).
 def test_docs_open_in_dev(client):
     assert client.get("/openapi.json").status_code == 200
 
@@ -201,9 +188,8 @@ def test_docs_disabled_when_cookie_secure(monkeypatch):
     assert main_mod.app.openapi_url is None
 
 
-# ===========================================================================
-# DB-down at boot degrades instead of crashing; /health reflects it.
-# ===========================================================================
+# DB unavailable at boot should degrade gracefully, not crash; /health must
+# reflect the degraded state.
 def test_safe_init_db_degrades_on_failure(client):
     import app.main as main_mod
     from sqlalchemy.exc import SQLAlchemyError
@@ -214,7 +200,7 @@ def test_safe_init_db_degrades_on_failure(client):
     orig = main_mod.init_db
     main_mod.init_db = boom
     try:
-        assert main_mod._safe_init_db() is False   # swallowed, returns False
+        assert main_mod._safe_init_db() is False   # error swallowed
     finally:
         main_mod.init_db = orig
 
@@ -238,9 +224,7 @@ def test_health_reports_degraded_when_db_unreachable(admin_client, monkeypatch):
     assert body["database"] == "unavailable"
 
 
-# ===========================================================================
-# JSON extractor scans past a stray brace in prose before the object.
-# ===========================================================================
+# JSON extractor must skip stray braces in prose and find the real object.
 def test_extract_json_scans_past_leading_prose_brace():
     from app.chatbot.cloud_llm import _extract_json as ej_cloud
     from app.chatbot.llm import _extract_json as ej_local
@@ -249,14 +233,9 @@ def test_extract_json_scans_past_leading_prose_brace():
     assert ej_local(reply) == {"mode": "answer", "text": "hi"}
 
 
-# ===========================================================================
-# A confirmed plan is re-checked against the admin-only write policy at execute
-# time, so a now-non-admin can't have a staged write run.
-# ===========================================================================
+# Sleuth write path validates field values the same way the REST API does.
+# Drive through execute_plan to cover _apply_set_field, not just the helper.
 def test_sleuth_set_invalid_value_rejected_via_execute(admin_client):
-    # The Sleuth write path validates enum/date values like the REST API.
-    # Driven through execute_plan so _apply_set_field's validation branch (not
-    # just the helper) is exercised.
     from sqlalchemy import select
     from app.database import SessionLocal
     from app.models import User
@@ -275,9 +254,7 @@ def test_sleuth_set_invalid_value_rejected_via_execute(admin_client):
         db.close()
 
 
-# ===========================================================================
-# Sleuth write path validates enum/date values like the REST API.
-# ===========================================================================
+# _validate_field_value covers every enum and date field.
 def test_sleuth_field_validation(admin_client):
     from app.database import SessionLocal
     from app.models import Bug
@@ -291,7 +268,7 @@ def test_sleuth_field_validation(admin_client):
         assert _validate_field_value(bug, "priority", "Ultra") is not None
         assert _validate_field_value(bug, "environment", "MARS") is not None
         assert _validate_field_value(bug, "status", "Bogus") is not None
-        # Valid values pass.
+        # Valid values should return None.
         assert _validate_field_value(bug, "due_date", "2026-01-15") is None
         assert _validate_field_value(bug, "priority", "High") is None
         assert _validate_field_value(bug, "environment", "PROD") is None
@@ -299,9 +276,7 @@ def test_sleuth_field_validation(admin_client):
         db.close()
 
 
-# ===========================================================================
-# A staged write only stays confirmable for a short window.
-# ===========================================================================
+# Staged actions expire after the confirm window to prevent stale confirmations.
 def test_pending_action_expires_after_confirm_window(client):
     import app.chatbot.memory as mm
     mm.store._clear_all_for_test()
@@ -314,14 +289,11 @@ def test_pending_action_expires_after_confirm_window(client):
     assert mm.store.take_pending(1) == {"kind": "set_priority"}
 
 
-# ===========================================================================
-# Redaction covers more secret/PII shapes before egress.
-# ===========================================================================
+# Redaction covers secrets and PII before egress.
 def test_redaction_covers_more_secret_shapes():
     from app.chatbot.redaction import redact
-    # Build the fake tokens by concatenation so no complete token literal sits in
-    # the source (keeps secret scanners quiet) while redact() still sees the full
-    # runtime string.
+    # Build tokens by concatenation so no complete token literal sits in source
+    # (keeps secret scanners quiet) while redact() still sees the full string.
     body = "abcdefghij1234567890"
     hex32 = "0123456789abcdef0123456789abcdef"
     samples = [
@@ -337,9 +309,7 @@ def test_redaction_covers_more_secret_shapes():
     assert "555-123-4567" not in redact("dial 555-123-4567 now")
 
 
-# ===========================================================================
-# xlsx scan is row-bounded (decompression-bomb guard).
-# ===========================================================================
+# xlsx row count is bounded as a decompression-bomb guard.
 def test_xlsx_rows_capped(monkeypatch):
     import openpyxl
     from app.chatbot import ingest
@@ -351,9 +321,7 @@ def test_xlsx_rows_capped(monkeypatch):
     assert rows is not None and len(rows) == 1
 
 
-# ===========================================================================
-# Over-range numeric q falls to text search instead of a 500.
-# ===========================================================================
+# Over-range numeric q must fall back to a text search rather than raising.
 def test_q_huge_number_does_not_500(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="findme")
@@ -361,9 +329,7 @@ def test_q_huge_number_does_not_500(admin_client):
     assert r.status_code == 200   # over-range digits → LIKE path, no DataError
 
 
-# ===========================================================================
-# Reverse-direction directional links are rejected; symmetric ones aren't.
-# ===========================================================================
+# Reverse-direction directional links are rejected; symmetric ones are not.
 def test_reverse_directional_link_rejected(admin_client):
     p = _make_project(admin_client)
     a = _make_item(admin_client, p["id"], title="ra-item")
@@ -378,9 +344,7 @@ def test_reverse_directional_link_rejected(admin_client):
         "target_bug_id": a["id"], "link_type": "relates"}).status_code == 201
 
 
-# ===========================================================================
-# Linking/unlinking requires edit rights on both endpoints.
-# ===========================================================================
+# Linking requires edit rights on both endpoints.
 def test_link_to_task_requires_target_edit_rights(admin_client):
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -392,9 +356,7 @@ def test_link_to_task_requires_target_edit_rights(admin_client):
     assert r.status_code == 403
 
 
-# ===========================================================================
 # Optimistic concurrency via a version counter (sub-second safe).
-# ===========================================================================
 def test_update_stale_version_409_and_bump(admin_client):
     p = _make_project(admin_client)
     item = _make_item(admin_client, p["id"])
@@ -429,9 +391,7 @@ def test_optimistic_check_noop_when_row_vanished(client):
         db.close()
 
 
-# ===========================================================================
-# Case-insensitive email uniqueness, incl. legacy mixed-case rows.
-# ===========================================================================
+# Case-insensitive email uniqueness, including legacy mixed-case rows.
 def test_email_uniqueness_is_case_insensitive(admin_client):
     from app.auth import hash_password
     from app.database import SessionLocal
@@ -485,9 +445,7 @@ def test_update_user_db_unique_race_still_409(admin_client, monkeypatch):
     assert r.status_code == 409, r.text
 
 
-# ===========================================================================
-# Stats priority/environment buckets are str/int-cast (NULL-key safe).
-# ===========================================================================
+# Stats buckets must be int-typed (NULL-key safe).
 def test_stats_buckets_are_int_typed(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], priority="High", environment="PROD")
@@ -496,9 +454,7 @@ def test_stats_buckets_are_int_typed(admin_client):
     assert all(isinstance(v, int) for v in body["by_environment"].values())
 
 
-# ===========================================================================
-# Event item can_edit is computed per-user, not hardcoded True.
-# ===========================================================================
+# can_edit on event items is computed per-user, not hardcoded.
 def test_event_item_can_edit_per_user(admin_client):
     p = _make_project(admin_client)
     ev = admin_client.post("/api/events", json={
@@ -512,9 +468,7 @@ def test_event_item_can_edit_per_user(admin_client):
     assert next(i for i in user_view["items"] if i["id"] == task["id"])["can_edit"] is False
 
 
-# ===========================================================================
-# Spreadsheet formula defang catches leading-whitespace / newline forms.
-# ===========================================================================
+# Spreadsheet formula defang must also catch leading-whitespace and newline forms.
 def test_spreadsheet_defang_handles_whitespace_and_newline():
     from app.chatbot.excel import _defang_formula_text as defang_excel
     from app.reports.xlsx import _defang_formula_text as defang_xlsx
@@ -527,9 +481,7 @@ def test_spreadsheet_defang_handles_whitespace_and_newline():
         assert defang("") == ""
 
 
-# ===========================================================================
-# Report filter id-lists are length-capped (DoS guard).
-# ===========================================================================
+# Report filter id-lists are length-capped as a DoS guard.
 def test_report_filter_id_list_capped(admin_client):
     r = admin_client.post("/api/reports/run", json={
         "report_key": "status_distribution",

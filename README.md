@@ -1,19 +1,18 @@
 # Bug Hunter
 
-Bug Hunter is a self-hosted tracker for bugs, requirements, and tasks. It uses a
-FastAPI + PostgreSQL backend and a React + TypeScript frontend, and runs as one
-Docker Compose stack. There is no external login provider to set up, and
-attachments are stored in the database — so one database backup saves everything.
+Bug Hunter is a self-hosted tracker for bugs, requirements, and tasks. It runs as
+a single Docker Compose stack: FastAPI + PostgreSQL backend, React + TypeScript
+frontend. No external login provider is required, and attachments are stored in
+PostgreSQL, so one database backup saves everything.
 
-On top of work items, it gives you projects, events, comments, an audit trail,
-notifications, reports, and an optional in-app assistant called **Sleuth**.
+It also includes projects, events, comments, an audit trail, notifications,
+reports, and an optional in-app assistant called **Sleuth**.
 
-Current version: **3.0**. Upgrades only *add* tables and columns, never remove or
-change existing data, so upgrading never touches your production data (see
-[Live-data safety](#live-data-safety)).
+Current version: **3.1**. Upgrades only *add* tables and columns — existing data
+is never removed or changed (see [Live-data safety](#live-data-safety)).
 
-A companion native Android app lives in its own repository and uses the same
-web-push system.
+A companion Android app lives in its own repository and uses the same web-push
+system.
 
 ## Features
 
@@ -78,9 +77,9 @@ cp .env.example .env       # edit the values you care about — see Configuratio
 `./deploy.sh` builds the image, starts PostgreSQL, waits for it to be healthy,
 then starts the app. Open <http://localhost:8765>.
 
-PostgreSQL runs in its own container on host port `55432` (an unusual port, to
-avoid clashing with any PostgreSQL you already run). Data lives in the named
-volume `bugtracker_pgdata`, which `./deploy.sh` and `./down.sh` never delete (see
+PostgreSQL runs in its own container on host port `55432` (chosen to avoid
+clashing with a local PostgreSQL install). Data lives in the named volume
+`bugtracker_pgdata`, which `./deploy.sh` and `./down.sh` never delete (see
 [Live-data safety](#live-data-safety)).
 
 For a clean rebuild, run `BUILD_CLEAN=1 ./deploy.sh`. Behind a corporate proxy or
@@ -91,8 +90,8 @@ air gap, set `BASE_IMAGE` in `.env` to an internal mirror, or pre-load
 
 On an empty database, Bug Hunter creates a first admin from the
 `BOOTSTRAP_ADMIN_*` variables (default `admin@bughunter.local` / `ChangeMe123!`).
-Change this password right away from the profile menu. A production deploy
-(`COOKIE_SECURE=true`) refuses to start if you leave the default password.
+Change this password immediately from the profile menu. A production deploy
+(`COOKIE_SECURE=true`) refuses to start with the default password still set.
 
 ### Production checklist
 
@@ -119,8 +118,8 @@ Then `./down.sh && ./deploy.sh`.
 ## Configuration
 
 All settings come from environment variables. Copy [`.env.example`](.env.example)
-to `.env` and edit it — every variable is explained inline in that file and read
-in [`app/config.py`](app/config.py). The ones that matter most:
+to `.env` — every variable is explained inline there and read in
+[`app/config.py`](app/config.py). The ones that matter most:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -140,28 +139,28 @@ Settings are grouped into: login and sessions, password policy, email and SMTP,
 the daily digest (and its optional built-in scheduler), reports, web push
 (Firebase), and the Sleuth assistant. See `.env.example` for the full list.
 
-Secrets (`.env`, `secrets/firebase-admin.json`) are gitignored and set up
-per server — never commit real secrets.
+Secrets (`.env`, `secrets/firebase-admin.json`) are gitignored and provisioned
+once per server. Never commit real secrets.
 
 ### Email (optional)
 
-By default, `EMAIL_BACKEND=console` just prints emails to the log. For real
-delivery, set `EMAIL_BACKEND=smtp` and the `SMTP_*` variables (host, port,
-username, password, TLS), then restart. Any standard SMTP provider works.
+By default, `EMAIL_BACKEND=console` prints emails to the log. For real delivery,
+set `EMAIL_BACKEND=smtp` and the `SMTP_*` variables (host, port, username,
+password, TLS), then restart. Any standard SMTP provider works.
 
 Set `EMAIL_DIGEST_ENABLED=true` to batch each user's notifications (new item,
-update, assignment, comment, event) into one email per day instead of sending
-each one right away. Password-reset and other security emails always send
-immediately and are never batched. Run the digest from cron or Task Scheduler:
+update, assignment, comment, event) into one email per day. Password-reset and
+other security emails always send immediately and are never batched. Run the
+digest from cron or Task Scheduler:
 
 ```bash
 python -m app.jobs.email_digest
 ```
 
-Or set `EMAIL_DIGEST_CRON` (a 5-field cron expression) plus
-`EMAIL_DIGEST_TIMEZONE` and the app runs the digest itself. The job is safe to
-re-run and bounded to its time window, so you can leave it scheduled whether or
-not the digest is on.
+Alternatively, set `EMAIL_DIGEST_CRON` (a 5-field cron expression) and
+`EMAIL_DIGEST_TIMEZONE` to let the app run the digest itself. The job is
+idempotent and bounded to its time window, so it can stay scheduled even when the
+digest is off.
 
 ### Web push (optional)
 
@@ -170,10 +169,10 @@ Browser push uses Firebase Cloud Messaging and is off by default. One-time setup
 1. Create or reuse a project at <https://console.firebase.google.com>.
 2. Add a Web app and copy its config into `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_APP_ID`.
 3. Generate a Web Push key pair and put the public key in `FIREBASE_VAPID_KEY`.
-4. Download a service-account key and save it as `secrets/firebase-admin.json`. `docker-compose.yml` mounts it read-only and points `FCM_CREDENTIALS_FILE` at it.
-5. Set `WEB_PUSH_ENABLED=true`, restart, and serve over HTTPS (browsers only allow push on a secure origin; `localhost` is exempt for development).
+4. Download a service-account key and save it as `secrets/firebase-admin.json`. `docker-compose.yml` mounts it read-only and sets `FCM_CREDENTIALS_FILE` to that path.
+5. Set `WEB_PUSH_ENABLED=true`, restart, and serve over HTTPS (browsers require a secure origin for push; `localhost` is exempt for development).
 
-Each user then turns on push once from the profile menu. The Firebase SDK is
+Each user then enables push once from the profile menu. The Firebase SDK is
 self-hosted (no CDN), and the feature adds just one table.
 
 ## Local development
@@ -189,14 +188,13 @@ cp .env.example .env
 python -m uvicorn app.main:app --reload    # http://127.0.0.1:8000
 ```
 
-With no `DATABASE_URL` set, the app uses a local SQLite file, so you can run the
-backend without Docker.
+With no `DATABASE_URL` set, the app uses a local SQLite file — no Docker needed.
 
 ### Frontend
 
 The SPA source is in `frontend/`. The build writes the static bundle into
-`app/static/`, which FastAPI serves — so after editing the frontend, rebuild and
-reload the app.
+`app/static/`, which FastAPI serves. After editing the frontend, rebuild and
+restart the app.
 
 ```bash
 cd frontend
@@ -204,13 +202,12 @@ npm install
 npm run build          # type-checks, vendors the Firebase SDK, writes app/static
 ```
 
-`npm run dev` runs the Vite dev server for fast edits; `npm run build` produces
-the production bundle.
+Use `npm run dev` for the Vite dev server during development.
 
 ## Testing
 
 The suite is self-contained — each test file uses its own temporary SQLite
-database and never touches production data.
+database.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -227,23 +224,23 @@ pytest tests/test_ui_smoke.py
 
 ## Deployment
 
-To deploy in production: `git pull`, then `./deploy.sh`. There is no separate
-migration step — `init_db()` brings the schema up to date on boot, adding only
-what's missing. Secrets (`.env` and `secrets/firebase-admin.json`) are set up
-once per server and never committed.
+To deploy: `git pull`, then `./deploy.sh`. There is no separate migration step —
+`init_db()` brings the schema up to date on boot, adding only what's missing.
+Secrets (`.env` and `secrets/firebase-admin.json`) are provisioned once per
+server and never committed.
 
 ## Live-data safety
 
 `./deploy.sh` rebuilds the image and restarts the stack without touching the
 `bugtracker_pgdata` volume. `./down.sh` (no flags) stops the containers and keeps
-the volume. You can only lose data through explicit, opt-in commands:
-`./down.sh --wipe-db` (which asks for confirmation), `docker compose down -v`, or
-deleting the volume by hand.
+the volume. Data can only be lost through explicit, opt-in commands:
+`./down.sh --wipe-db` (which prompts for confirmation), `docker compose down -v`,
+or deleting the volume manually.
 
-Upgrades are always additive. On boot, `init_db()` creates any missing tables and
-columns via `Base.metadata.create_all()` and never changes existing rows. Sleuth
-adds no tables and changes no columns — read intents only `SELECT`, and write
-intents go through the same audited paths as the REST API.
+Upgrades are always additive. `init_db()` creates missing tables and columns via
+`Base.metadata.create_all()` and never changes existing rows. Sleuth adds no
+tables and changes no columns — read intents only `SELECT`, and write intents go
+through the same audited paths as the REST API.
 
 ## Sleuth
 
@@ -265,47 +262,46 @@ Sleuth is the in-app assistant — a floating widget on every page (open it with
 - *comment on #5: looks fixed in v2.1*
 - *create a bug titled "Login broken" in project Apollo*
 
-After a turn that names a bug, pronouns (*close it*) work for a short window.
+After a turn that names a bug, pronouns (*close it*) resolve correctly for a short window.
 
 ### How it works
 
-Sleuth tries the cheapest layer first and only moves up when needed:
+Sleuth tries the cheapest layer first and escalates only when needed:
 
 1. **Rules** (`app/chatbot/nlu.py`) — a regex parser over verbs, filters, names, and IDs. Handles most queries.
 2. **Statistical classifier** (`app/chatbot/classifier.py`) — TF-IDF and cosine similarity over a curated corpus, no external models. Catches reworded questions.
 3. **Local LLM** (`app/chatbot/llm.py`) — optional, lazily loaded `llama.cpp` against a GGUF model in `models/`. Used only when layers 1 and 2 are unsure. See [models/README.md](models/README.md).
-4. **Cloud LLM** (`app/chatbot/cloud_llm.py`) — optional and off by default. When `SLEUTH_CLOUD_ENABLED=1` and a key is set, free-form questions can fall through to Gemini (primary) or OpenRouter (fallback), optionally with RAG retrieval.
+4. **Cloud LLM** (`app/chatbot/cloud_llm.py`) — optional and off by default. When `SLEUTH_CLOUD_ENABLED=1` and a key is set, free-form questions can fall through to Groq (primary) or OpenRouter (fallback), optionally with RAG retrieval.
 
 With the defaults (`SLEUTH_CLOUD_ENABLED=0`, no model file), Sleuth is fully
 local: no outbound HTTP, no telemetry, no third-party API. The cloud layer is the
-only path that sends text off the box, and even then all text first passes
-through a secret-redaction filter (`app/chatbot/redaction.py`). In every mode,
-Sleuth never writes data through the model and never invents counts.
+only path that sends text off the box, and all text first passes through a
+secret-redaction filter (`app/chatbot/redaction.py`). In every mode, Sleuth never
+writes data through the model and never invents counts.
 
-When the cloud layer is on, four read-only add-ons can each be turned on
-separately to make answers more accurate and trustworthy. All are off by default
-and need no extra dependencies, so they fit a small box:
+When the cloud layer is on, four read-only add-ons can be enabled separately.
+All are off by default and need no extra dependencies:
 
-- **Grounding** (`SLEUTH_RETRIEVAL_ENABLED`) — answers free-form questions from real bug records found by keyword search, with no vector database.
-- **Agent** (`SLEUTH_AGENT_ENABLED`) — for a multi-step question, the model runs a few read-only lookups before answering. Every lookup goes through the same write firewall, so the agent can never change data.
-- **Verification** (`SLEUTH_VERIFY_ANSWERS`) — checks every bug number an answer cites against the records and flags any that aren't backed by data. No extra model call.
-- **Evaluation** (`SLEUTH_EVAL_ENABLED`) — a second model call scores each answer for grounding and adds a short "please verify" note when confidence is low. It can only annotate, never rewrite.
+- **Grounding** (`SLEUTH_RETRIEVAL_ENABLED`) — answers free-form questions from real bug records via keyword search, no vector database required.
+- **Agent** (`SLEUTH_AGENT_ENABLED`) — for multi-step questions, the model runs a few read-only lookups before answering. Every lookup goes through the same write firewall, so the agent can never change data.
+- **Verification** (`SLEUTH_VERIFY_ANSWERS`) — checks every bug number cited in an answer against the records and flags any not backed by data. No extra model call.
+- **Evaluation** (`SLEUTH_EVAL_ENABLED`) — a second model call scores each answer for grounding and appends a short "please verify" note when confidence is low. It can only annotate, never rewrite.
 
 Key cloud-layer variables (all off or blank by default): `SLEUTH_CLOUD_ENABLED`,
-`GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-2.5-flash`),
+`GROQ_API_KEY`, `GROQ_MODEL` (default `llama-3.3-70b-versatile`),
 `OPENROUTER_API_KEY`, `SLEUTH_RAG_ENABLED`, `SLEUTH_RETRIEVAL_ENABLED`,
 `SLEUTH_VERIFY_ANSWERS`, `SLEUTH_AGENT_ENABLED`, and `SLEUTH_EVAL_ENABLED`. The
 `/api/chat` endpoint is rate-limited to 30 messages per minute per user.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for supported versions, how to report a
-vulnerability privately, and a summary of the security posture.
+See [SECURITY.md](SECURITY.md) for supported versions, private vulnerability
+reporting, and a summary of the security posture.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Run the test suite before opening a pull
-request. Report vulnerabilities privately via [SECURITY.md](SECURITY.md), not as
+request. Report vulnerabilities privately via [SECURITY.md](SECURITY.md) — not as
 public issues.
 
 ## License

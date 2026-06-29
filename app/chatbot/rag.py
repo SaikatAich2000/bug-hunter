@@ -1,20 +1,18 @@
 """Retrieval-Augmented Generation for Sleuth's cloud layer.
 
-Indexes the things a user asks free-form questions about — bugs,
-requirements, tasks (the `bugs` table), their comments, and any plain-text
-/ markdown docs under SLEUTH_DOCS_DIR — into a local Chroma vector store,
-embedded with Gemini's embedding API. `retrieve_text()` returns the top-k
-snippets as a compact context block for cloud_llm.
+Indexes bugs, comments, and any plain-text/markdown docs under
+SLEUTH_DOCS_DIR into a local Chroma vector store using Gemini embeddings.
+retrieve_text() returns the top-k snippets as a compact context block for
+cloud_llm.
 
-Scope: this deployment is single-tenant — there is no organization table,
-and every authenticated user already sees every bug through the normal
-handlers, so retrieval is not org-filtered. The `where` parameter on the
-Chroma query is the seam where a tenant/project filter would go if this app
-ever became multi-tenant; mirror the SQL handlers' scoping there.
+This deployment is single-tenant, so retrieval is not org-filtered. The
+`where` parameter on the Chroma query is the seam for a future tenant/project
+filter; mirror the SQL handlers' scoping there if this ever becomes
+multi-tenant.
 
-Everything is lazy and gated: with SLEUTH_RAG_ENABLED off, or chromadb not
-installed, or no embedding key, retrieve_text() returns "" and the cloud
-layer runs without grounding. Nothing here can break startup.
+Everything is lazy and gated: with SLEUTH_RAG_ENABLED off, chromadb missing,
+or no embedding key, retrieve_text() returns "" and the cloud layer runs
+without grounding. Nothing here can break startup.
 """
 from __future__ import annotations
 
@@ -33,9 +31,6 @@ logger = logging.getLogger("bug_hunter.sleuth.rag")
 _COLLECTION = "sleuth"
 
 
-# ---------------------------------------------------------------------------
-# Embeddings (Gemini API via httpx — no local model, keeps RAM flat)
-# ---------------------------------------------------------------------------
 def _embed(texts: list[str]) -> Optional[list[list[float]]]:
     """Batch-embed texts with Gemini. Returns None on any failure."""
     s = get_settings()
@@ -47,13 +42,13 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         model = f"models/{s.GEMINI_EMBED_MODEL}"
         r = httpx.post(
             f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
-            # Key in a header (not the URL query string) so it can't leak into a
-            # logged exception URL / proxy access log — mirrors cloud_llm.py.
+            # Key in a header rather than the URL query string so it won't
+            # appear in logged exception URLs or proxy access logs (same
+            # approach as cloud_llm.py).
             headers={"x-goog-api-key": s.GEMINI_API_KEY},
-            # Redact every text before it leaves the box. This embedding call is
-            # outbound egress like the generation path, so secrets/PII in bug
-            # descriptions, comment bodies, author names or docs pass the same
-            # gate. Redact first, then truncate.
+            # Redact before sending: bug descriptions, comment bodies, and
+            # doc content are outbound egress just like the generation path,
+            # so they pass the same PII gate. Redact first, then truncate.
             json={"requests": [
                 {"model": model, "content": {"parts": [{"text": redact(t)[:8000]}]}}
                 for t in texts
@@ -67,9 +62,6 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Chroma collection (lazy, persistent)
-# ---------------------------------------------------------------------------
 def _collection():
     """Return the Chroma collection, or None if unavailable."""
     s = get_settings()
@@ -78,7 +70,7 @@ def _collection():
     try:
         import chromadb
         client = chromadb.PersistentClient(path=s.SLEUTH_RAG_DIR)
-        # We supply embeddings explicitly, so no embedding_function here.
+        # Embeddings are supplied explicitly, so no embedding_function needed.
         return client.get_or_create_collection(
             _COLLECTION, metadata={"hnsw:space": "cosine"}
         )
@@ -95,9 +87,6 @@ def _doc_text(bug: Bug) -> str:
     return "\n".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Indexing
-# ---------------------------------------------------------------------------
 def _gather_db_docs(db: Session) -> tuple[list[str], list[str], list[dict]]:
     """Collect (ids, docs, metas) for every bug + comment in the DB."""
     ids: list[str] = []
@@ -159,8 +148,8 @@ def _embed_upsert(col, ids: list[str], docs: list[str], metas: list[dict]) -> in
 
 
 def index_all(db: Session) -> int:
-    """Full (re)index of bugs + comments + docs. Returns the doc count.
-    Run from scripts/build_sleuth_rag.py or a periodic job."""
+    """Full (re)index of bugs, comments, and docs. Returns the doc count.
+    Called from scripts/build_sleuth_rag.py or a periodic job."""
     col = _collection()
     if col is None:
         return 0
@@ -194,18 +183,13 @@ def upsert_bug(db: Session, bug_id: int) -> None:
         logger.debug("Sleuth RAG upsert_bug failed", exc_info=True)
 
 
-# ---------------------------------------------------------------------------
-# Retrieval
-# ---------------------------------------------------------------------------
 def retrieve_text(message: str, where: Optional[dict] = None) -> str:
     """Return a compact context block of the top-k snippets, or "" if RAG
-    is disabled/unavailable.
+    is disabled or unavailable.
 
     `where` is the multi-tenant scoping seam: pass a Chroma metadata filter
-    here to restrict retrieval to a tenant/project if this app ever becomes
-    multi-tenant. It is unused in this single-tenant build (every user already
-    sees every bug through the normal handlers), so retrieval is not
-    org-filtered and the caller need not pass the user/session."""
+    here to restrict retrieval to a specific tenant/project. Unused in this
+    single-tenant build, so the caller need not pass user/session info."""
     col = _collection()
     if col is None:
         return ""
@@ -222,10 +206,9 @@ def retrieve_text(message: str, where: Optional[dict] = None) -> str:
     docs = (res.get("documents") or [[]])[0]
     if not docs:
         return ""
-    # Wrap retrieved doc text as a fenced data block and defang any literal fence
-    # marker, so indexed content (arbitrary comment/doc bodies) can't smuggle
-    # instructions to the model — the same structural injection defense the
-    # keyword retrieval path applies in retrieval.format_context.
+    # Wrap in a fenced data block and defang any literal fence marker so
+    # indexed content (arbitrary comment/doc bodies) can't smuggle instructions
+    # to the model. Same structural injection defense as retrieval.format_context.
     body = "\n---\n".join(d.replace("<<", "< <") for d in docs)
     return f"<<DATA>>\n{body}\n<<END DATA>>"
 

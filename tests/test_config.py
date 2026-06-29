@@ -1,10 +1,9 @@
-"""Coverage for app/config.py env-var parsers + is_production, and
-app/chatbot/evals._as_bool.
+"""Tests for app/config.py env-var parsers and is_production, plus evals._as_bool.
 
-These are the crash-safe, fail-closed parsing helpers: unrecognized booleans
-fall back to the declared default (never silently flip a security switch),
-ints/floats tolerate garbage and float-formatted values, and non-finite floats
-are rejected. Each branch is exercised directly here.
+The parsers are fail-closed: unrecognized booleans fall back to the declared
+default (so garbage input can't silently flip a security switch), ints/floats
+tolerate garbage and float-formatted strings, and non-finite floats are
+rejected. Each branch gets its own test here.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ def test_load_dotenv_oserror_is_logged(monkeypatch):
         raise OSError("malformed .env")
 
     monkeypatch.setattr(config, "load_dotenv", _raise)
-    config._load_dotenv()  # must not raise — the OSError is caught + logged
+    config._load_dotenv()  # must not raise; the OSError is caught and logged
 
 
 def test_load_dotenv_ok(monkeypatch):

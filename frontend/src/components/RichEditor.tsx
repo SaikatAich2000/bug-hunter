@@ -1,17 +1,15 @@
 /**
- * RichEditor — a contentEditable rich-text editor with a custom toolbar.
+ * RichEditor — contentEditable rich-text editor with a custom toolbar.
  *
- * - React renders the shell (wrap > toolbar > surface) once; the
- *   contentEditable surface body is uncontrolled. All formatting is done with
- *   direct DOM manipulation inside the surface — do not convert the surface to
- *   controlled JSX.
- * - Output flows through the onChange prop and the getHtml()/setHtml()
- *   imperative handle; pasted files flow through the onPasteFile prop.
- * - execCommand appears only as a last-resort fallback. The primary paths are
- *   manual DOM code for cross-browser correctness; those helpers are
- *   load-bearing.
- * - Styling comes from the .bh-rt-* rules in styles.css (including the
- *   :empty::before data-placeholder empty-state).
+ * The contentEditable surface is uncontrolled; React only renders the shell.
+ * All formatting uses direct DOM manipulation — do not convert the surface to
+ * controlled JSX.
+ *
+ * execCommand is a last-resort fallback; the primary paths use manual DOM code
+ * for cross-browser correctness.
+ *
+ * Styling lives in the .bh-rt-* rules in styles.css (including the
+ * :empty::before placeholder).
  */
 
 import {
@@ -30,12 +28,9 @@ import type {
 import { fileTooLargeMessage } from "../lib/upload";
 import { toast } from "../lib/toast";
 
-// ---------------------------------------------------------------------------
-// Unsafe-file paste filter. Block extensions or MIME types that could let a
-// pasted attachment deliver an executable payload from the attachments grid.
-// The list mirrors the Windows "potentially dangerous" set plus common
-// cross-platform binaries.
-// ---------------------------------------------------------------------------
+// Unsafe-file filter — blocks extensions/MIME types that could deliver an
+// executable payload via the attachment grid. Mirrors the Windows
+// "potentially dangerous" list plus common cross-platform binaries.
 const UNSAFE_EXTS = new Set<string>([
   "exe", "bat", "cmd", "com", "scr", "pif", "msi", "msp", "msc",
   "jar", "vbs", "vbe", "js", "jse", "wsf", "wsh",
@@ -78,9 +73,8 @@ function describeError(err: unknown): string {
 // Editor constants
 // ---------------------------------------------------------------------------
 
-// Inline-style commands toggled via manual wrappers. execCommand("bold") can
-// silently no-op inside certain stacking-context / overflow ancestors, so
-// Bold/Italic/Underline/Strike are pure DOM code.
+// execCommand("bold") can silently no-op inside certain stacking-context /
+// overflow ancestors, so Bold/Italic/Underline/Strike are pure DOM code.
 const INLINE_TOGGLE: Record<string, string> = {
   bold: "b",
   italic: "i",
@@ -88,12 +82,11 @@ const INLINE_TOGGLE: Record<string, string> = {
   strikeThrough: "s",
 };
 
-// Zero-width space used to arm the "next typed character is styled" state.
+// Zero-width space used to arm inline-style state on a collapsed caret.
 const ZWSP = "​";
 
-// Word characters for the auto word-select: letters / digits / underscore /
-// hyphen / apostrophe, plus the Latin-extended, Greek and CJK ranges
-// (À-ɏ Ͱ-῿ 一-鿿).
+// Letters / digits / underscore / hyphen / apostrophe, plus Latin-extended,
+// Greek and CJK ranges (À-ɏ Ͱ-῿ 一-鿿) for the auto word-select.
 const WORD_RE = /[A-Za-z0-9_'\-À-ɏͰ-῿一-鿿]/;
 
 const MAX_HISTORY = 100;
@@ -111,7 +104,7 @@ interface HistoryState {
 }
 
 // ---------------------------------------------------------------------------
-// Component contract
+// Public types
 // ---------------------------------------------------------------------------
 
 export interface RichEditorHandle {
@@ -128,10 +121,9 @@ interface Props {
   ariaLabel?: string;
   disabled?: boolean;
   /**
-   * Rendered on the visually-hidden native <textarea> kept behind the surface
-   * (`.bh-rt-native`, the form-submission source of truth). Automation and
-   * tests fill that textarea directly — it is clipped to 1×1px, not
-   * display:none, precisely so it stays fillable.
+   * Name for the hidden native textarea (.bh-rt-native), which is the
+   * form-submission source of truth. It is clipped to 1×1px (not
+   * display:none) so automation can fill it directly.
    */
   name?: string;
   textareaId?: string;
@@ -154,16 +146,13 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   const toolbarRef = useRef<HTMLDivElement>(null);
   const nativeRef = useRef<HTMLTextAreaElement>(null);
 
-  // Track the last selection that was inside the editor. Toolbar buttons
-  // restore this on click so the formatting helpers have a valid range to
-  // operate on even if focus briefly left the editor for the button.
+  // Last selection inside the editor. Toolbar buttons restore it before
+  // running commands so the range is valid even after focus briefly left.
   const savedRangeRef = useRef<Range | null>(null);
 
-  // Snapshot-based undo/redo state. Custom history instead of the browser's
-  // contenteditable undo stack because the toolbar helpers mutate the DOM
-  // directly (range.insertNode, createElement, ...); those mutations are not
-  // recorded on the native undo stack, so Ctrl+Z would skip every formatting
-  // operation in between.
+  // Custom snapshot-based undo/redo: the toolbar helpers mutate the DOM
+  // directly, so those changes never appear on the browser's native undo
+  // stack and Ctrl+Z would skip them entirely.
   const historyRef = useRef<HistoryState>({
     stack: [],
     idx: -1,
@@ -171,14 +160,11 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     restoring: false,
   });
 
-  // Uncontrolled seeding: initialHtml is read once on mount; later changes to
-  // the prop (including `disabled`) are ignored. To change content or read-only
-  // state on an already-mounted editor, callers must use the imperative
-  // setHtml() handle or force a remount with a changing `key` (BugModal does
-  // both); otherwise the surface keeps stale content.
+  // initialHtml is read once on mount; later prop changes are ignored.
+  // To update content on a live editor use setHtml() or remount with a new key.
   const initialHtmlRef = useRef(initialHtml);
 
-  // Latest-prop refs so DOM-driven callbacks never go stale.
+  // Latest-prop refs so DOM-driven callbacks never close over stale values.
   const onChangeRef = useRef<Props["onChange"]>(onChange);
   const onPasteFileRef = useRef<Props["onPasteFile"]>(onPasteFile);
   useEffect(() => {
@@ -188,38 +174,31 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- value sync --------------------------------------------------------
 
-  // Empty heuristic: contenteditable inserts a leading <br> or empty <div>
-  // when the user clears all text. Treat "<br>" / "<div><br></div>" as empty
-  // so length-1 validation downstream still rejects them. The inline-toggle
-  // path arms styling via a zero-width space (U+200B); a wrapper containing
-  // only ZWSP (and no <img>) is still empty, and .trim() does not remove ZWSP,
-  // so check it explicitly via textContent.
+  // contenteditable leaves a <br> or empty <div> when text is cleared, and
+  // the inline-toggle path seeds a ZWSP wrapper. Both are treated as empty.
+  // .trim() doesn't strip ZWSP, so we check textContent explicitly.
   const computeHtml = (): string => {
     const editor = editorRef.current;
     if (!editor) return "";
     const html = editor.innerHTML;
-    // If there's a real embedded image, it's never empty regardless of text.
     const hasImg = editor.querySelector("img") !== null;
-    // textContent with ZWSP removed — this catches inline-only wrappers like
-    // "<b>​</b>" that the structural-tag strip below would miss.
+    // ZWSP removal needed here: .trim() won't catch "<b>​</b>" wrappers.
     const text = (editor.textContent ?? "").replace(/​/g, "").trim();
     if (!hasImg && text === "") return "";
-    // Belt-and-braces: also treat pure structural scaffolding as empty.
+    // Also reject pure structural scaffolding (<br>, <div>, <p> with no content).
     const stripped = html
       .replace(/​/g, "")
       .replace(/<br\s*\/?>/gi, "")
       .replace(/<\/?(?:div|p)>/gi, "")
       .trim();
     if (!hasImg && stripped === "") return "";
-    // Non-empty: strip stray ZWSP from the persisted HTML (the caret-arming
-    // ZWSP is transient typing state).
+    // Strip transient ZWSP before persisting.
     return html.replace(/​/g, "");
   };
 
   const sync = (): void => {
     const html = computeHtml();
-    // Keep the hidden native textarea mirroring the surface — it is the
-    // form-submission / automation contract.
+    // Keep the native textarea in sync — it's the form-submission source of truth.
     if (nativeRef.current && nativeRef.current.value !== html) {
       nativeRef.current.value = html;
     }
@@ -263,7 +242,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (target) {
       range.setStart(target, targetOffset);
     } else {
-      // No text content (or offset past end) — drop caret at editor end.
+      // Offset past end — place caret at the editor's end.
       range.selectNodeContents(editor);
       range.collapse(false);
     }
@@ -280,7 +259,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (!editor || h.restoring) return;
     const html = editor.innerHTML;
     if (h.idx >= 0 && h.stack[h.idx]?.html === html) return;
-    // Drop the redo tail when pushing after an undo.
+    // Drop the redo tail on new push.
     if (h.idx < h.stack.length - 1) {
       h.stack.length = h.idx + 1;
     }
@@ -292,8 +271,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     }
   };
 
-  // Push a typing snapshot debounced per input event so we don't store one
-  // entry per character (would blow the cap on a paragraph).
+  // Debounced snapshot: avoids storing one entry per keystroke.
   const scheduleSnapshot = (): void => {
     const h = historyRef.current;
     if (h.debounce !== null) window.clearTimeout(h.debounce);
@@ -321,7 +299,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     try {
       setCaretOffset(entry.caret || 0);
     } catch {
-      /* selection may fail in detached editor */
+      /* selection can fail if editor is detached */
     }
     h.restoring = false;
     sync();
@@ -393,7 +371,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     savedRangeRef.current = r.cloneRange();
   };
 
-  // True if the current selection is anchored inside <tag> within the editor.
+  // Returns true if the current selection is inside one of the given tags.
   const inAncestor = (tagNames: string[]): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -410,10 +388,9 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- inline formatting ---------------------------------------------------
 
-  // For inline-style commands on a collapsed caret, the browser typing-state
-  // model is unreliable. The cross-browser workaround is to manually toggle a
-  // wrapper element around a zero-width placeholder, then drop the caret inside
-  // it, so the next character lands in the wrapper and inherits its styling.
+  // The browser's typing-state model is unreliable for a collapsed caret, so
+  // we manually toggle a wrapper around a ZWSP placeholder and place the caret
+  // inside it; the next keystroke then inherits the wrapper's style.
   const toggleInlineAtCaret = (tag: string): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -421,20 +398,18 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (!s || s.rangeCount === 0) return false;
     const r = s.getRangeAt(0);
     if (!editor.contains(r.commonAncestorContainer)) return false;
-    if (!r.collapsed) return false; // the wrap path handles the non-empty case
-    // Look for an existing wrapper of the same tag among the caret's
-    // ancestors. If found, exit it: insert a ZWSP text node after the wrapper
-    // and place the caret after that ZWSP, unambiguously outside the wrapper,
-    // so subsequent typing lands in unstyled text. (Browsers greedily extend
-    // an adjacent inline element when the caret sits right after its close
-    // tag, so setStartAfter(<b>) alone isn't enough.)
+    if (!r.collapsed) return false; // non-empty selection: use the wrap path
+    // Walk ancestors for an existing wrapper. If found, exit it by inserting
+    // a ZWSP after the wrapper and placing the caret there. A bare
+    // setStartAfter(<b>) isn't sufficient — browsers greedily extend an
+    // adjacent inline element when the caret sits at its close tag.
     let n: Node | null = r.startContainer;
     while (n && n !== editor) {
       if (n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName.toLowerCase() === tag) {
         const sep = document.createTextNode(ZWSP);
         n.parentNode?.insertBefore(sep, n.nextSibling);
         const after = document.createRange();
-        after.setStart(sep, 1); // after the ZWSP
+        after.setStart(sep, 1); // place caret after the ZWSP
         after.collapse(true);
         s.removeAllRanges();
         s.addRange(after);
@@ -442,8 +417,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       }
       n = n.parentNode;
     }
-    // Not in wrapper: insert `<tag>ZWSP</tag>` and put the caret between the
-    // ZWSP and the end of the wrapper so the next key appears inside.
+    // No existing wrapper — insert `<tag>ZWSP</tag>` and place the caret
+    // inside it so the next keystroke lands in the styled element.
     const wrapEl = document.createElement(tag);
     const zw = document.createTextNode(ZWSP);
     wrapEl.appendChild(zw);
@@ -456,18 +431,15 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     return true;
   };
 
-  // When the user clicks Bold (or Italic / Underline / Strike) with no text
-  // selected but content in the editor, the expectation is to format the word
-  // just typed. This auto-selects the word at the caret. Returns true if a
-  // selection was made or one already existed.
+  // Auto-selects the word at the caret so a Bold/Italic click with no explicit
+  // selection formats the word the user just typed.
   const selectWordAtCaret = (): boolean => {
     const s = window.getSelection();
     if (!s || s.rangeCount === 0) return false;
     const r = s.getRangeAt(0);
     if (!r.collapsed) return true;
-    // Normalize: when the caret sits in an ELEMENT (e.g. after a
-    // selectNodeContents+collapse on an <li>), descend into the adjacent
-    // text node child so the word walk can run.
+    // When the caret is in an ELEMENT node (e.g. after collapse on an <li>),
+    // descend into the adjacent text node so the character walk can run.
     let node: Node | null = r.startContainer;
     let pos = r.startOffset;
     if (node.nodeType === Node.ELEMENT_NODE) {
@@ -502,9 +474,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     return true;
   };
 
-  // Manual wrap/unwrap for inline styles. document.execCommand("bold") can
-  // silently no-op inside certain stacking-context / overflow ancestors, so
-  // toggling Bold/Italic/Underline/Strike is done entirely in DOM code here.
+  // Wrap/unwrap for inline styles — pure DOM because execCommand("bold") can
+  // silently no-op in certain stacking-context / overflow ancestors.
   const applyInlineWrap = (tag: string): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -513,9 +484,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     const r = s.getRangeAt(0);
     if (r.collapsed) return false;
     if (!editor.contains(r.commonAncestorContainer)) return false;
-    // If selection sits entirely inside a wrapper of this tag, UNWRAP by
-    // replacing the wrapper with its children. We test by walking both
-    // ends — if they share the same ancestor of this tag, it's "inside".
+    // If both ends of the selection share the same ancestor of this tag,
+    // the selection is fully inside a wrapper — unwrap it.
     const findWrapper = (start: Node): Element | null => {
       let n: Node | null = start;
       while (n && n !== editor) {
@@ -532,16 +502,13 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       const wrapEl = startAnc;
       const parent = wrapEl.parentNode;
       if (!parent) return false;
-      // Capture references to the first and last children before moving them
-      // out. Building the re-selection from these exact node refs is robust
-      // even when the unwrapped content has multiple children or the parent
-      // already had adjacent text.
+      // Capture first/last refs before moving children out; the re-selection
+      // uses these node refs to work correctly with multiple children.
       const firstMoved = wrapEl.firstChild;
       const lastMoved = wrapEl.lastChild;
       while (wrapEl.firstChild) parent.insertBefore(wrapEl.firstChild, wrapEl);
       wrapEl.remove();
-      // Re-select from the first moved node's start to the last moved node's
-      // end so the user can re-toggle without re-selecting manually.
+      // Re-select the moved content so the user can re-toggle without reselecting.
       if (firstMoved && lastMoved) {
         const re = document.createRange();
         re.setStartBefore(firstMoved);
@@ -551,9 +518,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       }
       return true;
     }
-    // Wrap the selection. surroundContents is the cleanest path when the
-    // range is well-formed; when the selection straddles block boundaries
-    // we extract + wrap.
+    // Wrap the selection. surroundContents works for well-formed ranges;
+    // extract + insert handles cross-block selections.
     const wrapEl = document.createElement(tag);
     try {
       r.surroundContents(wrapEl);
@@ -562,7 +528,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       wrapEl.appendChild(frag);
       r.insertNode(wrapEl);
     }
-    // Re-select the now-wrapped content so chained toggles work.
+    // Re-select the wrapped content so chained toggles work.
     const inside = document.createRange();
     inside.selectNodeContents(wrapEl);
     s.removeAllRanges();
@@ -572,9 +538,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- lists -----------------------------------------------------------------
 
-  // Manual list toggle (ul / ol). We treat the LINE containing the caret as
-  // the target: if it's already inside a list of the requested type, unwrap;
-  // otherwise wrap it.
+  // Toggle ul/ol on the block containing the caret. Unwraps if already in the
+  // requested list type, otherwise wraps.
   const applyList = (listTag: "ul" | "ol"): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -582,7 +547,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (!s || s.rangeCount === 0) return false;
     const r = s.getRangeAt(0);
     if (!editor.contains(r.commonAncestorContainer)) return false;
-    // Find the enclosing block (LI, P, DIV, BLOCKQUOTE, PRE, or none).
+    // Walk up to find the enclosing block element.
     const block = ((): Element | null => {
       let n: Node | null = r.startContainer;
       while (n && n !== editor) {
@@ -596,11 +561,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       }
       return null;
     })();
-    // Already in a LI of the same list type: unwrap to a <p>, splitting the
-    // list in place at the LI's document position. Items before the LI stay in
-    // the original list, the unwrapped <p> takes the LI's slot, and items after
-    // it move into a new sibling list inserted right after the <p>, preserving
-    // order.
+    // Already in a matching LI: unwrap to <p>. Items before the LI stay in the
+    // original list; items after it move to a new sibling list after the <p>.
     if (block && block.tagName === "LI") {
       const list = block.parentElement;
       if (list && list.tagName === listTag.toUpperCase()) {
@@ -617,10 +579,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
         }
 
         if (parent) {
-          // Insert the <p> immediately after the original list…
           parent.insertBefore(p, list.nextSibling);
-          // …and if there were trailing items, move them into a fresh list
-          // placed after the <p>, preserving order.
           if (after.length) {
             const rest = document.createElement(listTag);
             for (const node of after) rest.appendChild(node);
@@ -628,11 +587,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
           }
         }
         block.remove();
-        // If the original list is now empty (un-listed the only/first item),
-        // drop it.
-        if (!list.firstChild) list.remove();
+        if (!list.firstChild) list.remove(); // drop the list if it's now empty
 
-        // Place caret at start of new <p>.
         const re = document.createRange();
         re.setStart(p, 0);
         re.collapse(true);
@@ -641,14 +597,10 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
         return true;
       }
     }
-    // Wrap path. Three shapes:
-    //   (a) Caret/selection sits inside a P/DIV/BLOCKQUOTE/etc. — replace
-    //       that block with `<ul><li>…</li></ul>` carrying its contents.
-    //   (b) Selection is non-empty but lives directly at the editor root —
-    //       extract the selection and wrap it in `<ul><li>…</li></ul>`
-    //       inserted at the extracted position.
-    //   (c) Caret is collapsed at the editor root — move every editor child
-    //       into a single `<li>`.
+    // Wrap path — three cases:
+    //   (a) Caret inside a block element: replace that block with <ul/ol><li>.
+    //   (b) Non-empty selection at the editor root: extract and wrap in <li>.
+    //   (c) Collapsed caret at root: wrap all editor children in one <li>.
     const list = document.createElement(listTag);
     const li = document.createElement("li");
     if (block && block !== (editor as Element)) {
@@ -656,19 +608,18 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       list.appendChild(li);
       block.parentNode?.replaceChild(list, block);
     } else if (!r.collapsed) {
-      // (b) Extract the selected fragment and put it inside the <li>.
+      // (b)
       const frag = r.extractContents();
       li.appendChild(frag);
       list.appendChild(li);
       r.insertNode(list);
     } else {
-      // (c) Wrap the whole editor's current content.
+      // (c)
       while (editor.firstChild) li.appendChild(editor.firstChild);
       list.appendChild(li);
       editor.appendChild(list);
     }
-    // An empty <li> renders without a marker in some browsers — drop a <br>
-    // so the list is visible even before the user types.
+    // An empty <li> has no bullet in some browsers; a <br> makes it visible.
     if (!li.firstChild) li.appendChild(document.createElement("br"));
     const re = document.createRange();
     re.selectNodeContents(li);
@@ -680,8 +631,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- block wrappers (blockquote / pre) -------------------------------------
 
-  // Manual block toggle for blockquote / pre. Wrap the current block, or
-  // unwrap if already wrapped.
+  // Toggle a blockquote/pre around the current block.
   const applyBlockWrap = (tag: string): boolean => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -689,7 +639,6 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (!s || s.rangeCount === 0) return false;
     const r = s.getRangeAt(0);
     if (!editor.contains(r.commonAncestorContainer)) return false;
-    // Find the nearest matching wrapper.
     const existing = ((): Element | null => {
       let n: Node | null = r.startContainer;
       while (n && n !== editor) {
@@ -701,7 +650,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       return null;
     })();
     if (existing) {
-      // Unwrap: replace existing with a <p> carrying its children.
+      // Unwrap: hoist children into a <p> and remove the wrapper.
       const p = document.createElement("p");
       while (existing.firstChild) p.appendChild(existing.firstChild);
       existing.parentNode?.replaceChild(p, existing);
@@ -712,7 +661,6 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       s.addRange(re);
       return true;
     }
-    // Wrap the current block (or insert a new block at caret).
     const block = ((): Element | null => {
       let n: Node | null = r.startContainer;
       while (n && n !== editor) {
@@ -731,7 +679,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       while (block.firstChild) wrapEl.appendChild(block.firstChild);
       block.parentNode?.replaceChild(wrapEl, block);
     } else {
-      // Empty editor or top-level text — push everything in editor into wrap.
+      // No block found — wrap all editor content.
       while (editor.firstChild) wrapEl.appendChild(editor.firstChild);
       editor.appendChild(wrapEl);
     }
@@ -745,9 +693,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- command dispatch --------------------------------------------------------
 
-  // Run a formatting command with a valid selection — restore the last
-  // intra-editor range, run the command, then re-capture so chained toolbar
-  // clicks build on the correct anchor.
+  // Restore the last in-editor range, run the command, then re-capture so
+  // chained toolbar clicks build on the correct anchor.
   const runCmd = (cmd: string, arg: string | null = null): void => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -757,10 +704,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     if (inlineTag !== undefined) {
       const s = window.getSelection();
       if (s && s.rangeCount > 0 && s.getRangeAt(0).collapsed) {
-        // Auto-select the word at the caret — this matches "I just typed a
-        // word, click Bold, the word bolds" expectation.
         if (!selectWordAtCaret()) {
-          // No word at caret → arm typing state via a ZWSP wrapper.
+          // No word at caret — arm typing state with a ZWSP wrapper.
           if (toggleInlineAtCaret(inlineTag)) {
             captureSelection();
             sync();
@@ -785,15 +730,15 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       return;
     }
     if (cmd === "formatBlock") {
-      // arg looks like "<blockquote>" / "<pre>" / "<p>"
+      // arg is e.g. "<blockquote>", "<pre>", or "<p>"
       const tag = (arg || "").replace(/[<>]/g, "").toLowerCase();
       if (tag && tag !== "p" && applyBlockWrap(tag)) {
         captureSelection();
         sync();
         return;
       }
-      // Falling back to <p> — unwrap any existing blockquote/pre.
       if (tag === "p") {
+        // "p" means "plain" — unwrap any existing block wrapper.
         for (const t of ["blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6"]) {
           if (applyBlockWrap(t)) {
             captureSelection();
@@ -803,7 +748,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
         }
       }
     }
-    // Last-resort fallback for anything we haven't manually implemented.
+    // execCommand fallback for commands without a manual implementation.
     try {
       document.execCommand(cmd, false, arg ?? undefined);
     } catch {
@@ -813,11 +758,9 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     sync();
   };
 
-  // Open a hidden file picker and route the chosen file through onPasteFile.
-  // Images are not embedded inline in the contenteditable: the surface can't
-  // reliably resize <img> elements or position a caret after them. Treating the
-  // image as another attachment keeps the editor text-only and surfaces the
-  // file in the parent form's attachment grid.
+  // Opens a hidden file picker and routes the chosen file to onPasteFile.
+  // Files are never embedded inline — the editor stays text-only and the file
+  // appears in the parent form's attachment grid.
   const pickFileAsAttachment = (): void => {
     const handler = onPasteFileRef.current;
     if (!handler) {
@@ -874,22 +817,19 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     updateActiveStates();
   };
 
-  // Reflect the current inline-formatting state on the toolbar buttons so
-  // the user sees that Bold is "on" before they start typing. Imperative
-  // classList toggling (not React state) — the buttons are rendered once
-  // with static props, so React reconciliation never clobbers the class.
+  // Reflect active formatting on toolbar buttons. Imperative classList toggling
+  // rather than React state — the buttons are rendered once with static props.
   const updateActiveStates = (): void => {
     const toolbar = toolbarRef.current;
     if (!toolbar) return;
     toolbar.querySelectorAll<HTMLButtonElement>("button[data-cmd]").forEach((b) => {
       const c = b.dataset.cmd ?? "";
       let active = false;
-      // Inline styles: check DOM ancestor for the tag we toggled in.
-      // queryCommandState is unreliable for the manual-wrapper path.
+      // For manual-wrapped inline styles, check the DOM ancestor; fall back
+      // to queryCommandState (unreliable for the wrapped path but fine otherwise).
       const inlineTag = INLINE_TOGGLE[c];
       if (inlineTag !== undefined) {
         active = inAncestor([inlineTag]);
-        // Fallback to queryCommandState for the non-wrapped path.
         if (!active) {
           try {
             active = !!document.queryCommandState(c);
@@ -909,8 +849,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     });
   };
 
-  // Snapshot wrapper around handleToolbarCmd so undo can step over every
-  // formatting change as one unit.
+  // Wraps handleToolbarCmd with pre/post snapshots so undo treats each toolbar
+  // action as a single undoable step.
   const runToolbarCmd = (btn: HTMLButtonElement): void => {
     flushSnapshot();
     snapshot(); // pre-state
@@ -920,29 +860,21 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   // ----- toolbar events ------------------------------------------------------------
 
-  // Both capture-selection and preventDefault run on mousedown. preventDefault
-  // stops the browser from shifting focus away from the contenteditable to the
-  // button; without it the editor's typing state is wiped before the user can
-  // type. The command runs on mousedown for immediate feedback, and the click
-  // handler's mouse path is swallowed.
+  // preventDefault on mousedown keeps focus in the editor (without it the
+  // contenteditable loses its typing state). Capture the selection first —
+  // the getter still works at this point even after preventDefault.
   const handleToolbarMouseDown = (e: ReactMouseEvent<HTMLDivElement>): void => {
     const target = e.target instanceof Element ? e.target : null;
     const btn = target?.closest<HTMLButtonElement>("button[data-cmd]");
     if (!btn || btn.disabled) return;
-    // Capture selection FIRST — preventDefault stops the focus shift but
-    // the selection getter still works at this point.
     captureSelection();
-    // KEEP editor focused so the typing state survives across the press.
     e.preventDefault();
-    // Run the command immediately on mousedown so it lands inside the same
-    // focus session as the user's click.
     runToolbarCmd(btn);
   };
 
-  // Keyboard accessibility — Enter / Space on a focused toolbar button.
+  // Keyboard path (Enter / Space on a focused button). The mouse path is
+  // already handled by mousedown; e.detail === 0 identifies keyboard-driven clicks.
   const handleToolbarClick = (e: ReactMouseEvent<HTMLDivElement>): void => {
-    // Mouse path is already handled by mousedown above; suppress the
-    // duplicate run that would otherwise come from the click event.
     if (e.detail !== 0) {
       e.preventDefault();
       return;
@@ -962,9 +894,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     updateActiveStates();
   };
 
-  // External writes to the hidden native textarea (Playwright fill, any form
-  // automation) mirror into the surface — the inverse of sync(). The surface
-  // is canonical, so propagate eagerly on the textarea's input event.
+  // Mirrors external writes to the native textarea (e.g. Playwright fill) into
+  // the surface. The surface is canonical; propagate on the textarea's input event.
   const handleNativeInput = (): void => {
     const editor = editorRef.current;
     const ta = nativeRef.current;
@@ -994,8 +925,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return;
     const key = e.key.toLowerCase();
-    // Undo / redo runs against the snapshot history so formatting changes from
-    // toolbar buttons are tracked too; the browser-native undo would miss them.
+    // Use snapshot history for undo/redo — the browser-native stack misses
+    // toolbar formatting changes.
     if (key === "z" && !e.shiftKey) {
       e.preventDefault();
       undoEdit();
@@ -1036,10 +967,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     }
   };
 
-  // Route dropped or pasted files to onPasteFile (the caller stages or uploads
-  // them). Image / PDF / anything not on the unsafe blocklist is accepted;
-  // oversized files are stopped here with a clear message. Files are never
-  // embedded inline in the editor HTML.
+  // Routes pasted/dropped files to onPasteFile. Blocked: unsafe types and
+  // oversized files. Files are never embedded inline in the editor HTML.
   const routeFiles = (files: File[]): void => {
     const handler = onPasteFileRef.current;
     for (const f of files) {
@@ -1069,8 +998,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     }
   };
 
-  // File paste: intercept clipboard files. Plain-text/HTML paste falls through
-  // to the browser default.
+  // Intercept file pastes; plain-text/HTML paste falls through to the browser.
   const handlePaste = (e: ReactClipboardEvent<HTMLDivElement>): void => {
     const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
     const files: File[] = [];
@@ -1080,14 +1008,13 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
         if (f) files.push(f);
       }
     }
-    if (!files.length) return; // plain-text paste: let the browser handle it.
+    if (!files.length) return; // no files — let the browser handle it
     e.preventDefault();
     routeFiles(files);
   };
 
-  // Accept a dragged photo/video/file dropped onto the editor and attach it,
-  // rather than letting the browser drop it inline as an image or navigate
-  // away. A non-file drag (selected text/HTML) falls through to the default.
+  // Intercept file drags to prevent the browser from embedding them inline or
+  // navigating away. Non-file drags (text/HTML) fall through to the default.
   const handleDragOver = (e: ReactDragEvent<HTMLDivElement>): void => {
     if (disabled) return;
     const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
@@ -1099,15 +1026,14 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   const handleDrop = (e: ReactDragEvent<HTMLDivElement>): void => {
     if (disabled) return;
     const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
-    if (!files.length) return; // not a file drop: let the browser handle it.
+    if (!files.length) return; // not a file drop — let the browser handle it
     e.preventDefault();
     routeFiles(files);
   };
 
   // ----- lifecycle ------------------------------------------------------------------
 
-  // Seed the surface once on mount (uncontrolled thereafter) and seed the
-  // initial history state so the first Ctrl+Z can return to it.
+  // Seed the surface and initial undo snapshot on mount.
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (editor) {
@@ -1128,8 +1054,7 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Track selection while the editor is the active element (document-level
-  // selectionchange listener, scoped to the surface).
+  // Keep savedRangeRef current while the editor is focused.
   useEffect(() => {
     const onSelectionChange = (): void => {
       if (document.activeElement === editorRef.current) captureSelection();
@@ -1145,9 +1070,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       if (!editor) return;
       editor.innerHTML = html || "";
       sync();
-      // The editor content was replaced wholesale, so drop the snapshot
-      // history and seed a fresh one; otherwise Ctrl+Z would jump back to
-      // unrelated previous content.
+      // Content replaced wholesale — reset history so Ctrl+Z doesn't
+      // jump back to unrelated previous content.
       resetHistory();
     },
     getHtml(): string {
@@ -1160,9 +1084,8 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
 
   return (
     <div className="bh-rt-wrap">
-      {/* Visually-hidden native textarea (.bh-rt-native): clipped to 1×1px so
-          it stays programmatically fillable, synced both ways with the
-          contenteditable surface. */}
+      {/* Hidden native textarea (.bh-rt-native): clipped to 1×1px so it
+          stays fillable by automation, synced both ways with the surface. */}
       <textarea
         ref={nativeRef}
         className="bh-rt-native"

@@ -18,8 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
-# Ordered for clarity; ordering doesn't matter for correctness — every
-# file is hermetic.
+# Ordering doesn't affect correctness; each file is hermetic.
 TEST_FILES = [
     "test_sleuth_parser.py",
     "test_sleuth_actions.py",
@@ -48,17 +47,14 @@ def main() -> int:
             capture_output=True, text=True,
         )
         ok = (res.returncode == 0)
-        # Each test file prints its own per-line PASS/FAIL; we just echo
-        # the tail so the user sees the summary.
         out_lines = res.stdout.strip().splitlines()
-        # Print last ~6 lines (the RESULTS block).
+        # Print the tail so the user sees each file's summary block.
         for line in out_lines[-6:]:
             print("    " + line)
         if res.stderr.strip():
             print("    [stderr]")
             for line in res.stderr.strip().splitlines()[-10:]:
                 print("    " + line)
-        # Count
         for line in out_lines:
             if line.startswith("Passed:"):
                 try:

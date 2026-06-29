@@ -34,9 +34,9 @@ os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
 
-# Force a fresh app import bound to this file's dedicated DB (see the note in
-# test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
-# engine bound to an earlier-collected module's torn-down DB.
+# Fresh app import for this file's private DB. Without the purge, a shared
+# engine from an earlier-collected module's torn-down DB causes "no such table"
+# errors later in the suite.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -54,9 +54,12 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind this file's module-level app.* references to the current import
-    generation each test (conftest's `client` fixture purges `app.*` to rebind
-    the engine per test; stale refs would otherwise diverge from execute()'s)."""
+    """Re-bind module-level app.* references each test.
+
+    conftest's ``client`` fixture purges ``app.*`` modules to rebind the engine
+    per test; without this, our module-level names would point at a stale
+    generation and diverge from what ``execute()`` uses.
+    """
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -306,8 +309,7 @@ def test_time_windows() -> None:
             check(f"time: {phrase!r} parsed time_window",
                   pq.time_window is not None, "no time window extracted")
 
-        # Concrete: created in last 1.5 days. Bug #4 (0d) and #1 (1d) qualify;
-        # bugs older than that should NOT appear.
+        # Bug #4 (0d) and #1 (1d) qualify; anything older should not appear.
         resp = executor.execute("bugs created in the last 2 days", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         if tbl:
@@ -386,7 +388,6 @@ def test_action_verb_variants() -> None:
             check(f"verb: {verb!r} -> status {expected_status}",
                   bug.status == expected_status,
                   f"got {bug.status}")
-            # Reset bug status for next iteration.
             bug.status = "Resolved"
             db.commit()
 
@@ -419,7 +420,6 @@ def test_assign_verb_variants() -> None:
     db = SessionLocal()
     try:
         admin = db.get(models.User, ids["admin"])
-        # Each verb should stage a confirm.
         for phrase in [
             "assign bug 5 to alice",
             "give bug 5 to alice",
@@ -430,7 +430,6 @@ def test_assign_verb_variants() -> None:
             "allot bug 5 to alice",
         ]:
             memstore.reset(admin.id)
-            # Make sure bug 5 starts unassigned for repeatability.
             b5 = db.get(models.Bug, 5)
             b5.assignees = []
             db.commit()
@@ -466,11 +465,10 @@ def test_create_bug_phrasings() -> None:
         check("create_bug: 3 bugs added",
               after - before == 3, f"delta={after - before}")
 
-        # Most recent created bug — verify project assignment took effect.
         latest = db.query(models.Bug).order_by(models.Bug.id.desc()).first()
         check("create_bug: title of latest is Cache miss C",
               "Cache miss C" in latest.title)
-        # The third one had no project — should fall back to the first project.
+        # No project was specified, so it should fall back to the first project.
         check("create_bug: latest reporter is admin",
               latest.reporter_id == admin.id)
     finally:
@@ -488,12 +486,11 @@ def test_pronoun_edges() -> None:
         admin = db.get(models.User, ids["admin"])
         memstore.reset(admin.id)
 
-        # No prior bug discussed → friendly error
+        # No prior context, so the pronoun can't be resolved.
         resp = executor.execute("close it", db, admin)
         check("pronoun: 'close it' with no context -> action_invalid",
               resp.intent == "action_invalid", f"got {resp.intent}")
 
-        # Discuss bug 3, then refer to "it"
         executor.execute("bug 3", db, admin)
         resp = executor.execute("comment on it: looks ok", db, admin)
         check("pronoun: 'comment on it' after viewing -> confirm",
@@ -503,7 +500,6 @@ def test_pronoun_edges() -> None:
         check("pronoun: comment was added to bug 3",
               any("looks ok" in c.body for c in comments))
 
-        # 'that bug'
         executor.execute("bug 6", db, admin)
         resp = executor.execute("close that bug", db, admin)
         check("pronoun: 'close that bug' staged",
@@ -527,7 +523,6 @@ def test_confirm_flow_edges() -> None:
         admin = db.get(models.User, ids["admin"])
         memstore.reset(admin.id)
 
-        # 'yes' aliases — confirm equivalents
         for word in ["yes", "yeah", "yep", "yup", "sure", "ok", "okay",
                      "confirm", "do it", "go ahead"]:
             memstore.reset(admin.id)
@@ -539,7 +534,6 @@ def test_confirm_flow_edges() -> None:
             check(f"confirm-yes alias: {word!r} -> action_done",
                   resp.intent == "action_done", f"got {resp.intent}")
 
-        # 'no' aliases
         for word in ["no", "nope", "cancel", "abort", "stop", "never mind",
                      "nvm"]:
             memstore.reset(admin.id)
@@ -551,7 +545,7 @@ def test_confirm_flow_edges() -> None:
             check(f"confirm-no alias: {word!r} -> cancel",
                   resp.intent == "confirm_cancel", f"got {resp.intent}")
 
-        # Double-yes (second one finds nothing pending)
+        # Second yes with nothing pending.
         memstore.reset(admin.id)
         b3 = db.get(models.Bug, 3)
         b3.status = "New"
@@ -562,7 +556,6 @@ def test_confirm_flow_edges() -> None:
         check("confirm: second 'yes' is confirm_idle",
               resp.intent == "confirm_idle", f"got {resp.intent}")
 
-        # 'no' with nothing pending
         memstore.reset(admin.id)
         resp = executor.execute("no", db, admin)
         check("confirm: 'no' with nothing pending -> friendly",
@@ -581,48 +574,39 @@ def test_http_edges() -> None:
     from app.main import app
     client = TestClient(app)
 
-    # Login
     r = client.post("/api/auth/login",
                     json={"email": "admin@example.com",
                           "password": "AdminPass123!"})
     check("http-edge: login", r.status_code == 200)
 
-    # Empty message
     r = client.post("/api/chat/ask", json={"message": ""})
     check("http-edge: empty message -> 422 (Pydantic min_length)",
           r.status_code in (422, 200), f"got {r.status_code}")
 
-    # Whitespace-only — should NOT crash
     r = client.post("/api/chat/ask", json={"message": "   \n\t  "})
     check("http-edge: whitespace-only message handled gracefully",
           r.status_code in (200, 422), f"got {r.status_code}")
 
-    # Missing message field
     r = client.post("/api/chat/ask", json={})
     check("http-edge: missing field -> 422",
           r.status_code == 422, f"got {r.status_code}")
 
-    # Null message
     r = client.post("/api/chat/ask", json={"message": None})
     check("http-edge: null message -> 422",
           r.status_code == 422, f"got {r.status_code}")
 
-    # Wrong type
     r = client.post("/api/chat/ask", json={"message": ["not", "a", "string"]})
     check("http-edge: wrong-type message -> 422",
           r.status_code == 422, f"got {r.status_code}")
 
-    # Long message at exact cap (2000)
     r = client.post("/api/chat/ask", json={"message": "a" * 2000})
     check("http-edge: 2000-char message accepted",
           r.status_code in (200, 422), f"got {r.status_code}")
 
-    # 2001 chars rejected
     r = client.post("/api/chat/ask", json={"message": "a" * 2001})
     check("http-edge: 2001-char message rejected",
           r.status_code == 422, f"got {r.status_code}")
 
-    # Unknown download token
     r = client.get("/api/chat/download/this-token-does-not-exist")
     check("http-edge: bad download token -> 404",
           r.status_code == 404, f"got {r.status_code}")
@@ -638,33 +622,26 @@ def test_full_conversation() -> None:
     try:
         admin = db.get(models.User, ids["admin"])
         memstore.reset(admin.id)
-        # Turn 1: user asks for context
         r1 = executor.execute("show critical bugs in production", db, admin)
         check("conv-1: returns table",
               any(b.kind == "table" for b in r1.blocks))
-        # Turn 2: drill into one
         r2 = executor.execute("bug 1", db, admin)
         check("conv-2: bug detail",
               r2.intent == "bug_detail", f"got {r2.intent}")
-        # Turn 3: take action via pronoun
         r3 = executor.execute("assign it to alice", db, admin)
         check("conv-3: assign-it staged",
               r3.intent == "confirm_action", f"got {r3.intent}")
-        # Turn 4: confirm
         r4 = executor.execute("yes", db, admin)
         check("conv-4: action done",
               r4.intent == "action_done", f"got {r4.intent}")
-        # Turn 5: comment via pronoun
         r5 = executor.execute("comment on it: assigned to alice now", db, admin)
         check("conv-5: comment staged",
               r5.intent == "confirm_action", f"got {r5.intent}")
         executor.execute("yes", db, admin)
-        # Turn 6: change priority
         r6 = executor.execute("set bug 1 priority to high", db, admin)
         check("conv-6: priority change staged",
               r6.intent == "confirm_action", f"got {r6.intent}")
         executor.execute("yes", db, admin)
-        # Verify final state
         db.expire_all()
         bug = db.get(models.Bug, 1)
         names = sorted(a.name for a in bug.assignees)

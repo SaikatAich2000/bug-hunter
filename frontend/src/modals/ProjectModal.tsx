@@ -1,9 +1,9 @@
 /**
- * Project create/edit modal.
+ * Create/edit modal for a project.
  *
- * Driven by `projectModal` in AppContext: `project == null` means create
- * (color defaults to #c9764f), otherwise edit. On success: close, reload
- * projects, refresh bugs/stats, toast.
+ * Driven by `projectModal` in AppContext. `project == null` → create mode
+ * (color defaults to #c9764f); otherwise edit mode. On success: close, reload
+ * projects, refresh bugs/stats, and show a toast.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -24,22 +24,21 @@ export default function ProjectModal() {
   const [description, setDescription] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Reset and prefill on every open, then focus the name input after the modal
-  // becomes visible.
+  // Prefill fields on open, then focus the name input once the modal is visible.
   useEffect(() => {
     if (!open) return;
     setName(project ? project.name : "");
-    // A native <input type="color"> coerces any non-#rrggbb value to #000000,
-    // and saving would then overwrite a legacy color the user never chose. Fall
-    // back to the default for display instead of silently blacking it out.
+    // <input type="color"> coerces any non-#rrggbb string to #000000, so a
+    // legacy color would silently become black on save. Fall back to the
+    // default instead.
     setColor(project && /^#[0-9a-fA-F]{6}$/.test(project.color) ? project.color : DEFAULT_COLOR);
     setDescription(project ? project.description : "");
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, project]);
 
-  // Fail-closed: only admins/managers may create/update projects, independent
-  // of whoever set the open state (backend uses require_manager_or_admin).
+  // Fail-closed: gate here in addition to the backend (require_manager_or_admin)
+  // so non-managers can never see the form regardless of who set open.
   if (!open || !canManage) return null;
 
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
@@ -58,8 +57,7 @@ export default function ProjectModal() {
           } else {
             await api("/projects", { method: "POST", json: payload });
           }
-          // Closing returns to whatever view the user was on — saving a
-          // project must not yank them to Work Items.
+          // Close before reloading so the user stays on their current view.
           closeProjectModal();
           await loadProjects();
           await refreshAll();

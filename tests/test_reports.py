@@ -1,18 +1,9 @@
 """Tests for the Reports feature.
 
-Covers:
-  - Auth: regular users get 403, managers + admins get 200, anon get 401
-  - Catalog: /types lists every known report and the filter vocab
-  - Filters: each filter independently shapes the result set
-  - Throughput: resolution events parsed from the activity_log mean a
-    bug "Resolved" by Alice in the window shows up under Alice
-  - Per-type "solved" map: Bug → Resolved/Closed; Requirement →
-    Implemented; Task → Done all count
-  - XLSX export: returns a valid openpyxl-readable workbook with the
-    expected sheets
-  - Sleuth: a manager asking "report of who solved how many bugs last
-    week" gets a report Response with a table block and a file block
-  - Legacy CSV: /api/bugs/export.csv no longer exists (returns 404)
+Covers auth gates (anon→401, user→403, manager/admin→200), the /types
+catalog, every filter type, throughput counts from activity_log, the
+per-type "solved" status map, XLSX export structure, Sleuth report
+intent, and the removed legacy CSV endpoint.
 """
 from __future__ import annotations
 
@@ -26,8 +17,7 @@ from openpyxl import load_workbook
 from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
 
 
-# Test-only credentials, packaged as tuples. The values are hermetic to the
-# temp SQLite DB the fixtures spin up.
+# Test-only credentials; hermetic to the temp SQLite DB the fixtures spin up.
 _MANAGER_LOGIN = ("mona@test.local", "Mana123456")
 _DEFAULT_USER_SECRET = ("UserPass99",)
 
@@ -37,7 +27,7 @@ _DEFAULT_USER_SECRET = ("UserPass99",)
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def manager_client(client):
-    """A TestClient logged in as a freshly-created manager user."""
+    """Return a TestClient logged in as a newly-created manager."""
     email, secret = _MANAGER_LOGIN
     res = client.post("/api/auth/login", json={
         "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD,
@@ -87,7 +77,7 @@ def _make_item(client, project_id, **extra):
 
 
 def _change_status(client, bug_id, new_status):
-    """PUT a status change so the activity log records who/when."""
+    """PUT a status change; the activity log records the actor and timestamp."""
     r = client.put(f"/api/bugs/{bug_id}", json={"status": new_status})
     assert r.status_code == 200, r.text
     return r.json()
@@ -124,7 +114,7 @@ def test_reports_admin_can_run(admin_client):
         "project_breakdown", "aging", "timeline", "time_to_resolution",
     }
     assert expected.issubset(keys), f"missing: {expected - keys}"
-    # Filter vocab is exposed for the frontend picker.
+    # Vocab is exposed so the frontend can populate filter pickers.
     v = catalog["vocab"]
     assert "Bug" in v["item_types"]
     assert "Critical" in v["priorities"]
@@ -154,8 +144,7 @@ def test_item_detail_returns_every_matching_item(admin_client):
     assert body["total"] == 3
     titles = {row["title"] for row in body["rows"]}
     assert {"alpha", "beta", "gamma"} == titles
-    # Every detail row carries the standard columns including the
-    # resolved/days_open computed fields.
+    # Check that the standard columns, including computed resolved/days_open, are present.
     keys = set(body["rows"][0].keys())
     for must in ("id", "item_type", "title", "project", "status",
                  "priority", "environment", "reporter_name",
@@ -226,12 +215,12 @@ def test_item_detail_text_search(admin_client):
 
 
 def test_item_detail_attribute_and_entity_filters(admin_client):
-    """Exercise the priority / environment / assignee / reporter / event /
-    date filter branches in one pass — each independently narrows the set."""
+    """Exercise priority, environment, assignee, reporter, event, and date
+    filters in one pass; each independently narrows the result set."""
     me = admin_client.get("/api/auth/me").json()
     p = _make_project(admin_client, name="FilterProj")
     ev = admin_client.post("/api/events", json={"name": "FilterEvent"}).json()
-    # Target item matches every filter; the decoy matches none of them.
+    # The target matches every filter; the decoy matches none.
     target = _make_item(
         admin_client, p["id"], title="filter-target",
         priority="Critical", environment="PROD",
@@ -263,10 +252,9 @@ def test_item_detail_attribute_and_entity_filters(admin_client):
 # Throughput — derived from activity_log
 # ---------------------------------------------------------------------------
 def test_throughput_counts_resolution_events_per_user(admin_client):
-    """The manager's first question: who solved how many last week."""
+    """Basic throughput check: admin resolves two items, both appear in the summary."""
     p = _make_project(admin_client)
-    # Make two bugs, both reported & resolved by admin (the only user in
-    # the system besides what we'll create below).
+    # Both bugs are reported and resolved by admin (the only user in scope).
     b1 = _make_item(admin_client, p["id"], title="resolvable-1")
     b2 = _make_item(admin_client, p["id"], title="resolvable-2")
     _change_status(admin_client, b1["id"], "Resolved")
@@ -277,9 +265,7 @@ def test_throughput_counts_resolution_events_per_user(admin_client):
     })
     assert r.status_code == 200
     body = r.json()
-    # Admin resolved 2 items.
     assert body["summary"]["total_resolved"] == 2
-    # The user row breakdown shows admin with 2 Bugs.
     admin_row = next(row for row in body["rows"] if row["user_name"] == "Test Admin")
     assert admin_row["resolved"] == 2
     assert admin_row["bugs"] == 2
@@ -287,19 +273,17 @@ def test_throughput_counts_resolution_events_per_user(admin_client):
 
 
 def test_throughput_respects_per_type_solved_map(admin_client):
-    """Bug→Resolved, Requirement→Implemented, Task→Done all count;
-    other transitions do not."""
+    """Bug→Resolved, Requirement→Implemented, and Task→Done all count;
+    other status transitions (e.g. "In Progress") do not."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], title="bug-x", item_type="Bug")
     req = _make_item(admin_client, p["id"], title="req-x", item_type="Requirement")
     task = _make_item(admin_client, p["id"], title="task-x", item_type="Task")
     other = _make_item(admin_client, p["id"], title="other", item_type="Bug")
-    # Resolve each in its canonical "done" status.
     _change_status(admin_client, bug["id"], "Resolved")
     _change_status(admin_client, req["id"], "Implemented")
     _change_status(admin_client, task["id"], "Done")
-    # "In Progress" should not count.
-    _change_status(admin_client, other["id"], "In Progress")
+    _change_status(admin_client, other["id"], "In Progress")  # must not count
     r = admin_client.post("/api/reports/run", json={
         "report_key": "throughput",
         "filters": {},
@@ -310,26 +294,23 @@ def test_throughput_respects_per_type_solved_map(admin_client):
     assert admin_row["bugs"] == 1
     assert admin_row["requirements"] == 1
     assert admin_row["tasks"] == 1
-    # Detail rows (per-item drill-down) carry one entry per resolution.
+    # Per-item drill-down has one entry per resolution event.
     assert body["has_detail"] is True
     assert body["detail_total"] == 3
 
 
 def test_throughput_filters_date_window(admin_client):
-    """The date_from/date_to window is applied to the activity_log
-    timestamp, not the bug.created_at — the manager's question is
-    "who resolved a bug last week", regardless of when the bug was
-    originally filed."""
+    """date_from/date_to filters on the activity_log timestamp, not created_at,
+    so "who resolved last week" works regardless of when the bug was filed."""
     p = _make_project(admin_client)
     b = _make_item(admin_client, p["id"], title="will-be-resolved")
     _change_status(admin_client, b["id"], "Resolved")
-    # Window in the far past → no rows.
     r = admin_client.post("/api/reports/run", json={
         "report_key": "throughput",
         "filters": {"date_from": "2000-01-01", "date_to": "2000-12-31"},
     })
     assert r.json()["summary"]["total_resolved"] == 0
-    # Open-ended window from today onward → the just-now resolution is included.
+    # Open-ended from today → the just-made resolution is included.
     today = datetime.now(timezone.utc).date().isoformat()
     r = admin_client.post("/api/reports/run", json={
         "report_key": "throughput",
@@ -401,7 +382,6 @@ def test_aging_orders_oldest_first(admin_client):
     })
     body = r.json()
     assert body["total"] == 2
-    # Every row carries an age bucket.
     for row in body["rows"]:
         assert "age_bucket" in row
 
@@ -420,16 +400,13 @@ def test_timeline_counts_created_and_resolved_per_day(admin_client):
     assert r.status_code == 200
     body = r.json()
     assert body["report_key"] == "timeline"
-    # Default window is the last 30 days → 30 daily rows.
+    # Default window is 30 days, so there are 30 daily rows.
     assert body["summary"]["window_days"] == len(body["rows"])
     assert body["summary"]["total_created"] == 2
     assert body["summary"]["total_resolved"] == 1
-    # net = created - resolved
-    assert body["summary"]["net"] == 1
-    # Every row carries the per-day shape.
+    assert body["summary"]["net"] == 1  # created - resolved
     for row in body["rows"]:
         assert set(row) >= {"date", "created", "resolved", "delta"}
-    # The day with activity reflects today's created count.
     today = datetime.now(timezone.utc).date().isoformat()
     today_row = next(row for row in body["rows"] if row["date"] == today)
     assert today_row["created"] == 2
@@ -457,7 +434,7 @@ def test_time_to_resolution_reports_resolved_items(admin_client):
     p = _make_project(admin_client)
     b1 = _make_item(admin_client, p["id"], title="ttr-1")
     b2 = _make_item(admin_client, p["id"], title="ttr-2")
-    # One still-open item must not appear.
+    # The open item must not appear in the result.
     _make_item(admin_client, p["id"], title="ttr-open")
     _change_status(admin_client, b1["id"], "Resolved")
     _change_status(admin_client, b2["id"], "Closed")
@@ -467,16 +444,14 @@ def test_time_to_resolution_reports_resolved_items(admin_client):
     assert r.status_code == 200
     body = r.json()
     assert body["report_key"] == "time_to_resolution"
-    # Two resolved items, the open one excluded.
     assert body["summary"]["count"] == 2
     assert body["total"] == 2
     titles = {row["title"] for row in body["rows"]}
     assert titles == {"ttr-1", "ttr-2"}
-    # Summary carries the aggregate stats keys.
     for k in ("average_hours", "median_hours", "p95_hours",
               "fastest_hours", "slowest_hours"):
         assert k in body["summary"]
-    # Each row has both hours and days fields, resolved just now → ~0.
+    # Resolved just now, so hours should be ~0 but never negative.
     for row in body["rows"]:
         assert row["hours_to_resolve"] >= 0
         assert "days_to_resolve" in row
@@ -537,15 +512,13 @@ def test_xlsx_export_returns_valid_workbook(admin_client):
     cd = r.headers.get("content-disposition", "")
     assert "report-item_detail" in cd
     wb = load_workbook(io.BytesIO(r.content), read_only=True)
-    # Filters Applied sheet must always be present.
     sheet_names = set(wb.sheetnames)
     assert "Filters Applied" in sheet_names
-    # The main sheet contains a banner + header + at least one data row.
-    # The main sheet title is the report's label (truncated to 31 chars).
+    # Main sheet: banner + header + at least one data row.
+    # Title is the report's label, truncated to Excel's 31-char sheet name limit.
     main_ws = wb[wb.sheetnames[0]]
     rows = list(main_ws.iter_rows(values_only=True))
     assert len(rows) >= 3, "expected banner + header + data row"
-    # Verify the run label propagated to the filters sheet.
     filters_ws = wb["Filters Applied"]
     text_dump = " ".join(
         str(v) for r in filters_ws.iter_rows(values_only=True) for v in r if v is not None
@@ -563,7 +536,7 @@ def test_xlsx_export_for_throughput_has_drilldown_sheet(admin_client):
     })
     assert r.status_code == 200
     wb = load_workbook(io.BytesIO(r.content), read_only=True)
-    # The Items drill-down sheet appears when result.detail_rows is non-empty.
+    # "Items" drill-down sheet is only written when detail_rows is non-empty.
     assert "Items" in wb.sheetnames
 
 
@@ -583,12 +556,11 @@ def test_sleuth_report_intent_returns_report_with_file(admin_client):
     kinds = [b["kind"] for b in body["blocks"]]
     assert "text" in kinds
     assert "table" in kinds
-    # A downloadable file block is present for the XLSX.
+    # One file block carries the XLSX download token.
     file_blocks = [b for b in body["blocks"] if b["kind"] == "file"]
     assert len(file_blocks) == 1, body
     token = file_blocks[0]["payload"]["download_token"]
     assert token and isinstance(token, str)
-    # Downloading the staged file works.
     r2 = admin_client.get(f"/api/chat/download/{token}")
     assert r2.status_code == 200
     assert r2.headers["content-type"].startswith("application/vnd.openxmlformats")
@@ -598,7 +570,7 @@ def test_sleuth_report_intent_forbidden_for_regular_user(user_client):
     r = user_client.post("/api/chat/ask", json={
         "message": "report of who resolved how many bugs last week",
     })
-    # Chat itself returns 200 — the response body indicates the refusal.
+    # The chat endpoint always returns 200; the refusal is in the body.
     assert r.status_code == 200
     body = r.json()
     assert body["intent"] == "report_forbidden"
@@ -609,13 +581,11 @@ def test_sleuth_report_intent_forbidden_for_regular_user(user_client):
 # ---------------------------------------------------------------------------
 def test_legacy_csv_endpoint_removed(admin_client):
     """The old /api/bugs/export.csv handler was removed in favour of the
-    Reports view + Sleuth report intent. After deletion, the path either
-    404s (no handler) or 422s (the catchall /api/bugs/{bug_id} route
-    tries to parse "export.csv" as an integer) — both are acceptable
-    proof the legacy export is gone."""
+    Reports view + Sleuth report intent. The path now 404s (no handler)
+    or 422s (the /api/bugs/{bug_id} catchall can't parse "export.csv" as
+    an integer) — either proves the legacy export is gone."""
     r = admin_client.get("/api/bugs/export.csv")
     assert r.status_code in (404, 422), r.text
-    # And the new XLSX export exists.
     r = admin_client.post("/api/reports/export.xlsx", json={
         "report_key": "item_detail", "filters": {},
     })

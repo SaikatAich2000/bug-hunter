@@ -1,4 +1,4 @@
-"""Tests asserting safe behavior for cache-control, session invalidation,
+"""Behavioral safety tests covering cache-control headers, session invalidation,
 attachment serving, search-wildcard escaping, reporter permissions, filter
 case-insensitivity, activity ordering, description updates, and input
 validation."""
@@ -11,8 +11,8 @@ from pathlib import Path
 
 def _make_user(c, name="Some User", email="user@x.com", role="user", password="TestUserPwd9X"):
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping tests keep exercising the flat "see everything" model.
+    # Tag the new user to every existing project so pre-scoping tests still
+    # exercise the flat "see everything" model.
     pids = [p["id"] for p in c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -59,10 +59,10 @@ class TestCacheControl:
         assert "no-store" in cc, f"/api/health missing no-store: {cc!r}"
 
     def test_static_assets_are_cached_long(self, client):
-        # Post React+TS migration the long-cached assets are Vite's
-        # content-hashed bundles under /static/assets/. Pull a real one out
-        # of the built index.html and assert the middleware applies the
-        # immutable 1-year cache to it (safe: the hash changes per deploy).
+        # After the React/TS migration, long-cached assets are Vite's
+        # content-hashed bundles under /static/assets/. Pull a real URL from
+        # the built index.html and verify the middleware applies an immutable
+        # 1-year cache (the hash changes on each deploy, so this is safe).
         index = (
             Path(__file__).resolve().parents[1] / "app" / "static" / "index.html"
         ).read_text(encoding="utf-8")
@@ -84,18 +84,17 @@ class TestCacheControl:
     def test_html_contains_asset_version_in_static_urls(self, client):
         r = client.get("/login.html")
         body = r.text
-        # The placeholder must be replaced — never delivered to the browser.
+        # The template placeholder must be substituted before the response goes out.
         assert "__ASSET_VERSION__" not in body, "asset version placeholder leaked into HTML"
-        # Cache-busting is now twofold: Vite content-hashes the JS/CSS bundle
-        # filenames (inherently versioned), and the brand favicon link still
-        # carries the server-substituted ?v= asset-version query. The favicon is
-        # the real Bug Hunter emblem (icon.png), not a generic favicon.png.
+        # Cache-busting is twofold: Vite content-hashes JS/CSS bundle filenames,
+        # and the brand favicon carries a server-substituted ?v= query string.
+        # The favicon is the real Bug Hunter icon (icon.png), not a generic favicon.png.
         assert "/static/assets/login-" in body, "hashed login bundle not referenced"
         assert "/static/icon.png?v=" in body, "favicon asset-version query missing"
 
     def test_html_url_changes_when_asset_version_changes(self, client):
-        # Request once, capture the URL hash; mutate app.state.asset_version
-        # and request again — the new HTML must reference the new version.
+        # Mutate asset_version between requests and confirm the HTML reflects
+        # the updated value each time.
         from app.main import app
         original_version = app.state.asset_version
         try:
@@ -115,33 +114,31 @@ class TestCacheControl:
 # ===========================================================================
 class TestSessionInvalidation:
     def test_password_change_invalidates_other_sessions(self, admin_client, client):
-        """Two devices logged into the same account. Device A changes
-        password → device B is logged out on its next request."""
-        # admin_client is "device A" (fixture-logged-in admin).
-        # Use a separate raw TestClient as "device B".
+        """Two devices share the same account. When device A changes the password,
+        device B must be kicked out on its next request."""
+        # admin_client acts as device A (the fixture-logged-in admin).
+        # Create a fresh TestClient for device B.
         from fastapi.testclient import TestClient
         from app.main import app
 
-        # device B logs in independently
         device_b = TestClient(app)
         r = device_b.post("/api/auth/login", json={
             "email": "admin@test.local", "password": "Admin1234",
         })
         assert r.status_code == 200
-        # Confirm B is logged in
         assert device_b.get("/api/auth/me").status_code == 200
 
-        # Device A changes the password
+        # Device A changes the password.
         r = admin_client.post("/api/auth/change-password", json={
             "current_password": "Admin1234",
             "new_password": "NewBetter999",
         })
         assert r.status_code == 204
 
-        # Device A must still be logged in (cookie was re-issued)
+        # Device A's cookie is re-issued, so it stays logged in.
         assert admin_client.get("/api/auth/me").status_code == 200
 
-        # Device B's old cookie must now be invalid
+        # Device B's old cookie must be invalid now.
         r = device_b.get("/api/auth/me")
         assert r.status_code == 401, \
             "session NOT invalidated for other devices on password change"
@@ -153,30 +150,28 @@ class TestSessionInvalidation:
         assert r.status_code == 400
 
     def test_password_change_with_empty_current_returns_422(self, admin_client):
-        """Empty current_password is now rejected by the schema validator
-        (min_length=1) — never reaches the bcrypt check."""
+        """An empty current_password is rejected by the schema (min_length=1)
+        before the request ever reaches the bcrypt check."""
         r = admin_client.post("/api/auth/change-password", json={
             "current_password": "", "new_password": "Whatever123",
         })
         assert r.status_code == 422
 
     def test_admin_password_reset_invalidates_target_user_sessions(self, admin_client):
-        """When an admin resets another user's password, that user's
-        existing sessions become invalid."""
+        """An admin resetting another user's password must invalidate that
+        user's existing sessions."""
         from fastapi.testclient import TestClient
         from app.main import app
         u = _make_user(admin_client, "Victim", "victim@x.com", password="OldPass11")
-        # Victim logs in
         victim = TestClient(app)
         r = victim.post("/api/auth/login", json={
             "email": "victim@x.com", "password": "OldPass11",
         })
         assert r.status_code == 200
         assert victim.get("/api/auth/me").status_code == 200
-        # Admin resets victim's password
+        # Admin resets victim's password.
         r = admin_client.put(f"/api/users/{u['id']}", json={"password": "NewPass22"})
         assert r.status_code == 200
-        # Victim's session should be dead
         assert victim.get("/api/auth/me").status_code == 401
 
     def test_admin_deactivation_invalidates_user_sessions(self, admin_client):
@@ -188,7 +183,7 @@ class TestSessionInvalidation:
             "email": "sleepy@x.com", "password": "ZzzPass11",
         })
         assert sleepy.get("/api/auth/me").status_code == 200
-        # Admin deactivates
+        # Deactivating the account must immediately invalidate the session.
         admin_client.put(f"/api/users/{u['id']}", json={"is_active": False})
         assert sleepy.get("/api/auth/me").status_code == 401
 
@@ -210,11 +205,9 @@ class TestAttachmentSafety:
         assert d.status_code == 200
         ct = d.headers.get("content-type", "")
         cd = d.headers.get("content-disposition", "")
-        # Must be downgraded to octet-stream
+        # Active content must be downgraded to octet-stream and forced to attachment.
         assert ct.startswith("application/octet-stream"), f"unsafe ct: {ct!r}"
-        # And forced to attachment disposition
         assert "attachment" in cd.lower(), f"not forced to attachment: {cd!r}"
-        # Defensive headers set
         assert d.headers.get("X-Content-Type-Options") == "nosniff"
         assert "default-src 'none'" in (d.headers.get("Content-Security-Policy") or "")
         assert d.headers.get("X-Frame-Options") == "DENY"
@@ -250,8 +243,8 @@ class TestAttachmentSafety:
     def test_safe_image_still_served_inline(self, admin_client):
         p = _make_project(admin_client, "ATX-4")
         bug = _make_bug(admin_client, p["id"])
-        # Tiny PNG header (8 bytes is enough for the test — validity as a PNG
-        # does not matter, only that the server respects the content-type).
+        # 8-byte PNG magic is enough here — we only care that the server
+        # preserves the content-type for non-active formats.
         png = b"\x89PNG\r\n\x1a\n"
         r = admin_client.post(
             f"/api/bugs/{bug['id']}/attachments",
@@ -259,7 +252,7 @@ class TestAttachmentSafety:
         )
         att_id = r.json()["id"]
         d = admin_client.get(f"/api/bugs/{bug['id']}/attachments/{att_id}/download")
-        # PNG is not active content — kept as-is, served inline.
+        # PNG is not active content, so the type is kept as-is and served inline.
         assert d.headers.get("content-type", "").startswith("image/png")
         assert "inline" in (d.headers.get("content-disposition") or "").lower()
 
@@ -277,9 +270,8 @@ class TestAttachmentSafety:
         d = admin_client.get(f"/api/bugs/{bug['id']}/attachments/{att_id}/download")
         assert d.status_code == 200
         cd = d.headers.get("content-disposition", "")
-        # No raw CR/LF/quote should leak through.
+        # CR, LF, and quotes must be stripped to prevent header injection.
         assert "\r" not in cd and "\n" not in cd
-        # No injected pseudo-header.
         assert d.headers.get("X-Evil") is None
 
     def test_download_advertises_accept_ranges(self, admin_client):
@@ -312,7 +304,7 @@ class TestAttachmentSafety:
         att_id = r.json()["id"]
         url = f"/api/bugs/{bug['id']}/attachments/{att_id}/download"
 
-        # Mid-file span.
+        # Mid-file range.
         d = admin_client.get(url, headers={"Range": "bytes=100-199"})
         assert d.status_code == 206
         assert d.headers.get("Content-Range") == f"bytes 100-199/{len(blob)}"
@@ -320,13 +312,13 @@ class TestAttachmentSafety:
         assert d.headers.get("Accept-Ranges") == "bytes"
         assert d.content == blob[100:200]
 
-        # Open-ended span (start to EOF).
+        # Open-ended range (start to EOF).
         d2 = admin_client.get(url, headers={"Range": "bytes=1000-"})
         assert d2.status_code == 206
         assert d2.headers.get("Content-Range") == f"bytes 1000-{len(blob) - 1}/{len(blob)}"
         assert d2.content == blob[1000:]
 
-        # Suffix span (last N bytes).
+        # Suffix range (last N bytes).
         d3 = admin_client.get(url, headers={"Range": "bytes=-50"})
         assert d3.status_code == 206
         assert d3.content == blob[-50:]
@@ -358,20 +350,20 @@ class TestLikeWildcardEscape:
     def test_user_search_with_percent_does_not_match_everyone(self, admin_client):
         _make_user(admin_client, "Alpha", "alpha@x.com")
         _make_user(admin_client, "Beta", "beta@x.com")
-        # No user has literal '%' in their name → result must be 0
+        # No user has a literal '%' in their name, so the result must be empty.
         r = admin_client.get("/api/users?q=%25")
         users = r.json()
         assert len(users) == 0, f"LIKE wildcard not escaped: q=% returned {len(users)} users"
 
     def test_user_search_with_underscore_does_not_match_everyone(self, admin_client):
         _make_user(admin_client, "ZetaName", "zeta@x.com")
-        # No user has literal '_' in their name → 0 results
+        # No user has a literal '_' in their name, so the result must be empty.
         r = admin_client.get("/api/users?q=_")
         users = r.json()
         assert len(users) == 0, f"LIKE wildcard not escaped: q=_ returned {len(users)} users"
 
     def test_user_search_with_literal_percent_in_name_works(self, admin_client):
-        # If a name actually contains '%', searching for it should find it
+        # A name that actually contains '%' should be findable by exact search.
         _make_user(admin_client, "100% Smith", "p1@x.com")
         _make_user(admin_client, "Plain Doe", "p2@x.com")
         r = admin_client.get("/api/users?q=%25")  # %25 = literal '%'
@@ -396,15 +388,15 @@ class TestReporterPermissionFix:
         p = _make_project(admin_client, "RP-1")
         owner = _make_user(admin_client, "Owner", "owner@x.com", password="TestUserPwd9X")
         bug = _make_bug(admin_client, p["id"], reporter_id=owner["id"])
-        # Owner logs in and edits the bug (mimics SPA behavior — payload
-        # always includes reporter_id from the form).
+        # The SPA always sends reporter_id back in the payload; the owner
+        # updating their own bug with the same reporter_id must be allowed.
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
             "email": "owner@x.com", "password": "TestUserPwd9X",
         })
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={
             "title": "Owner edits their own bug now",
-            "reporter_id": owner["id"],   # same as before — must be allowed
+            "reporter_id": owner["id"],   # unchanged reporter — must be allowed
             "priority": "High",
         })
         assert r.status_code == 200, r.text
@@ -497,7 +489,7 @@ class TestSearchWhitespace:
     def test_search_strips_whitespace(self, admin_client):
         p = _make_project(admin_client, "SW-1")
         _make_bug(admin_client, p["id"], title="findable thing here")
-        # Padded query — must still find it
+        # Leading/trailing whitespace should be stripped before the search.
         r = admin_client.get("/api/bugs?q=  findable  ")
         items = r.json()["items"]
         assert any("findable" in b["title"] for b in items)
@@ -536,10 +528,9 @@ class TestResetTokenInvalidation:
             "current_password": "Admin1234", "new_password": "Whatever123",
         })
         assert r.status_code == 204
-        # Audit row for password_changed should mention invalidation
         rows = admin_client.get("/api/audit?q=password_changed").json()
         assert rows, "no password_changed audit row"
-        # The most recent password_changed row should mention reset link.
+        # The audit detail should confirm that outstanding reset links were invalidated.
         recent = [r for r in rows if r["action"] == "password_changed"]
         assert recent
         assert "reset link" in recent[0]["detail"].lower() or \

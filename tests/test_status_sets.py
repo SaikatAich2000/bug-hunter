@@ -1,24 +1,22 @@
 """Tests for per-item-type status sets and admin-only comment/attachment edits.
 
-  1. Per-item-type status sets — "Not a Bug" / "Resolved" only on Bug;
-     "Approved" / "Implemented" only on Requirement; "Done" / "Blocked"
-     / "Cancelled" only on Task; "New" shared by every type.
-  2. Comments — edit + delete admin-only (creation still open).
-  3. Attachments — delete admin-only (upload still open to anyone
-     who can edit the bug, including post-creation).
+Covers:
+  1. Status sets scoped by item type ("Not a Bug"/"Resolved" for Bug,
+     "Approved"/"Implemented" for Requirement, "Done"/"Blocked"/"Cancelled"
+     for Task, "New" shared by all).
+  2. Comments: edit and delete are admin-only; creation is open to everyone.
+  3. Attachments: delete is admin-only; upload remains open post-creation.
   4. /api/meta exposes statuses_by_type for the frontend.
 
-These behaviors are enforced server-side (the SPA mirrors them but the
-authoritative check is here).
+All checks are server-side; the SPA mirrors these rules but is not the
+authoritative source.
 """
 from __future__ import annotations
 
 import io
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# Shared helpers
 def _login(client, email, password):
     client.post("/api/auth/logout")
     r = client.post("/api/auth/login", json={"email": email, "password": password})
@@ -28,8 +26,8 @@ def _login(client, email, password):
 def _make_user(client, name, role="user", email=None, password="User12345Aa"):
     email = email or f"{name.lower()}@x.test"
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping tests keep exercising the flat "see everything" model.
+    # Tag the user into every existing project so tests that predate per-project
+    # scoping continue to see all items.
     pids = [p["id"] for p in client.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -58,9 +56,7 @@ def _make_item(client, project_id, item_type="Bug", **extra):
     return r.json()
 
 
-# ---------------------------------------------------------------------------
 # 1. Per-item-type status sets
-# ---------------------------------------------------------------------------
 def test_status_new_is_shared_by_every_type(admin_client):
     p = _make_project(admin_client)
     for itype in ("Bug", "Requirement", "Task"):
@@ -84,7 +80,7 @@ def test_task_cannot_be_created_with_not_a_bug_status(admin_client):
         "priority": "Medium", "environment": "DEV", "status": "Not a Bug",
     })
     assert r.status_code == 422, r.text
-    # Pydantic error mentions the disallowed status + the valid set.
+    # The validation error should name the bad status and the item type.
     body = r.json()
     msgs = [d.get("msg", "") for d in body.get("detail", [])]
     joined = " ".join(msgs).lower()
@@ -125,16 +121,14 @@ def test_requirement_can_use_approved_status(admin_client):
 
 
 def test_changing_type_validates_status_against_new_type(admin_client):
-    """If a bug is currently 'Not a Bug' and a single PUT tries to flip it
-    to a Task, the request must fail because a Task can't carry that status.
-    (Flipping the type without changing the status is a bug-data scenario the
-    server tolerates; this asserts the explicit reject path.)"""
+    """A PUT that changes item_type must also validate the status against the
+    new type. If the combination is invalid the server rejects the whole
+    request (400)."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Not a Bug"})
     assert r.status_code == 200
-    # Flip the type to Task while resetting status to something invalid
-    # for Task → reject.
+    # Flip to Task while keeping a Bug-only status — must be rejected.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={
         "item_type": "Task", "status": "Resolved",
     })
@@ -148,7 +142,7 @@ def test_meta_endpoint_exposes_statuses_by_type(admin_client):
     assert "statuses_by_type" in body
     sbt = body["statuses_by_type"]
     assert "Bug" in sbt and "Requirement" in sbt and "Task" in sbt
-    # Spec invariants.
+    # Verify the key membership rules.
     assert "New" in sbt["Bug"]
     assert "New" in sbt["Requirement"]
     assert "New" in sbt["Task"]
@@ -161,23 +155,19 @@ def test_meta_endpoint_exposes_statuses_by_type(admin_client):
     assert "Approved" not in sbt["Task"]
 
 
-# ---------------------------------------------------------------------------
 # 2. Comments — admin-only edit + delete
-# ---------------------------------------------------------------------------
 def test_comment_delete_is_admin_only(admin_client):
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
-    # Manager creates a comment.
     _make_user(admin_client, "Mgr", role="manager")
     _login(admin_client, "mgr@x.test", "User12345Aa")
     r = admin_client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "from manager"})
     assert r.status_code == 201, r.text
     cid = r.json()["id"]
-    # Manager tries to delete their own comment → 403.
+    # Manager trying to delete their own comment should be refused.
     r = admin_client.delete(f"/api/bugs/{bug['id']}/comments/{cid}")
     assert r.status_code == 403
     assert "admin" in r.json()["detail"].lower()
-    # Admin can delete.
     _login(admin_client, "admin@test.local", "Admin1234")
     r = admin_client.delete(f"/api/bugs/{bug['id']}/comments/{cid}")
     assert r.status_code == 200
@@ -186,17 +176,15 @@ def test_comment_delete_is_admin_only(admin_client):
 def test_comment_edit_is_admin_only(admin_client):
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
-    # Regular user files a comment.
     _make_user(admin_client, "User1", role="user", email="user1@x.test")
     _login(admin_client, "user1@x.test", "User12345Aa")
     r = admin_client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "original body"})
     assert r.status_code == 201, r.text
     cid = r.json()["id"]
-    # The author tries to edit → 403.
+    # Author trying to edit their own comment should be refused.
     r = admin_client.put(f"/api/bugs/{bug['id']}/comments/{cid}", json={"body": "edited"})
     assert r.status_code == 403
     assert "admin" in r.json()["detail"].lower()
-    # Admin can edit and the body changes.
     _login(admin_client, "admin@test.local", "Admin1234")
     r = admin_client.put(f"/api/bugs/{bug['id']}/comments/{cid}", json={"body": "edited by admin"})
     assert r.status_code == 200
@@ -204,8 +192,8 @@ def test_comment_edit_is_admin_only(admin_client):
 
 
 def test_comment_creation_still_open_for_everyone(admin_client):
-    """Only edit + delete are restricted — creating comments must still
-    work for anyone authenticated, otherwise users can't add evidence."""
+    """Comment creation must remain open to any authenticated user.
+    Only edit and delete are restricted to admins."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     _make_user(admin_client, "User2", role="user", email="user2@x.test")
@@ -214,9 +202,7 @@ def test_comment_creation_still_open_for_everyone(admin_client):
     assert r.status_code == 201
 
 
-# ---------------------------------------------------------------------------
 # 3. Attachments — admin-only delete, upload still open
-# ---------------------------------------------------------------------------
 def test_attachment_delete_is_admin_only(admin_client):
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -224,26 +210,25 @@ def test_attachment_delete_is_admin_only(admin_client):
     r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
     assert r.status_code == 201
     att_id = r.json()["id"]
-    # Manager can't delete (used to be allowed).
+    # Managers were previously allowed to delete; that permission was removed.
     _make_user(admin_client, "Mgr2", role="manager", email="mgr2@x.test")
     _login(admin_client, "mgr2@x.test", "User12345Aa")
     r = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
     assert r.status_code == 403
     assert "admin" in r.json()["detail"].lower()
-    # Admin can.
     _login(admin_client, "admin@test.local", "Admin1234")
     r = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
     assert r.status_code == 200
 
 
 def test_attachment_upload_open_post_creation(admin_client):
-    """Users can still attach evidence after a bug is filed — the
-    restriction only applies to delete."""
+    """Uploading attachments after a bug is created must be open to all users;
+    the admin restriction covers delete only."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     _make_user(admin_client, "User3", role="user", email="user3@x.test")
     _login(admin_client, "user3@x.test", "User12345Aa")
-    # Bug-level upload after the bug exists.
+    # Upload after creation.
     files = {"file": ("evidence.txt", io.BytesIO(b"after creation"), "text/plain")}
     r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
     assert r.status_code == 201
@@ -251,11 +236,10 @@ def test_attachment_upload_open_post_creation(admin_client):
 
 
 def test_comment_attachment_delete_is_admin_only(admin_client):
-    """Attachments on a comment also drop into the admin-only delete
-    rule (the route is the same DELETE /attachments/{id} endpoint)."""
+    """Attachments on comments use the same DELETE endpoint and are subject
+    to the same admin-only rule as bug-level attachments."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
-    # User adds a comment with an attachment.
     _make_user(admin_client, "User4", role="user", email="user4@x.test")
     _login(admin_client, "user4@x.test", "User12345Aa")
     r = admin_client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "see file"})
@@ -268,17 +252,15 @@ def test_comment_attachment_delete_is_admin_only(admin_client):
     )
     assert r.status_code == 201
     att_id = r.json()["id"]
-    # Author CAN'T delete their own attachment.
     r = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
     assert r.status_code == 403
-    # Admin can.
     _login(admin_client, "admin@test.local", "Admin1234")
     r = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")
     assert r.status_code == 200
 
 
 def test_audit_log_records_admin_comment_actions(admin_client):
-    """Admin edit + delete of comments should be auditable."""
+    """Admin edits and deletes of comments must appear in the audit log."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     r = admin_client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "initial"})
@@ -287,7 +269,6 @@ def test_audit_log_records_admin_comment_actions(admin_client):
     assert r.status_code == 200
     r = admin_client.delete(f"/api/bugs/{bug['id']}/comments/{cid}")
     assert r.status_code == 200
-    # Audit feed should contain both rows.
     r = admin_client.get("/api/audit?entity_type=comment&limit=50")
     assert r.status_code == 200
     actions = {row["action"] for row in r.json()}

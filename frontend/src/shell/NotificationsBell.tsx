@@ -1,17 +1,16 @@
 /**
- * NotificationsBell — the top-bar bell + unread badge + dropdown panel.
+ * Top-bar bell with unread badge and dropdown panel.
  *
- * Per-user only: every row comes from GET /api/notifications, which is scoped
- * to the current session's user server-side (no cross-user leak). The badge
- * count rides on the AppContext session poll; opening the panel pulls a fresh
- * list. Clicking a row marks it read and deep-links to the linked bug/event.
+ * Badge count comes from the AppContext session poll. Opening the panel
+ * fetches a fresh list; clicking a row marks it read and navigates to the
+ * linked item.
  */
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { timeAgo } from "../lib/format";
 import type { NotificationKind, NotificationOut } from "../types";
 
-/** Emoji glyph per notification kind (chrome-only; not a brand mark). */
+/** Emoji per notification kind. */
 const KIND_ICON: Record<NotificationKind, string> = {
   assigned: "🎯",
   reported: "📌",
@@ -33,22 +32,19 @@ export default function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Pull a fresh list each time the panel opens.
+  // Fetch on open.
   useEffect(() => {
     if (open) void loadNotifications();
   }, [open, loadNotifications]);
 
-  // While the panel is open, re-fetch the list every 15s (matching the badge
-  // cadence) so new notifications appear without reopening. Only runs while
-  // open; the open-load effect already does the first fetch. Skips when the
-  // tab is hidden.
+  // Poll every 15 s while the panel is open; skip when the tab is hidden.
   useEffect(() => {
     if (!open) return;
     const id = setInterval(() => { if (!document.hidden) void loadNotifications(); }, 15_000);
     return () => clearInterval(id);
   }, [open, loadNotifications]);
 
-  // Close on outside click or Escape.
+  // Dismiss on outside click or Escape.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {

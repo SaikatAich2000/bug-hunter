@@ -1,19 +1,12 @@
-"""Bug Hunter reporting engine.
+"""Reporting engine for Bug Hunter.
 
-Single source of truth for every report the system can produce. The same
-engine powers:
+Powers both the REST API (/api/reports/*) and the Sleuth chatbot's report
+intent, so the UI and the chatbot always return the same numbers.
 
-  - The REST API at /api/reports/*  (driven by the Reports sidebar view).
-  - The Sleuth chatbot's "report" intent (natural-language to the same reports).
-
-Both callers share one engine so the UI and the chatbot return identical
-numbers for the same query.
-
-What lives here:
-  catalog.py  — the registry of report types + their default filters.
-  engine.py   — Filters dataclass + run_report() dispatcher + every
-                per-report query implementation.
-  xlsx.py     — multi-sheet workbook writer shared by both callers.
+Modules:
+  catalog.py  registry of report types and their default filters
+  engine.py   Filters dataclass, run_report() dispatcher, per-report queries
+  xlsx.py     multi-sheet workbook writer used by both callers
 """
 from __future__ import annotations
 

@@ -19,15 +19,15 @@ from app.schemas import ActivityOut
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
-# Largest value a 32-bit signed PK column (entity_id / bug_id) can hold. A
-# longer digit run in the search box would overflow int4 and raise a DataError
-# (500) on Postgres, so we only do an exact-id compare at or below it.
+# Upper bound for int4 PKs. A longer digit string in the search box would
+# overflow entity_id / bug_id on Postgres and cause a 500, so exact-id
+# comparison is skipped for values above this.
 _MAX_PK_INT = 2**31 - 1
 
 
 def _like_escape(needle: str) -> str:
-    """Escape SQL LIKE wildcards so a query containing literal '%' or '_'
-    matches those characters exactly instead of acting as wildcards."""
+    """Escape SQL LIKE special characters so literal '%' and '_' in user input
+    are treated as plain characters, not wildcards."""
     return (
         needle.replace("\\", "\\\\")
               .replace("%", "\\%")
@@ -36,15 +36,12 @@ def _like_escape(needle: str) -> str:
 
 
 def _scope_to_projects(stmt, accessible):
-    """Restrict the audit trail to a manager's projects.
+    """Filter audit rows to a manager's assigned projects.
 
-    A restricted manager sees only rows about a bug in one of their projects, or
-    an event in one of their projects. Admins (``accessible is None``) are
-    unrestricted; an untagged manager (empty set) matches nothing. Rows that
-    can't be tied to a project — system events, or bug/event rows detached on
-    deletion (bug_id NULL / the entity gone) — are not shown to a restricted
-    manager, only to admins. Aliased subqueries so this composes cleanly with
-    the optional OUTER JOIN on bugs the text search adds."""
+    Admins pass ``accessible=None`` and see everything. Managers see only rows
+    tied to a bug or event in their project set; system/orphaned rows are hidden
+    from them. Aliased subqueries keep this composable with the optional OUTER
+    JOIN on bugs that the text-search path adds."""
     if accessible is None:
         return stmt
     sbug = aliased(Bug)
@@ -65,27 +62,23 @@ def list_audit(
     entity_type: Optional[str] = None,
     actor_user_id: Optional[int] = None,
     q: Optional[str] = Query(default=None, max_length=200),
-    # Ceiling of 10000 bounds the response size; the SPA requests 5000 by
-    # default and offers a "Load more" control for older activity.
+    # The SPA defaults to 5000 and shows a "Load more" control for older rows.
     limit: int = Query(default=5000, le=10000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ) -> list[Activity]:
-    """Return audit events filtered by entity, actor and a free-text search.
+    """Return audit events, optionally filtered by entity type, actor, or a free-text query.
 
-    The search query (`q`) is matched broadly: bug numbers (`#42` / `42` /
-    `bug 42`), user names, item titles, actions, entity types, and item types
-    are all ORed together rather than parsed into a structured form.
+    The search (`q`) matches broadly across actions, details, actor names, entity
+    types, bug titles, and item types. Bug numbers are detected by extracting any
+    digit run, so ``#42``, ``bug 42``, and plain ``42`` all hit the same row.
 
-    A text search needs the current bug title, supplied by an OUTER JOIN on
-    bugs that is added only when `q` is present, so plain paginated browsing
-    doesn't pay for it. The join is OUTER because most audit rows aren't
-    bug-related and bug-related rows may have been detached (bug_id NULL) on
-    bug delete; those rows still carry the original title in `detail`."""
+    The OUTER JOIN on bugs is deferred until `q` is present to keep plain
+    paginated browsing cheap. The join is outer because most audit rows have no
+    bug, and deleted bugs leave ``bug_id`` NULL while the original title persists
+    in ``detail``."""
     stmt = select(Activity)
-    # Project scope: a manager only sees audit entries for their projects; an
-    # admin is unrestricted. Applied before the optional text-search join below.
     stmt = _scope_to_projects(stmt, accessible_project_ids(db, user))
     if entity_type:
         stmt = stmt.where(Activity.entity_type == entity_type)
@@ -100,31 +93,23 @@ def list_audit(
             Activity.detail.ilike(like, escape="\\"),
             Activity.actor_name.ilike(like, escape="\\"),
             Activity.entity_type.ilike(like, escape="\\"),
-            # Search the current bug title for rows still attached to a
-            # live bug. Without this, renaming a bug after audit rows
-            # were written would make the old detail strings the only
-            # title users could search for.
+            # Current bug title — lets users search by the live title even
+            # after a rename changed what the old detail strings say.
             Bug.title.ilike(like, escape="\\"),
-            # Item type ("task", "requirement", "bug") for the joined bug
-            # so typing the type word filters down to that flavor of item.
+            # Item type ("task", "requirement", "bug") so filtering by type word works.
             Bug.item_type.ilike(like, escape="\\"),
         ]
-        # Numeric IDs: extract the digit run so "#42", "bug 42" and
-        # "ticket #42" all search for entity_id = 42. A cast(entity_id) LIKE
-        # clause is ORed in so partial-id searches ("4" -> 4, 40, 41, 422) work.
+        # Pull the digit run so "#42", "bug 42", and "ticket #42" all resolve
+        # to entity_id = 42. A substring LIKE on the cast column also handles
+        # partial matches ("4" finds 4, 40, 41, ...).
         digits_match = re.search(r"\d+", raw)
         if digits_match:
             digits = digits_match.group(0)
-            # Exact-id compare only for values that fit int4 — a longer run
-            # would overflow the entity_id / bug_id column and 500 on Postgres.
-            # The substring LIKE below still searches a long/partial id as text.
+            # Skip the exact-int compare for values that would overflow int4.
             if int(digits) <= _MAX_PK_INT:
                 entity_id_val = int(digits)
                 clauses.append(Activity.entity_id == entity_id_val)
-                # Also catch rows still attached to the bug via bug_id.
                 clauses.append(Activity.bug_id == entity_id_val)
-            # Substring match on the entity_id column as text, so typing "4"
-            # finds ids 4, 40, 41, and so on.
             digit_like = f"%{_like_escape(digits)}%"
             clauses.append(cast(Activity.entity_id, String).ilike(digit_like, escape="\\"))
         stmt = stmt.where(or_(*clauses))

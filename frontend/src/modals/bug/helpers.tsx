@@ -1,22 +1,20 @@
 /**
- * Shared building blocks for the bug list and unified bug modal: item-type
- * emoji, permission/meta lookups, the activity icon + row, the attachment
- * card, and attachment staging (useStagedFiles + StagedTile).
+ * Shared helpers for the bug list and bug modal: item-type emoji,
+ * permission/meta lookups, activity row, attachment card, and attachment
+ * staging (useStagedFiles + StagedTile).
  *
- * Class names and data-attributes match the markup that styles.css keys off.
+ * Class names and data-attributes match styles.css selectors.
  */
 import { useCallback, useState, type ReactNode } from "react";
 import { activityIcon, fileIcon, formatBytes, formatDate } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { partitionBySize } from "../../lib/upload";
 
-// Executable / script extensions blocked client-side as UX (the server also
-// rejects them — this just gives immediate feedback). Mirrors the backend
-// _DANGEROUS_UPLOAD_EXTS denylist. Trailing dots/spaces are stripped first so
-// "evil.exe." can't slip past.
+// Blocked client-side for immediate UX feedback; the server also rejects these.
+// Mirrors backend _DANGEROUS_UPLOAD_EXTS. Trailing dots/spaces are stripped
+// first to prevent tricks like "evil.exe.".
 const _DANGEROUS_EXTS = new Set([
-  // .js intentionally allowed (legit source; neutralized at download). Mirrors
-  // the backend _DANGEROUS_UPLOAD_EXTS denylist.
+  // .js is intentionally allowed (legitimate source files; neutralized on download).
   "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "hta", "jar",
   "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "psm1", "sh", "bash",
   "app", "dmg", "pkg", "deb", "rpm", "apk", "msc", "reg", "lnk", "gadget",
@@ -30,7 +28,7 @@ function isDangerousFile(name: string): boolean {
   return _DANGEROUS_EXTS.has(cleaned.slice(dot + 1).trim().toLowerCase());
 }
 
-// Re-exported from lib/format so existing importers of this module keep working.
+// Re-exported so existing importers of this module don't break.
 export { activityIcon };
 import VideoLightbox from "../../components/VideoLightbox";
 import type { ActivityOut, AttachmentOut, MetaOut } from "../../types";
@@ -53,10 +51,7 @@ export function itemTypeEmoji(t: string): string {
 // Permissions / meta lookups
 // ---------------------------------------------------------------------------
 
-/**
- * Mirror of the backend can_edit_bug rule. Regular users can edit Bugs; Tasks
- * and Requirements require manager/admin.
- */
+/** Mirrors the backend can_edit_bug rule. Tasks and Requirements require manager/admin. */
 export function canEditItemType(role: string, itemType: string | null | undefined): boolean {
   if (role === "admin" || role === "manager") return true;
   return (itemType || "Bug") === "Bug";
@@ -122,12 +117,11 @@ interface AttachmentCardProps {
 export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<AttachmentCardProps>) {
   const url = `/api/bugs/${bugId}/attachments/${att.id}/download`;
   const ct = (att.content_type || "").toLowerCase();
-  // Inline rendering is safe for raster images and video. SVG can carry
-  // inline JS (server downgrades it on download) so it gets the file icon.
+  // SVG can carry inline JS (server downgrades it on download), so it gets the
+  // file icon instead of inline rendering.
   const isRasterImg = ct.startsWith("image/") && ct !== "image/svg+xml";
   const isVideo = ct.startsWith("video/");
-  // Video plays in the themed lightbox (so "View" never falls back to the
-  // browser's native player), opened from the thumbnail or the View action.
+  // Video opens in the themed lightbox rather than the browser's native player.
   const [videoOpen, setVideoOpen] = useState(false);
   const openVideo = useCallback(() => setVideoOpen(true), []);
 
@@ -139,8 +133,7 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<Att
       </a>
     );
   } else if (isVideo) {
-    // Compact poster (the #t=0.1 fragment makes the browser paint the first
-    // frame) + a play badge; clicking opens the full player in the lightbox.
+    // #t=0.1 forces the browser to paint the first frame as a poster.
     preview = (
       <button
         type="button"
@@ -213,9 +206,9 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<Att
 // ---------------------------------------------------------------------------
 // Attachment staging
 //
-// `input.files` is a read-only FileList, so staged selections are copied into
-// a plain array (with a blob URL each for the preview tile). Buckets are
-// React state owned by the bug modal: createBug / comment / bugAttach.
+// FileList is read-only, so selections are copied into a plain array with a
+// blob URL per file for preview. Buckets are React state owned by the modal
+// (createBug / comment / bugAttach).
 // ---------------------------------------------------------------------------
 
 export interface StagedFile {
@@ -226,7 +219,7 @@ export interface StagedFile {
 
 export interface StagedBucket {
   files: StagedFile[];
-  /** Add to (not replace) the bucket so files can be picked in batches. */
+  /** Appends to the bucket; does not replace existing files. */
   addFiles: (files: File[] | FileList) => void;
   removeAt: (idx: number) => void;
   clear: () => void;
@@ -238,10 +231,9 @@ export function useStagedFiles(): StagedBucket {
   const addFiles = useCallback((fs: File[] | FileList) => {
     const list = Array.from(fs);
     if (!list.length) return;
-    // Stop files that are over the size limit before any upload starts.
     const { allowed: sized, tooLargeMessage } = partitionBySize(list);
     if (tooLargeMessage) toast(tooLargeMessage, "error");
-    // Drop executable/script files (the server rejects them too); say which.
+    // Drop dangerous extensions and name the blocked files in the toast.
     const blocked = sized.filter((f) => isDangerousFile(f.name));
     const allowed = sized.filter((f) => !isDangerousFile(f.name));
     if (blocked.length) {
@@ -293,8 +285,7 @@ interface StagedTileProps {
 
 /** One pending-upload preview tile. */
 export function StagedTile({ staged, bucket, idx, onRemove }: Readonly<StagedTileProps>) {
-  // If the blob URL can't render as a real image, swap to the generic file
-  // icon so the row stays readable.
+  // Fall back to the file icon if the blob URL fails to render.
   const [broken, setBroken] = useState(false);
   const f = staged.file;
   const wasImage = (f.type || "").startsWith("image/");

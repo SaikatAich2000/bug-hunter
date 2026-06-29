@@ -1,12 +1,8 @@
-"""Tests exercising specific edge-case lines and branches across several
-modules that the rest of the suite does not reach.
+"""Edge-case branch coverage for modules not reached by the main suite.
 
-Test discipline (see conftest.py):
-  * The ``client`` fixture purges every ``app.*`` module between tests to rebind
-    the engine. Unit tests that monkeypatch app modules therefore import them
-    fresh inside the test/fixture, and the seeded DB is the executor's DB.
-  * Integration tests use the conftest ``client`` / ``admin_client`` /
-    ``user_client`` fixtures.
+Imports happen inside each test so the client fixture's module-purge/rebind
+cycle is respected. Integration tests use the conftest client/admin_client
+fixtures.
 """
 from __future__ import annotations
 
@@ -23,15 +19,15 @@ from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
 # app/schemas.py — HTML sanitizer + bulk-action dedup validator edge cases
 # ===========================================================================
 def test_schema_sanitize_rejects_svg_data_url():
-    # data:image/svg+xml is scriptable and must not survive sanitization.
+    # data:image/svg+xml is scriptable; the src must be dropped entirely.
     from app.schemas import sanitize_html
     out = sanitize_html('<img src="data:image/svg+xml,<script>alert(1)</script>">')
     assert "svg+xml" not in out  # src was dropped (no clean URL)
 
 
 def test_schema_sanitize_drops_unlisted_tag():
-    # A start tag outside the allowlist (and not RCDATA) is dropped, but its
-    # text survives. <marquee> is neither allowed nor RCDATA.
+    # Tags outside the allowlist are dropped but their text content survives.
+    # <marquee> is neither in the allowlist nor an RCDATA element.
     from app.schemas import sanitize_html
     out = sanitize_html("<marquee>hello</marquee>")
     assert "<marquee" not in out
@@ -39,9 +35,8 @@ def test_schema_sanitize_drops_unlisted_tag():
 
 
 def test_schema_sanitize_self_closing_rcdata_does_not_stick():
-    # A self-closing RCDATA tag (<script/>) opens and closes in one token; the
-    # startendtag handler must early-return so suppression depth doesn't get
-    # stuck on and swallow the trailing text.
+    # <script/> is self-closing; the startendtag handler must early-return so
+    # suppression depth doesn't get stuck and swallow subsequent text.
     from app.schemas import sanitize_html
     out = sanitize_html("<script/>after")
     assert "after" in out
@@ -49,7 +44,7 @@ def test_schema_sanitize_self_closing_rcdata_does_not_stick():
 
 
 def test_bulk_action_dedup_skips_duplicate_id():
-    # The dedup loop skips an id already seen, preserving first-seen order.
+    # Dedup preserves first-seen order.
     from app.schemas import BulkActionIn
     ba = BulkActionIn(action="delete", ids=[5, 5, 7, 5])
     assert ba.ids == [5, 7]
@@ -63,8 +58,7 @@ def _now():
 
 
 def test_nlu_coerce_bug_id_rejects_non_int_and_out_of_range():
-    # A non-integer, an over-range value, and a non-positive value all coerce
-    # to None; a valid id is returned as an int.
+    # Non-integer, over-range, and non-positive values all coerce to None.
     from app.chatbot.nlu import _coerce_bug_id, _MAX_BUG_ID
     assert _coerce_bug_id("not-a-number") is None
     assert _coerce_bug_id(str(_MAX_BUG_ID + 1)) is None  # over range
@@ -73,9 +67,8 @@ def test_nlu_coerce_bug_id_rejects_non_int_and_out_of_range():
 
 
 def test_nlu_extract_bug_id_skips_out_of_range_matches():
-    # _BUG_ID_RE matches "bug <huge>" but _coerce_bug_id returns None, so it
-    # skips to the bare-id hint; that also coerces to None, so it falls through
-    # to the whole-message-digits check.
+    # _BUG_ID_RE matches "bug <huge>" but _coerce_bug_id returns None, so
+    # extraction falls through all three candidate paths and returns None.
     from app.chatbot.nlu import _extract_bug_id, _MAX_BUG_ID
     over = str(_MAX_BUG_ID + 5)
     # "bug <over>" and a bare "#<over>" both fail to coerce; the trailing word
@@ -84,44 +77,38 @@ def test_nlu_extract_bug_id_skips_out_of_range_matches():
 
 
 def test_nlu_time_window_tolerates_internal_whitespace():
-    # A named window matched with irregular internal whitespace ("this  week")
-    # is normalized before the exact-equality lookup, so the time filter
-    # resolves instead of being silently dropped.
+    # Irregular internal whitespace ("this  week") must be normalised before
+    # the exact-equality lookup; otherwise the time filter is silently dropped.
     from app.chatbot.nlu import _parse_time_window
     tw = _parse_time_window("bugs from this  week please", _now())
     assert tw is not None and tw.label == "this week"
 
 
 def test_nlu_candidate_name_phrases_skips_empty_phrase():
-    # For both assignee and reporter phrases: after stripping "'s" and
-    # whitespace the captured phrase is empty, so it is not appended.
+    # After stripping "'s" the captured phrase is empty, so it is not appended.
     from app.chatbot.nlu import _candidate_name_phrases
-    # "assigned to 's" -> group "'s" -> strip("'s") -> "" -> skipped.
     out = _candidate_name_phrases("assigned to 's and reported by 's")
     assert all(phrase for _role, phrase in out)
 
 
 def test_nlu_action_add_comment_is_none_for_list_verb():
-    # A comment cue with a list verb ("show comments on #5") is a read, not a
-    # write, so _action_add_comment returns None.
+    # "show comment on #5" is a read, not a write; _action_add_comment must
+    # return None when the verb is a list verb.
     from app.chatbot.nlu import _action_add_comment, ParsedQuery
     pq = ParsedQuery()
     pq.bug_id = 5
-    # "comment on" (singular) matches _COMMENT_RE; "show" is a list verb → read.
+    # "comment on" (singular) matches _COMMENT_RE; "show" is a list verb.
     assert _action_add_comment("show comment on #5", pq) is None
 
 
 def test_nlu_action_create_bug_bare_without_title():
-    # "create a bug" matches _CREATE_BUG_RE but neither the titled nor the
-    # bare-title regex captures anything, so action_title stays unset and the
-    # result is still "create_bug".
+    # "create a bug" matches _CREATE_BUG_RE but no title is captured, so
+    # action_title stays None and the action kind is still "create_bug".
     #
-    # The case of a bare regex match with an empty title after
-    # _strip_create_bug_tail cannot occur: the bare capture is stripped before
-    # _strip_create_bug_tail runs, and every tail marker in _TAIL_MARKERS begins
-    # with a leading space, so a marker can never sit at index 0 of the
-    # already-left-stripped title. Thus _strip_create_bug_tail can only return
-    # "" for an already-empty input, as asserted below.
+    # A bare match with an empty title after _strip_create_bug_tail cannot
+    # happen in practice: every tail marker in _TAIL_MARKERS starts with a
+    # leading space, so it can never sit at index 0 of an already-stripped
+    # title. _strip_create_bug_tail therefore only returns "" for empty input.
     from app.chatbot.nlu import (
         _action_create_bug, _strip_create_bug_tail, ParsedQuery,
     )
@@ -129,7 +116,6 @@ def test_nlu_action_create_bug_bare_without_title():
     res = _action_create_bug("create a bug", pq)
     assert res == "create_bug"
     assert pq.action_title is None
-    # The only way _strip_create_bug_tail returns "" is an already-empty input.
     assert _strip_create_bug_tail("") == ""
 
 
@@ -143,12 +129,10 @@ def test_engine_parse_prior_status_empty_and_no_match():
 
 
 def test_engine_fetch_resolution_skips_unresolved_transition():
-    # A row whose parsed new_status isn't a resolved state loops back without
-    # recording.
+    # A transition to a non-resolved state must not be credited.
     from app.reports.engine import _fold_throughput_row
     per_user: dict = {}
     details: list = []
-    # status_changed detail with no resolved target is not credited.
     raw = (
         7, 3, "Dana",
         datetime(2026, 1, 2, tzinfo=timezone.utc),
@@ -159,8 +143,8 @@ def test_engine_fetch_resolution_skips_unresolved_transition():
 
 
 def test_engine_fold_throughput_skips_resolved_to_resolved():
-    # A transition that was already resolved (Resolved -> Closed) is not a new
-    # resolution; the double-count guard returns early.
+    # Resolved -> Closed is not a new resolution; the double-count guard must
+    # return early.
     from app.reports.engine import _fold_throughput_row
     per_user: dict = {}
     details: list = []
@@ -170,12 +154,12 @@ def test_engine_fold_throughput_skips_resolved_to_resolved():
         "status: 'Resolved' -> 'Closed'", "Bug", "T", "High", "Closed", "Apollo",
     )
     _fold_throughput_row(raw, per_user, details)
-    assert per_user == {}  # already resolved, skipped (no double count)
+    assert per_user == {}  # already resolved, skipped
 
 
 def test_engine_utc_date_postgresql_branch():
-    # The postgresql dialect path wraps the column in func.timezone('UTC', col).
-    # Driven with a fake bind reporting postgresql.
+    # On PostgreSQL the column is wrapped in func.timezone('UTC', col). Drive
+    # the branch with a fake bind that reports the postgresql dialect.
     from app.reports.engine import _utc_date
     from app.models import Bug
 
@@ -190,13 +174,11 @@ def test_engine_utc_date_postgresql_branch():
             return _Bind()
 
     expr = _utc_date(_FakeDB(), Bug.created_at)
-    # It compiled to a SQL expression referencing the UTC timezone conversion.
     assert "timezone" in str(expr).lower()
 
 
 def test_engine_utc_day_key_accepts_plain_date():
-    # A non-datetime value (a date) takes the isoformat() fallback rather than
-    # the tz-coercion path.
+    # A bare date (not a datetime) takes the isoformat() fallback path.
     from app.reports.engine import _utc_day_key
     assert _utc_day_key(date(2026, 6, 21)) == "2026-06-21"
 
@@ -205,13 +187,13 @@ def test_engine_utc_day_key_accepts_plain_date():
 # app/scheduler.py — the async _loop's per-minute guard
 # ===========================================================================
 def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
-    # The loop skips when the minute equals the last fired minute, and when
-    # schedule.matches(now) is False it returns to the top of the loop.
+    # Two guards: same-minute calls must not fire twice, and a new minute where
+    # the schedule doesn't match must be skipped without calling _tick.
     sched = importlib.import_module("app.scheduler")
 
-    # Scripted wall-clock: iter1 and iter2 land in the same minute (07:00) so the
-    # second hits the per-minute guard; iter3 is a new minute (07:01) where the
-    # schedule does not match (skip the tick).
+    # Scripted wall-clock: iter1 fires at 07:00; iter2 is the same minute
+    # (hits the per-minute guard); iter3 is 07:01 but doesn't match the
+    # schedule; iter4 terminates via CancelledError.
     times = [
         datetime(2026, 6, 21, 7, 0, 5, tzinfo=timezone.utc),
         datetime(2026, 6, 21, 7, 0, 5, tzinfo=timezone.utc),   # iter1 after-sleep
@@ -233,8 +215,6 @@ def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
             return times[i]
 
     async def fake_sleep(_secs):
-        # Let iters 1-3 fully run (including iter3's non-matching pass), then
-        # cancel at the start of iter4's sleep.
         sleeps["n"] += 1
         if sleeps["n"] >= 4:
             raise asyncio.CancelledError()
@@ -251,24 +231,23 @@ def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
 
     class _Schedule:
         def matches(self, now):
-            # Matches only at minute 0, so it fires on iter1; the new-minute
-            # (07:01) pass does not match.
+            # Only minute 0 matches, so iter1 fires and iter3 (07:01) does not.
             return now.minute == 0
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(sched._loop(_Schedule(), timezone.utc))
 
-    assert ticks["n"] == 1  # fired exactly once (repeat minute is guarded)
+    assert ticks["n"] == 1  # fired exactly once
 
 
 # ===========================================================================
 # app/jobs/email_digest.py — concurrent-claim continue branch
 # ===========================================================================
 def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
-    # The guarded UPDATE claims 0 rows because a concurrent runner stamped
-    # emailed_at after the candidate SELECT. We simulate that race by stamping
-    # the rows inside a patched _group_by_user (which runs between the SELECT
-    # and the guarded UPDATE).
+    # Simulate a concurrent runner that stamps emailed_at between the candidate
+    # SELECT and the guarded UPDATE. We do this inside a patched _group_by_user,
+    # which is called at exactly that point. The guarded UPDATE then claims 0
+    # rows and the batch is skipped.
     from app.database import SessionLocal
     from app.jobs import email_digest
     from app import models
@@ -295,7 +274,6 @@ def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
     orig_group = email_digest._group_by_user
 
     def racing_group(rows):
-        # Concurrent runner claims the row out from under us before our UPDATE.
         other = SessionLocal()
         try:
             other.query(models.Notification).filter(
@@ -322,7 +300,7 @@ def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
 # app/auth.py — SESSION_REQUIRE_JTI legacy jti-less path
 # ===========================================================================
 def test_auth_legacy_jtiless_session_accepted_when_not_required(client):
-    # With SESSION_REQUIRE_JTI False, a legacy jti-less cookie is accepted.
+    # A jti-less cookie is accepted when SESSION_REQUIRE_JTI is False.
     from app.config import get_settings
     from app.auth import make_session_token, COOKIE_NAME
     from app.database import SessionLocal
@@ -346,7 +324,7 @@ def test_auth_legacy_jtiless_session_accepted_when_not_required(client):
 
 
 def test_auth_legacy_jtiless_session_rejected_when_required(client):
-    # With SESSION_REQUIRE_JTI True, a legacy jti-less cookie is rejected (401).
+    # A jti-less cookie is rejected (401) when SESSION_REQUIRE_JTI is True.
     from app.config import get_settings
     from app.auth import make_session_token, COOKIE_NAME
     from app.database import SessionLocal
@@ -374,7 +352,6 @@ def test_auth_legacy_jtiless_session_rejected_when_required(client):
 # reset-token expiry branch
 # ===========================================================================
 def test_change_password_rejects_same_password(admin_client):
-    # A "change" to the same password is rejected.
     r = admin_client.post("/api/auth/change-password", json={
         "current_password": BOOTSTRAP_PASSWORD,
         "new_password": BOOTSTRAP_PASSWORD,
@@ -384,14 +361,10 @@ def test_change_password_rejects_same_password(admin_client):
 
 
 def test_reset_password_tzaware_expiry_branch(client):
-    # A reset token whose expires_at is tz-aware on read skips the
-    # naive-coercion line and proceeds.
-    #
     # On SQLite, DateTime(timezone=True) always reads back naive, so the
-    # tz-aware branch can't be reached through a plain DB round-trip in the
-    # hermetic suite (it only happens on PostgreSQL). We reproduce the
-    # PostgreSQL read shape by coercing expires_at to tz-aware via a one-shot
-    # SQLAlchemy ``load`` event listener on PasswordResetToken.
+    # tz-aware branch can only be reached on PostgreSQL. We reproduce that shape
+    # by attaching a one-shot SQLAlchemy ``load`` event listener that coerces
+    # expires_at to tz-aware before the route sees it.
     from sqlalchemy import event, select
     from app.auth import generate_reset_token
     from app.database import SessionLocal
@@ -430,7 +403,8 @@ def test_reset_password_tzaware_expiry_branch(client):
 # app/routes/push.py — token already bound to another account
 # ===========================================================================
 def test_push_subscribe_conflict_returns_409(admin_client):
-    # A token registered to one user can't be claimed by another (409).
+    # A push token already registered to one account must be rejected (409)
+    # when a second user tries to claim it.
     admin_client.post("/api/push/subscribe", json={"token": "shared-token", "platform": "web"})
     # Create and log in as a second user; reuse the same token.
     admin_client.post("/api/users", json={
@@ -450,10 +424,9 @@ def test_push_subscribe_conflict_returns_409(admin_client):
 # app/routes/sessions.py — empty list + sweep error rollback
 # ===========================================================================
 def test_sessions_list_empty_skips_user_prefetch(client):
-    # With no live session rows, user_ids is empty so the user-prefetch block
-    # is skipped. We authenticate the admin with a legacy jti-less cookie
-    # (which needs no session row), so we can wipe the sessions table and still
-    # pass require_admin, leaving the listing empty.
+    # With an empty sessions table, user_ids is empty and the user-prefetch
+    # block is skipped. We authenticate via a legacy jti-less cookie (no session
+    # row needed) so we can wipe the table and still pass require_admin.
     from app.config import get_settings
     from app.auth import make_session_token, COOKIE_NAME
     from app.database import SessionLocal
@@ -479,14 +452,13 @@ def test_sessions_list_empty_skips_user_prefetch(client):
 
 def test_sessions_list_survives_sweep_error(admin_client, monkeypatch):
     # A SQLAlchemyError during the expiry sweep is caught and rolled back; the
-    # listing is still served.
+    # listing response is still returned normally.
     import app.routes.sessions as sessions_mod
     from sqlalchemy.exc import SQLAlchemyError
 
     real_execute_marker = {"raised": False}
 
     def boom_delete(*args, **kwargs):
-        # Make the swept DELETE explode the first time it's built or executed.
         real_execute_marker["raised"] = True
         raise SQLAlchemyError("sweep boom")
 
@@ -498,7 +470,7 @@ def test_sessions_list_survives_sweep_error(admin_client, monkeypatch):
 
 # ===========================================================================
 # app/main.py — asset hash, body-limit ASGI, cache headers, rate buckets,
-# client IP, CSRF, page session check
+# client IP, CSRF, session check
 # ===========================================================================
 class _FakeURL:
     def __init__(self, path):
@@ -525,8 +497,8 @@ async def _ok_no_cache(_request):
 
 
 def test_main_asset_version_large_file_uses_size(tmp_path, monkeypatch):
-    # A file larger than the per-file cap is hashed by size, not read into
-    # memory. Shrink the cap so a tiny file trips the branch.
+    # Files above the per-file cap are hashed by size to avoid reading them
+    # into memory. Shrink the cap so a tiny file trips the branch.
     import app.main as main
     monkeypatch.setattr(main, "_MAX_ASSET_FILE_BYTES", 4)
     big = tmp_path / "big.js"
@@ -536,8 +508,8 @@ def test_main_asset_version_large_file_uses_size(tmp_path, monkeypatch):
 
 
 def test_main_cache_control_static_non_fingerprinted(monkeypatch):
-    # A /static/ path not under /static/assets/ gets the 1-hour cache header
-    # (not the immutable one).
+    # A /static/ path not under /static/assets/ gets the 1-hour cache header,
+    # not the immutable fingerprinted one.
     import app.main as main
     mw = main.CacheControlMiddleware(app=None)
     req = _FakeReq(path="/static/firebase-messaging-sw.js", method="GET")
@@ -546,14 +518,13 @@ def test_main_cache_control_static_non_fingerprinted(monkeypatch):
 
 
 def test_main_body_limit_skips_non_request_messages():
-    # A message whose type is not http.request passes through the counter
-    # untouched (no size accounting).
+    # Non-http.request messages (e.g. http.disconnect) must pass through the
+    # middleware without triggering the byte counter.
     import app.main as main
 
     received = {"msgs": []}
 
     async def app_inner(_scope, receive, _send):
-        # Pull a non-request message; the counter must not raise.
         msg = await receive()
         received["msgs"].append(msg)
 
@@ -570,13 +541,12 @@ def test_main_body_limit_skips_non_request_messages():
 
 
 def test_main_body_limit_413_on_oversized_body(monkeypatch):
-    # An oversized body raises, and a 413 response is built when the response
-    # has not started.
+    # An oversized body triggers a 413 response when the response hasn't
+    # started yet.
     import app.main as main
     monkeypatch.setattr(main.settings, "MAX_REQUEST_BODY_BYTES", 8)
 
     async def app_inner(_scope, receive, _send):
-        # Read until the oversized body raises _RequestBodyTooLarge.
         await receive()
 
     async def receive():
@@ -590,19 +560,18 @@ def test_main_body_limit_413_on_oversized_body(monkeypatch):
     mw = main.StreamingBodyLimitMiddleware(app_inner)
     scope = {"type": "http", "path": "/api/x"}
     asyncio.run(mw(scope, receive, send))
-    # The 413 JSON response was emitted (response.start carries status 413).
     starts = [m for m in sent if m.get("type") == "http.response.start"]
     assert starts and starts[0]["status"] == 413
 
 
 def test_main_body_limit_reraises_when_response_started(monkeypatch):
-    # If the response has already begun when the body overflow is detected, we
-    # can't cleanly swap in a 413, so _RequestBodyTooLarge is re-raised.
+    # If the response has already started when the body overflows, there's no
+    # clean way to swap in a 413, so _RequestBodyTooLarge is re-raised.
     import app.main as main
     monkeypatch.setattr(main.settings, "MAX_REQUEST_BODY_BYTES", 8)
 
     async def app_inner(_scope, receive, send):
-        # Begin the response before reading the (oversized) body.
+        # Start the response before reading the oversized body.
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await receive()  # this read overflows, raising _RequestBodyTooLarge
 
@@ -619,14 +588,15 @@ def test_main_body_limit_reraises_when_response_started(monkeypatch):
 
 
 def test_main_evict_dead_rate_bucket(monkeypatch):
-    # A bucket whose newest timestamp is older than the horizon is deleted;
-    # with the dict under the cap, no further eviction happens.
+    # A bucket whose newest timestamp is past the eviction horizon is deleted,
+    # as is an empty bucket. With the dict under the cap, no further eviction
+    # runs.
     import app.main as main
     import time as _time
     main._rate_buckets.clear()
     old = _time.monotonic() - 10_000  # older than _MAX_RATE_WINDOW
     main._rate_buckets[("/old", "ipX")] = main.deque([old])
-    main._rate_buckets[("/empty", "ipY")] = main.deque()  # empty, also dead
+    main._rate_buckets[("/empty", "ipY")] = main.deque()
     main._evict_one_rate_bucket(_time.monotonic())
     assert ("/old", "ipX") not in main._rate_buckets
     assert ("/empty", "ipY") not in main._rate_buckets
@@ -634,9 +604,8 @@ def test_main_evict_dead_rate_bucket(monkeypatch):
 
 
 def test_main_client_ip_trusted_xff_none_falls_through(monkeypatch):
-    # With TRUST_PROXY on and an XFF header present, but the trusted resolver
-    # returns None (hop count exceeds entries), fall through to
-    # request.client.host.
+    # With TRUST_PROXY on, if trusted_forwarded_ip returns None (hop count
+    # exceeds available entries), fall back to request.client.host.
     import app.main as main
     monkeypatch.setattr(main.settings, "TRUST_PROXY_FORWARDED_FOR", True)
     monkeypatch.setattr(main.settings, "TRUST_PROXY_HOP_COUNT", 5)
@@ -646,14 +615,11 @@ def test_main_client_ip_trusted_xff_none_falls_through(monkeypatch):
 
 
 def test_main_csrf_origin_present_not_allowed_blocks(monkeypatch):
-    # A browser Origin that isn't in the allowed set (and no usable referer) is
-    # blocked with 403.
+    # An Origin header not in the allowed set is blocked with 403.
     #
-    # Note: the ``elif referer:`` evaluating false and falling through is
-    # unreachable: the ``elif`` is only evaluated when ``origin`` is falsy, and
-    # the earlier guard already returns when both origin and referer are falsy,
-    # so by the time we reach the elif, ``referer`` is always truthy. The
-    # elif-false edge can never be taken.
+    # The ``elif referer:`` branch evaluating false is unreachable in practice:
+    # the guard before it already returns when both origin and referer are
+    # absent, so referer is always truthy by the time the elif is reached.
     import app.main as main
     monkeypatch.setattr(main, "_allowed_origins", lambda: set())
     mw = main.CsrfOriginMiddleware(app=None)
@@ -664,8 +630,7 @@ def test_main_csrf_origin_present_not_allowed_blocks(monkeypatch):
 
 
 def test_main_has_valid_session_missing_row_returns_false(client):
-    # A signed cookie carrying a jti with no matching session row (or a user
-    # mismatch) is rejected.
+    # A valid-looking token whose jti was never persisted must be rejected.
     import app.main as main
     from app.auth import make_session_token, new_jti, COOKIE_NAME
     from app.database import SessionLocal
@@ -675,7 +640,6 @@ def test_main_has_valid_session_missing_row_returns_false(client):
     db = SessionLocal()
     try:
         admin = db.scalar(select(User).where(User.email == BOOTSTRAP_EMAIL))
-        # A token with a jti that was never persisted to the sessions table.
         token = make_session_token(admin.id, admin.session_version or 0, jti=new_jti())
     finally:
         db.close()
@@ -689,8 +653,7 @@ def test_main_has_valid_session_missing_row_returns_false(client):
 # app/chatbot/actions.py — write-path edge branches
 # ===========================================================================
 def _seed_chat_world(client):
-    """Seed two regular users, an inactive user, a project and a bug; return a
-    dict of ids. Uses the live (client-fixture) engine."""
+    """Seed two users, an inactive user, a project, and a bug; return a dict of ids."""
     from app.database import SessionLocal
     from app import models
     from app.auth import hash_password
@@ -725,8 +688,7 @@ def _seed_chat_world(client):
 
 
 def test_actions_create_project_denied_for_regular_user(client):
-    # _check_can_create_project denies and _apply_create_project returns that
-    # error. A regular (non-admin/manager) user can't create a project.
+    # A regular (non-admin/manager) user must be denied project creation.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import User
@@ -744,7 +706,7 @@ def test_actions_create_project_denied_for_regular_user(client):
 
 
 def test_actions_resolve_targets_empty_and_inactive(client):
-    # Empty ids produce an error, and a deactivated user can't be assigned.
+    # Empty id list returns an error; a deactivated user can't be assigned.
     from app.chatbot import actions
     from app.database import SessionLocal
 
@@ -760,7 +722,6 @@ def test_actions_resolve_targets_empty_and_inactive(client):
 
 
 def test_actions_assign_noop_when_already_assigned(client):
-    # Assigning a user who is already assigned is a no-op.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import User
@@ -778,8 +739,8 @@ def test_actions_assign_noop_when_already_assigned(client):
 
 
 def test_actions_notify_chat_op_skips_when_no_reporter(client):
-    # When bug.reporter_id is None the reporter is not added to recipients
-    # (the conditional body is skipped).
+    # bug.reporter_id is None, so the reporter-notify branch must be skipped
+    # without raising.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import Bug, User
@@ -791,7 +752,6 @@ def test_actions_notify_chat_op_skips_when_no_reporter(client):
         bug.reporter_id = None
         db.flush()
         admin = db.get(User, ids["alice"])
-        # Must not raise; reporter branch is skipped.
         actions._notify_chat_op(db, bug, admin, kind="updated",
                                 title="t", body="b")
         db.rollback()
@@ -800,8 +760,7 @@ def test_actions_notify_chat_op_skips_when_no_reporter(client):
 
 
 def test_actions_add_comment_no_notify_no_commit(client):
-    # With notify False the notify block is skipped, and with commit False the
-    # commit is skipped.
+    # notify=False skips the notify block; commit=False skips the commit.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import User
@@ -820,7 +779,6 @@ def test_actions_add_comment_no_notify_no_commit(client):
 
 
 def test_actions_create_bug_invalid_priority_and_bad_assignee(client):
-    # An invalid priority and an assignee-resolution error are both handled.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import User
@@ -847,8 +805,8 @@ def test_actions_create_bug_invalid_priority_and_bad_assignee(client):
 
 
 def test_actions_execute_plan_denied_for_non_admin(client, monkeypatch):
-    # execute_plan re-checks sleuth_write_denied at execute time; a denied
-    # actor gets an error before any DB write.
+    # execute_plan re-checks sleuth_write_denied at execute time and returns
+    # an error before any DB write.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import User
@@ -868,9 +826,9 @@ def test_actions_execute_plan_denied_for_non_admin(client, monkeypatch):
 
 
 def test_actions_bulk_all_skipped_rolls_back(client):
-    # With updated == 0 the notify step is skipped and the transaction is rolled
-    # back. Bulk-assign a user already assigned to the only bug, so every item
-    # is a no-op and 0 are updated.
+    # Bulk-assign a user who is already assigned to every bug in scope: all
+    # items are no-ops, updated==0, notify is skipped, and the transaction rolls
+    # back.
     from app.chatbot import actions
     from app.database import SessionLocal
     from app.models import User
@@ -893,8 +851,7 @@ def test_actions_bulk_all_skipped_rolls_back(client):
 # app/chatbot/executor.py — bulk / report / ingest branches
 # ===========================================================================
 def test_executor_bulk_kind_detects_unassign(client):
-    # An unassign phrase with no parsed action_kind is detected directly as a
-    # bulk "unassign".
+    # An unassign phrase with no parsed action_kind resolves to "unassign".
     from app.chatbot import executor
     from app.chatbot.nlu import ParsedQuery
     pq = ParsedQuery()
@@ -903,7 +860,6 @@ def test_executor_bulk_kind_detects_unassign(client):
 
 
 def test_executor_resolve_bulk_filters_by_environment(client):
-    # The environment filter is applied to the bulk id query.
     from app.chatbot import executor
     from app.chatbot.nlu import ParsedQuery
     from app.database import SessionLocal
@@ -920,8 +876,8 @@ def test_executor_resolve_bulk_filters_by_environment(client):
 
 
 def test_executor_bulk_set_status_without_value_returns_none(client):
-    # A bulk set_status/set_priority command without a value returns None
-    # (defers to normal flow to ask for the missing value).
+    # Without a target value the bulk handler defers (returns None) so the
+    # normal flow can ask the user for it.
     from app.chatbot import executor
     from app.chatbot.nlu import ParsedQuery
     from app.database import SessionLocal
@@ -943,7 +899,6 @@ def test_executor_bulk_set_status_without_value_returns_none(client):
 
 
 def test_executor_bulk_over_cap_refused(client, monkeypatch):
-    # A bulk scope exceeding the action cap is refused.
     from app.chatbot import executor
     from app.chatbot.nlu import ParsedQuery
     from app.database import SessionLocal
@@ -954,7 +909,7 @@ def test_executor_bulk_over_cap_refused(client, monkeypatch):
     monkeypatch.setattr(executor, "_BULK_ACTION_CAP", 1)  # 2 bugs now exceed it
     db = SessionLocal()
     try:
-        # Add a second bug so the scope is 2 > cap(1).
+        # Two bugs in scope now exceed cap(1).
         extra = models.Bug(title="Extra", description="d", status="New",
                            priority="Low", environment="DEV",
                            project_id=ids["proj"], reporter_id=ids["alice"])
@@ -974,9 +929,8 @@ def test_executor_bulk_over_cap_refused(client, monkeypatch):
 
 
 def test_executor_report_too_large_413(client, monkeypatch):
-    # A report that matches more than MAX_REPORT_ROWS (or is flagged truncated)
-    # returns the "report too large" response instead of materializing the
-    # workbook.
+    # When a report is flagged truncated, the "report too large" path is taken
+    # instead of materializing the workbook.
     from app.chatbot import executor
     from app.chatbot.nlu import ParsedQuery
     from app.database import SessionLocal
@@ -990,8 +944,8 @@ def test_executor_report_too_large_413(client, monkeypatch):
         rows = []
         columns = []
 
-    # _handle_report does `from app.reports import run_report` INSIDE the
-    # function, so patch it on the app.reports module it imports from.
+    # _handle_report imports run_report inside the function, so patch it on
+    # app.reports directly.
     import app.reports as _reports
     monkeypatch.setattr(_reports, "run_report", lambda *_a, **_k: _FakeResult())
 
@@ -1009,20 +963,17 @@ def test_executor_report_too_large_413(client, monkeypatch):
 
 
 def test_executor_ingest_created_response_no_items_skips_table(client):
-    # When the items list is empty the table block is skipped, flowing straight
-    # to the "and N more" check.
+    # Empty items: the table block is skipped and the "and N more" tail is
+    # still appended because created(3) > len(items)(0).
     from app.chatbot import executor
     summary = {"created": 3, "project_name": "Apollo", "items": []}
     res = executor._ingest_created_response(summary)
     assert res.intent == "ingest_done"
-    # Only the text block (no table); the "and N more" line still appends since
-    # n(3) > len(items)(0).
     assert all(b.kind != "table" for b in res.blocks)
 
 
 def test_executor_ingest_created_response_exact_fit(client):
-    # The complementary case: items present and n == len(items), so a table
-    # block is added with no "and N more" tail.
+    # created == len(items): a table block is added and no "and N more" tail.
     from app.chatbot import executor
     summary = {
         "created": 2,
@@ -1031,21 +982,20 @@ def test_executor_ingest_created_response_exact_fit(client):
     }
     res = executor._ingest_created_response(summary)
     assert res.intent == "ingest_done"
-    assert len(res.blocks) == 2  # text plus table, no "more" tail
+    assert len(res.blocks) == 2  # text + table, no "more" tail
 
 
 # ===========================================================================
 # app/routes/bugs.py — helpers + route edge cases
 # ===========================================================================
 def test_bugs_dangerous_ext_no_extension_returns_none(client):
-    # A filename with no dot has no extension, so the result is None.
     from app.routes.bugs import _dangerous_upload_ext
     assert _dangerous_upload_ext("README") is None
     assert _dangerous_upload_ext("evil.exe") == "exe"
 
 
 def test_bugs_resolve_user_unknown_raises_400(client):
-    # _resolve_user on a non-existent id is a hard 400.
+    # None is allowed (no filter); a non-existent id is a hard 400.
     from fastapi import HTTPException
     from app.routes.bugs import _resolve_user
     from app.database import SessionLocal
@@ -1069,8 +1019,8 @@ def test_bugs_reject_overflow_ids_raises_422(client):
 
 
 def test_bugs_directional_link_reaches_multi_hop(client):
-    # The BFS walks an intermediate node that is neither the goal nor already
-    # seen (adds it to the frontier), then finds the goal one hop further.
+    # BFS must walk an intermediate node (not the goal, not yet seen) before
+    # finding the goal one hop further.
     from app.routes.bugs import _directional_link_reaches
     from app.database import SessionLocal
     from app import models
@@ -1091,7 +1041,7 @@ def test_bugs_directional_link_reaches_multi_hop(client):
                        environment="DEV", project_id=proj.id, reporter_id=actor.id)
         db.add_all([a, b, c])
         db.flush()
-        # A --blocks--> B --blocks--> C : reaching C from A walks B.
+        # A --blocks--> B --blocks--> C; reaching C from A walks through B.
         db.add_all([
             models.BugLink(source_bug_id=a.id, target_bug_id=b.id,
                            link_type="blocks", created_by_user_id=actor.id),
@@ -1106,17 +1056,16 @@ def test_bugs_directional_link_reaches_multi_hop(client):
 
 
 def test_bugs_reject_updated_at_drift_aware_current(client):
-    # When current_updated is already tz-aware the naive-coercion line is
-    # skipped, going straight to the second compare.
+    # A tz-aware current_updated skips the naive-coercion line and goes
+    # straight to the comparison (same instant, so no conflict is raised).
     from app.routes.bugs import _reject_if_updated_at_drifted
     aware = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
-    # Same instant means no conflict is raised (exercises the aware-current branch).
     _reject_if_updated_at_drifted(aware.isoformat(), aware)
 
 
 def test_bugs_list_deep_page_returns_empty(admin_client):
-    # A page far past the end short-circuits to an empty list (no expensive
-    # deep OFFSET scan).
+    # A page well past the end short-circuits to an empty list rather than
+    # performing a deep OFFSET scan.
     proj = admin_client.post("/api/projects", json={"name": "DeepPage"}).json()
     admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "only one", "priority": "Low",
@@ -1128,7 +1077,6 @@ def test_bugs_list_deep_page_returns_empty(admin_client):
 
 
 def test_bugs_attachment_dangerous_ext_rejected(admin_client):
-    # An executable attachment is refused with 400.
     proj = admin_client.post("/api/projects", json={"name": "AttProj"}).json()
     bug = admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "needs file", "priority": "Low",
@@ -1151,16 +1099,14 @@ def _mk_user_via_api(admin_client, name, email):
 
 
 def test_bugs_update_changes_reporter_and_notifies(admin_client):
-    # A changed reporter label is recorded, and an update with field changes
-    # stages "updated" notifications.
+    # Changing the reporter is recorded; updating a tracked field also stages
+    # "updated" notifications for assignees.
     uid = _mk_user_via_api(admin_client, "Redo", "redo@test.local")
     proj = admin_client.post("/api/projects", json={"name": "UpdProj"}).json()
     bug = admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "orig", "priority": "Low",
         "environment": "DEV", "assignee_ids": [uid],
     }).json()
-    # Change the title (a tracked field, which notifies the assignee) and the
-    # reporter.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={
         "title": "renamed", "reporter_id": uid,
     })
@@ -1170,8 +1116,8 @@ def test_bugs_update_changes_reporter_and_notifies(admin_client):
 
 
 def test_bugs_update_legacy_invalid_status_tolerated(admin_client):
-    # A row holding a status no longer valid for its type is tolerated on an
-    # update that does not change the status or the type.
+    # A row with a legacy status that is invalid for its current type must be
+    # tolerated on an update that doesn't change the status or type.
     from app.database import SessionLocal
     from app.models import Bug
     proj = admin_client.post("/api/projects", json={"name": "LegacyProj"}).json()
@@ -1179,8 +1125,8 @@ def test_bugs_update_legacy_invalid_status_tolerated(admin_client):
         "project_id": proj["id"], "title": "legacy", "priority": "Low",
         "environment": "DEV",
     }).json()
-    # Force a status that is a valid enum value but Task-only (so it's invalid
-    # for this Bug), simulating a legacy row. "Done" is a Task status.
+    # "Done" is a valid enum value but Task-only; force it directly to simulate
+    # a legacy row.
     db = SessionLocal()
     try:
         row = db.get(Bug, bug["id"])
@@ -1188,8 +1134,6 @@ def test_bugs_update_legacy_invalid_status_tolerated(admin_client):
         db.commit()
     finally:
         db.close()
-    # Re-send the same (now type-invalid) status unchanged while editing the
-    # title and not changing the type, which is tolerated.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={
         "title": "legacy-renamed", "status": "Done",
     })
@@ -1197,8 +1141,8 @@ def test_bugs_update_legacy_invalid_status_tolerated(admin_client):
 
 
 def test_bugs_add_reverse_relates_link_is_idempotent(admin_client):
-    # Adding a 'relates' link in the reverse direction of an existing one
-    # returns the existing edge instead of creating a duplicate.
+    # A 'relates' link in the reverse direction of an existing one must return
+    # the existing edge rather than creating a duplicate.
     proj = admin_client.post("/api/projects", json={"name": "RelProj"}).json()
     a = admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "Aye bug", "priority": "Low", "environment": "DEV",
@@ -1210,7 +1154,6 @@ def test_bugs_add_reverse_relates_link_is_idempotent(admin_client):
         "target_bug_id": b["id"], "link_type": "relates",
     })
     assert r1.status_code == 201, r1.text
-    # Reverse direction, same logical relationship, so the return is idempotent.
     r2 = admin_client.post(f"/api/bugs/{b['id']}/links", json={
         "target_bug_id": a["id"], "link_type": "relates",
     })
@@ -1218,8 +1161,8 @@ def test_bugs_add_reverse_relates_link_is_idempotent(admin_client):
 
 
 def test_bugs_remove_link_other_endpoint_present(admin_client):
-    # Removing a link whose other endpoint still exists takes the
-    # `if other is not None` branch (authz and stakeholders).
+    # The other endpoint exists, so the `if other is not None` branch (authz
+    # and stakeholder notifications) is taken.
     proj = admin_client.post("/api/projects", json={"name": "DelLink"}).json()
     a = admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "Aye bug", "priority": "Low", "environment": "DEV",
@@ -1235,9 +1178,8 @@ def test_bugs_remove_link_other_endpoint_present(admin_client):
 
 
 def test_bugs_attachment_grows_past_limit_after_strip(admin_client, monkeypatch):
-    # If metadata-stripping/re-encode grows the file past the cap, the
-    # post-strip re-check returns 413. We patch the strip to balloon the bytes
-    # and shrink the cap so a tiny upload trips the post-strip guard.
+    # Metadata stripping can re-encode to a larger size; if the result exceeds
+    # the cap the post-strip re-check must return 413.
     import app.routes.bugs as bugs_mod
     monkeypatch.setattr(bugs_mod, "MAX_FILE_BYTES", 100)
     monkeypatch.setattr(bugs_mod, "strip_image_metadata", lambda _d, _ct: b"x" * 500)
@@ -1255,8 +1197,7 @@ def test_bugs_attachment_grows_past_limit_after_strip(admin_client, monkeypatch)
 
 
 def test_bugs_reload_link_missing_raises_409(client):
-    # _reload_link returns a clean 409 when the row was concurrently deleted
-    # (db.scalar yields None).
+    # A concurrently deleted row (db.scalar returns None) must give a clean 409.
     from fastapi import HTTPException
     from app.routes.bugs import _reload_link
 
@@ -1270,8 +1211,8 @@ def test_bugs_reload_link_missing_raises_409(client):
 
 
 def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
-    # When the unique-index race is lost (created=False) the existing edge is
-    # returned idempotently rather than raising a 500.
+    # Losing the unique-index race (created=False) must return the existing
+    # edge idempotently rather than raising a 500.
     import app.routes.bugs as bugs_mod
 
     proj = admin_client.post("/api/projects", json={"name": "RaceProj"}).json()
@@ -1281,7 +1222,6 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
     b = admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "Bee bug", "priority": "Low", "environment": "DEV",
     }).json()
-    # First link really creates the edge.
     first = admin_client.post(f"/api/bugs/{a['id']}/links", json={
         "target_bug_id": b["id"], "link_type": "blocks",
     }).json()
@@ -1297,9 +1237,9 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
     finally:
         db.close()
 
-    # Force the "lost the unique-index race" outcome: _find_existing() returns
-    # None for a brand-new type, we attempt insert, but the helper reports
-    # created=False with an already-present edge, so the idempotent return runs.
+    # Simulate losing the race: _find_existing returns None for the new type,
+    # we attempt insert, the helper reports created=False, and the idempotent
+    # return runs.
     def lost_race(_db, _link, _refetch):
         from app.database import SessionLocal as SL
         from app.models import BugLink as BL
@@ -1313,7 +1253,7 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
 
     monkeypatch.setattr(bugs_mod, "_insert_link_or_existing", lost_race)
     # Use a not-yet-existing (source, target, type) so _find_existing is None
-    # and control reaches _insert_link_or_existing, our lost_race.
+    # and control reaches our patched _insert_link_or_existing.
     again = admin_client.post(f"/api/bugs/{a['id']}/links", json={
         "target_bug_id": b["id"], "link_type": "duplicate",
     })
@@ -1321,9 +1261,8 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
 
 
 def _orphan_link(admin_client, *, drop="other"):
-    """Create A--blocks-->B, then delete one bug row without cascading (FK off
-    on a throwaway connection) so the link survives orphaned. Returns
-    (path_bug_id, link_id)."""
+    """Create A--blocks-->B, delete one bug row with FK off so the link
+    survives orphaned. Returns (path_bug_id, link_id)."""
     from app.database import SessionLocal
     from app.models import Bug
     from sqlalchemy import delete, text
@@ -1352,25 +1291,25 @@ def _orphan_link(admin_client, *, drop="other"):
 
 
 def test_bugs_remove_link_other_endpoint_gone(admin_client):
-    # The other endpoint bug is gone (orphaned link), so the
-    # `if other is not None` block is skipped, flowing to db.delete(link).
+    # The other endpoint is gone (orphaned link), so the `if other is not None`
+    # block is skipped and the link is deleted directly.
     path_bug_id, link_id = _orphan_link(admin_client, drop="other")
     r = admin_client.delete(f"/api/bugs/{path_bug_id}/links/{link_id}")
     assert r.status_code == 200, r.text
 
 
 def test_bugs_remove_link_path_bug_gone_404(admin_client):
-    # The path bug is gone (orphaned link), giving a clean 404.
+    # The path bug itself is gone (orphaned link); the route must return 404.
     path_bug_id, link_id = _orphan_link(admin_client, drop="path")
     r = admin_client.delete(f"/api/bugs/{path_bug_id}/links/{link_id}")
     assert r.status_code == 404
 
 
 def test_bugs_download_range_row_vanished_404(admin_client):
-    # A Range request where the in-SQL slice returns None (the row was deleted
-    # between the metadata read and the byte-slice) yields a clean 404 rather
-    # than an empty 206. We simulate the TOCTOU race by overriding get_db with a
-    # session whose scalar() returns None for the substr slice query only.
+    # A Range request where the row is deleted between the metadata read and the
+    # byte-slice (TOCTOU) must return 404, not an empty 206. We simulate the
+    # race by overriding get_db with a session whose scalar() returns None only
+    # for the substr slice query.
     from app.database import SessionLocal, get_db
     from app.main import app
 
@@ -1392,7 +1331,7 @@ def test_bugs_download_range_row_vanished_404(admin_client):
 
         def scalar(self, stmt):
             if "substr" in str(stmt).lower():
-                return None  # simulate a concurrent delete of the row
+                return None  # concurrent delete of the blob row
             return self._real.scalar(stmt)
 
         def __getattr__(self, name):
@@ -1417,17 +1356,15 @@ def test_bugs_download_range_row_vanished_404(admin_client):
 
 
 def test_bugs_update_assignee_only_skips_changes_notify(admin_client):
-    # An assignee-only update has an empty `changes` list (no tracked field
-    # changed) but a non-empty newly_assigned, so _stage_update_notifications is
-    # entered yet the `if changes:` block is skipped, flowing to the
-    # assignment-notify block.
+    # An assignee-only update produces an empty `changes` list but a non-empty
+    # newly_assigned, so _stage_update_notifications enters but skips the
+    # `if changes:` block and falls through to the assignment-notify block.
     uid = _mk_user_via_api(admin_client, "Assignee Only", "assignonly@test.local")
     proj = admin_client.post("/api/projects", json={"name": "AssignOnly"}).json()
     bug = admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "assignee only", "priority": "Low",
         "environment": "DEV",
     }).json()
-    # Change only the assignees; every tracked field is re-sent unchanged.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={
         "title": "assignee only", "priority": "Low", "environment": "DEV",
         "assignee_ids": [uid],

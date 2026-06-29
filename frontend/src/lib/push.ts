@@ -1,13 +1,11 @@
 /**
- * Web push (Firebase Cloud Messaging), foreground handling.
+ * Web push via Firebase Cloud Messaging, foreground side only.
  *
- * The Firebase compat SDK is self-hosted under /static/vendor (so the CSP keeps
- * script-src 'self', no gstatic CDN) and loaded on demand the first time the
- * user turns push on. The background service worker lives at
- * /firebase-messaging-sw.js, served by the backend with the config injected.
+ * The Firebase compat SDK is self-hosted under /static/vendor so the CSP can
+ * stay at script-src 'self' with no gstatic CDN. The background service worker
+ * at /firebase-messaging-sw.js is served by the backend with config injected.
  *
- * Every path is guarded so a push failure degrades to no push (the in-app bell
- * and email still work) rather than breaking the app.
+ * Push failures degrade gracefully — the in-app bell and email digest still work.
  */
 import { api } from "./api";
 import { toast } from "./toast";
@@ -75,9 +73,8 @@ function loadScript(src: string): Promise<void> {
     el.async = true;
     el.onload = () => resolve();
     el.onerror = () => {
-      // Remove the failed node so a later attempt re-adds and retries it,
-      // instead of the querySelector above short-circuiting to resolved() for a
-      // script that never actually loaded.
+      // Remove the failed node so a later attempt can re-add and retry it;
+      // otherwise the querySelector guard above would see it and resolve early.
       el.remove();
       reject(new Error(`failed to load ${src}`));
     };
@@ -114,8 +111,8 @@ async function ensureMessaging(
   return { messaging, reg };
 }
 
-// Remember the last subscribed token so logout can deregister it even after the
-// messaging SDK state is gone (e.g. a fresh tab). Cleared on unsubscribe.
+// Persists the last subscribed token so logout can deregister it even if the
+// messaging SDK was never initialised in this tab. Cleared on unsubscribe.
 const _PUSH_TOKEN_KEY = "bh_push_token";
 
 async function subscribeToken(cfg: PushConfig): Promise<boolean> {
@@ -139,10 +136,9 @@ async function subscribeToken(cfg: PushConfig): Promise<boolean> {
 }
 
 /**
- * Deregister this device's push token on logout so the next user on a shared
- * browser stops receiving the previous user's notifications. Must be called
- * before /auth/logout, since the unsubscribe endpoint needs the session.
- * Best-effort and never throws so a failure can't block logout.
+ * Deregister this device's FCM token on logout so a shared browser doesn't
+ * deliver another user's notifications. Must be called before /auth/logout
+ * because the unsubscribe endpoint requires an active session. Never throws.
  */
 export async function unsubscribeOnLogout(): Promise<void> {
   let token = "";
@@ -151,7 +147,7 @@ export async function unsubscribeOnLogout(): Promise<void> {
   } catch {
     /* ignore */
   }
-  // Best-effort: drop the FCM token client-side so the SDK stops refreshing it.
+  // Drop the FCM token client-side so the SDK stops auto-refreshing it.
   try {
     if (supported() && messagingCache) {
       await messagingCache.deleteToken();
@@ -174,14 +170,12 @@ export async function unsubscribeOnLogout(): Promise<void> {
 }
 
 /**
- * On boot, web push is required whenever the server has it enabled; there is no
- * in-app opt-out. If the browser permission is still "default" we prompt for it;
- * once granted we register/refresh this browser's FCM token (FCM tokens rotate,
- * so we re-subscribe every boot). A browser/OS-level "denied" cannot be
- * overridden, since no web API can force-grant notification permission. Never
- * throws and never blocks boot. No-op when web push is disabled or the browser
- * can't support it (e.g. an insecure-context origin; push requires HTTPS or
- * localhost).
+ * Subscribe (or refresh) this browser's FCM token on every boot. FCM tokens
+ * rotate so we re-register each time rather than assuming the stored one is
+ * still valid. Prompts for permission if the browser is still at "default";
+ * silently bails if denied (nothing we can do via the web API). No-op when
+ * push is disabled server-side or the browser can't support it (push requires
+ * HTTPS or localhost). Never throws and never blocks boot.
  */
 export async function initPushOnBoot(): Promise<void> {
   try {

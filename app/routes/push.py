@@ -1,9 +1,8 @@
-"""Web push subscription API (Firebase Cloud Messaging).
+"""Web push subscription endpoints (Firebase Cloud Messaging).
 
-Every mutating endpoint is scoped to the authenticated user — you register or
-remove only YOUR OWN device tokens. ``GET /config`` exposes the *public*
-Firebase web config so the browser can initialise messaging; the secret
-service-account JSON never leaves the server.
+Mutating endpoints are scoped to the authenticated user — you can only
+register or remove your own tokens. ``GET /config`` exposes the public
+Firebase web config; the service-account key stays server-side.
 """
 from __future__ import annotations
 
@@ -23,8 +22,11 @@ router = APIRouter(prefix="/api/push", tags=["push"])
 
 @router.get("/config", response_model=PushConfigOut)
 def push_config() -> PushConfigOut:
-    """Public Firebase web config for the browser. ``enabled`` is False when web
-    push isn't fully configured, so the frontend can hide its toggle."""
+    """Return the public Firebase web config for the browser.
+
+    ``enabled`` is False when push isn't fully configured, letting the
+    frontend hide the toggle without a separate feature-flag endpoint.
+    """
     s = get_settings()
     configured = bool(
         s.WEB_PUSH_ENABLED and s.FIREBASE_API_KEY and s.FIREBASE_VAPID_KEY
@@ -58,8 +60,8 @@ def subscribe(
             user_agent=payload.user_agent,
         )
     except PushTokenConflict as exc:
-        # Token already bound to a different account — refuse rather than let a
-        # replayed token hijack that device's push.
+        # Refuse rather than let a replayed token silently redirect another
+        # account's push notifications to this user's session.
         raise HTTPException(
             status_code=409,
             detail="This device token is already registered to another account.",

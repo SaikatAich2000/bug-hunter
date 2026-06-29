@@ -1,10 +1,8 @@
 /**
- * NAV_ITEMS — the single source of truth for the app's top-level view nav.
- *
- * Shared by TopChrome (the desktop horizontal chrome nav) and the Sidebar
- * (the mobile drawer nav). Keeping one list means the desktop bar and the
- * mobile drawer can never drift; role gating still flows from VIEW_MIN_ROLE
- * in types.ts, consulted by both consumers.
+ * Single source of truth for top-level navigation entries.
+ * Both the desktop TopChrome and the mobile Sidebar draw from this list
+ * so the two can never drift. Role gating is handled separately via
+ * VIEW_MIN_ROLE in types.ts.
  */
 import type { ViewName } from "../types";
 

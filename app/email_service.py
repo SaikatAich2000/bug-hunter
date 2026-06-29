@@ -3,7 +3,7 @@
 Three backends:
   - console   : logs the email to stdout. Default, used for dev.
   - smtp      : sends via a real SMTP server.
-  - disabled  : no-op. For tests.
+  - disabled  : sends nothing. For tests.
 
 Public functions are meant to be called from a FastAPI BackgroundTasks
 instance: they take pre-fetched primitives (not DB sessions or ORM objects)
@@ -32,8 +32,7 @@ _TOKEN_IN_URL_RE = re.compile(r"(?i)([?&]token=)[^&\s]+")
 def _redact_secrets_for_log(text: str) -> str:
     return _TOKEN_IN_URL_RE.sub(r"\1[REDACTED]", text)
 
-# Repeated section label used by every email body that has a free-text
-# description block. Extracted to avoid repeating the literal.
+# Shared label for the description block in notification bodies.
 _DESC_LABEL = "Description:"
 
 
@@ -84,10 +83,9 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
         return False   # nothing sent → report failure, like the except path below
 
     try:
-        # Build an SSL context with explicit hostname and cert verification and
-        # a minimum TLS version. create_default_context() already sets these
-        # defaults on Python 3.10+; stating them locally makes the posture
-        # explicit without consulting stdlib internals.
+        # create_default_context() already enables hostname checking and cert
+        # verification on Python 3.10+; we set them explicitly to make the
+        # security posture obvious without relying on stdlib version behaviour.
         ctx = ssl.create_default_context()
         ctx.check_hostname = True
         ctx.verify_mode = ssl.CERT_REQUIRED
@@ -116,18 +114,16 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
         logger.info("SMTP email sent: subject=%r to=%s", msg["Subject"], msg["To"])
         return True
     except (smtplib.SMTPException, OSError):
-        # Never let mailer failures break the API. We narrow to network and
-        # SMTP-protocol errors so programmer mistakes (e.g. bad header type)
-        # still surface in tests instead of getting swallowed. Returns False so
-        # a transactional caller (e.g. password reset) can log the failure.
+        # Narrow the catch to network and SMTP-protocol errors so programming
+        # mistakes (wrong header type, etc.) still raise instead of disappearing.
+        # Returns False so transactional callers (e.g. password reset) can log it.
         logger.exception("Failed to send email via SMTP")
         return False
 
 
 def _send_console(msg: EmailMessage) -> None:
-    # Body is not logged at INFO: a password-reset email's body carries a live
-    # single-use reset link, and operation emails carry bug/comment PII. Log
-    # only routing metadata; gate the full body behind DEBUG for local dev.
+    # Only log routing metadata at INFO; the body may contain a live reset link
+    # or bug/comment PII. Gate the full body behind DEBUG for local dev only.
     logger.info(
         "[console-email] to=%s subject=%r (body suppressed — set log level "
         "DEBUG to include it)",
@@ -135,8 +131,7 @@ def _send_console(msg: EmailMessage) -> None:
     )
     if logger.isEnabledFor(logging.DEBUG):
         body = msg.get_content() if msg.is_multipart() is False else "(multipart)"
-        # Redact any live token-bearing URL (reset link) so even a DEBUG log
-        # can't capture a replayable single-use credential.
+        # Redact token-bearing URLs so a DEBUG log can't leak a replayable credential.
         logger.debug("[console-email] body for %r:\n%s", msg["Subject"],
                      _redact_secrets_for_log(body.strip()))
 
@@ -154,11 +149,9 @@ def _build(subject: str, to: list[str], body: str, settings: Settings) -> EmailM
     if len(to) == 1:
         msg["To"] = _header_safe(to[0])
     else:
-        # Multiple stakeholders (reporter + assignees, or all event managers):
-        # don't put every address in a visible To: header where each recipient
-        # sees all the others (cross-recipient PII / directory-harvesting leak).
-        # Address the message to the no-reply sender and Bcc the recipients —
-        # smtplib still delivers to the Bcc envelope and strips the header.
+        # With multiple recipients, use Bcc to prevent each person seeing the
+        # others' addresses (directory-harvesting / cross-recipient PII).
+        # Address To: back to the sender; smtplib delivers via the Bcc envelope.
         msg["To"] = _header_safe(settings.EMAIL_FROM)
         msg["Bcc"] = ", ".join(_header_safe(addr) for addr in to)
     msg["Subject"] = _header_safe(subject)
@@ -167,7 +160,7 @@ def _build(subject: str, to: list[str], body: str, settings: Settings) -> EmailM
 
 
 def deliver(subject: str, to: list[str], body: str) -> bool:
-    """Public dispatch — pick the right backend based on settings.
+    """Public dispatch: pick the right backend based on settings.
 
     Returns True when a message was actually handed to a backend (and, for
     SMTP, accepted), False when delivery was skipped (disabled / no recipients)
@@ -190,8 +183,8 @@ def deliver(subject: str, to: list[str], body: str) -> bool:
 def _digest_owns_work_item_email() -> bool:
     """True when the once-a-day digest job, not an immediate send, owns the
     work-item operation emails (new item / update / assignment / comment /
-    event). When EMAIL_DIGEST_ENABLED is on, those `notify_*` functions become
-    no-ops and the operation is delivered later by `app.jobs.email_digest`,
+    event). When EMAIL_DIGEST_ENABLED is on, those `notify_*` functions send
+    nothing and the operation is delivered later by `app.jobs.email_digest`,
     batched into one email per user.
 
     Security/transactional emails (e.g. password reset) never consult this and
@@ -234,7 +227,7 @@ def _bug_link(bug_id: int) -> str:
 
 
 def _item_label(bug: BugSnapshot) -> str:
-    """The grammatical noun for the item — 'bug' / 'requirement' / 'task'."""
+    """The grammatical noun for the item: 'bug' / 'requirement' / 'task'."""
     return (bug.item_type or "Bug").lower()
 
 
@@ -367,7 +360,7 @@ class EventSnapshot:
 
 
 def _event_recipients(ev: EventSnapshot, exclude_user_id: int | None) -> list[str]:
-    """Recipients of an event email — every manager except the actor."""
+    """Recipients of an event email: every manager except the actor."""
     out: list[str] = []
     seen: dict[str, None] = {}
     for u in ev.managers:

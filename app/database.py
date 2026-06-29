@@ -94,9 +94,9 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency that yields a session and always closes it.
 
-    Session.close() rolls back any in-progress (uncommitted) transaction, so an
-    exception on the request path can't hand a half-applied unit of work back to
-    the connection pool — no explicit rollback (and no broad ``except``) needed.
+    Session.close() rolls back any uncommitted transaction, so a request
+    exception can't leak a half-applied write back to the connection pool.
+    No explicit rollback or broad except needed.
     """
     db = SessionLocal()
     try:
@@ -114,10 +114,11 @@ def _column_names(inspector, table: str) -> set[str]:
 
 
 def _add_column_safely(conn, sql: str) -> None:
-    """Run one additive ALTER inside a SAVEPOINT so one table's failure can't
-    roll back the other additive columns (mirrors _create_index_safely).
-    Best-effort and idempotent: a column that already exists or a transient
-    error is logged and skipped, not fatal to boot."""
+    """Run one additive ALTER inside a SAVEPOINT.
+
+    A failure on one column won't roll back the rest. A column that already
+    exists (or any transient error) is logged and skipped, not fatal.
+    """
     from sqlalchemy import text
     try:
         with conn.begin_nested():
@@ -128,15 +129,13 @@ def _add_column_safely(conn, sql: str) -> None:
 
 
 def _add_missing_columns(conn) -> None:
-    """ALTER-ADD any columns the model declares but an existing DB lacks.
+    """ALTER-ADD any columns the model declares that an existing DB lacks.
 
-    SQLAlchemy's create_all() never alters an existing table, so a column added
-    in a later release would never appear on a populated database; this pass
-    closes that gap. It is strictly additive — nothing is dropped, altered or
-    renamed — and every new column is safe to add to a populated table
-    (nullable, or NOT NULL with a column-level default so existing rows get a
-    value at the DB level). Runs before the index pass since new composite
-    indexes may reference these columns.
+    create_all() never modifies an existing table, so columns added in a later
+    release would never appear on a populated database. This pass fills that
+    gap. Every new column is either nullable or carries a DEFAULT so existing
+    rows get a value without a backfill. Runs before the index pass because new
+    composite indexes may reference these columns.
     """
     from sqlalchemy import inspect
     inspector = inspect(engine)
@@ -185,10 +184,9 @@ def _add_missing_columns(conn) -> None:
 
 
 def _add_missing_indexes(conn) -> None:
-    """CREATE any indexes the model declares but the DB lacks (idempotent).
+    """CREATE any indexes the model declares that the DB lacks (idempotent).
 
-    This is what makes new composite indexes show up on an upgraded DB.
-    Re-introspects so it sees any columns the column pass just added.
+    Re-introspects after the column pass so it can see newly added columns.
     """
     from sqlalchemy import inspect
     inspector = inspect(engine)
@@ -204,14 +202,13 @@ def _add_missing_indexes(conn) -> None:
 
 
 def _create_index_safely(conn, idx, table_name: str) -> None:
-    """Create one missing index inside a SAVEPOINT so a single failure can't
-    abort the whole index pass (and crash boot).
+    """Create one missing index inside a SAVEPOINT.
 
-    The only realistic additive failure is adding a UNIQUE index to a table that
-    already holds duplicate rows. We don't want that to take the app down on a
-    later release: roll back just this index, log loudly, and keep going. The
-    non-unique queries still work; an operator can dedupe and reboot to get the
-    constraint. SAVEPOINT is honoured by both Postgres and SQLite.
+    A single failure (most likely a UNIQUE index on a table that already holds
+    duplicate rows) won't abort the whole pass or crash boot. We roll back just
+    that index, log a warning, and continue. Non-unique queries keep working;
+    an operator can dedupe and reboot to add the constraint. SAVEPOINT works on
+    both Postgres and SQLite.
     """
     try:
         with conn.begin_nested():
@@ -226,14 +223,11 @@ def _create_index_safely(conn, idx, table_name: str) -> None:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist, then add any missing columns and
-    indexes the model declares. Idempotent and safe to call on every boot.
+    """Create tables if they don't exist, then add any missing columns and indexes.
 
-    SQLAlchemy's `create_all()` skips tables that already exist (and their
-    columns/indexes), so columns/indexes added in a later release would never
-    appear on a long-running database. The two follow-up passes close that gap.
-    This is strictly additive: nothing is dropped, altered or renamed, and
-    existing data is never touched.
+    Idempotent and safe to call on every boot. create_all() skips existing
+    tables, so subsequent passes handle columns and indexes added in later
+    releases. Nothing is dropped, renamed, or altered.
     """
     # Local import avoids circular import at module load.
     from app import models  # noqa: F401  (registers tables on Base.metadata)

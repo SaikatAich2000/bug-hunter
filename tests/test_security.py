@@ -1,20 +1,14 @@
-"""Security tests covering the application's hardening features.
+"""Security hardening tests.
 
-Covers:
+Covers login timing (no user-enumeration via latency), CSV/XLSX formula
+injection, body-size middleware, X-Forwarded-For trust gating, email
+masking in logs, per-account lockout, HaveIBeenPwned breach checks, and
+EXIF/metadata stripping on image uploads.
 
-  - login timing equality (no user-enumeration via response latency)
-  - CSV formula injection guard on bug export
-  - global request body size middleware
-  - X-Forwarded-For trust gate on audit IP
-  - masked email in INFO-level logs
-  - per-account lockout after N failed logins
-  - HaveIBeenPwned breach check on password set
-  - EXIF / metadata strip on uploaded images
-
-Each block has both a focused unit test and a route-level integration
-test where it makes sense. Module-level state used by the in-memory
-features (account lockout, HIBP backend) is reset between cases via
-the ``reset_security_state`` fixture so the suite is order-independent.
+Each section pairs unit tests with route-level integration tests where
+practical. In-memory state (lockout buckets, HIBP backend) is reset
+between cases via ``reset_security_state`` so the suite is
+order-independent.
 """
 from __future__ import annotations
 
@@ -25,16 +19,15 @@ from unittest import mock
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Shared fixtures
-# ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def reset_security_state():
-    """Wipe per-process security state between tests. The account
-    lockout buckets are in-memory; without this, a failed-login burst
-    in one test could lock the same email out of a later test."""
+    """Reset in-memory lockout state after each test.
+
+    The lockout buckets live in process memory, so a burst of failures in
+    one test would carry over and lock the same email out in a later test.
+    Cleanup runs after yield so a failing test doesn't skip it.
+    """
     yield
-    # Done AFTER yield so test failures still see clean state on rerun.
     try:
         from app import account_lockout
         account_lockout._reset_for_tests()
@@ -56,13 +49,11 @@ def _make_bug(client, title: str, project_id: int = 1) -> int:
 # Login timing equality
 # ---------------------------------------------------------------------------
 class TestLoginTimingEquality:
-    """Both the unknown-email and the wrong-password branches must run
-    one bcrypt verification. Without this, an attacker can enumerate
-    accounts by measuring response latency."""
+    """Unknown-email and wrong-password branches must both run one bcrypt
+    verification so response latency can't be used to enumerate accounts."""
 
     def test_unknown_email_still_runs_bcrypt(self, client):
-        # Patch verify_password to count calls without paying the
-        # 50 ms bcrypt cost in the test.
+        # Spy on verify_password rather than paying the real bcrypt cost.
         from app.routes import auth as auth_routes
         with mock.patch.object(auth_routes, "verify_password",
                                wraps=auth_routes.verify_password) as spy:
@@ -71,16 +62,15 @@ class TestLoginTimingEquality:
                 "password": "anything-at-all-9",
             })
         assert res.status_code == 401
-        # The dummy-hash path must invoke verify_password exactly once.
         assert spy.call_count == 1, (
             "Unknown-email branch did not run bcrypt — timing oracle still open"
         )
-        # And it must have used the dummy hash, not None / empty string.
+        # Must use the dummy hash, not None or an empty string.
         args, _ = spy.call_args
         assert args[1] == auth_routes._DUMMY_PASSWORD_HASH
 
     def test_wrong_password_branch_unchanged(self, client):
-        # The existing branch still works: real user, wrong password.
+        # Confirm the real-user/wrong-password path still hits verify_password.
         from tests.conftest import BOOTSTRAP_EMAIL
         from app.routes import auth as auth_routes
         with mock.patch.object(auth_routes, "verify_password",
@@ -107,11 +97,9 @@ class TestLoginTimingEquality:
 # ---------------------------------------------------------------------------
 # Spreadsheet formula injection (XLSX)
 #
-# A bug title like `=cmd|'/c calc.exe'!A1` becomes an Excel formula when
-# the workbook is opened, because openpyxl auto-treats cell values
-# starting with `=`/`+`/`-`/`@`/`\t`/`\r` as formulas. The values are
-# defanged at the same boundary in
-# app/reports/xlsx.py::_defang_formula_text.
+# openpyxl treats cell values starting with =, +, -, @, \t, or \r as
+# formulas when opened in Excel. Titles are defanged in
+# app/reports/xlsx.py::_defang_formula_text before being written.
 # ---------------------------------------------------------------------------
 class TestXlsxFormulaInjectionGuard:
 
@@ -129,9 +117,8 @@ class TestXlsxFormulaInjectionGuard:
         assert _defang_formula_text("") == ""
 
     def test_export_xlsx_prefixes_malicious_title(self, admin_client):
-        """End-to-end: a bug filed with a formula-shaped title must come
-        back through the XLSX with a leading single-quote so spreadsheet
-        apps render it as text rather than executing it."""
+        """A formula-shaped bug title must appear in the XLSX with a leading
+        single-quote so spreadsheet apps treat it as text, not a formula."""
         import io
         from openpyxl import load_workbook
         bug_id = _make_bug(admin_client, "=cmd|'calc.exe'!A1")
@@ -141,14 +128,12 @@ class TestXlsxFormulaInjectionGuard:
         })
         assert res.status_code == 200
         wb = load_workbook(io.BytesIO(res.content), read_only=True)
-        # Walk the cells in the main sheet looking for the title column.
         found_defanged = False
         for row in wb[wb.sheetnames[0]].iter_rows(values_only=True):
             for cell in row:
                 if not isinstance(cell, str):
                     continue
                 if "cmd|" in cell:
-                    # Must be prefixed with a single quote (defanged).
                     assert cell.startswith("'="), (
                         f"Un-neutralised formula in XLSX cell: {cell!r}"
                     )
@@ -162,26 +147,20 @@ class TestXlsxFormulaInjectionGuard:
 class TestBodySizeMiddleware:
 
     def test_normal_request_under_limit_succeeds(self, admin_client):
-        # 1 KB body is far below the 60 MB default limit.
         res = admin_client.get("/api/auth/me")
         assert res.status_code == 200
 
     def test_oversize_content_length_rejected_with_413(self, client, monkeypatch):
-        # Send a Content-Length that exceeds even a generous limit.
-        # Uploading 70 MB isn't necessary — middleware checks the
-        # header BEFORE reading the body. httpx normally overrides
-        # Content-Length to match the body, so the raw transport sends
-        # the actual body to make the assertion robust.
-        # Easiest deterministic path: lower the limit via env, send a
-        # body slightly above it. Requires fresh client to re-read settings.
-        # (Done in the next test.)
+        # Middleware checks Content-Length before reading the body, so we
+        # don't need to actually send 70 MB. Lowering the limit and sending a
+        # small body over it is done in the next test; this one just confirms
+        # the default limit is at least 50 MB (as documented).
         from app.main import settings
-        # Sanity: the default limit is at the documented 60 MB.
         assert settings.MAX_REQUEST_BODY_BYTES >= 50 * 1024 * 1024
 
     def test_oversize_body_rejected(self, tmp_path, monkeypatch):
-        """End-to-end check with a deliberately tiny limit to avoid
-        allocating hundreds of MB just to exercise the rejection."""
+        """Use a tiny limit (1 KB) so the test doesn't need to allocate
+        hundreds of MB to exercise the 413 path."""
         import sys
         db_file = tmp_path / "bodysize.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
@@ -189,7 +168,7 @@ class TestBodySizeMiddleware:
         monkeypatch.setenv("SESSION_SECRET", "test_secret")
         monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
         monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "Admin1234")
-        monkeypatch.setenv("MAX_REQUEST_BODY_BYTES", "1024")  # 1 KB cap
+        monkeypatch.setenv("MAX_REQUEST_BODY_BYTES", "1024")
         for mod in list(sys.modules):
             if mod == "app" or mod.startswith("app."):
                 del sys.modules[mod]
@@ -201,22 +180,19 @@ class TestBodySizeMiddleware:
             c.post("/api/auth/login", json={
                 "email": "admin@test.local", "password": "Admin1234",
             })
-            # Send a body larger than 1 KB to a JSON endpoint.
             payload = {"current_password": "Admin1234", "new_password": "x" * 2048}
             res = c.post("/api/auth/change-password", json=payload)
-            # The middleware fires BEFORE the route, so the response is a
-            # 413 (Payload Too Large) regardless of the route's own
-            # validation.
+            # Middleware fires before the route handler, so the status is 413
+            # regardless of what the route's own validation would say.
             assert res.status_code == 413, (
                 f"Expected 413, got {res.status_code}: {res.text}"
             )
             assert "too large" in res.json()["detail"].lower()
 
     def test_malformed_content_length_returns_400(self):
-        """The middleware must reject a non-integer Content-Length cleanly
-        rather than tracebacking inside the int() call. Exercised by
-        invoking the middleware's dispatch directly because httpx + uvicorn
-        normally enforce numeric Content-Length on the wire."""
+        """A non-integer Content-Length must yield 400, not an uncaught
+        ValueError from int(). Dispatched directly because httpx/uvicorn
+        enforce numeric Content-Length on the wire."""
         import asyncio
         from starlette.requests import Request
         from app.main import BodySizeLimitMiddleware
@@ -240,10 +216,6 @@ class TestBodySizeMiddleware:
         assert "try again" in body.lower()
 
 
-# ---------------------------------------------------------------------------
-# Coverage tests — cover the remaining defensive branches in the new
-# security modules so the suite catches regressions on those paths too.
-# ---------------------------------------------------------------------------
 class TestAccountLockoutEdgeCases:
 
     def test_env_int_falls_back_on_garbage(self, monkeypatch):
@@ -257,8 +229,8 @@ class TestAccountLockoutEdgeCases:
         assert _env_int("BH_GOOD_INT_VAR", 0) == 99
 
     def test_old_failures_get_evicted(self, monkeypatch):
-        """Failures older than the rolling window must be popleft'd so
-        a user who fat-fingers once a year doesn't accumulate a lockout."""
+        """Failures outside the rolling window must be evicted so an
+        infrequent typo never accumulates into a lockout."""
         import time
         from app import account_lockout
         monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_WINDOW_SECONDS", 0.05)
@@ -266,10 +238,9 @@ class TestAccountLockoutEdgeCases:
         account_lockout._reset_for_tests()
         for _ in range(2):
             account_lockout.record_failure("evictee@x.com")
-        time.sleep(0.07)  # past the 50 ms window
+        time.sleep(0.07)
         account_lockout.record_failure("evictee@x.com")
         bucket = account_lockout._buckets.get("evictee@x.com")
-        # Only the post-sleep failure should remain in the deque.
         assert bucket is not None
         assert len(bucket.fails) == 1
         account_lockout.check_locked("evictee@x.com")  # must not raise
@@ -282,6 +253,7 @@ class TestAccountLockoutEdgeCases:
         # Fill past the cap → eviction kicks in on the 6th entry.
         for i in range(7):
             account_lockout.record_failure(f"user{i}@x.com")
+        # 6th and 7th entries must have evicted the oldest to stay at cap.
         assert len(account_lockout._buckets) <= 5
 
     def test_clear_unknown_email_is_noop(self):
@@ -293,9 +265,9 @@ class TestAccountLockoutEdgeCases:
 
 
 class TestPasswordBreachFetchRange:
-    """Exercise the real ``_fetch_range`` body — every other breach-check
-    test monkeypatches this seam to keep tests hermetic. These tests stub
-    the httpx layer instead so the real branching is exercised."""
+    """Exercise the real ``_fetch_range`` implementation. All other breach
+    tests patch this seam for hermeticity; these stub the httpx layer so
+    the actual branching inside ``_fetch_range`` gets covered."""
 
     @pytest.fixture(autouse=True)
     def _enable(self, monkeypatch):
@@ -312,7 +284,6 @@ class TestPasswordBreachFetchRange:
 
         class _FakeClient:
             def __init__(self, **_kw):
-                # No-op stand-in for httpx.Client(timeout=...).
                 pass
             def __enter__(self): return self
             def __exit__(self, *_a): return False
@@ -352,29 +323,25 @@ class TestPasswordBreachFetchRange:
 class TestImageStripEdgeCases:
 
     def test_pillow_missing_returns_original(self, monkeypatch):
-        """If Pillow isn't installed, the helper must fail-open with the
+        """With Pillow absent the helper must fail open and return the
         original bytes unchanged."""
         import sys
         from app.image_strip import strip_image_metadata
-        # Force the next `from PIL import Image` to ImportError.
         monkeypatch.setitem(sys.modules, "PIL", None)
         raw = b"fake-jpeg-bytes"
         assert strip_image_metadata(raw, "image/jpeg") == raw
 
     def test_format_none_returns_original(self, monkeypatch):
-        """An image Pillow can open but whose .format is None (e.g. a
-        raw in-memory image) must round-trip unchanged."""
+        """An image Pillow opens but whose .format is None (e.g. a raw
+        in-memory buffer) must be returned unchanged."""
         from PIL import Image as PILImage
         from app.image_strip import strip_image_metadata
 
         class _FakeImg:
             format = None
             info: dict = {}
-            size = (8, 8)   # within the decode-pixel budget (the pre-check reads .size)
+            size = (8, 8)
             def load(self):
-                # Pillow's real load() decodes pixel data; the stub
-                # doesn't need to do anything to exercise the
-                # format-is-None branch.
                 pass
 
         monkeypatch.setattr(PILImage, "open", lambda _src: _FakeImg())
@@ -382,8 +349,8 @@ class TestImageStripEdgeCases:
         assert strip_image_metadata(raw, "image/jpeg") == raw
 
     def test_save_oserror_returns_original(self, monkeypatch):
-        """If Pillow's save raises OSError mid-encode, the helper logs and
-        returns the original bytes rather than tracebacking the upload."""
+        """An OSError from Pillow's save() must cause the helper to log
+        and return the original bytes rather than propagating the exception."""
         from PIL import Image as PILImage
         from app.image_strip import strip_image_metadata
 
@@ -391,8 +358,6 @@ class TestImageStripEdgeCases:
             format = "JPEG"
             info: dict = {}
             def load(self):
-                # No-op load — the failure under test is in save(),
-                # not in decode.
                 pass
             def save(self, _out, **_kw): raise OSError("disk full mid-encode")
 
@@ -401,15 +366,16 @@ class TestImageStripEdgeCases:
         assert strip_image_metadata(raw, "image/jpeg") == raw
 
     def test_content_type_with_charset_param_still_handled(self):
-        """Some browsers send ``image/jpeg; charset=binary`` — the helper
-        must strip the parameter before matching the prefix."""
+        """Some browsers send ``image/jpeg; charset=binary``. The helper
+        must strip the parameter before matching the MIME prefix.
+
+        No real JPEG here — just confirms the helper gets past the
+        content-type guard. Pillow can't decode the bytes, so it fails
+        open and returns the original. The full round-trip is covered by
+        TestExifStrip.
+        """
         from app.image_strip import strip_image_metadata
-        # There's no real JPEG here, so this just verifies the helper
-        # gets past the content-type guard (the real round-trip is
-        # already exercised by TestExifStrip).
         raw = b"not-a-jpeg"
-        # With the charset suffix the helper still treats it as image/jpeg
-        # and Pillow can't decode → fail-open returns the original.
         assert strip_image_metadata(raw, "image/jpeg; charset=binary") == raw
 
 
@@ -419,9 +385,8 @@ class TestImageStripEdgeCases:
 class TestXffTrustGate:
 
     def test_xff_ignored_when_trust_disabled(self, admin_client):
-        # Default TRUST_PROXY_FORWARDED_FOR = False (see config.py).
-        # An X-Forwarded-For header on a login should not influence the
-        # session-row IP.
+        # TRUST_PROXY_FORWARDED_FOR defaults to False.
+        # An XFF header on login must not affect the recorded session IP.
         admin_client.post("/api/auth/logout")
         res = admin_client.post(
             "/api/auth/login",
@@ -431,18 +396,15 @@ class TestXffTrustGate:
         assert res.status_code == 200
         sessions = admin_client.get("/api/sessions").json()
         assert sessions, "expected at least one session row"
-        # The recorded IP must be the actual transport client, not the
-        # spoofed XFF value.
         ips = [s["ip_address"] for s in sessions]
         assert "203.0.113.99" not in ips, (
             f"XFF was honoured despite TRUST_PROXY_FORWARDED_FOR=False: {ips}"
         )
 
     def test_xff_honoured_when_trust_enabled(self, tmp_path, monkeypatch):
-        """With TRUST_PROXY_FORWARDED_FOR=true (set before app load), the
-        right-most XFF entry — the address the trusted proxy appended — is
-        recorded on the session row. The left-most entry is client-controlled
-        and must not be trusted."""
+        """With TRUST_PROXY_FORWARDED_FOR=true the right-most XFF entry (the
+        one the trusted proxy appended) must be recorded. The left-most entry
+        is client-controlled and must not be stored."""
         import sys
         db_file = tmp_path / "xff.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
@@ -494,7 +456,6 @@ class TestEmailMasking:
         assert _mask_email(raw) == expected
 
     def test_inactive_login_logs_masked_email(self, admin_client, caplog):
-        # Create + deactivate a user, then attempt to log in as them.
         admin_client.post("/api/users", json={
             "name": "Disabled User", "email": "disabled@test.local",
             "role": "user", "password": "Disabled12",
@@ -526,7 +487,6 @@ class TestAccountLockout:
 
     def test_unit_check_locked_passes_when_no_state(self):
         from app import account_lockout
-        # No prior failures recorded — should not raise.
         account_lockout.check_locked("never-seen@example.com")
 
     def test_unit_threshold_triggers_lockout(self):
@@ -536,7 +496,6 @@ class TestAccountLockout:
             account_lockout.record_failure(email)
         with pytest.raises(Exception) as excinfo:
             account_lockout.check_locked(email)
-        # FastAPI HTTPException with 429 + Retry-After.
         assert getattr(excinfo.value, "status_code", None) == 429
         assert "Retry-After" in (excinfo.value.headers or {})
 
@@ -546,7 +505,6 @@ class TestAccountLockout:
         for _ in range(account_lockout._LOGIN_FAIL_LIMIT):
             account_lockout.record_failure(email)
         account_lockout.clear(email)
-        # Cleared bucket means no lockout.
         account_lockout.check_locked(email)
 
     def test_unit_unknown_email_also_counts(self):
@@ -564,13 +522,12 @@ class TestAccountLockout:
         monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_LIMIT", 0)
         for _ in range(50):
             account_lockout.record_failure("anyone@example.com")
-        # Should never raise when limit == 0 (operator opt-out).
+        # limit == 0 is the operator opt-out; must never raise.
         account_lockout.check_locked("anyone@example.com")
 
     def test_http_login_429_after_threshold(self, client):
-        """Drive the lockout from the route layer. The IP rate limit
-        (8/60s) would normally fire first, but the route-level test
-        still confirms 429 is returned to abusive clients."""
+        """Drive the lockout via the route. The IP rate limit (8/60s)
+        may fire first, but either way at least one response must be 429."""
         from tests.conftest import BOOTSTRAP_EMAIL
         codes = []
         for _ in range(15):
@@ -578,25 +535,19 @@ class TestAccountLockout:
                 "email": BOOTSTRAP_EMAIL, "password": "Wrong-pwd-9",
             })
             codes.append(r.status_code)
-        # At least one of the responses must be 429 — either from the
-        # IP limiter or the per-account lockout.
         assert 429 in codes, f"Expected 429 somewhere in {codes}"
 
     def test_successful_login_clears_lockout(self, client):
-        """After K (< threshold) failures, a successful login should
-        let the user keep going without carrying failure debt."""
+        """A successful login after some (sub-threshold) failures must
+        clear the bucket so those failures don't carry over."""
         from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
         from app import account_lockout
-        # 3 failures (below the threshold).
         for _ in range(3):
             account_lockout.record_failure(BOOTSTRAP_EMAIL)
         res = client.post("/api/auth/login", json={
             "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD,
         })
         assert res.status_code == 200
-        # Bucket should now be cleared. The internal state isn't easily
-        # checkable without reaching into the module, but a fresh
-        # failure-counter should not be in lockout state.
         account_lockout.check_locked(BOOTSTRAP_EMAIL)
 
 
@@ -604,15 +555,13 @@ class TestAccountLockout:
 # HIBP breach check
 # ---------------------------------------------------------------------------
 class TestPasswordBreachCheck:
-    """The conftest disables PASSWORD_BREACH_CHECK_ENABLED for the rest
-    of the suite (so unrelated tests stay hermetic). Integration tests
-    re-enable it inside the test body — the autouse approach loses to
-    the client fixture's later setenv call. Unit tests don't go
-    through the `client` fixture so the module default (enabled=True)
-    is fine for them."""
+    """conftest disables PASSWORD_BREACH_CHECK_ENABLED globally for hermeticity.
+    Integration tests re-enable it per test body (the autouse approach is
+    overridden by the client fixture's later setenv). Unit tests bypass the
+    client fixture, so the module default (enabled=True) applies."""
 
     def test_unit_known_breached_hash_matches(self):
-        # 'password' SHA-1 = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
+        # SHA-1("password") = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
         # prefix 5BAA6, suffix 1E4C9B93F3F0682250B6CF8331B7EE68FD8
         from app import password_breach
         body = "1E4C9B93F3F0682250B6CF8331B7EE68FD8:3861493\n"
@@ -621,13 +570,12 @@ class TestPasswordBreachCheck:
 
     def test_unit_unknown_password_passes(self):
         from app import password_breach
-        # An empty response means the suffix isn't listed.
         with mock.patch.object(password_breach, "_fetch_range", return_value=""):
             assert password_breach.is_password_breached("rare-uniq-pwd-9") is False
 
     def test_unit_padding_count_zero_treated_as_safe(self):
         from app import password_breach
-        # Lines with COUNT=0 are the API's anti-correlation padding.
+        # COUNT=0 entries are anti-correlation padding from the HIBP API.
         sha1_prefix_match = "1E4C9B93F3F0682250B6CF8331B7EE68FD8"
         body = f"{sha1_prefix_match}:0\n"
         with mock.patch.object(password_breach, "_fetch_range", return_value=body):
@@ -641,39 +589,33 @@ class TestPasswordBreachCheck:
     def test_unit_disabled_short_circuits(self, monkeypatch):
         from app import password_breach
         monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
-        # Even with a positive match the helper returns False when
-        # disabled. Mocking _fetch_range isn't needed — the function
-        # returns before reaching it.
+        # Returns False before reaching _fetch_range; no mock needed.
         assert password_breach.is_password_breached("password") is False
 
     @staticmethod
     def _force_match(pw: str) -> str:
-        """Build a HIBP /range/ response body that will match the SHA-1
-        suffix of ``pw``, regardless of what the prefix is. The
-        `_fetch_range` mock returns this body unconditionally; the
-        helper takes care of computing the right suffix."""
+        """Return a HIBP /range/ response body whose suffix matches the
+        SHA-1 of ``pw``. The mock returns this body unconditionally."""
         import hashlib
         digest = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()  # NOSONAR
         return f"{digest[5:]}:9999\n"
 
     def test_unit_changeme_allowlisted_despite_breach_match(self):
-        """The legacy default 'changeme' is always accepted (mirrors
-        schemas._check_password_strength), even though it is in the breach
-        corpus — so the breach gate must whitelist it, case-insensitively and
-        before any network call."""
+        """'changeme' is whitelisted case-insensitively (mirrors
+        schemas._check_password_strength) and must short-circuit before any
+        network call, even though it appears in the breach corpus."""
         from app import password_breach
-        body = self._force_match("changeme")  # this body would match its suffix
+        body = self._force_match("changeme")
         with mock.patch.object(password_breach, "_fetch_range", return_value=body) as m:
             assert password_breach.is_password_breached("changeme") is False
             assert password_breach.is_password_breached("CHANGEME") is False
-        # Whitelisted short-circuit returns before ever fetching the range.
         m.assert_not_called()
 
     def test_change_password_rejects_breached(self, admin_client, monkeypatch):
         monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "true")
         from app import password_breach
-        # GoodFresh123 passes the local strength rules but the mocked
-        # HIBP endpoint reports it as breached.
+        # GoodFresh123 passes local strength rules, but the mocked HIBP
+        # endpoint says it's breached.
         new_pw = "GoodFresh123"
         with mock.patch.object(
             password_breach, "_fetch_range",
@@ -716,14 +658,13 @@ class TestPasswordBreachCheck:
 # EXIF strip
 # ---------------------------------------------------------------------------
 def _jpeg_with_exif(gps_value: str = "secret-gps-tag") -> bytes:
-    """Build an in-memory JPEG that carries a custom EXIF tag to look
-    for after the upload roundtrip. Pillow 11+ exposes Image.Exif
-    directly — no extra dependency needed."""
+    """Return an 8x8 JPEG with ``gps_value`` stored in EXIF tag 270
+    (ImageDescription). Uses Pillow's Image.Exif directly (no extras)."""
     from PIL import Image
 
     img = Image.new("RGB", (8, 8), (200, 100, 50))
     exif = img.getexif()
-    exif[270] = gps_value              # 270 = ImageDescription tag
+    exif[270] = gps_value
     out = io.BytesIO()
     img.save(out, format="JPEG", exif=exif.tobytes())
     return out.getvalue()
@@ -775,7 +716,6 @@ class TestExifStrip:
     def test_unit_garbage_image_passes_through(self):
         from app.image_strip import strip_image_metadata
         raw = b"this is definitely not a jpeg"
-        # Pillow can't decode; the helper fails open.
         assert strip_image_metadata(raw, "image/jpeg") == raw
 
     def test_unit_empty_bytes_returns_empty(self):

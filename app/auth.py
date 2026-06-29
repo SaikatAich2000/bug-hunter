@@ -96,12 +96,11 @@ def hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt. Returns a string suitable for DB."""
     if not plain:
         raise ValueError("Password cannot be empty")
-    # bcrypt caps input at 72 bytes, so pre-hash with sha256 to handle long
-    # passwords. The 32-byte digest is well under the cap and is passed as raw
-    # bytes: the pinned pyca/bcrypt backend uses the buffer's explicit length
-    # and does not NUL-truncate, so an embedded 0x00 is safe. This pre-processing
-    # must stay byte-for-byte identical to verify_password — changing it (e.g.
-    # base64-encoding the digest) would invalidate every stored password.
+    # bcrypt caps input at 72 bytes. Pre-hashing with sha256 handles long
+    # passwords: the 32-byte digest is safely under the cap and passed as raw
+    # bytes (pyca/bcrypt uses the buffer length, not NUL termination).
+    # This must stay identical to verify_password; changing it would invalidate
+    # every stored hash.
     pre = hashlib.sha256(plain.encode("utf-8")).digest()
     return bcrypt.hashpw(pre, bcrypt.gensalt(rounds=12)).decode("utf-8")
 
@@ -283,7 +282,7 @@ def _delete_expired_session(db: Session, sess: SessionRow, jti: str) -> None:
 
 
 def _maybe_bump_last_seen(db: Session, sess: SessionRow, now: datetime, jti: str) -> None:
-    """Throttled write of sess.last_seen_at - skipped if recent."""
+    """Throttled write of sess.last_seen_at, skipped if recent."""
     last_seen = sess.last_seen_at
     if last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
@@ -327,16 +326,16 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         return None
-    # Token's session_version must match the user's current value, which is
-    # bumped on password change / reset / forced logout.
+    # session_version is bumped on password change/reset/forced logout, which
+    # invalidates every previously issued cookie for this user.
     if (user.session_version or 0) != session_version:
         return None
-    # Per-session revocation: if the cookie carries a jti, look it up.
-    # Tokens with no jti pre-date the sessions table.
+    # If the cookie has a jti, validate the session row. Tokens without a jti
+    # pre-date the sessions table.
     if jti is None:
         if get_settings().SESSION_REQUIRE_JTI:
-            # Refuse jti-less cookies that can't be revoked per-device.
-            # Operators enable this after a migration window.
+            # Refuse cookies that can't be revoked per-device.
+            # Operators flip this on after a migration window.
             logger.info("Rejected jti-less session for user_id=%s", user_id)
             return None
         logger.debug("Accepting jti-less session for user_id=%s", user_id)
@@ -364,7 +363,7 @@ def get_current_user_optional(
     request: Request,
     db: Session = Depends(get_db),
 ) -> Optional[User]:
-    """Return the current user if logged in, else None — never raises."""
+    """Return the current user if logged in, else None. Never raises."""
     return _user_from_request(request, db)
 
 
@@ -415,7 +414,7 @@ def can_edit_comment(user: User) -> bool:
 
 
 def can_delete_comment(user: User) -> bool:
-    """Deleting a comment is admin-only — see can_edit_comment."""
+    """Deleting a comment is admin-only (see can_edit_comment)."""
     return user.role == ROLE_ADMIN
 
 
@@ -426,7 +425,7 @@ def can_delete_attachment(user: User) -> bool:
 
 
 def can_edit_event(user: User) -> bool:
-    """Events are admin/manager only — users have no edit rights."""
+    """Events are admin/manager only; users have no edit rights."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 
@@ -436,8 +435,8 @@ def can_delete_event(user: User) -> bool:
 
 
 def can_manage_projects(user: User) -> bool:
-    """Create / edit projects: admin or manager. Delete is admin-only —
-    see can_delete_project."""
+    """Create / edit projects: admin or manager. Delete is admin-only
+    (see can_delete_project)."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 
@@ -446,8 +445,8 @@ def can_delete_project(user: User) -> bool:
 
 
 def can_manage_users(user: User) -> bool:
-    """Create / edit users: admin or manager. Delete is admin-only — see
-    can_delete_user."""
+    """Create / edit users: admin or manager. Delete is admin-only (see
+    can_delete_user)."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 
@@ -456,7 +455,7 @@ def can_delete_user(user: User) -> bool:
 
 
 def can_view_audit(user: User) -> bool:
-    """Audit trail is hidden from regular users — they don't need to see who
+    """Audit trail is hidden from regular users; they don't need to see who
     did what across the system."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 

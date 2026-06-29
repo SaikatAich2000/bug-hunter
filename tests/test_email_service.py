@@ -12,10 +12,9 @@ from types import SimpleNamespace
 
 from app import email_service as es
 
-# config.py binds its settings from os.getenv at class-definition time and
+# config.py binds settings from os.getenv at class-definition time and
 # auto-loads .env, so setenv+cache_clear can't reshape an already-imported
-# Settings. Instead we monkeypatch the get_settings the module actually calls
-# and hand it an explicit, fully-specified settings object.
+# Settings object. We monkeypatch get_settings directly instead.
 
 
 def _use_backend(monkeypatch, backend: str, **over) -> None:
@@ -30,7 +29,7 @@ def _use_backend(monkeypatch, backend: str, **over) -> None:
         SMTP_USE_TLS=False,
         SMTP_USE_SSL=False,
         SMTP_TIMEOUT=10,
-        # Digest off by default → these tests exercise the immediate-send path.
+        # Digest off so these tests exercise the immediate-send path.
         EMAIL_DIGEST_ENABLED=False,
         EMAIL_DIGEST_LOOKBACK_HOURS=26,
     )
@@ -70,10 +69,10 @@ def _event(**over) -> es.EventSnapshot:
 def test_recipients_dedup_and_exclude_actor():
     dup = _user(2, "Dev A", "deva@bh.local")
     bug = _bug(assignees=(dup, _user(2, "Dev A copy", "DEVA@bh.local"), _user(9, "", "")))
-    # Case-insensitive dedup + drop the no-email assignee.
+    # Dedup is case-insensitive; the no-email assignee is dropped.
     out = es._recipients(bug, exclude_user_id=None)
     assert out == ["rep@bh.local", "deva@bh.local"]
-    # Excluding the reporter drops them.
+    # Excluding the reporter removes them from the list.
     assert "rep@bh.local" not in es._recipients(bug, exclude_user_id=1)
 
 
@@ -179,7 +178,7 @@ class _FakeSMTP:
         self.sent.append(msg)
 
 
-_CRED = "s3cr3t"  # not a real secret — exercises the auth branch only
+_CRED = "s3cr3t"  # placeholder value to exercise the auth branch
 
 
 def test_smtp_starttls_path(monkeypatch):

@@ -1,6 +1,6 @@
 /**
- * Global blocking loader. Counter-based so concurrent operations can share it;
- * drives the #globalLoader overlay the App shell renders.
+ * Counter-based global loader — multiple concurrent callers each increment/decrement
+ * so the overlay stays visible until all of them finish.
  */
 let pending = 0;
 

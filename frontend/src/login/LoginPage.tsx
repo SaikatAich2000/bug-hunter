@@ -1,12 +1,11 @@
-// Login page.
+// Playwright selects inputs by name="email" / name="password" and the submit
+// button, so those attributes are load-bearing — don't rename them.
 //
-//  - Playwright logs in via input[name="email"], input[name="password"] and
-//    the submit button, so those names and the submit control are load-bearing.
-//  - "Version __APP_VERSION__" is a literal placeholder the backend
-//    substitutes when serving the page (see app/main.py _serve_html); it must
-//    stay verbatim in the rendered output.
-//  - No inline scripts/styles anywhere: the app ships a strict CSP (script-src
-//    'self', no 'unsafe-inline'). The theme bootstrap lives in main.tsx.
+// "__APP_VERSION__" is substituted server-side by _serve_html() in app/main.py;
+// keep it verbatim in any template that serves it.
+//
+// No inline scripts or styles: the CSP is strict (script-src 'self', no
+// 'unsafe-inline'). Theme bootstrap lives in main.tsx.
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, MouseEvent as ReactMouseEvent } from "react";
 import PasswordInput from "../components/PasswordInput";
@@ -18,8 +17,7 @@ interface AlertState {
   kind: AlertKind;
 }
 
-// Error parsing: {detail} may be a plain string or a Pydantic
-// validation-error array of objects carrying a `msg` field.
+// detail can be a plain string or a Pydantic validation-error array.
 function detailMessage(data: unknown, fallback: string): string {
   if (typeof data === "object" && data !== null && "detail" in data) {
     const detail: unknown = (data as { detail: unknown }).detail;
@@ -43,8 +41,7 @@ export default function LoginPage() {
   const forgotEmailRef = useRef<HTMLInputElement>(null);
   const mountedRef = useRef(false);
 
-  // Focus the revealed form's email input when the user toggles between forms.
-  // Initial focus comes from autoFocus.
+  // Re-focus the email field on view switch; initial focus is handled by autoFocus.
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -101,15 +98,13 @@ export default function LoginPage() {
         setLoginAlert({ msg, kind: "error" });
         return;
       }
-      // Success — redirect to home (or `next` query param if provided).
-      // Only accept a same-origin relative path; reject absolute, protocol-
-      // relative ("//host") and backslash variants to avoid an open redirect.
+      // Redirect to `next` if given, but only accept a relative path to
+      // prevent open-redirect via absolute or protocol-relative URLs.
       const params = new URLSearchParams(location.search);
       const requested = params.get("next") || "/";
       const next = /^\/(?![/\\])/.test(requested) ? requested : "/";
       location.replace(next);
     } catch {
-      // The user already sees the alert below; no need to noise up the console.
       setLoginAlert({ msg: "Network error. Try again", kind: "error" });
     } finally {
       setLoginBusy(false);
@@ -129,8 +124,7 @@ export default function LoginPage() {
         body: JSON.stringify({ email }),
       });
       if (res.status === 204) {
-        // Email exists — the server queued the reset link. Be specific
-        // about what happens next so the user knows to check their inbox.
+        // 204 means the server queued a reset email.
         setForgotAlert({
           msg: "Reset link sent. Check your inbox — the link expires in 30 minutes",
           kind: "success",
@@ -290,11 +284,9 @@ export default function LoginPage() {
           </div>
         </form>
       </div>
-      {/* The "Version X.Y" line is not rendered here: __APP_VERSION__ is a
-          placeholder the backend substitutes into served HTML files only —
-          inside this JS bundle it would reach users verbatim. The line lives in
-          frontend/login.html (after #root), where _serve_html() replaces it
-          server-side. */}
+      {/* Version string lives in login.html, not here — __APP_VERSION__ is
+          replaced server-side by _serve_html() and would be emitted verbatim
+          from this bundle. */}
     </main>
   );
 }

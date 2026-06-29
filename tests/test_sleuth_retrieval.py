@@ -40,7 +40,7 @@ def test_like_escape_neutralizes_wildcards():
 def test_snippet_empty_unmatched_and_centered():
     from app.chatbot.retrieval import _snippet
     assert _snippet("", ["x"]) == ""
-    # term not found or at the start -> excerpt from the beginning
+    # no match or match at the start -> excerpt from the beginning
     assert _snippet("login button broken", ["nomatch"]).startswith("login button")
     assert _snippet("login button broken", ["login"]).startswith("login button")
     # term deep in the text -> centered excerpt with an ellipsis prefix
@@ -95,6 +95,30 @@ def test_retrieve_respects_limit(admin_client):
         db.close()
 
 
+def test_retrieve_bugs_scoped_to_accessible_projects(admin_client):
+    """Regression: retrieval must honour the actor's project scope so a
+    restricted user can't have out-of-scope bug text injected into the model
+    context (previously it queried every bug regardless of membership)."""
+    from app.database import SessionLocal
+    from app.chatbot import retrieval
+    pa = _project(admin_client, "Alpha")
+    pb = _project(admin_client, "Beta")
+    a_id = _bug(admin_client, pa, "Checkout latency Alpha", "shared keyword zephyr here")
+    b_id = _bug(admin_client, pb, "Checkout latency Beta", "shared keyword zephyr here")
+    db = SessionLocal()
+    try:
+        # admin (None scope) sees both projects
+        ids = {r.id for r in retrieval.retrieve_bugs(db, "zephyr", accessible=None)}
+        assert {a_id, b_id} <= ids
+        # restricted to Alpha; Beta's bug must not appear
+        scoped = {r.id for r in retrieval.retrieve_bugs(db, "zephyr", accessible={pa})}
+        assert a_id in scoped and b_id not in scoped
+        # empty scope retrieves nothing
+        assert retrieval.retrieve_bugs(db, "zephyr", accessible=set()) == []
+    finally:
+        db.close()
+
+
 # --- format_context ---------------------------------------------------------
 
 def test_format_context_empty_and_records():
@@ -137,6 +161,17 @@ def test_annotate_appends_caveat_only_when_ungrounded():
     assert "#9, #10" in many and "them" in many
 
 
+def test_flag_write_claims_appends_only_for_self_attributed_writes():
+    from app.chatbot.verify import flag_write_claims
+    # an answer that claims the model itself performed a change gets a correction appended
+    claim = flag_write_claims("Sure — I closed bug #5 and assigned it to Alice.")
+    assert claim.startswith("Sure — I closed") and "can't change anything" in claim
+    # text that doesn't claim a self-performed write passes through unchanged
+    assert flag_write_claims("You can close it from the panel.") == \
+        "You can close it from the panel."
+    assert flag_write_claims("") == ""
+
+
 # --- end-to-end: grounded retrieval + answer verification in the cloud path --
 
 def test_cloud_answer_is_grounded_and_verified(admin_client, monkeypatch):
@@ -150,10 +185,10 @@ def test_cloud_answer_is_grounded_and_verified(admin_client, monkeypatch):
     monkeypatch.setattr(s, "SLEUTH_RETRIEVAL_ENABLED", True)
     monkeypatch.setattr(s, "SLEUTH_VERIFY_ANSWERS", True)
     monkeypatch.setattr(cloud_llm, "is_available", lambda: True)
-    # The model cites a real (grounded) bug and a fabricated one.
+    # stub returns one grounded citation and one fabricated one
     monkeypatch.setattr(
-        cloud_llm, "_call_gemini",
-        lambda system, user: (
+        cloud_llm, "_call_groq",
+        lambda system, user, **kw: (
             '{"mode":"answer","text":"The login issue is bug #%d. Also see #99999."}' % bid
         ),
     )
@@ -163,8 +198,8 @@ def test_cloud_answer_is_grounded_and_verified(admin_client, monkeypatch):
         resp = cloud_llm.try_understand("safari login crash", db, actor)
         assert resp is not None and resp.intent == "cloud_answer"
         text = resp.blocks[0].payload["text"]
-        assert f"#{bid}" in text             # grounded citation preserved
-        assert "#99999" in text              # fabricated citation named in the caveat
-        assert "could not ground" in text    # transparency caveat appended
+        assert f"#{bid}" in text             # grounded citation kept
+        assert "#99999" in text              # fabricated citation named in caveat
+        assert "could not ground" in text    # caveat appended for transparency
     finally:
         db.close()

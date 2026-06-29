@@ -1,13 +1,10 @@
 /**
- * ItemPicker — a searchable, multi-select combobox for linking work items.
- * Optionally filter by type (All / Bugs / Requirements / Tasks), search by
- * title or #id, and tick one or more results; chosen items appear as removable
- * chips and are linked together when the caller's "Link" button is pressed.
+ * Searchable, multi-select combobox for linking work items.
  *
- * Controlled: `selected` is the array of staged items; toggling a row calls
- * onChange with the next array. `excludeIds` removes the current item and
- * anything already linked, preventing duplicate or self-links. GET /bugs
- * returns every item type; the type tabs scope it server-side.
+ * Controlled: `selected` holds the staged items; toggling a row calls
+ * `onChange` with the updated array. `excludeIds` strips the current item and
+ * already-linked items so self-links and duplicates are impossible. GET /bugs
+ * returns all types; the type tabs add a server-side filter.
  */
 import {
   useCallback,
@@ -69,7 +66,7 @@ export default function ItemPicker({
   excludeRef.current = excludeIds;
   const selectedIds = new Set(selected.map((s) => s.id));
 
-  // Last-writer-wins so a slow earlier response can't clobber a newer one.
+  // Sequence counter: a slow response arriving after a newer one is dropped.
   const seqRef = useRef(0);
 
   const runSearch = useCallback(async (q: string, type: TypeKey) => {
@@ -95,19 +92,17 @@ export default function ItemPicker({
     }
   }, []);
 
-  // Read the current type tab at fire time (not the keystroke-time value) so a
-  // trailing debounced search can't repopulate the list with the previous tab's
-  // results after the user switched tabs within the debounce window.
+  // Read typeFilter at call time, not at debounce-schedule time, so a trailing
+  // call can't populate the list with results from the previously selected tab.
   const typeFilterRef = useRef(typeFilter);
   typeFilterRef.current = typeFilter;
   const debouncedSearch = useRef(
     debounce((q: string) => void runSearch(q, typeFilterRef.current), 200),
   ).current;
-  // Cancel a pending trailing search when the picker unmounts so it can't fire
-  // a stale query (and resolve) after the component is gone.
+  // Cancel any pending debounced call on unmount to avoid stale state updates.
   useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
 
-  // Open → focus search + load an initial page for the active type tab.
+  // On open: focus the input and fetch the initial result page.
   useEffect(() => {
     if (!open) return;
     inputRef.current?.focus();
@@ -115,7 +110,7 @@ export default function ItemPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Switching the type tab while open re-queries immediately (no debounce).
+  // Tab switch while open re-queries immediately, bypassing the debounce.
   useEffect(() => {
     if (open) void runSearch(query, typeFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -196,7 +191,6 @@ export default function ItemPicker({
 
   return (
     <div className="item-picker" ref={wrapRef}>
-      {/* Staged selections — removable chips. */}
       {selected.length > 0 && (
         <div className="item-picker-chips">
           {selected.map((it) => (

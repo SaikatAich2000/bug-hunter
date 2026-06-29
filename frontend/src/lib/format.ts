@@ -1,6 +1,6 @@
 /** Formatting helpers. */
 
-/** "MMM D, YYYY, HH:MM" — always shows both date and time. */
+/** "MMM D, YYYY, HH:MM" */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -51,8 +51,7 @@ export function fileIcon(
   return "📎";
 }
 
-/** Icon per audit/activity action. Shared by the bug modal's activity feed and
- * the Audit Trail view. */
+/** Icon per audit/activity action. Used in both the bug modal feed and the Audit Trail view. */
 export function activityIcon(action: string): string {
   if (action.includes("session")) return "🔐";
   if (action.includes("login")) return "🔑";
@@ -86,7 +85,7 @@ export function timeAgo(iso: string | null | undefined): string {
 
 export interface Debounced<A extends unknown[]> {
   (...args: A): void;
-  /** Cancel any pending trailing invocation (call from an unmount cleanup). */
+  /** Cancel any pending invocation. */
   cancel: () => void;
 }
 

@@ -1,11 +1,11 @@
 /**
- * SuperNav — the second chrome band: the work-item type tabs on the left + the
- * search box on the right. The band only appears on the views the type tabs
- * apply to (list / analytics); the search box is list-only.
+ * Second chrome band: work-item type tabs (left) and search box (right).
+ * Renders only on views where type tabs are relevant (list / analytics);
+ * search is list-only.
  *
- * The search debounces a 300ms write into filters.q, with a "last sent" ref so
- * external clears (the Clear-all button) flow back into the box without
- * fighting typing.
+ * Search debounces 300 ms before writing to filters.q. The lastSent ref lets
+ * external clears (Clear-all button) update the input without racing a
+ * keystroke in progress.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
@@ -34,7 +34,6 @@ export default function SuperNav() {
     }
   }, [filters.q]);
 
-  // The band exists only where the type tabs apply.
   if (view !== "list" && view !== "analytics") return null;
 
   return (

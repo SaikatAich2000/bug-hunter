@@ -1,23 +1,19 @@
 """Sleuth Layer 2 — statistical intent classifier.
 
-Catches paraphrases the rule-based parser in nlu.py misses. Pure Python,
-no external model files or GPU; the trained state is the corpus dict below
-plus the IDF weights.
+Catches paraphrases that the rule-based parser in nlu.py misses. Pure
+Python, no external model files or GPU; the trained state is just the
+corpus dict and the IDF weights computed at import time.
 
-How it works:
-- A small hand-curated corpus maps example phrasings to intent labels.
-- IDF weights are computed once at import time over the corpus.
-- For each incoming message, tokenize + normalize, compute a TF-IDF
-  vector, and find the highest cosine-similarity intent.
-- A confidence threshold gates the prediction. Below threshold, return
-  None so the caller falls through to the LLM (if installed) or "unknown".
+A hand-curated corpus maps example phrasings to intent labels. Incoming
+messages are tokenized, converted to TF-IDF vectors, and matched by cosine
+similarity. Below a confidence threshold the call returns None, leaving
+dispatch to the LLM or "unknown".
 
-A finite bug-tracker vocabulary makes this effective: paraphrases like
-"show me the open ones" / "list all open" / "what's still open" share
-enough overlapping tokens that IDF cosine similarity ranks them together.
-Add examples to the corpus to extend coverage. A neural classifier
-(DistilBERT, MiniLM) would cost 100-500 MB RAM for little benefit on this
-constrained vocabulary and is not worth it on a 2 GB box.
+The bug-tracker vocabulary is small and closed, so paraphrases like "show
+me the open ones" / "list all open" / "what's still open" share enough
+tokens that cosine similarity groups them reliably. A neural classifier
+(DistilBERT, MiniLM) would cost 100-500 MB RAM for little practical gain
+on this constrained vocabulary.
 """
 from __future__ import annotations
 
@@ -30,9 +26,9 @@ from dataclasses import dataclass
 # ---------------------------------------------------------------------------
 # Training corpus
 # ---------------------------------------------------------------------------
-# Each tuple is (intent_label, list_of_example_phrasings). The labels are
-# the same strings nlu.parse() emits as `pq.intent`, so executor.execute()
-# can dispatch on them uniformly.
+# Each tuple is (intent_label, example_phrasings). Labels match what
+# nlu.parse() emits as pq.intent, so executor.execute() dispatches on them
+# uniformly.
 _CORPUS: list[tuple[str, list[str]]] = [
     ("greeting", [
         "hi", "hello", "hey there", "good morning", "yo", "howdy",
@@ -126,8 +122,7 @@ _CORPUS: list[tuple[str, list[str]]] = [
 
 
 # ---------------------------------------------------------------------------
-# Tokenization — lowercase, alphanumeric, drop very short tokens unless they
-# look like a bug id.
+# Tokenization
 # ---------------------------------------------------------------------------
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _STOPWORDS = {
@@ -140,9 +135,9 @@ _STOPWORDS = {
 
 
 def _tokenize(text: str) -> list[str]:
-    """Lowercase + alnum-extract + stop-word drop. The bug-id placeholder
-    `<NUM>` is substituted in for any pure-digit token so the classifier
-    treats `bug 5` and `bug 12` identically."""
+    """Lowercase, extract alphanumeric tokens, drop stop-words. Pure-digit
+    tokens are replaced with the placeholder ``<num>`` so "bug 5" and
+    "bug 12" produce the same vector."""
     if not text:
         return []
     tokens: list[str] = []
@@ -157,7 +152,7 @@ def _tokenize(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Train: compute IDF over the corpus once at import time.
+# Model: IDF weights computed once at import time.
 # ---------------------------------------------------------------------------
 @dataclass
 class _TrainedModel:
@@ -180,13 +175,13 @@ def _train(corpus: list[tuple[str, list[str]]]) -> _TrainedModel:
     for _intent, tc in docs:
         for term in tc:
             df[term] += 1
-    # Smoothed IDF — log((1 + N) / (1 + df)) + 1, like sklearn's default.
+    # Smoothed IDF: log((1+N)/(1+df)) + 1, matching sklearn's default.
     idf: dict[str, float] = {
         t: math.log((1 + n) / (1 + d)) + 1.0
         for t, d in df.items()
     }
-    # Pre-compute each doc's vector norm so cosine doesn't have to redo
-    # it per query.
+    # Cache each doc's vector norm so cosine similarity is a single dot
+    # product per query.
     doc_norms: list[float] = []
     for _intent, tc in docs:
         s = 0.0
@@ -239,26 +234,24 @@ def _cosine(qc: Counter[str], q_norm: float,
 
 
 def predict(message: str, threshold: float = 0.35) -> Prediction | None:
-    """Return the most likely intent label for `message`, or None if the
+    """Return the most likely intent label for ``message``, or None if the
     classifier isn't confident enough.
 
-    The threshold is calibrated so paraphrases of corpus examples cross
-    it but free-form noise ("xyzzy frobnicate qux") doesn't. Raising it
-    trades coverage for precision."""
+    The threshold is calibrated so paraphrases of corpus examples cross it
+    but free-form noise does not. Raising it trades recall for precision."""
     tokens = _tokenize(message)
     if not tokens:
         return None
-    # Reject degenerate inputs that carry no real signal: a message whose ONLY
-    # tokens are the <num> placeholder (e.g. "is it 5?" → ['<num>']) has
-    # near-zero IDF mass yet can spuriously cross the threshold against any doc
-    # that also contains <num>. Out-of-vocabulary words still flow through to
-    # the normal cosine/threshold gate below (which correctly returns None).
+    # A message whose only token is <num> (e.g. "is it 5?") carries no real
+    # signal but can spuriously cross the threshold against corpus docs that
+    # also contain <num>. OOV words flow through to the cosine gate below,
+    # which handles them correctly by returning None.
     if all(t == "<num>" for t in tokens):
         return None
     qc, q_norm = _vec(tokens, _MODEL.idf)
 
-    # Per-intent best score: a single message can match any one example
-    # in any intent's example list, and we pick the overall max.
+    # Score every corpus doc individually; the best match across all docs
+    # wins, regardless of which example phrase it came from.
     best_intent = ""
     best_score = -1.0
     runner_intent = ""
@@ -267,7 +260,7 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
         score = _cosine(qc, q_norm, dc, d_norm, _MODEL.idf)
         if score > best_score:
             if best_intent != intent:
-                # Different intent winning — old best becomes runner-up.
+                # New top intent from a different class; demote old best.
                 runner_intent = best_intent
                 runner_score = best_score
             best_intent = intent
@@ -287,8 +280,7 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
 
 
 # ---------------------------------------------------------------------------
-# Convenience: explain why we picked something. Useful for debugging
-# misclassifications without firing up a Python REPL.
+# Debug helper: show per-doc scores for a message.
 # ---------------------------------------------------------------------------
 def explain(message: str, top_k: int = 5) -> list[tuple[str, float]]:
     tokens = _tokenize(message)

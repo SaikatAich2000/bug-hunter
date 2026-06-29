@@ -1,10 +1,9 @@
 /**
- * Sidebar — the library rail: Projects and Team entity lists only.
+ * Sidebar — project/team rail.
  *
- * The brand mark and view nav live in the TopChrome bar; the sidebar is purely
- * the project / user lists, with the swatch/avatar = filter vs name = edit
- * click split and the manager/admin add + delete handlers. Account actions
- * (change-password / theme / log out) live in the top-right ProfileMenu.
+ * Brand mark and view nav belong to TopChrome; this component owns only the
+ * project/user lists. Swatch/avatar click = filter, name click = edit.
+ * Account actions live in ProfileMenu (top-right).
  */
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
@@ -21,9 +20,8 @@ interface Props {
   readonly onNavigate?: () => void;
 }
 
-// Make a non-<button> interactive element keyboard-operable: Enter/Space fire
-// the same action as a click. Used for the swatch/avatar/label spans below,
-// which stay <span> (not <button>) to preserve the existing grid/CSS layout.
+// Lets non-<button> interactive spans respond to Enter/Space like a click.
+// Spans are used instead of buttons here to keep the existing grid layout intact.
 function keyActivate(fn: () => void) {
   return (e: { key: string; preventDefault: () => void }) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -55,8 +53,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     health,
   } = useApp();
 
-  // Same VIEW_MIN_ROLE gate the TopChrome nav uses — the mobile drawer nav and
-  // the desktop chrome nav consume one source of truth so they can't drift.
+  // Mirrors the TopChrome nav gate so mobile and desktop can't drift.
   const allowed = (v: ViewName): boolean => {
     const need = VIEW_MIN_ROLE[v];
     return !need || roleRank(currentUser.role) >= roleRank(need);
@@ -95,8 +92,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     try {
       await withLoader(async () => {
         await api(`/projects/${id}`, { method: "DELETE" });
-        // Drop the deleted project from the multi-select filter so we don't
-        // keep filtering by a no-longer-existing id.
+        // Remove the deleted project from any active filter.
         setFilters((prev) => ({
           ...prev,
           project_id: prev.project_id.filter((v) => v !== id),
@@ -138,20 +134,16 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
       id="sidebar"
       aria-label="Projects and team"
     >
-      {/* Mobile-only brand header. On phones the chrome bar shows only the
-          logo, so the drawer carries the wordmark and version. Hidden on
-          desktop via CSS, where the chrome shows the brand. */}
+      {/* Mobile-only brand header — hidden on desktop where TopChrome owns the brand. */}
       <div className="sidebar-brand">
         <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
         <div className="wm">
           <b>BUG<span>HUNTER</span></b>
-          <small>{health ? `Version ${health.version}` : "Version 3.0"}</small>
+          <small>{health ? `Version ${health.version}` : "Version 3.1"}</small>
         </div>
       </div>
 
-      {/* Mobile-only view nav — on desktop the chrome bar owns the view nav,
-          so this is hidden via CSS (≥900px). On phones the chrome nav is
-          hidden and this drawer becomes the way to switch views. */}
+      {/* Mobile-only view nav (hidden ≥900px via CSS). Desktop uses TopChrome nav instead. */}
       <nav className="sidebar-nav" aria-label="Main sections">
         {NAV_ITEMS.filter((item) => allowed(item.view)).map((item) => (
           <button
@@ -329,11 +321,8 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
         </section>
       )}
 
-      {/* Collapse control, pinned to the bottom of the rail. On desktop it
-          narrows the sidebar to an icon strip (the chevron rotates to indicate
-          expand). Hidden on the mobile drawer, where the close button below
-          replaces it. State is held in AppContext, which toggles the
-          body.sidebar-collapsed class and persists the choice to localStorage. */}
+      {/* Desktop collapse toggle — hidden on mobile, where the close button below takes its place.
+          AppContext persists the collapsed state to localStorage. */}
       <button
         type="button"
         className="sidebar-collapse-btn"
@@ -359,9 +348,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
         <span className="collapse-label">Collapse sidebar</span>
       </button>
 
-      {/* Mobile-only counterpart to the collapse control: same footer styling,
-          but it closes the off-canvas drawer via onNavigate. Hidden on desktop,
-          where the collapse button above is shown instead. */}
+      {/* Mobile-only close button — hidden on desktop, where the collapse button above is shown. */}
       <button
         type="button"
         className="sidebar-close-btn"

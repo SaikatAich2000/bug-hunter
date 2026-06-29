@@ -6,7 +6,7 @@ Uses self-contained temp-SQLite isolation.
 from __future__ import annotations
 
 import os as _os, sys as _sys
-# Make the bug-hunter root importable when run directly.
+# Ensure the repo root is on the path when running this file directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
@@ -23,10 +23,9 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 
-# Force a fresh app import bound to this file's dedicated DB. Without this, an
-# earlier-collected test module that already imported app.database leaves the
-# engine bound to a different (often torn-down) DB, so our seed()'s create_all
-# fails with "no such table" in the full-suite collection order.
+# Force a fresh import of app.* bound to this file's dedicated DB. If an earlier
+# test module already imported app.database, the engine is still pointing at its
+# (possibly torn-down) DB, and seed()'s create_all will fail with "no such table".
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -43,11 +42,13 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind this file's module-level app.* references to the current import
-    generation each test. conftest's `client` fixture purges `app.*` from
-    sys.modules to rebind the engine per test; without this our `executor` /
-    `memstore` / `engine` would be stale while execute()'s internal imports
-    resolve to a fresh generation, so staged actions and DB reads would diverge."""
+    """Re-bind module-level app.* references to the current import generation.
+
+    conftest purges app.* from sys.modules between tests to rebind the engine.
+    Without this, our executor/memstore/engine stay stale while execute()'s
+    internal imports resolve to the fresh generation, causing staged actions
+    and DB reads to diverge.
+    """
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -130,25 +131,23 @@ def test_assign_flow() -> None:
     db = SessionLocal()
     try:
         admin = db.get(models.User, admin_id)
-        # Step 1: parse + stage
+        # Parse and stage the action.
         resp = executor.execute(f"assign bug {bug1} to alice", db, admin)
         check("assign — intent is confirm",
               resp.intent == "confirm_action", f"got {resp.intent}")
         check("assign — confirm block present",
               any(b.kind == "confirm" for b in resp.blocks))
-        # Step 2: memory holds the pending action
         sess = memstore.get(admin_id)
         check("assign — memory has pending_action",
               sess is not None and sess.pending_action is not None)
 
-        # Pre-confirm: bug still has just bob
+        # DB should be unchanged until confirmed.
         bug_pre = db.get(models.Bug, bug1)
         db.refresh(bug_pre)
         names_pre = sorted(a.name for a in bug_pre.assignees)
         check("assign — DB unchanged before confirm",
               names_pre == ["Bob Builder"], f"got {names_pre}")
 
-        # Step 3: confirm
         resp2 = executor.execute("yes", db, admin)
         check("assign — confirm executes",
               resp2.intent == "action_done", f"got {resp2.intent}")
@@ -160,7 +159,6 @@ def test_assign_flow() -> None:
               names_post == ["Alice Wonderland", "Bob Builder"],
               f"got {names_post}")
 
-        # Audit trail entry
         acts = list(db.query(models.Activity).filter_by(bug_id=bug1).all())
         check("assign — audit entry written",
               any("assignees" in (a.detail or "").lower() for a in acts),
@@ -179,7 +177,7 @@ def test_cancel_flow() -> None:
     try:
         admin = db.get(models.User, admin_id)
         executor.execute(f"close bug {bug1}", db, admin)
-        # 'no' should clear the pending plan and not mutate
+        # 'no' should clear the staged plan without touching the DB.
         resp = executor.execute("no", db, admin)
         check("cancel — intent is cancel",
               resp.intent == "confirm_cancel", f"got {resp.intent}")
@@ -209,7 +207,6 @@ def test_status_change() -> None:
         check("close — status==Closed",
               bug.status == "Closed", f"got {bug.status}")
 
-        # Try the alias verb
         resp = executor.execute(f"reopen bug {bug1}", db, admin)
         executor.execute("yes", db, admin)
         db.expire_all()
@@ -217,7 +214,6 @@ def test_status_change() -> None:
         check("reopen — status==Reopened",
               bug.status == "Reopened", f"got {bug.status}")
 
-        # Mark as resolved
         resp = executor.execute(f"mark bug {bug1} as resolved", db, admin)
         executor.execute("yes", db, admin)
         db.expire_all()
@@ -241,7 +237,6 @@ def test_priority_change() -> None:
         check("priority — Low set",
               bug.priority == "Low", f"got {bug.priority}")
 
-        # Make it critical
         executor.execute(f"make bug {bug1} critical", db, admin)
         executor.execute("yes", db, admin)
         db.expire_all()
@@ -312,14 +307,13 @@ def test_create_project_perm() -> None:
         admin = db.get(models.User, admin_id)
         bob = db.get(models.User, bob_id)
 
-        # Admin path
         executor.execute("create project Mercury", db, admin)
         executor.execute("yes", db, admin)
         proj = db.query(models.Project).filter_by(name="Mercury").first()
         check("create_project (admin) — project exists", proj is not None)
 
-        # Regular user path — Sleuth writes are admin-only, so it's denied up
-        # front and never staged; the follow-up "yes" is then idle.
+        # Sleuth writes are admin-only, so this is denied before staging;
+        # the follow-up "yes" should be treated as idle.
         denied = executor.execute("create project Saturn", db, bob)
         check("create_project (regular) — denied up front",
               denied.intent == "action_denied", f"got {denied.intent}")
@@ -338,14 +332,13 @@ def test_pronoun_resolution() -> None:
     db = SessionLocal()
     try:
         admin = db.get(models.User, admin_id)
-        # First view the bug — this populates memory.last_bug_id
+        # Viewing the bug populates memory.last_bug_id.
         executor.execute(f"bug #{bug1}", db, admin)
         sess = memstore.get(admin_id)
         check("pronoun — memory has last_bug_id",
               sess is not None and sess.last_bug_id == bug1,
               f"sess={sess.last_bug_id if sess else None}")
 
-        # Now use a pronoun — should resolve to bug1
         resp = executor.execute("close it", db, admin)
         check("pronoun — close it staged confirm",
               resp.intent == "confirm_action", f"got {resp.intent}")
@@ -381,17 +374,13 @@ def test_action_no_target() -> None:
     try:
         admin = db.get(models.User, admin_id)
         resp = executor.execute("close that bug", db, admin)
-        # No memory of any bug → friendly error
+        # No bug in memory yet, so this should return a friendly error.
         check("missing target — action_invalid intent",
               resp.intent == "action_invalid", f"got {resp.intent}")
 
-        # No comment body
+        # No colon means no comment body; the parser sets action_comment to None
+        # and returns action_invalid before ever touching the DB.
         resp = executor.execute("comment on bug 999999", db, admin)
-        # bug 999999 doesn't exist; the staging path doesn't validate
-        # bug existence (executor does), but a missing comment body
-        # should be caught at planning.
-        # Actually with our parser, "comment on bug 999999" has no colon,
-        # so action_comment is None → action_invalid.
         check("missing comment — action_invalid",
               resp.intent == "action_invalid", f"got {resp.intent}")
     finally:
@@ -422,7 +411,7 @@ def test_audit_atomicity() -> None:
     db = SessionLocal()
     try:
         admin = db.get(models.User, admin_id)
-        # Simulate failure: ask to assign a non-existent user.
+        # Use a non-existent user ID to force a controlled failure path.
         from app.chatbot import actions as _actions
         plan = _actions.ActionPlan(
             kind="assign", actor_user_id=admin_id,

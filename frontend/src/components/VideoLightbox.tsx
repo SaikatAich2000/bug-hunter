@@ -1,11 +1,10 @@
 /**
- * VideoLightbox — an overlay that hosts <VideoPlayer/> on a dark backdrop, used
- * to view video attachments. Opening the raw file in a new tab would use the
- * browser's native player, whose fullscreen chrome can't be themed; instead the
- * custom player opens here, large and centered, with autoplay.
+ * Full-screen overlay for video attachments. Uses the custom player rather than
+ * opening the raw file in a new tab, which would fall back to the browser's
+ * native controls and can't be themed.
  *
- * Portaled to <body> so it escapes the modal's stacking/transform context.
- * Closes on the close button, a backdrop click, or Escape.
+ * Portaled to <body> to escape any parent modal's stacking/transform context.
+ * Closes on backdrop click, the close button, or Escape.
  */
 import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -22,19 +21,16 @@ export default function VideoLightbox({ src, type, label, onClose }: Readonly<Pr
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Focus management: save the element that had focus, move focus into the
-  // dialog on open, and restore it on close/unmount.
+  // Save current focus, move into the dialog, restore on unmount.
   useEffect(() => {
     const prevActive = document.activeElement as HTMLElement | null;
-    // Move focus to the close button.
     closeBtnRef.current?.focus();
     return () => {
       if (prevActive && typeof prevActive.focus === "function") prevActive.focus();
     };
   }, []);
 
-  // Esc to close + lock background scroll while open. A simple focus trap keeps
-  // Tab / Shift+Tab cycling within the dialog.
+  // Esc closes, background scroll is locked, Tab/Shift+Tab stay within the dialog.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {

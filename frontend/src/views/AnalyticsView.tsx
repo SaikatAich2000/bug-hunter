@@ -1,11 +1,8 @@
 /**
- * Analytics view — the charts section.
- *
- * Charts are scoped by the global type-tabs: the same activeTab that drives
- * the work-items list also drives analytics. Titles update per tab and the
- * Environment card hides itself on the Requirement / Task tabs (environment
- * doesn't apply there). Stats are refreshed on mount; tab changes re-fetch
- * stats via the AppContext effect, so this view just consumes context stats.
+ * Analytics view. Charts scope to the active type-tab (Bug / Requirement /
+ * Task / all). The Environment card is hidden for Requirement and Task tabs.
+ * Stats come from AppContext; this view re-fetches on mount and on status
+ * filter changes.
  */
 import { Fragment, useEffect } from "react";
 import { useApp } from "../state/AppContext";
@@ -23,7 +20,7 @@ const TAB_NOUNS: Record<string, string> = {
   Task: "Tasks",
 };
 
-/** Per-category bar colors. */
+/** Maps status/priority/env category keys to their chart fill colors. */
 function kindColor(kind: string, key: string): string {
   const map: Record<string, Record<string, string>> = {
     status: {
@@ -37,7 +34,7 @@ function kindColor(kind: string, key: string): string {
   return map[kind]?.[key] ?? "#8b8270";
 }
 
-/** 600×200 SVG line + area chart. */
+/** SVG line + area chart for time-series data. */
 function TimelineChart({ data }: Readonly<{ data: StatsTimelinePoint[] }>) {
   if (!data.length) return <p className="muted">No data</p>;
   const W = 600;
@@ -84,7 +81,7 @@ function TimelineChart({ data }: Readonly<{ data: StatsTimelinePoint[] }>) {
   );
 }
 
-/** Vertical bar chart. */
+/** SVG vertical bar chart for categorical counts. */
 function BarsChart({ data, kind }: Readonly<{ data: Record<string, number>; kind: string }>) {
   const entries = Object.entries(data ?? {});
   if (!entries.length) return <p className="muted">No data</p>;
@@ -118,7 +115,7 @@ function BarsChart({ data, kind }: Readonly<{ data: Record<string, number>; kind
   );
 }
 
-/** Horizontal project rows with color swatch. */
+/** Horizontal bar rows for project breakdown, using each project's color. */
 function ProjectBars({ rows }: Readonly<{ rows: StatsProjectSlice[] }>) {
   if (!rows.length) return <p className="muted">No data</p>;
   const max = Math.max(1, ...rows.map((r) => r.count));
@@ -145,7 +142,7 @@ function ProjectBars({ rows }: Readonly<{ rows: StatsProjectSlice[] }>) {
   );
 }
 
-/** Horizontal assignee rows with avatar initials. */
+/** Horizontal bar rows for top assignees, with avatar initials. */
 function AssigneeBars({ rows }: Readonly<{ rows: StatsAssigneeSlice[] }>) {
   if (!rows.length) return <p className="muted">No assignments yet</p>;
   const max = Math.max(1, ...rows.map((r) => r.count));
@@ -175,16 +172,15 @@ function AssigneeBars({ rows }: Readonly<{ rows: StatsAssigneeSlice[] }>) {
 export default function AnalyticsView() {
   const { stats, activeTab, refreshStats, filters } = useApp();
 
-  // Entering the view re-fetches stats, and re-fetches whenever the status
-  // filter changes so the charts react to a KPI tile click in place
-  // (refreshStats reads the live filter at call time).
+  // Re-fetch when the status filter changes so charts react to KPI tile clicks.
+  // refreshStats reads the live filter at call time.
   const statusKey = filters.status.join(",");
   useEffect(() => {
     void refreshStats();
   }, [refreshStats, statusKey]);
 
   const noun = TAB_NOUNS[activeTab] ?? "Items";
-  // Environment doesn't apply to Requirements / Tasks — hide the card.
+  // Environment is not meaningful for Requirements or Tasks.
   const hideEnv = activeTab === "Requirement" || activeTab === "Task";
 
   return (

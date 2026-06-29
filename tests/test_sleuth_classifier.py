@@ -22,13 +22,13 @@ os.environ["SESSION_SECRET"] = "test-classifier-and-llm"
 os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
-# Force the LLM model path somewhere that doesn't exist so the LLM
-# layer reports unavailable for the duration of these tests.
+# Point LLM model path at a non-existent file so the LLM layer
+# reports unavailable throughout these tests.
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__sleuth_no_model__.gguf"
 
-# Force a fresh app import bound to this file's dedicated DB (see the note in
-# test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
-# engine bound to an earlier-collected module's torn-down DB.
+# Force a fresh app import bound to this file's dedicated DB. Without this
+# purge, a shared engine from an earlier-collected module's torn-down DB
+# causes "no such table" failures mid-suite.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -44,9 +44,11 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind this file's module-level app.* references to the current import
-    generation each test (conftest's `client` fixture purges `app.*` to rebind
-    the engine per test; stale refs would otherwise diverge from execute()'s)."""
+    """Re-bind module-level app.* references each test.
+
+    conftest's `client` fixture purges `app.*` to rebind the engine per test;
+    stale references here would diverge from what execute() sees.
+    """
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -131,7 +133,7 @@ def test_classifier_basic():
         detail = "" if ok else f"got {p}"
         check(f"clf: {msg!r} -> {expected}", ok, detail)
 
-    # Below-threshold cases
+    # Inputs that should score below threshold
     nonsense = [
         "blah blah xyzzy",
         "asdfghjkl qwerty",
@@ -152,13 +154,8 @@ def test_classifier_via_executor():
     try:
         admin = db.get(models.User, admin_id)
 
-        # A phrasing the rule parser will miss but the classifier knows
-        # — "anyone there" looks like a greeting in the corpus.
-        # The rule parser has its own greeting matcher, so to actually
-        # exercise the classifier path we need a phrase the rules don't
-        # match. "what was changed" is in the corpus for recent_activity
-        # and the rules DO have a recent-activity matcher — so let's
-        # use a paraphrase the rules don't catch.
+        # "show me the dashboard" isn't matched by the rule parser,
+        # so it falls through to the classifier (which maps it to stats).
         resp = executor.execute("show me the dashboard", db, admin)
         check("'show me the dashboard' routed to stats",
               resp.intent == "stats", f"got {resp.intent}")
@@ -167,13 +164,11 @@ def test_classifier_via_executor():
         check("'kpi please' routed to stats (rule path)",
               resp.intent == "stats", f"got {resp.intent}")
 
-        # A query that only the classifier should catch:
-        #   "team list" — rules want literal "user/users/admin" or "list",
-        #   classifier corpus has "team list" -> list_users.
+        # "team list" — the rules look for literal "user/users/admin" or
+        # "list"; the classifier corpus maps it to list_users. Rules may
+        # still catch "list" and route to list_bugs, which is fine — the
+        # point is we don't fall all the way through to "unknown".
         resp = executor.execute("team list", db, admin)
-        # Rules might still catch "list", routing to list_bugs. Either
-        # list_users (classifier win) or list_bugs (rule path) is OK
-        # here; what matters is we don't return "unknown".
         check("'team list' is handled (not unknown)",
               resp.intent in ("list_users", "list_bugs"),
               f"got {resp.intent}")
@@ -185,7 +180,7 @@ def test_llm_unavailable_path():
     section("LLM layer: unavailable when no model file")
     check("llm.is_available() is False without GGUF",
           llm.is_available() is False)
-    # Calling try_understand should return None, not crash.
+    # try_understand must return None gracefully, not crash.
     db = SessionLocal()
     try:
         admin = db.query(models.User).first()
@@ -195,7 +190,7 @@ def test_llm_unavailable_path():
         result = llm.try_understand("some weird query", db, admin)
         check("llm.try_understand returns None when unavailable",
               result is None)
-        # No model file → no budget, no shortfall message
+        # Without a model file there's no budget and no shortfall message.
         check("memory_budget is None without GGUF",
               llm.memory_budget() is None)
         check("memory_shortfall_message is None without GGUF",
@@ -207,7 +202,7 @@ def test_llm_unavailable_path():
 def test_llm_memory_budget_calculation():
     section("LLM memory budget: detects undersized hardware")
     import tempfile
-    # Stage a fake 400 MB "model" file.
+    # Fake a 400 MB model file on disk.
     fake = tempfile.NamedTemporaryFile(suffix=".gguf", delete=False)
     fake.seek(400 * 1024 * 1024 - 1)
     fake.write(b"\x00")
@@ -216,7 +211,7 @@ def test_llm_memory_budget_calculation():
     from pathlib import Path as _P
     llm._MODEL_PATH = _P(fake.name)
 
-    # Patch the memory-detection helpers to simulate an undersized box.
+    # Simulate an undersized box.
     orig_avail = llm._detect_available_mb
     orig_cg = llm._detect_container_limit_mb
     llm._detect_available_mb = lambda: 350
@@ -232,8 +227,8 @@ def test_llm_memory_budget_calculation():
         check("budget: container_limit_mb == 512",
               budget is not None and budget.container_limit_mb == 512)
 
-        # Shortfall message is now a single user-friendly line; the
-        # detailed operator info goes to logs via is_available().
+        # Shortfall message must be a single user-friendly line.
+        # Operator detail goes to logs (via is_available()), not here.
         msg = llm.memory_shortfall_message()
         check("shortfall: message exists when budget insufficient",
               msg is not None)
@@ -246,7 +241,7 @@ def test_llm_memory_budget_calculation():
               and "MB" not in msg,
               "operator detail leaking into user message")
 
-        # is_available should refuse load when budget is insufficient.
+        # is_available() should refuse to load when budget is insufficient.
         check("is_available: False when RAM too low",
               llm.is_available() is False)
     finally:
@@ -259,7 +254,7 @@ def test_llm_memory_budget_calculation():
 def test_llm_memory_budget_sufficient():
     section("LLM memory budget: 'enough RAM' path")
     import tempfile
-    # 100 MB model on a box with 1500 MB available — should be sufficient.
+    # 100 MB model with 1500 MB available — budget should be sufficient.
     fake = tempfile.NamedTemporaryFile(suffix=".gguf", delete=False)
     fake.seek(100 * 1024 * 1024 - 1)
     fake.write(b"\x00")
@@ -274,7 +269,7 @@ def test_llm_memory_budget_sufficient():
         check("budget-ok: sufficient flag True",
               budget is not None and budget.sufficient,
               f"got {budget}")
-        # No shortfall message when budget is fine.
+        # No shortfall message when there's enough memory.
         check("budget-ok: no shortfall msg",
               llm.memory_shortfall_message() is None)
     finally:
@@ -286,11 +281,10 @@ def test_llm_memory_budget_sufficient():
 def test_executor_falls_through_simply():
     section("Executor: shortfall stays in logs, user gets simple reply")
     import tempfile
-    # Stage a fake model file too big to fit. The rules + classifier
-    # should miss our nonsense query, so the executor falls through to
-    # Layer 3 — but Layer 3 detects the shortfall, logs it for the
-    # operator, and returns None. The user sees the same friendly
-    # "didn't understand" reply as if no model existed at all.
+    # Fake a model file too large to load. Rules + classifier both miss
+    # the nonsense query, so the executor falls through to Layer 3, which
+    # detects the shortfall, logs it for the operator, and returns None.
+    # The user sees the same "didn't understand" reply as if no model existed.
     fake = tempfile.NamedTemporaryFile(suffix=".gguf", delete=False)
     fake.seek(400 * 1024 * 1024 - 1)
     fake.write(b"\x00")
@@ -302,7 +296,7 @@ def test_executor_falls_through_simply():
     orig_cg = llm._detect_container_limit_mb
     llm._detect_available_mb = lambda: 350
     llm._detect_container_limit_mb = lambda: 512
-    # Reset the "warned once" flag so this test starts fresh.
+    # Reset the warned-once flag before this test runs.
     llm._shortfall_warned = False
     try:
         seed()
@@ -312,8 +306,8 @@ def test_executor_falls_through_simply():
             resp = executor.execute(
                 "qzlmqop frobnicate xyzzy ineffable", db, admin
             )
-            # Falls through to the unknown handler — same friendly
-            # response as a normal rules+classifier miss.
+            # Should fall through to the unknown handler with a normal
+            # user-friendly response, not any operator-facing detail.
             check("exec: user sees a normal 'unknown' reply, not tech text",
                   resp.intent in ("unknown", "fallback")
                   or any(b.kind == "text" for b in resp.blocks),
@@ -326,7 +320,7 @@ def test_executor_falls_through_simply():
             check("exec: NO mention of MB / RAM details to user",
                   "MB" not in text and "memory" not in text.lower(),
                   text[:200])
-            # And is_available() must have flipped the warned-once flag.
+            # is_available() should have set the warned-once flag by now.
             check("exec: operator warning flag was set",
                   llm._shortfall_warned is True)
         finally:

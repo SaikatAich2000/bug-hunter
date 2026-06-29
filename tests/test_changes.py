@@ -1,21 +1,19 @@
-"""Tests for the status, KPI, filtering, and listing behavior:
+"""Tests for status values, KPI fields, multi-select filters, and list performance.
 
-  1. Two statuses: "Not a Bug" and "Resolve Later"
-  2. KPI strip of total / open / resolved / closed / resolve_later
-     (with `users` and `projects` kept for backward compat).
-  3. Multi-select filters via repeated query params (?status=A&status=B).
-  4. "Not a Bug" rows are excluded from the `bugs` total.
-  5. The list endpoint serves the page in a single attachment-count query
-     instead of N+1 queries.
+Coverage:
+  1. Two new statuses: "Not a Bug" and "Resolve Later"
+  2. KPI strip (total / open / resolved / closed / resolve_later),
+     plus `users` and `projects` for backward compat
+  3. Multi-select filters via repeated query params (?status=A&status=B)
+  4. "Not a Bug" is excluded from the `bugs` total
+  5. Attachment counts use a single aggregate query, not N+1
 """
 from __future__ import annotations
 
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# Shared helpers used by multiple test classes below.
 def _make_project(client, name="P-status"):
     r = client.post("/api/projects", json={"name": name, "color": "#abcdef"})
     assert r.status_code == 201, r.text
@@ -36,9 +34,7 @@ def _make_bug(client, project_id, status="New", title="A test bug", priority="Me
     return r.json()
 
 
-# ===========================================================================
-# 1. New statuses
-# ===========================================================================
+# --- 1. New statuses ---
 class TestNewStatuses:
     def test_meta_lists_both_new_statuses(self, admin_client):
         r = admin_client.get("/api/meta")
@@ -69,26 +65,21 @@ class TestNewStatuses:
     def test_status_filter_case_insensitive_for_new_statuses(self, admin_client):
         p = _make_project(admin_client, "NS-4")
         _make_bug(admin_client, p["id"], status="Not a Bug", title="oops")
-        # Passing lowercase still matches because the value is normalized
-        # before validation.
+        # Value is normalized before validation, so lowercase should match.
         r = admin_client.get("/api/bugs?status=not%20a%20bug")
         items = r.json()["items"]
         assert any(b["title"] == "oops" for b in items)
 
 
-# ===========================================================================
-# 2. KPI / Stats response shape
-# ===========================================================================
+# --- 2. KPI / stats response shape ---
 class TestStatsShape:
     def test_stats_includes_new_kpi_fields(self, admin_client):
         r = admin_client.get("/api/stats")
         assert r.status_code == 200
         body = r.json()
-        # New KPI fields the dashboard renders today.
         for key in ("bugs", "open", "resolved", "closed", "resolve_later"):
             assert key in body, f"missing KPI field: {key}"
-        # Backward-compat fields — still there so an older cached frontend
-        # doesn't blow up.
+        # Keep these so an older cached frontend doesn't break.
         assert "users" in body
         assert "projects" in body
 
@@ -107,9 +98,7 @@ class TestStatsShape:
         assert after == before + 1
 
     def test_not_a_bug_excluded_from_total(self, admin_client):
-        """'Not a Bug' shouldn't count toward the Total KPI. The row stays
-        in the DB (audit trail); it is just omitted from the headline
-        number."""
+        """Row stays in the DB for audit purposes but must not inflate the headline total."""
         before = admin_client.get("/api/stats").json()["bugs"]
         p = _make_project(admin_client, "KP-NB")
         _make_bug(admin_client, p["id"], status="Not a Bug", title="nope")
@@ -118,27 +107,23 @@ class TestStatsShape:
             "'Not a Bug' rows must NOT increase the bugs total"
 
     def test_not_a_bug_still_shows_in_by_status_breakdown(self, admin_client):
-        """Excluded from the headline total but still in the per-status
-        breakdown so the analytics page can show the bucket."""
+        """Excluded from the headline total but still visible in the per-status breakdown."""
         p = _make_project(admin_client, "KP-NB2")
         _make_bug(admin_client, p["id"], status="Not a Bug", title="invalid-1")
         body = admin_client.get("/api/stats").json()
         assert body["by_status"].get("Not a Bug", 0) >= 1
 
     def test_resolved_kpi_is_just_resolved_status(self, admin_client):
-        """`resolved` is only the Resolved status; Closed has its own KPI."""
+        """`resolved` counts only the Resolved status; Closed has its own KPI field."""
         p = _make_project(admin_client, "KP-RES")
         _make_bug(admin_client, p["id"], status="Resolved", title="resolved-1")
         _make_bug(admin_client, p["id"], status="Closed", title="closed-1")
         body = admin_client.get("/api/stats").json()
-        # by_status is the source of truth for per-bucket counts.
         assert body["resolved"] == body["by_status"].get("Resolved", 0)
         assert body["closed"] == body["by_status"].get("Closed", 0)
 
 
-# ===========================================================================
-# 3. Multi-select filters
-# ===========================================================================
+# --- 3. Multi-select filters ---
 class TestMultiSelectFilters:
     def test_repeat_status_param_is_or_match(self, admin_client):
         p = _make_project(admin_client, "MS-1")
@@ -165,7 +150,7 @@ class TestMultiSelectFilters:
 
     def test_repeat_environment_param(self, admin_client):
         p = _make_project(admin_client, "MS-3")
-        # Bugs default to DEV; can override via PUT.
+        # Default environment is DEV; override with PUT.
         b1 = _make_bug(admin_client, p["id"], title="env-dev")
         b2 = _make_bug(admin_client, p["id"], title="env-uat")
         admin_client.put(f"/api/bugs/{b2['id']}", json={"environment": "UAT"})
@@ -191,8 +176,7 @@ class TestMultiSelectFilters:
         assert "bug-in-p3" not in titles
 
     def test_single_value_still_works(self, admin_client):
-        """Backward compat: ?status=New (one value) parses into a 1-element
-        list and the IN clause still matches."""
+        """A single ?status=New param must still work; it parses into a 1-element list."""
         p = _make_project(admin_client, "MS-4")
         _make_bug(admin_client, p["id"], status="New", title="single-new")
         r = admin_client.get("/api/bugs?status=New")
@@ -200,14 +184,12 @@ class TestMultiSelectFilters:
         assert "single-new" in titles
 
     def test_invalid_value_in_multi_returns_400(self, admin_client):
-        # Even one bogus value in the list should fail the request rather
-        # than silently dropping garbage.
+        # One bad value should fail the whole request, not silently drop it.
         r = admin_client.get("/api/bugs?status=New&status=Bogus")
         assert r.status_code == 400
 
     def test_empty_filter_strings_ignored(self, admin_client):
-        """The SPA may send blank values when nothing's selected; those
-        should be ignored, not 400'd."""
+        """Blank filter values from the SPA (nothing selected) should be ignored, not 400'd."""
         p = _make_project(admin_client, "MS-5")
         _make_bug(admin_client, p["id"], title="empty-ok")
         r = admin_client.get("/api/bugs?status=&priority=")
@@ -216,13 +198,10 @@ class TestMultiSelectFilters:
         assert "empty-ok" in titles
 
 
-# ===========================================================================
-# 4. Live-data safety — schema additions don't break existing rows
-# ===========================================================================
+# --- 4. Backward compat — schema additions must not break existing rows ---
 class TestBackwardCompat:
     def test_existing_bug_with_old_status_still_listable(self, admin_client):
-        """Any pre-existing bug stored with one of the original 5 statuses
-        must continue to round-trip cleanly through the new validator."""
+        """Bugs using the original 5 statuses must round-trip cleanly through the new validator."""
         p = _make_project(admin_client, "BC-1")
         for s in ("New", "In Progress", "Resolved", "Closed", "Reopened"):
             _make_bug(admin_client, p["id"], status=s, title=f"bc-{s}")
@@ -232,7 +211,7 @@ class TestBackwardCompat:
         assert statuses == {"New", "In Progress", "Resolved", "Closed", "Reopened"}
 
     def test_old_single_status_query_unchanged(self, admin_client):
-        # The exact query format the old SPA used should still work.
+        # The old SPA sent a single ?status= param; that format must still work.
         p = _make_project(admin_client, "BC-2")
         _make_bug(admin_client, p["id"], status="In Progress", title="in-prog")
         r = admin_client.get("/api/bugs?status=In%20Progress")
@@ -240,18 +219,14 @@ class TestBackwardCompat:
         assert any(b["title"] == "in-prog" for b in r.json()["items"])
 
 
-# ===========================================================================
-# 5. Performance — attachment-count is a single aggregate query
-# ===========================================================================
+# --- 5. Performance — attachment counts use a single aggregate query ---
 class TestAttachmentCountPerf:
     def test_list_bugs_returns_correct_attachment_counts(self, admin_client):
-        """Functional check that the new aggregate-query path still reports
-        the right attachment counts (the perf optimisation must not change
-        the response semantics)."""
+        """The aggregate-query path must still return correct attachment counts."""
         p = _make_project(admin_client, "PERF-1")
         b1 = _make_bug(admin_client, p["id"], title="att-bug")
         b2 = _make_bug(admin_client, p["id"], title="no-att-bug")
-        # Upload two attachments to b1.
+        # Two attachments on b1, none on b2.
         for fname in ("a.txt", "b.txt"):
             files = {"file": (fname, b"hello world", "text/plain")}
             r = admin_client.post(f"/api/bugs/{b1['id']}/attachments", files=files)
@@ -263,13 +238,10 @@ class TestAttachmentCountPerf:
         assert items["no-att-bug"]["attachment_count"] == 0
 
     def test_list_bugs_uses_single_count_query(self, admin_client):
-        """The listing endpoint should execute roughly a constant number of
-        queries regardless of how many bugs are returned. Instrument the
-        SQLAlchemy engine, list 10 bugs, and check the query count is
-        reasonable.
+        """Instrument SQLAlchemy and verify query count stays constant regardless of result size.
 
-        Threshold is generous (< 15) — it fails loudly if the N+1 pattern
-        accidentally comes back for attachment counts."""
+        Threshold is generous (< 15) so it fails loudly if the N+1 pattern returns
+        for attachment counts."""
         from sqlalchemy import event
         from app.database import engine
 
@@ -292,9 +264,8 @@ class TestAttachmentCountPerf:
         finally:
             event.remove(engine, "before_cursor_execute", _on_exec)
 
-        # If the old N+1 pattern were back, this would be ~1 + 10 = 11+ for
-        # attachment counts ALONE plus everything else, easily 20+. The new
-        # path uses 1 aggregate count query for all 10 bugs.
+        # N+1 would produce ~1 + 10 = 11 queries for attachment counts alone,
+        # plus all other queries — easily 20+. The fixed path uses one aggregate.
         assert queries < 15, (
             f"list_bugs ran {queries} SQL queries for 10 bugs — N+1 regression?"
         )

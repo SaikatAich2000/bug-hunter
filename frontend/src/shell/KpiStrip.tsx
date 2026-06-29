@@ -43,17 +43,14 @@ export default function KpiStrip() {
   const isActive = (key: string): boolean => {
     const target = KPI_FILTER_MAP[key];
     if (!target) return false;
-    // "Total" is active when no status filter is set.
     return key === "total"
       ? filters.status.length === 0
       : arraysEqualAsSets(filters.status, target);
   };
 
-  // Toggle: clicking the active filter clears it. The click only sets the
-  // status filter; it does not navigate. Forcing the user to the Work Items
-  // list when they clicked a KPI on Analytics would be a surprising redirect —
-  // on the list the filter shows immediately, and on Analytics the tile's
-  // active highlight gives feedback while they stay put.
+  // Clicking an active tile clears the filter (toggle). No navigation: staying
+  // on Analytics when clicking a KPI there is intentional; the active highlight
+  // is the feedback.
   const onKpiClick = (key: string) => {
     const target = KPI_FILTER_MAP[key];
     if (!target) return;

@@ -52,12 +52,10 @@ def notify(
     The web push (if scheduled) fires regardless of the email-digest setting:
     push is the real-time channel, the digest only batches email.
     """
-    # Email-obligation marker. In immediate-email mode every operation's email
-    # goes out now (from the route's BackgroundTask), so the row is born
-    # already-emailed, which guarantees that enabling the daily digest later
-    # never re-sends an old operation. In digest mode it stays NULL so the daily
-    # job picks the operation up exactly once. (read_at, the in-app read state,
-    # is independent of this.)
+    # In immediate-email mode the row is born already-emailed, so switching to
+    # digest mode later never re-sends past notifications. In digest mode it
+    # stays NULL so the daily job picks each row up exactly once.
+    # (read_at tracks the in-app read state separately.)
     emailed_at = None if get_settings().EMAIL_DIGEST_ENABLED else _utcnow()
 
     seen: set[int] = set()
@@ -79,8 +77,8 @@ def notify(
         ))
 
     if background is not None and recipients:
-        # Lazy import keeps notification_service free of the push/FCM deps for
-        # callers that never push.
+        # Lazy import: keeps this module free of push/FCM dependencies for
+        # callers that never schedule a push.
         from app import push_service
         push_service.schedule(
             background, recipients, title=title, body=body,

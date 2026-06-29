@@ -1,25 +1,22 @@
-"""Sleuth document-ingest — the admin "upload a doc full of bugs" feature.
+"""Sleuth document ingest — the admin "upload a doc full of bugs" feature.
 
-Sleuth's one write surface, admin-only (enforced by the route in router.py).
-An admin uploads a document listing bugs and Sleuth turns each entry into a
-work item, with the same validation and audit trail as the REST create
-endpoint.
+Admin-only write surface (enforced by the route in router.py). An uploaded
+document is parsed into work items with the same validation and audit trail as
+the REST create endpoint.
 
-Two extraction paths, in order of preference:
+Two extraction paths, tried in order:
 
-  1. AI — when the cloud assistant is configured (SLEUTH_CLOUD_ENABLED + a key),
-     the raw text is handed to the model, which returns a structured list of
-     bug specs.
+  1. AI. When the cloud assistant is configured (SLEUTH_CLOUD_ENABLED + a key),
+     raw text goes to the model, which returns a structured list of bug specs.
 
-  2. Deterministic parser — always available, no network. Understands xlsx,
-     JSON, CSV and free-form text / markdown (one bug per line / bullet /
-     numbered item, with optional `[Priority]` tags and `Title | Description`).
+  2. Deterministic parser. Always available, no network required. Understands
+     xlsx, JSON, CSV, and free-form text/markdown (one bug per line, bullet or
+     numbered, with optional `[Priority]` tags and `Title | Description` splits).
 
-Both paths converge on the same cleaned `spec` shape, so the rest of the
-pipeline (validation, creation, audit) is identical regardless of how the
-document was read. The parser works without an API key, so the feature works
-on a box with no cloud access and the test suite covers it without a network
-call.
+Both paths produce the same cleaned `spec` shape, so validation, creation, and
+audit are identical regardless of how the document was read. The parser works
+with no API key, so ingest works on air-gapped boxes and the test suite runs
+without a network call.
 """
 from __future__ import annotations
 
@@ -79,8 +76,8 @@ _ENV_KEYS = ("environment", "env")
 
 
 def _norm_from(value: Any, synonyms: dict[str, str], allowed: list[str], default: str) -> str:
-    """Resolve a free-text value to a canonical enum: exact (case-insensitive)
-    match wins, then the synonym table, else the default."""
+    """Resolve a free-text value to a canonical enum. Tries an exact
+    case-insensitive match first, then the synonym table, then returns default."""
     if value is None:
         return default
     s = str(value).strip().lower()
@@ -93,16 +90,16 @@ def _norm_from(value: Any, synonyms: dict[str, str], allowed: list[str], default
 
 
 def _first_key(row: dict, keys: tuple[str, ...]) -> Any:
-    """First present, non-empty value among `keys` for a dict whose own keys may
-    be any case and may be multi-word ("Bug Summary", "Sev."). Match exactly
-    first, then fall back to a word-level contains check (in `keys` priority
-    order) so real-world column headers map to the right field."""
+    """Return the first non-empty value among `keys` from a dict with
+    case-insensitive, multi-word column names ("Bug Summary", "Sev."). Tries
+    exact matches first, then falls back to a word-level contains check so
+    real-world column headers map to the right field."""
     low = {str(k).strip().lower(): v for k, v in row.items()}
     for k in keys:
         if k in low and low[k] not in (None, ""):
             return low[k]
-    # Fuzzy, in priority order: a column whose name CONTAINS the key as a word
-    # (e.g. "bug summary" → summary → title; "sev" → priority).
+    # Fuzzy fallback, in priority order: a column whose name contains the key
+    # as a word (e.g. "bug summary" → summary → title; "sev" → priority).
     for k in keys:
         for col, v in low.items():
             if v in (None, ""):
@@ -213,8 +210,8 @@ _HEADER_WORDS = frozenset(
 
 
 def _looks_like_header(row: list[str]) -> bool:
-    """True if the row names a recognized column (title / priority / status /
-    …) — the reliable signal that it's a header, not data."""
+    """True if the row names a recognized column (title, priority, status and
+    so on), the reliable signal that it's a header, not data."""
     return any(c.strip().lower() in _HEADER_WORDS for c in row if c.strip())
 
 
@@ -228,7 +225,7 @@ _MAX_XLSX_COLS = 100
 
 def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
     """Read the first sheet's non-empty rows as lists of strings, or None if the
-    bytes aren't a readable workbook (so the caller falls through to text)."""
+    bytes aren't a readable workbook (so the caller moves on to text)."""
     try:
         from openpyxl import load_workbook
         wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
@@ -236,8 +233,8 @@ def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
         return None
     try:
         ws = wb.active
-        # islice caps rows; the per-row slice caps columns. read_only iter_rows
-        # doesn't honour max_row/max_col reliably, so we bound the stream here.
+        # read_only iter_rows doesn't honour max_row/max_col reliably,
+        # so bound the stream explicitly with islice and a per-row slice.
         rows = [
             [("" if c is None else str(c)) for c in row[:_MAX_XLSX_COLS]]
             for row in islice(ws.iter_rows(values_only=True), _MAX_XLSX_ROWS)
@@ -248,10 +245,10 @@ def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
 
 
 def _rows_to_specs(rows: list[list[str]]) -> list[dict]:
-    """Turn a table's rows into specs: if the first row is a header, map columns
-    by name; otherwise (esp. a 1-column list) treat each first cell as a title.
-    A 2+-column sheet whose first row isn't recognisably data is treated as
-    headered — so a header row never becomes a bogus 'bug'."""
+    """Convert table rows to specs. If the first row looks like a header, use
+    it to map columns by name; otherwise treat the first cell of each row as the
+    title. Multi-column sheets default to treating row 0 as a header, so it
+    doesn't accidentally become a spurious work item."""
     if not rows:
         return []
     multi_col = max((len(r) for r in rows), default=1) >= 2
@@ -339,9 +336,8 @@ def ai_extract_specs(text: str) -> Optional[list[dict]]:
 
 
 def _document_text(filename: str, raw: bytes) -> str:
-    """A readable plain-text representation of the upload for the AI reader.
-    A spreadsheet becomes a pipe-delimited table (so the model sees the rows,
-    headers and all); everything else is decoded as UTF-8."""
+    """Plain-text view of the upload for the AI reader. Spreadsheets become
+    pipe-delimited tables (headers included); everything else is decoded as UTF-8."""
     if _looks_like_xlsx(filename or "", raw):
         rows = _xlsx_rows(raw)
         if not rows:

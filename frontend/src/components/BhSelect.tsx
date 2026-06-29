@@ -1,21 +1,21 @@
 /**
- * BhSelect — a custom single-select dropdown. Class names must match
- * styles.css:
+ * BhSelect — custom single-select with a portaled popover. Class names must
+ * match styles.css:
  *
  *   <div class="bh-sel-wrap">
- *     <select class="bh-sel-native" …>                  ← form value + keyboard path
+ *     <select class="bh-sel-native" …>           ← form value + keyboard path
  *     <button class="bh-sel-btn [is-disabled]" aria-haspopup="listbox" aria-expanded>
  *       <span class="bh-sel-label [bh-sel-placeholder]">…</span>
- *       <span class="bh-sel-caret">▾</span>             ← hidden while disabled
+ *       <span class="bh-sel-caret">▾</span>       ← hidden while disabled
  *     </button>
- *     <div class="bh-sel-pop" role="listbox">           ← only while open
+ *     <div class="bh-sel-pop" role="listbox">     ← only while open
  *       <button class="bh-sel-row [is-selected]" role="option"
  *               aria-selected data-bh-sel-i="i">…</button> × n
  *     </div>
  *   </div>
  *
- * The popover is portaled to <body> (still `position: fixed`, placed by
- * placePop with the trigger-width min-width), and the value is controlled.
+ * Portaled to <body> so ancestor transforms/contain can't break the fixed
+ * positioning. Value is controlled externally.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -23,7 +23,7 @@ import { createPortal } from "react-dom";
 export interface BhSelectOption {
   value: string;
   label: string;
-  /** Optional tooltip — rendered as the title attr on <option>. */
+  /** Rendered as the title attr on the native <option>. */
   title?: string;
 }
 
@@ -37,7 +37,7 @@ interface Props {
   ariaLabel?: string;
 }
 
-// Placeholder options look like "— select —".
+// Matches placeholder labels of the form "— … —".
 const PLACEHOLDER_RE = /^—.*—$/;
 
 export default function BhSelect({ value, onChange, options, disabled, id, name, ariaLabel }: Props) {
@@ -46,8 +46,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Viewport-anchored fixed positioning with the flip-above-when-clipped
-  // rule; panel min-width matches the trigger.
+  // Position the panel with fixed coords; flip above when clipping below.
   const placePop = useCallback(() => {
     const btn = btnRef.current;
     const pop = popRef.current;
@@ -83,7 +82,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     };
   }, [open, placePop]);
 
-  // Outside click closes.
+  // Close on outside click.
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
@@ -100,9 +99,8 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  // Escape closes only this popover. Capture-phase + stopPropagation pre-empts
-  // the app-level (bubble) Escape handler, which would otherwise dismiss the
-  // surrounding modal and discard the user's in-progress form.
+  // Capture-phase Escape so stopPropagation prevents the app-level bubble
+  // handler from closing the surrounding modal mid-form.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -115,8 +113,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("keydown", onKey, true);
   }, [open]);
 
-  // Resolve the selected option the way the native select would:
-  // unmatched value → selectedIndex -1 → label falls back to "—".
+  // Unmatched value gives selectedIndex -1; label falls back to "—".
   const selectedIndex = options.findIndex((o) => o.value === value);
   const selOpt = selectedIndex >= 0 ? options[selectedIndex] : undefined;
   const labelText = selOpt ? selOpt.label : "";
@@ -124,8 +121,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
 
   return (
     <div className="bh-sel-wrap" ref={wrapRef}>
-      {/* Kept in the DOM so form submission picks the value up via .name,
-          and so keyboard users retain the native select behaviour. */}
+      {/* Kept in the DOM for form submission (.name) and keyboard accessibility. */}
       <select
         className="bh-sel-native"
         id={id}
@@ -156,16 +152,11 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
         <span className={`bh-sel-label${isPlaceholder ? " bh-sel-placeholder" : ""}`}>
           {labelText || "—"}
         </span>
-        {/* A disabled select can't be opened, so the caret would mislead —
-            render a plain pill instead. */}
+        {/* Hide the caret when disabled; a non-interactive affordance misleads. */}
         {!disabled && <span className="bh-sel-caret" aria-hidden="true">▾</span>}
       </button>
-      {/* Portal the popover to <body> so its position:fixed coordinates are
-          relative to the viewport. Rendered in-place, any ancestor with a
-          transform / filter / contain (or other stacking context) becomes the
-          containing block and the panel lands in the wrong spot. popRef still
-          points at the real node, so the outside-click guard and placePop math
-          keep working unchanged. */}
+      {/* Portal to <body> so ancestor transforms/stacking contexts don't shift
+          the fixed-position panel. popRef still points at the real node. */}
       {open &&
         createPortal(
           <div className="bh-sel-pop" role="listbox" ref={popRef}>

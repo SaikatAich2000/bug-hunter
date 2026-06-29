@@ -1,25 +1,15 @@
-"""Unit tests for the reports-engine helpers.
+"""Unit tests for the reports-engine helper functions (no DB round-trip).
 
-These exercise the helper functions directly (no DB round-trip) and pin their
-behavior:
-
-  * _days_open_value      — open-duration in whole days, tz-coercion
-  * _bug_scalar_fields    — plain bug columns with defaults
-  * _bug_relation_fields  — related-object columns with None handling
-  * _ttr_row              — one Time-to-Resolution row from a query tuple
-  * _ttr_summary          — avg / median / p95 / fastest / slowest
-  * _fold_throughput_row  — per-user bucket accumulation
-  * _percentile           — NIST linear interpolation
-  * filter-blob parsers   — _parse_date / _parse_int / _str_list / _int_list
+Covers: _days_open_value, _bug_scalar_fields, _bug_relation_fields, _ttr_row,
+_ttr_summary, _fold_throughput_row, _percentile, and the filter-blob parsers.
 
 The throughput query tuple shape (see _build_throughput_query) is:
   (bug_id, actor_user_id, actor_name, created_at, detail,
    item_type, title, priority, current_status, project_name)
 
-`_bug_scalar_fields` / `_bug_relation_fields` are typed to accept a Bug, so
-the tests build real (transient, never-flushed) Bug/Project/User/Event
-instances rather than duck-typed stand-ins. Column defaults only apply at
-flush, so unset attributes read back as None or [].
+_bug_scalar_fields/_bug_relation_fields are typed to accept a Bug, so the
+tests use real transient (never-flushed) ORM instances. Column defaults only
+apply at flush, so unset attributes read back as None or [].
 """
 from __future__ import annotations
 
@@ -64,7 +54,7 @@ def test_days_open_value_still_open_measures_to_now():
 
 def test_days_open_value_never_negative():
     from app.reports.engine import _days_open_value
-    # resolved before created (clock skew / bad data) clamps to 0.
+    # resolved-before-created (clock skew / bad data) should clamp to 0.
     assert _days_open_value(_utc(2026, 1, 10), _utc(2026, 1, 1)) == 0
 
 
@@ -81,7 +71,7 @@ def test_days_open_value_coerces_naive_datetimes():
 def test_bug_scalar_fields_applies_defaults():
     from app.models import Bug
     from app.reports.engine import _bug_scalar_fields
-    b = Bug(id=7)  # every other column unset → reads back as None
+    b = Bug(id=7)  # all other columns unset, read back as None
     f = _bug_scalar_fields(b)
     assert f["id"] == 7
     assert f["item_type"] == "Bug"      # None → default
@@ -117,7 +107,7 @@ def test_bug_relation_fields_resolves_related_objects():
 def test_bug_relation_fields_handles_all_none():
     from app.models import Bug
     from app.reports.engine import _bug_relation_fields
-    # No project/event/reporter, no assignees → every field falls back to "".
+    # No project/event/reporter/assignees — every field falls back to "".
     b = Bug(id=2, title="t")
     f = _bug_relation_fields(b)
     assert f["project"] == ""
@@ -156,7 +146,7 @@ def test_ttr_row_skips_when_no_creation_time():
 
 def test_ttr_row_clamps_and_coerces_naive():
     from app.reports.engine import _ttr_row
-    # naive resolution 12h after naive creation, status Closed (resolved for Bug).
+    # Naive datetimes: resolution 12h after creation, Closed counts as resolved.
     raw = _raw("status: 'New' → 'Closed'",
                created_at=datetime(2026, 1, 1, 12, 0), current_status="Closed")
     row = _ttr_row(raw, datetime(2026, 1, 1, 0, 0))
@@ -180,8 +170,8 @@ def test_ttr_summary_aggregates_sorted_rows():
     assert s["count"] == 3
     assert s["average_hours"] == pytest.approx(4.0)
     assert s["median_hours"] == pytest.approx(4.0)
-    assert s["fastest_hours"] == pytest.approx(2.0)     # rows[0]
-    assert s["slowest_hours"] == pytest.approx(6.0)     # rows[-1]
+    assert s["fastest_hours"] == pytest.approx(2.0)
+    assert s["slowest_hours"] == pytest.approx(6.0)
     assert s["p95_hours"] >= 5.0
 
 
@@ -202,9 +192,8 @@ def test_fold_throughput_row_counts_resolution():
 
 
 def test_fold_throughput_row_deleted_actor_bucketed_by_name():
-    # Deleted users (NULL actor_user_id) are bucketed by their preserved
-    # snapshot name, not collapsed onto one -1 sentinel, so two distinct
-    # ex-employees' work never gets merged under one name.
+    # Deleted users (NULL actor_user_id) are keyed by their snapshot name so
+    # two different ex-employees' work never merges under a single bucket.
     from app.reports.engine import _fold_throughput_row
     per_user, details = {}, []
     raw = _raw("status: 'New' → 'Closed'", actor_id=None, actor_name="Gone Guy",
@@ -215,7 +204,7 @@ def test_fold_throughput_row_deleted_actor_bucketed_by_name():
     assert per_user["deleted:Gone Guy"]["user_name"] == "Gone Guy"
     assert details[0]["user_name"] == "Gone Guy"
 
-    # A second distinct ex-user stays in its OWN bucket.
+    # A second distinct ex-user must land in its own bucket.
     raw2 = _raw("status: 'New' → 'Closed'", actor_id=None, actor_name="Other Gone",
                 current_status="Closed")
     _fold_throughput_row(raw2, per_user, details)
@@ -254,14 +243,14 @@ def test_percentile_empty_is_zero():
 
 def test_percentile_exact_rank():
     from app.reports.engine import _percentile
-    # 0th and 100th land exactly on the endpoints (f == c branch).
+    # 0th and 100th fall exactly on the endpoints (f == c branch).
     assert _percentile([10.0, 20.0, 30.0], 0) == pytest.approx(10.0)
     assert _percentile([10.0, 20.0, 30.0], 100) == pytest.approx(30.0)
 
 
 def test_percentile_interpolates_between_ranks():
     from app.reports.engine import _percentile
-    # 95th of 0..100 (step 10) → between the 9th (90) and 10th (100) ranks.
+    # 95th of 0..100 (step 10) interpolates between the 9th (90) and 10th (100) values.
     values = [float(x) for x in range(0, 101, 10)]
     assert _percentile(values, 95) == pytest.approx(95.0)
 
@@ -295,7 +284,7 @@ def test_str_list_variants():
     assert _str_list(None) == []
     assert _str_list("  hi ") == ["hi"]
     assert _str_list("   ") == []
-    # Dedupe + strip + drop non-strings / empties, order preserved.
+    # Strips, deduplicates, drops non-strings and empties; order preserved.
     assert _str_list(["a", " a ", "b", "", 5]) == ["a", "b"]
     assert _str_list(42) == []
 

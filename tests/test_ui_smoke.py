@@ -1,16 +1,8 @@
-"""End-to-end UI smoke tests run in a real Chromium via Playwright.
+"""End-to-end UI smoke tests using a real Chromium via Playwright.
 
-They boot the FastAPI app on a real port, then drive Chromium to:
-
-  1. Log in as admin.
-  2. Create a project.
-  3. Open the bug create modal and assert the Create button is inside the bug
-     form, the Reporter select is disabled, and pressing Create fires the
-     POST /api/bugs request and creates a bug visible in the list.
-  4. Open the bug and assert the inline comments section appears.
-  5. Sessions panel: as admin, revoke a different user's session and assert that
-     user's open tab is bounced to /login.html within ~20 s by the periodic /me
-     poll.
+Boots the FastAPI app on a random port and drives a browser through the main
+user flows: login, project creation, bug creation and editing, session revoke,
+and various shell chrome behaviors.
 
 Run from the repo root:  python -m pytest tests/test_ui_smoke.py -q
 """
@@ -24,8 +16,7 @@ import contextlib
 
 import pytest
 
-# Every test here drives a real Chromium, so mark the module `ui`. CI can skip
-# the slow browser suite with `-m "not ui"`.
+# Mark the whole module `ui` so CI can skip the browser suite with `-m "not ui"`.
 pytestmark = pytest.mark.ui
 
 
@@ -46,13 +37,11 @@ def live_server():
     os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@ui.test"
     os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminUI1234"
     os.environ["BOOTSTRAP_ADMIN_NAME"] = "UI Admin"
-    # Disable the HIBP outbound call. Unlike the TestClient fixtures in
-    # conftest.py, this live_server starts a real uvicorn thread before any
-    # function-scoped monkeypatch is applied, so it would otherwise inherit the
-    # unset (default-enabled) value and create-user would block on a live
-    # network round-trip.
+    # Disable HIBP outbound calls. This server starts before any function-scoped
+    # monkeypatch runs, so without this the create-user flow would block on a
+    # live network round-trip.
     os.environ["PASSWORD_BREACH_CHECK_ENABLED"] = "false"
-    # Force a fresh import after env is set.
+    # Fresh import after env vars are in place.
     for m in list(sys.modules):
         if m == "app" or m.startswith("app."):
             del sys.modules[m]
@@ -66,7 +55,7 @@ def live_server():
 
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    # Wait for the server to actually bind.
+    # Poll until the server is ready to accept connections.
     deadline = time.time() + 10
     while time.time() < deadline:
         try:
@@ -100,10 +89,9 @@ def _login(page, base_url, email="admin@ui.test", password="AdminUI1234"):
     page.fill('input[name="password"]', password)
     page.click('button[type="submit"]')
     page.wait_for_url(f"{base_url}/", timeout=5000)
-    # Wait for the SPA to finish booting. #newBugBtn is in the static HTML
-    # so it appears instantly — not a reliable boot-done signal. Instead
-    # wait for the network to settle (boot fires several /api calls) AND
-    # for the account name to be filled in by renderAccountCard.
+    # Wait for the SPA to finish booting. #newBugBtn is in the static HTML so it
+    # appears immediately; it's not a reliable ready signal. Wait for network idle
+    # (boot fires several /api calls) and for the account name to be populated.
     page.wait_for_load_state("networkidle", timeout=10000)
     page.wait_for_function(
         "() => document.getElementById('accountName')?.textContent?.trim().length > 0",
@@ -111,20 +99,15 @@ def _login(page, base_url, email="admin@ui.test", password="AdminUI1234"):
     )
 
 
-# ---------------------------------------------------------------------------
-# Clicking "Create" actually creates a bug.
-#
 # When the inline comment <form> is nested inside the bug-modal <form>, the
-# HTML5 spec silently terminates the outer form. The Create button then ends up
-# parent-less and clicking it does nothing. This test reproduces that scenario
-# end-to-end.
-# ---------------------------------------------------------------------------
+# HTML5 spec silently closes the outer form. The Create button ends up
+# parent-less and clicking it does nothing. This test catches that regression.
 def test_create_bug_button_actually_creates(live_server, browser):
     ctx = browser.new_context()
     page = ctx.new_page()
     _login(page, live_server)
 
-    # Create a project first (Create-Bug needs at least one project)
+    # Create a project — the bug form requires at least one.
     page.click("#newProjectBtn")
     page.wait_for_selector("#modalProject", state="visible", timeout=2000)
     page.fill('#formProject input[name="name"]', "UI Smoke Project")
@@ -135,11 +118,9 @@ def test_create_bug_button_actually_creates(live_server, browser):
     page.click("#newBugBtn")
     page.wait_for_selector("#modalBug", state="visible", timeout=2000)
 
-    # ----- Assertions about modal structure -----
     # Create button must be inside the bug form. Use getAttribute('id') rather
-    # than f.id: HTMLFormElement has a named-property accessor that lets
-    # `form.id` resolve to a child input named "id" (formBug has
-    # <input name="id"> for the hidden bug-id field).
+    # than f.id because HTMLFormElement's named-property accessor can resolve
+    # `form.id` to a child <input name="id"> instead of the element's actual id.
     enclosing_form_id = page.evaluate("""
         () => {
             const btn = document.getElementById('bugSubmitBtn');
@@ -150,13 +131,13 @@ def test_create_bug_button_actually_creates(live_server, browser):
     assert enclosing_form_id == "formBug", \
         f"Create button is not inside formBug! Got: {enclosing_form_id!r}"
 
-    # Reporter select must be disabled.
+    # Reporter must be disabled (pre-filled to the logged-in user, not editable).
     is_disabled = page.evaluate("""
         () => document.querySelector('#formBug select[name="reporter_id"]').disabled
     """)
     assert is_disabled, "Reporter select must be disabled"
 
-    # Reporter must show the logged-in user's name.
+    # The selected option must show the logged-in user's name.
     reporter_text = page.evaluate("""
         () => {
             const sel = document.querySelector('#formBug select[name="reporter_id"]');
@@ -165,15 +146,14 @@ def test_create_bug_button_actually_creates(live_server, browser):
     """)
     assert "UI Admin" in reporter_text, f"Reporter should show 'UI Admin', got: {reporter_text!r}"
 
-    # ----- Fill the form and click Create -----
+    # Fill the form and submit.
     page.fill('#formBug input[name="title"]', "Smoke-test bug from Playwright")
     page.fill('#formBug textarea[name="description"]', "Created by an automated UI test.")
 
-    # Pick the project we just created. bubbles:true is required: real
-    # change events bubble, and the React frontend receives delegated
-    # events at the root — a non-bubbling synthetic event would never
-    # reach its onChange handler (the old vanilla app read the value at
-    # submit time, which masked this).
+    # bubbles:true is required. Real change events bubble, and the React
+    # frontend uses delegated listeners at the root. A non-bubbling synthetic
+    # event never reaches the onChange handler. The old vanilla app read the
+    # value at submit time, which hid this requirement.
     page.evaluate("""
         () => {
             const sel = document.querySelector('#formBug select[name="project_id"]');
@@ -182,41 +162,42 @@ def test_create_bug_button_actually_creates(live_server, browser):
         }
     """)
 
-    # Capture the network request to /api/bugs to confirm Create actually fires.
+    # Intercept the network request to confirm the form submission fires.
     with page.expect_response(lambda r: r.url.endswith("/api/bugs") and r.request.method == "POST") as resp_info:
         page.click("#bugSubmitBtn")
     resp = resp_info.value
     assert resp.status == 201, f"POST /api/bugs returned {resp.status}: {resp.text()}"
 
-    # Modal closes
     page.wait_for_selector("#modalBug", state="hidden", timeout=3000)
 
-    # New bug shows up in the list
+    # Bug should now be visible in the list.
     page.wait_for_selector("text=Smoke-test bug from Playwright", timeout=3000)
 
     ctx.close()
 
 
 def test_open_bug_shows_inline_comments_section(live_server, browser):
-    """Clicking a bug row opens the unified modal with the inline
-    comments section visible (was: separate detail modal with tabs)."""
+    """Opening a bug row shows the inline comments section in the modal.
+
+    Previously comments lived in a separate detail modal with tabs; this
+    guards the unified-modal behavior."""
     ctx = browser.new_context()
     page = ctx.new_page()
     _login(page, live_server)
 
-    # Open the bug we just created (relies on previous test having run;
-    # for isolation, we'd seed via API — but the project + bug from the
-    # previous test are still in the test DB since the fixture is module-scoped).
+    # Relies on the bug created by the previous test. The fixture is module-scoped,
+    # so the DB is shared; for full isolation you'd seed via the API instead.
     page.click("text=Smoke-test bug from Playwright")
     page.wait_for_selector("#modalBug", state="visible", timeout=2000)
 
-    # Comments section should be visible (not hidden) when editing an existing bug.
+    # Comments section must be visible when opening an existing bug (not a new one).
     is_hidden = page.evaluate("""
         () => document.getElementById('bugCommentsSection').hidden
     """)
     assert not is_hidden, "Comments section should be visible when opening an existing bug"
 
-    # The post-comment button is a normal button, not a submit (no nested form).
+    # The comment-post button must be type="button", not type="submit",
+    # so it doesn't trigger the outer form.
     btn_type = page.evaluate("() => document.getElementById('commentPostBtn').type")
     assert btn_type == "button"
 
@@ -224,33 +205,29 @@ def test_open_bug_shows_inline_comments_section(live_server, browser):
 
 
 def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
-    """Shell chrome regression guard.
+    """Shell chrome regression guard: notification bell, bell alignment, and profile menu.
 
-    Locks in three chrome behaviors:
-      1. The notification panel renders when the bell is clicked.
-      2. The bell sits in the same right-hand place on every view (it could
-         snap to the left next to the title on non-list views when a hidden
-         search box still matched a `~` sibling rule).
-      3. Account controls (change-password / theme / log out) live in a
-         top-right profile menu, not in the sidebar.
+    Three behaviors are locked in:
+    1. Clicking the bell renders the notification panel.
+    2. The bell stays right-aligned on all views (a CSS `~` sibling rule
+       could push it left on non-list views when a hidden search box matched).
+    3. Account controls (change-password / theme / log out) live in the
+       top-right profile menu, not the sidebar.
     """
     ctx = browser.new_context()
     page = ctx.new_page()
     _login(page, live_server)
 
-    # The account name now lives in the top-right profile button, and the old
-    # sidebar account card / logout button are gone.
+    # Account name must be in the top-right profile button; sidebar logout is gone.
     assert page.locator("#profileBtn #accountName").count() == 1, \
         "Account name should be inside the top-right profile button"
     assert page.locator(".sidebar #logoutBtn").count() == 0, \
         "Log out must no longer live in the sidebar"
 
-    # The bell and profile share one right-hand cluster, so the bell's left edge
-    # must be well into the right half of the viewport (it could be ~0 on
-    # non-list views). Switch to a non-list view first. The view nav lives in
-    # two surfaces: the desktop chrome bar and the mobile drawer (Sidebar).
-    # Target the chrome one explicitly so this desktop test doesn't resolve to
-    # the hidden drawer copy that's first in the DOM.
+    # The bell's left edge must be well into the right half of the viewport on
+    # non-list views (the CSS bug put it near x=0). Target the desktop chrome bar
+    # explicitly — the nav also lives in the mobile drawer which comes first in
+    # the DOM, so an unscoped selector would resolve to the wrong hidden element.
     page.click('.chrome .nav-btn[data-view="events"]')
     page.wait_for_selector("#viewEvents, .view", timeout=3000)
     box = page.locator("#notifBtn").bounding_box()
@@ -258,18 +235,18 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
     assert box and box["x"] > vw / 2, \
         f"Bell should be right-aligned on the Events view (x={box and box['x']}, vw={vw})"
 
-    # Clicking the bell opens the panel.
+    # Bell click opens the notification panel.
     page.click("#notifBtn")
     page.wait_for_selector(".notif-panel", state="visible", timeout=2000)
     assert page.locator(".notif-panel .notif-panel-title").inner_text().strip() == "Notifications"
     page.keyboard.press("Escape")
 
-    # The profile menu exposes change-password / theme / log out.
+    # Profile menu must expose change-password, theme, and log out.
     page.click("#profileBtn")
     for ctrl in ("#changePasswordBtn", "#themeBtn", "#logoutBtn"):
         page.wait_for_selector(f".profile-menu {ctrl}", state="visible", timeout=2000)
 
-    # Theme toggle flips the document theme attribute (moved off the sidebar).
+    # Theme toggle must flip the document's data-theme attribute.
     before = page.evaluate("() => document.documentElement.dataset.theme || 'dark'")
     page.click("#themeBtn")
     after = page.evaluate("() => document.documentElement.dataset.theme || 'dark'")
@@ -279,20 +256,14 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
 
 
 def test_session_revoke_kicks_user_out_promptly(live_server, browser):
-    """Admin revokes a user's session and the user is logged out.
+    """Admin revokes a session and the affected user is redirected to /login.html.
 
-    Two parts work together:
-
-      - Frontend: api() catches 401 and calls bounceToLogin(), which does
-        location.replace('/login.html'). A periodic /me poll covers the case
-        where the user does nothing.
-      - Backend: _has_valid_session() consults the sessions table, not just the
-        cookie signature. Otherwise the / and /login.html HTML handlers can't
-        tell a revoked cookie from a live one, so the SPA's
-        location.replace('/login.html') bounces back to / in an infinite loop.
-
-    Exercises the common flow: revoke, user reloads (or triggers any API call),
-    server then correctly serves /login.html.
+    Two pieces must work together:
+    - Frontend: api() catches 401, calls bounceToLogin() (location.replace).
+      The periodic /me poll handles the idle case.
+    - Backend: _has_valid_session() must check the sessions table, not just the
+      cookie signature. If it doesn't, /login.html bounces back to / in a loop
+      (the v3.1.0 redirect-loop bug).
     """
     import httpx
     admin = httpx.Client(base_url=live_server)
@@ -309,9 +280,8 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
     assert victim_page.url == f"{live_server}/", \
         f"Victim should be on / before revoke, was at {victim_page.url}"
 
-    # Revoke the victim's session via the API directly (deterministic;
-    # equivalent to admin clicking Revoke in the Sessions panel — which
-    # is covered separately by the backend tests in test_role_policy.py).
+    # Revoke via the API (deterministic). This is equivalent to clicking Revoke
+    # in the Sessions panel; the UI path is covered by test_role_policy.py.
     sessions = admin.get("/api/sessions").json()
     victim_session = next(
         s for s in sessions if s.get("user_email") == "victim@ui.test"
@@ -319,9 +289,9 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
     r = admin.delete(f"/api/sessions/{victim_session['id']}")
     assert r.status_code == 200
 
-    # Reload the victim's tab: boot() calls /me, gets 401, and location.replace
-    # runs. Server-side, _has_valid_session must return False for the revoked
-    # cookie so /login.html doesn't bounce back to /.
+    # Reload triggers boot() -> /me -> 401 -> location.replace. On the server,
+    # _has_valid_session must return False for the revoked cookie so /login.html
+    # doesn't immediately bounce back to /.
     victim_page.reload()
     try:
         victim_page.wait_for_url("**/login.html", timeout=5000)
@@ -337,23 +307,17 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
     admin.close()
 
 
-# ---------------------------------------------------------------------------
 # Navigation regression guards.
 #
-# Saving an item or clicking a KPI from a non-list view should not force-navigate
-# the user to the Work Items list. The forced setView("list") lived in BugModal
-# (create and edit), ProjectModal (save), and KpiStrip (click). These tests pin
-# the behavior: a save or KPI click keeps the user where they were.
+# Saving an item or clicking a KPI from a non-list view must not bounce the user
+# to Work Items. The bad setView("list") calls lived in BugModal (create + edit),
+# ProjectModal (save), and KpiStrip (click).
 #
-# Shell mounts only the active view (`{view === "x" && <X/>}`), so when the app
-# is on Events the #viewList element is absent from the DOM entirely. A
-# `#viewList` count of 0 is therefore a precise "did not redirect to the list"
-# assertion, and #viewEvents/#viewAnalytics visibility confirms we stayed put.
-# ---------------------------------------------------------------------------
+# The shell mounts only the active view, so #viewList is absent from the DOM when
+# the app is on Events. A count of 0 is therefore a precise "did not redirect"
+# assertion; checking #viewEvents/#viewAnalytics visibility confirms we stayed put.
 def _api_admin(live_server):
-    """Logged-in httpx client for seeding fixtures via the API. Credentials are
-    read from the bootstrap env vars live_server set, so they aren't repeated as
-    literals here."""
+    """Return an authenticated httpx client for seeding test data via the API."""
     import httpx
     creds = {
         "email": os.environ["BOOTSTRAP_ADMIN_EMAIL"],
@@ -366,13 +330,12 @@ def _api_admin(live_server):
 
 @pytest.fixture(scope="module")
 def nav_page(live_server, browser):
-    """One logged-in admin page shared across the navigation-regression tests.
+    """Shared logged-in page for the navigation-regression tests.
 
-    Login is rate-limited (8 / 60s per IP); the rest of the module already
-    spends most of that budget, so each of these tests can't afford its own
-    fresh login. They never revoke sessions and always re-enter through the view
-    nav, so a single shared page is both correct and rate-limit friendly. The
-    project + event they drive against are seeded once via a single API login."""
+    Login is rate-limited to 8 requests per 60s per IP, and the rest of the
+    module already uses most of that budget. These tests don't revoke sessions
+    and always re-enter through the view nav, so one shared page is both safe
+    and rate-limit friendly. Fixtures are seeded once via a single API client."""
     admin = _api_admin(live_server)
     admin.post("/api/projects", json={"name": "Event Task Project", "color": "#3366ff"})
     admin.post("/api/events", json={"name": "Sprint Planning Regression"})
@@ -386,19 +349,18 @@ def nav_page(live_server, browser):
 
 
 def test_create_task_inside_event_stays_in_event(nav_page):
-    """'+ Add Task' inside an event, then Save, must keep the user inside that
-    event's detail panel and never bounce to Work Items."""
+    """Creating a task from inside an event must keep the user in the event's
+    detail panel, not bounce to Work Items."""
     page = nav_page
 
-    # Open the Events view and drill into our event. Scope the card click to the
-    # visible grid: the event name also renders in the (hidden) detail header, so
-    # an unscoped text= match can resolve to the wrong, invisible node.
+    # Scope the card click to the visible grid: the event name also appears in the
+    # (hidden) detail header, so an unscoped text= selector hits the wrong node.
     page.click('.chrome .nav-btn[data-view="events"]')
     page.wait_for_selector("#viewEvents", state="visible", timeout=3000)
     page.click("#eventsGrid >> text=Sprint Planning Regression")
     page.wait_for_selector("#eventsDetailMode", state="visible", timeout=3000)
 
-    # "+ Add Task" opens the shared bug modal seeded with this event + Task type.
+    # "+ Add Task" opens the bug modal pre-seeded with the current event and Task type.
     page.click("#addItemToEventBtn")
     page.wait_for_selector("#modalBug", state="visible", timeout=2000)
     page.fill('#formBug input[name="title"]', "Task created inside the event")
@@ -416,7 +378,7 @@ def test_create_task_inside_event_stays_in_event(nav_page):
         page.click("#bugSubmitBtn")
     assert ri.value.status == 201, f"create task failed: {ri.value.text()}"
 
-    # Modal closes, and we must still be inside the event, not on the list.
+    # After the modal closes, we must still be inside the event.
     page.wait_for_selector("#modalBug", state="hidden", timeout=3000)
     assert page.locator("#viewList").count() == 0, (
         "BUG: creating a task inside an event redirected to the Work Items list. "
@@ -426,28 +388,28 @@ def test_create_task_inside_event_stays_in_event(nav_page):
         "Should still be on the Events view after adding a task"
     assert page.locator("#eventsDetailMode").is_visible(), \
         "Should still be in the event's detail panel (not the event card grid)"
-    # And the new task is visible in the event's own item table.
+    # Task also shows up in the event's item table.
     page.wait_for_selector(
         "#eventDetailItems >> text=Task created inside the event", timeout=4000
     )
 
 
 def test_edit_task_from_event_stays_in_event(nav_page):
-    """Editing a task opened FROM the event table and saving must also keep the
-    user in the event (the edit path force-navigated too)."""
+    """Saving an edit to a task opened from the event table must keep the user
+    in the event (the edit path had the same forced-navigation bug as create)."""
     page = nav_page
 
     page.click('.chrome .nav-btn[data-view="events"]')
     page.wait_for_selector("#viewEvents", state="visible", timeout=3000)
-    # The shared page may already be inside an event detail (the create-task test
-    # ran first); return to the card grid so the event card is visible/clickable.
+    # The shared page may already be in the event detail from the previous test;
+    # go back to the card grid so the event card is clickable.
     if page.locator("#eventsDetailMode").is_visible():
         page.click("#eventBackBtn")
         page.wait_for_selector("#eventsListMode", state="visible", timeout=3000)
     page.click("#eventsGrid >> text=Sprint Planning Regression")
     page.wait_for_selector("#eventsDetailMode", state="visible", timeout=3000)
 
-    # Open the task created by the previous test from the event's item table.
+    # Open the task that the previous test created, via the event's item table.
     page.click("#eventDetailItems >> text=Task created inside the event")
     page.wait_for_selector("#modalBug", state="visible", timeout=2000)
     page.fill('#formBug input[name="title"]', "Task edited inside the event")
@@ -465,15 +427,14 @@ def test_edit_task_from_event_stays_in_event(nav_page):
 
 
 def test_kpi_click_on_analytics_stays_on_analytics(nav_page):
-    """Clicking a KPI tile on Analytics filters in place — it must not redirect
-    to Work Items."""
+    """Clicking a KPI tile on Analytics must filter in place, not redirect to Work Items."""
     page = nav_page
 
     page.click('.chrome .nav-btn[data-view="analytics"]')
     page.wait_for_selector("#viewAnalytics", state="visible", timeout=3000)
 
     page.click('.kpi[data-kpi="open"]')
-    # No surprise jump — still on Analytics, and the tile reflects the filter.
+    # Must still be on Analytics, and the clicked tile must be marked active.
     assert page.locator("#viewList").count() == 0, \
         "BUG: a KPI click on Analytics redirected to the Work Items list"
     assert page.locator("#viewAnalytics").is_visible(), \
@@ -482,7 +443,7 @@ def test_kpi_click_on_analytics_stays_on_analytics(nav_page):
 
 
 def test_project_save_keeps_current_view(nav_page):
-    """Saving a project from a non-list view keeps the user on that view."""
+    """Saving a project from a non-list view must keep the user on that view."""
     page = nav_page
 
     page.click('.chrome .nav-btn[data-view="analytics"]')
@@ -500,13 +461,10 @@ def test_project_save_keeps_current_view(nav_page):
         "Saving a project should keep the user on the Analytics view"
 
 
-# ---------------------------------------------------------------------------
-# Feature regressions: linked-items Jira-style picker and the unified square
-# checkbox. Both reuse the shared nav_page login (rate-limit budget).
-# ---------------------------------------------------------------------------
+# Feature regression guards for the linked-items picker and the unified square
+# checkbox. Both reuse the shared nav_page login to stay within the rate limit.
 def _seed_bug_via_page(page, title: str) -> int:
-    """Create a Bug straight through the authenticated browser session (no extra
-    login) and return its id. Reuses the first existing project."""
+    """Create a bug via the authenticated browser session and return its id."""
     return page.evaluate(
         """async (title) => {
             const projs = await (await fetch('/api/projects', {credentials:'include'})).json();
@@ -525,19 +483,18 @@ def _seed_bug_via_page(page, title: str) -> int:
 
 
 def test_user_active_checkbox_is_square(nav_page):
-    """The user-create "Active" checkbox must render as a square (custom themed
-    control), not a stretched rectangle."""
+    """The "Active" checkbox in the user-create modal must be square (the custom
+    themed control), not a stretched rectangle."""
     page = nav_page
     page.click("#newUserBtn")
     page.wait_for_selector("#modalUser", state="visible", timeout=3000)
 
     box = page.locator('#modalUser input[name="is_active"]').bounding_box()
     assert box is not None, "Active checkbox not found"
-    # Square: width == height (allow 1px sub-pixel rounding).
+    # Allow 1px for sub-pixel rounding.
     assert abs(box["width"] - box["height"]) <= 1, \
         f"Active checkbox is not square (rectangle bug): {box}"
-    # And it's the custom-drawn control (appearance:none), so it's themed, not
-    # the browser's native box.
+    # appearance:none confirms it's the custom control, not the browser's native box.
     appearance = page.evaluate(
         """() => getComputedStyle(
             document.querySelector('#modalUser input[name="is_active"]')
@@ -548,34 +505,34 @@ def test_user_active_checkbox_is_square(nav_page):
 
 
 def test_linked_items_picker_multiselect_and_link(nav_page):
-    """The Jira-style linked-items picker: filter by type, multi-select two
-    results, and Link both at once. Guards the new multi-select UX, the type
-    filter, and that the underlying POST /links works end-to-end."""
+    """Linked-items picker: filter by type, multi-select two items, and link them
+    in one action. Guards the multi-select UX, the type filter, and the POST
+    /links API end-to-end."""
     page = nav_page
     src_id = _seed_bug_via_page(page, "ZZ Picker Source Bug")
     tgt1 = _seed_bug_via_page(page, "ZZ Picker Target Alpha")
     tgt2 = _seed_bug_via_page(page, "ZZ Picker Target Bravo")
 
-    # Open the source item's modal directly (no list-filter coupling).
+    # Open the source bug directly via a custom event (avoids list-filter coupling).
     page.evaluate(
         "(id) => document.dispatchEvent(new CustomEvent('sleuth:open-bug', {detail: {bugId: id}}))",
         src_id,
     )
     page.wait_for_selector("#modalBug", state="visible", timeout=3000)
 
-    # Open the picker, narrow to the Bugs tab, search, and tick two results.
+    # Open the picker, filter to Bugs, search, and tick both targets.
     page.click(".item-picker-trigger")
     page.click('.item-picker-tab:has-text("Bugs")')
     page.fill(".item-picker-search", "ZZ Picker Target")
     page.click('.item-picker-row:has-text("ZZ Picker Target Alpha")')
     page.click('.item-picker-row:has-text("ZZ Picker Target Bravo")')
-    # Both selections show as chips (multi-select keeps the dropdown open).
+    # Multi-select keeps the dropdown open and shows chips for each selection.
     assert page.locator(".item-picker-chips .item-picker-chip").count() == 2
 
-    # Link both — one POST per selected item.
+    # Link — one POST per selected item.
     page.click("#bugLinkAdd .btn.primary")
 
-    # Both link rows appear in the list.
+    # Both targets must appear in the linked-items list.
     page.wait_for_selector(f'.bug-link-row:has-text("#{tgt1}")', timeout=4000)
     page.wait_for_selector(f'.bug-link-row:has-text("#{tgt2}")', timeout=4000)
     assert page.locator('.bug-link-row:has-text("ZZ Picker Target Alpha")').count() >= 1
@@ -585,9 +542,11 @@ def test_linked_items_picker_multiselect_and_link(nav_page):
 
 
 def test_reports_type_dropdown_anchors_to_trigger(nav_page):
-    """The Report-type dropdown must open anchored to its trigger — it used to
-    land hundreds of px to the right because the position:fixed popover was
-    contained by an ancestor. Now portaled to <body>, it aligns to the trigger."""
+    """The report-type dropdown must open anchored to its trigger button.
+
+    Previously it landed hundreds of px to the right because a position:fixed
+    popover was clipped by an ancestor stacking context. Portaling to <body>
+    fixed the alignment."""
     page = nav_page
     page.click('.chrome .nav-btn[data-view="reports"]')
     page.wait_for_selector("#reportTypeSelect", timeout=5000)
@@ -599,9 +558,9 @@ def test_reports_type_dropdown_anchors_to_trigger(nav_page):
     tb = trigger.bounding_box()
     pb = page.locator(".bh-sel-pop").bounding_box()
     assert tb and pb
-    # Left edges align (the misplacement bug shifted it ~sidebar-width right).
+    # Left edges must align within 8px (the bug shifted it ~sidebar-width right).
     assert abs(pb["x"] - tb["x"]) <= 8, f"dropdown not left-aligned: trigger={tb}, pop={pb}"
-    # And it sits directly below the trigger (or just above if flipped).
+    # Must sit directly below the trigger, or just above if the popover flips.
     below = abs(pb["y"] - (tb["y"] + tb["height"])) <= 14
     above = abs((pb["y"] + pb["height"]) - tb["y"]) <= 14
     assert below or above, f"dropdown not anchored vertically: trigger={tb}, pop={pb}"
@@ -609,32 +568,31 @@ def test_reports_type_dropdown_anchors_to_trigger(nav_page):
 
 
 def test_bulk_bar_uses_themed_selects(nav_page):
-    """The bulk action bar must use the themed BhSelect controls, not the old
-    unstyled native <select> boxes."""
+    """The bulk action bar must use themed BhSelect controls, not native <select> boxes."""
     page = nav_page
     _seed_bug_via_page(page, "ZZ Bulk Bar Item")
     page.click('.chrome .nav-btn[data-view="list"]')
     page.wait_for_selector("#viewList", state="visible", timeout=3000)
 
-    page.check('th.col-select input[type="checkbox"]')  # select all on page
+    page.check('th.col-select input[type="checkbox"]')  # select all rows on page
     page.wait_for_selector("#bulkBar", state="visible", timeout=3000)
 
     assert page.locator("#bulkBar select.bulk-select").count() == 0, \
         "bulk bar still uses unthemed native <select>"
     assert page.locator("#bulkBar .bulk-select-wrap .bh-sel-btn").count() == 3, \
         "bulk bar should have 3 themed BhSelect controls (status/priority/env)"
-    # Clear the selection so the shared page is clean for later tests.
+    # Clear selection so the shared page is clean for subsequent tests.
     page.click("#bulkBar .bulk-clear")
 
 
 def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
-    """A video attachment shows a compact poster thumbnail in the card; clicking
-    "View" opens the custom player in a themed lightbox, not the browser's native
-    player in a new tab. The control bar must be visible while paused and while
-    playing, and the seek bar is always grabbable, including fullscreen."""
+    """A video attachment shows a poster thumbnail in the card; clicking "View"
+    must open the custom player in a themed lightbox, not the browser's native
+    player in a new tab. The control bar must stay visible while paused and
+    while playing, and the seek bar must always be grabbable."""
     page = nav_page
     bug_id = _seed_bug_via_page(page, "ZZ Video Bug")
-    # Upload a tiny fake mp4 so the card is treated as a video by content-type.
+    # Upload a minimal fake mp4 so the attachment is recognized as video by content-type.
     page.evaluate(
         """async (id) => {
             const fd = new FormData();
@@ -649,11 +607,11 @@ def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
         bug_id,
     )
     page.wait_for_selector("#modalBug", state="visible", timeout=3000)
-    # Card shows a poster thumbnail, not an inline player.
+    # Must show a poster thumbnail in the card, not an inline player.
     page.wait_for_selector(".attach-video-thumb", timeout=4000)
     assert page.locator(".vplayer").count() == 0, "player should not render inline (use the lightbox)"
 
-    # "View" for a video opens the lightbox player (not a raw new-tab download).
+    # "View" must open the lightbox player, not a raw new-tab download.
     view_btn = page.locator('.attach-actions [data-act="view-video"]').first
     assert view_btn.count() == 1, "video View action missing"
     view_btn.click()
@@ -661,12 +619,12 @@ def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
     assert page.locator(".video-lightbox .vplayer-seek-input").count() == 1, "no seek bar"
     assert page.locator(".video-lightbox .vplayer-volume").count() == 1, "no volume control"
 
-    # Control bar visible while paused.
+    # Control bar must be visible while paused.
     bar_opacity = page.eval_on_selector(".vplayer-bar", "el => getComputedStyle(el).opacity")
     assert float(bar_opacity) > 0.9, f"control bar not visible while paused (opacity {bar_opacity})"
 
-    # Regression for "control bar not visible while the video runs / can't drag
-    # the seek bar": it stays at full opacity once playback starts (no auto-hide).
+    # Regression: "control bar not visible while playing / can't drag the seek bar".
+    # The bar must stay at full opacity during playback (no auto-hide).
     page.evaluate(
         """() => {
             const v = document.querySelector('.video-lightbox .vplayer-video');
@@ -678,7 +636,7 @@ def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
     play_opacity = page.eval_on_selector(".vplayer-bar", "el => getComputedStyle(el).opacity")
     assert float(play_opacity) > 0.9, f"control bar faded while playing (opacity {play_opacity})"
 
-    # Backdrop click closes the lightbox.
+    # Close button must dismiss the lightbox.
     page.locator(".video-lightbox-close").click()
     page.wait_for_selector(".video-lightbox", state="detached", timeout=3000)
 
@@ -687,12 +645,12 @@ def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
 
 
 def test_attachment_drag_and_drop_stages_file(nav_page):
-    """Dropping a file on the create-mode attachment zone stages it for upload."""
+    """Dropping a file on the create-mode dropzone must stage it for upload."""
     page = nav_page
     page.click("#newBugBtn")
     page.wait_for_selector("#modalBug", state="visible", timeout=3000)
 
-    # Synthesize a native file-drop on the create dropzone.
+    # Synthesize a native drag-and-drop sequence on the create dropzone.
     page.evaluate(
         """() => {
             const zone = document.querySelector('#bugCreateAttachSection .attach-dropzone');

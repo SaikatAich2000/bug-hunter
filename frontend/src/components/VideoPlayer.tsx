@@ -1,14 +1,12 @@
 /**
- * VideoPlayer — a dependency-free player built on the native <video> element
- * (so decoding stays hardware-accelerated). The themed control bar stays
- * visible windowed and fullscreen so the seek bar is always grabbable.
+ * Dependency-free player on the native <video> element so decoding stays
+ * hardware-accelerated. The control bar is always visible — windowed and
+ * fullscreen — so the seek bar stays reachable.
  *
- * Features: play/pause, a draggable seek bar with a buffered track + thumb,
- * current/total time, mute + volume slider, a playback-speed cycle, optional
- * picture-in-picture, fullscreen, a buffering spinner, and keyboard shortcuts
- * (Space/k play, ←/→ seek 5s, ↑/↓ volume, m mute, f fullscreen, 0-9 seek to %).
+ * Keyboard shortcuts: Space/k play, ←/→ seek 5s, ↑/↓ volume, m mute,
+ * f fullscreen, 0-9 jump to that tenth of the video.
  *
- * Used both inline and inside <VideoLightbox/>.
+ * Used inline and inside <VideoLightbox/>.
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
@@ -22,7 +20,7 @@ interface Props {
 }
 
 const SPEEDS = [0.5, 1, 1.25, 1.5, 2] as const;
-const DEFAULT_SPEED_IDX = 1; // 1×
+const DEFAULT_SPEED_IDX = 1; // normal speed
 
 function fmtTime(s: number): string {
   if (!Number.isFinite(s) || s < 0) s = 0;
@@ -44,10 +42,8 @@ function volumeIcon(muted: boolean, volume: number): string {
 const PIP_SUPPORTED =
   typeof document !== "undefined" && Boolean(document.pictureInPictureEnabled);
 
-// ----- prefixed Fullscreen API shims -----
-// Safari (desktop + iOS WebKit) only exposes the webkit-prefixed Fullscreen
-// API, and iOS Safari only supports element-level fullscreen on the <video>
-// via webkitEnterFullscreen(). Detect and bridge these.
+// Safari exposes only the webkit-prefixed Fullscreen API; iOS Safari further
+// restricts element fullscreen to <video> via webkitEnterFullscreen().
 interface FsElement extends HTMLElement {
   webkitRequestFullscreen?: () => void;
 }
@@ -96,7 +92,6 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
   const [speedIdx, setSpeedIdx] = useState(DEFAULT_SPEED_IDX);
   const [isFs, setIsFs] = useState(false);
 
-  // ----- wire native <video> events -----
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -139,8 +134,8 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
     };
   }, []);
 
-  // Track fullscreen (incl. Esc-exit), via both the standard and the
-  // webkit-prefixed fullscreenchange events.
+  // Track fullscreen state for both the standard and webkit-prefixed events
+  // so Esc-exit is also caught.
   useEffect(() => {
     const onFs = () => setIsFs(fsElement() === wrapRef.current);
     document.addEventListener("fullscreenchange", onFs);
@@ -151,7 +146,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
     };
   }, []);
 
-  // Autoplay (lightbox). If the browser blocks it, the big play button remains.
+  // Autoplay for the lightbox; if the browser blocks it, the play button stays visible.
   useEffect(() => {
     if (!autoPlay) return;
     const v = videoRef.current;
@@ -217,9 +212,8 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
       exitFs();
       return;
     }
-    // Standard + webkit element fullscreen on the wrapper; if neither exists
-    // (iOS Safari, where only the <video> can go fullscreen), fall back to the
-    // <video>'s own webkitEnterFullscreen.
+    // On iOS Safari neither method exists on the wrapper, so fall back to
+    // the video element's own webkitEnterFullscreen.
     const el = wrap as FsElement;
     if (typeof el.requestFullscreen === "function" || typeof el.webkitRequestFullscreen === "function") {
       requestFs(el);
@@ -265,8 +259,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
         toggleFs();
         break;
       default:
-        // Guard on the live element duration; the React `duration` state is
-        // stale in the moment right after load.
+        // Use the live element duration — React state lags briefly after load.
         if (/^\d$/.test(e.key) && Number.isFinite(v.duration)) {
           e.preventDefault();
           seekTo((Number(e.key) / 10) * v.duration);

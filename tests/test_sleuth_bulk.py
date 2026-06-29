@@ -1,17 +1,13 @@
-"""Sleuth bulk actions and the admin-only write policy.
+"""Tests for Sleuth bulk actions and the admin-only write policy.
 
-Two things are exercised here:
+Bulk writes (assign all, close all, etc.) are staged as a single confirmable
+plan covering every matching item; one "yes" applies them all.
 
-  - Bulk writes ("assign all the bugs to X", "close all bugs", etc.): the
-    command is staged as one confirmable plan whose ``bug_ids`` covers every
-    matching item, and a single "yes" applies it to all of them.
+Role policy: admins get read/write/edit access (no delete). Managers and plain
+users are read-only via Sleuth — any write attempt, single or bulk, returns
+``action_denied`` while reads keep working.
 
-  - Role policy: Sleuth provides read/write/edit access for admins only (never
-    delete). Managers and regular users get read/lookup access; any write
-    attempt (single or bulk) is refused with intent ``action_denied`` while
-    reads keep working.
-
-Self-contained temp-SQLite isolation.
+Uses a self-contained temp-SQLite database.
 """
 from __future__ import annotations
 
@@ -27,9 +23,9 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
 os.environ["SESSION_SECRET"] = "test-secret-bulk-only"
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
-# Fresh app import bound to this file's dedicated DB (see the note in
-# test_sleuth_actions.py) — avoids a full-suite "no such table" from a shared
-# engine bound to an earlier-collected module's torn-down DB.
+# Purge any previously imported app modules so this file gets a fresh import
+# bound to its own DB, avoiding "no such table" errors when pytest collects
+# modules in a shared process and an earlier module's DB is already torn down.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -43,7 +39,7 @@ from app.chatbot.memory import store as memstore
 
 
 def seed():
-    """Re-seed; return dict of ids. 3 bugs, all New/Medium/DEV in General."""
+    """Drop and recreate all tables, seed 3 New/Medium/DEV bugs in General, return a dict of ids."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     memstore._clear_all_for_test()
@@ -100,8 +96,8 @@ def test_bulk_assign_all_admin():
         assigned = sum(1 for b in db.query(models.Bug).all()
                        if any(a.id == ids["admin"] for a in b.assignees))
         assert assigned == 3, assigned
-        # Bulk emits one aggregate notification (not one per item), and the
-        # actor (assignee here) gets it.
+        # Bulk ops emit one aggregate notification rather than one per item;
+        # the actor (the assignee in this case) receives it.
         notifs = db.query(models.Notification).filter_by(user_id=ids["admin"]).all()
         assert len(notifs) == 1, len(notifs)
         assert notifs[0].kind == "assigned"
@@ -181,7 +177,7 @@ def test_bulk_unassign_all_admin():
     db = SessionLocal()
     try:
         admin = _user(db, ids["admin"])
-        # First assign everyone, then bulk-unassign.
+        # Assign first, then bulk-unassign to verify the result is zero.
         executor.execute("assign all the bugs to Saikat Aich", db, admin)
         executor.execute("yes", db, admin)
         staged = executor.execute("unassign Saikat Aich from all the bugs", db, admin)
@@ -239,7 +235,7 @@ def test_bulk_assign_with_status_filter():
     db = SessionLocal()
     try:
         admin = _user(db, ids["admin"])
-        # Flip one bug to In Progress so the New filter selects only the rest.
+        # Move one bug to In Progress so only the remaining two match the New filter.
         b = db.get(models.Bug, ids["bugs"][0]); b.status = "In Progress"; db.commit()
         staged = executor.execute("assign all new bugs to Saikat Aich", db, admin)
         assert staged.intent == "confirm_action", staged.intent
@@ -254,8 +250,7 @@ def test_bulk_assign_with_status_filter():
 
 
 def _add_mixed_types(db, proj_id, admin_id):
-    """Add one Requirement + one Task next to the seeded 3 Bugs. Returns
-    (requirement_id, task_id)."""
+    """Add one Requirement and one Task alongside the seeded bugs. Returns (requirement_id, task_id)."""
     req = models.Bug(title="Req A", description="d", status="New", priority="Medium",
                      environment="DEV", project_id=proj_id, reporter_id=admin_id,
                      item_type="Requirement")
@@ -279,7 +274,7 @@ def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
         admin = _user(db, ids["admin"])
         staged = executor.execute("assign all the bugs to Saikat Aich", db, admin)
         assert staged.intent == "confirm_action", staged.intent
-        # The confirmation states the typed scope so the user can't be surprised.
+        # The confirmation must name the typed scope so the user sees exactly what will be touched.
         text = staged.blocks[0].payload["text"]
         assert "3 Bug" in text, text
 
@@ -342,7 +337,7 @@ def test_bulk_close_all_tasks_only_targets_tasks():
 
         db.expire_all()
         assert db.get(models.Bug, task_id).status == "Closed"
-        # The 3 Bugs stay New.
+        # The 3 bugs must remain New.
         assert all(b.status == "New"
                    for b in db.query(models.Bug).filter_by(item_type="Bug").all())
     finally:
@@ -367,7 +362,7 @@ def test_bulk_no_matching_items():
     db = SessionLocal()
     try:
         admin = _user(db, ids["admin"])
-        # No Critical bugs exist → the filtered set is empty.
+        # No Critical bugs were seeded, so the filter matches nothing.
         r = executor.execute("assign all critical bugs to Saikat Aich", db, admin)
         assert r.intent == "action_invalid", r.intent
         assert "matching" in r.blocks[0].payload["text"].lower()
@@ -446,7 +441,7 @@ def test_manager_single_write_denied():
         mgr = _user(db, ids["mgr"])
         r = executor.execute(f"assign bug {ids['bugs'][0]} to Mark Manager", db, mgr)
         assert r.intent == "action_denied", r.intent
-        # And nothing was staged.
+        # Nothing should have been staged.
         sess = memstore.get(ids["mgr"])
         assert sess is None or sess.pending_action is None
     finally:

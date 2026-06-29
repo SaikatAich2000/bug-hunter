@@ -2,38 +2,35 @@
 
 Covers:
 
-  1. Bold / Italic / Underline (toolbar and Ctrl+B/I/U) apply when the
-     contenteditable surface has focus but no caret yet, and formatBlock
-     (blockquote / pre) toggles off on a second click.
+  1. Bold/Italic/Underline (toolbar and Ctrl+B/I/U) apply when the
+     contenteditable has focus but no caret yet, and formatBlock
+     (blockquote/pre) toggles off on a second click.
 
-  2. Calendar prev / next buttons page the month instead of closing the
-     popover.
+  2. Calendar prev/next buttons page the month instead of closing the popover.
 
   3. The disabled Reporter <select> does not render the open-caret.
 
   4. The toolbar image button routes through the attachment flow rather
      than inserting an inline <img>.
 
-These tests assert:
+These tests check:
 
-  * The shipped frontend carries the markers for each behavior, so a
+  * The frontend source carries the markers for each behavior, so a
     refactor that removes one is caught.
-  * The source does not carry the old inline-image embed path
-    (no `_bhRtPickImage`, no `insertHTML.*<img`).
-  * Server-side HTML sanitisation lets the rich-text formatting tags
-    survive a round-trip through bug-description and comment-body
-    submission (bold, italic, underline, lists, blockquote, pre,
-    code, paragraphs).
+  * The old inline-image embed path is gone (no _bhRtPickImage,
+    no insertHTML.*<img).
+  * Server-side sanitisation lets rich-text tags survive a round-trip
+    through bug descriptions and comment bodies (bold, italic, underline,
+    lists, blockquote, pre, code, paragraphs).
   * Server-side sanitisation still strips dangerous payloads
     (<script>, javascript: URLs, onerror handlers).
-  * The Reporter field stays disabled in the rendered modal, so the
-    custom-dropdown's disabled branch is exercised in real rendering.
-  * The admin-only comment edit/delete and admin-only bug-attachment
-    delete rules still hold (re-covered here so this suite is
-    self-sufficient).
+  * The Reporter field stays disabled in the rendered modal so the
+    custom-dropdown's disabled branch is exercised.
+  * Admin-only comment edit/delete and attachment delete rules hold
+    (re-covered here so this suite is self-contained).
 
-Every test runs against a tmp SQLite file created by the conftest
-fixture; nothing here touches a production database.
+All tests run against a tmp SQLite file from the conftest fixture;
+nothing here touches a production database.
 """
 from __future__ import annotations
 
@@ -44,9 +41,7 @@ from pathlib import Path
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Test helpers — duplicated intentionally so this file stands alone.
-# ---------------------------------------------------------------------------
+# Helpers are duplicated from conftest intentionally so this file stands alone.
 def _login(client, email, password):
     client.post("/api/auth/logout")
     r = client.post("/api/auth/login", json={"email": email, "password": password})
@@ -78,9 +73,9 @@ def _read_static(name):
     return p.read_text(encoding="utf-8")
 
 
-# The rich-text editor / custom select / date input live in these sources
-# (the shipped JS is a content-hashed Vite bundle under app/static/assets/,
-# not human-readable). The marker tests below read the React source.
+# The rich-text editor, custom select, and date input live in the React source.
+# The shipped JS bundle is content-hashed and minified, so marker tests read
+# the source files directly.
 def _read_frontend(relpath):
     p = Path(__file__).resolve().parents[1] / "frontend" / "src" / relpath
     return p.read_text(encoding="utf-8")
@@ -107,10 +102,10 @@ def _styles_css():
 
 
 # ===========================================================================
-# 1. Rich-text editor fix markers (Bold / Italic / Underline / format-toggle)
+# 1. Rich-text editor markers (Bold / Italic / Underline / format-toggle)
 # ===========================================================================
 class TestRichTextFixMarkers:
-    """Check that the rich-text behavior markers are present in the source."""
+    """Verify that expected rich-text behavior markers are present in source."""
 
     def test_app_js_has_saved_selection_path(self):
         """Selection is saved and restored across toolbar clicks."""
@@ -128,9 +123,9 @@ class TestRichTextFixMarkers:
                 f"Ctrl+{cmd[0].upper()} should go through runCmd "
                 "not bare execCommand"
             )
-        # Strip line comments before asserting the call is not made
-        # directly (it is still mentioned in comments explaining the
-        # Chrome workaround).
+        # Strip line comments before checking for direct execCommand calls.
+        # The word still appears in comments explaining the Chrome workaround,
+        # so we only inspect non-comment lines.
         code_only = "\n".join(
             ln for ln in js.splitlines()
             if not ln.lstrip().startswith("//")
@@ -164,25 +159,21 @@ class TestRichTextFixMarkers:
         js = _rich_editor()
         assert "toggleInlineAtCaret" in js, "manual-toggle helper missing"
         assert "INLINE_TOGGLE" in js, "inline-tag map missing"
-        # The ZWSP separator must be inserted on toggle-off too, or Chrome
-        # absorbs the next keystroke back into the wrapper.
+        # ZWSP separator must also be inserted on toggle-off; without it,
+        # Chrome absorbs the next keystroke back into the wrapper.
         assert "insertBefore(sep, n.nextSibling)" in js, (
             "ZWSP separator must be inserted after wrapper on toggle-off"
         )
 
     def test_app_js_uses_preventdefault_on_toolbar_mousedown(self):
-        """The toolbar button's mousedown must call preventDefault, otherwise
-        focus moves from the contenteditable to the button and the typing
-        state set by execCommand disappears before the user can type.
+        """The toolbar mousedown must call preventDefault before running the
+        command. Without it, focus moves from the contenteditable to the button
+        and the execCommand typing state is lost before the user types.
 
-        The invariant tested here is that preventDefault stays in place,
-        regardless of whether the runner is the raw helper or the
-        snapshot wrapper that supports undo history."""
+        This checks that preventDefault stays regardless of whether the runner
+        is the raw helper or the undo-history snapshot wrapper."""
         js = _rich_editor()
-        # The toolbar mousedown handler must call preventDefault before
-        # running the toolbar command (the React onMouseDown handler is
-        # handleToolbarMouseDown; it ends in runToolbarCmd, the snapshot
-        # wrapper).
+        # handleToolbarMouseDown calls preventDefault then runToolbarCmd.
         m = re.search(
             r'handleToolbarMouseDown.*?e\.preventDefault\(\).*?runToolbarCmd',
             js, re.S,
@@ -190,9 +181,9 @@ class TestRichTextFixMarkers:
         assert m, "mousedown must preventDefault before running the toolbar command"
 
     def test_app_js_has_manual_formatting_implementations(self):
-        """Chrome silently no-ops document.execCommand("bold") inside the bug
-        modal's stacking context, so the editor implements its own. These
-        helpers must exist or B/I/U/list/blockquote stop working."""
+        """Chrome silently no-ops execCommand("bold") inside the bug modal's
+        stacking context, so the editor implements its own helpers. These must
+        exist or B/I/U/list/blockquote stop working."""
         js = _rich_editor()
         assert "applyInlineWrap" in js, "manual inline wrap missing"
         assert "applyList" in js, "manual list toggle missing"
@@ -203,8 +194,8 @@ class TestRichTextFixMarkers:
         )
 
     def test_app_js_has_visible_active_state(self):
-        """The toolbar buttons get an `.is-active` class driven by
-        updateActiveStates to show that Bold/Italic is armed."""
+        """Toolbar buttons get an .is-active class via updateActiveStates
+        to indicate that Bold/Italic/etc. is active at the caret."""
         js = _rich_editor()
         assert "updateActiveStates" in js
         css = _styles_css()
@@ -217,14 +208,12 @@ class TestRichTextFixMarkers:
 # 2. Calendar prev / next stays open
 # ===========================================================================
 class TestCalendarNavStaysOpen:
-    """Internal pop clicks call `e.stopPropagation()` so the rebuilt DOM
-    doesn't masquerade as an outside click that closes the popover."""
+    """Nav clicks must call e.stopPropagation() so the rebuilt DOM isn't
+    mistaken for an outside click that closes the popover."""
 
     def test_app_js_stops_propagation_for_nav_clicks(self):
         js = _bh_date()
-        # The next-month nav button's onClick must stopPropagation before
-        # paging the month, so the popover re-render isn't mistaken for an
-        # outside click that closes it.
+        # stopPropagation keeps the popover open when the month re-renders.
         m = re.search(
             r'data-nav="next".*?navMonth\(1\)',
             js, re.S,
@@ -241,9 +230,8 @@ class TestCalendarNavStaysOpen:
 # ===========================================================================
 class TestReporterDropdownNoCaret:
     def test_index_html_reporter_select_is_disabled(self):
-        # The Reporter <select> now lives in BugModal.tsx. It must remain
-        # disabled — if a future refactor un-disables it the caret-suppression
-        # behaviour is silently bypassed, so pin it here.
+        # Reporter <select> lives in BugModal.tsx. Pin disabled here so a
+        # refactor that removes it doesn't silently bypass caret-suppression.
         src = _bug_modal()
         assert re.search(
             r'<select[^>]*name="reporter_id"[^>]*\bdisabled\b',
@@ -251,9 +239,7 @@ class TestReporterDropdownNoCaret:
         ), "Reporter <select> must keep `disabled` attribute"
 
     def test_app_js_skips_caret_when_select_disabled(self):
-        # BhSelect renders the dropdown caret only when not disabled — a
-        # disabled select cannot open, so the caret would falsely advertise
-        # "click me".
+        # A disabled select can't open, so showing the caret is misleading.
         js = _bh_select()
         assert re.search(
             r'!disabled\s*&&\s*<span className="bh-sel-caret"',
@@ -261,11 +247,9 @@ class TestReporterDropdownNoCaret:
         ), "disabled-select caret-suppression branch missing"
 
     def test_app_js_observer_rerenders_label_on_disabled_change(self):
-        # Vanilla used a MutationObserver to re-render the caret when the
-        # select's disabled state flipped at runtime. In React the caret is a
-        # function of the `disabled` prop, so a prop change re-renders and the
-        # caret toggles immediately — no observer needed. Pin that the caret
-        # (and the trigger) stay driven by `disabled`.
+        # The old vanilla implementation used a MutationObserver to track
+        # disabled changes. In React this is just a prop, so no observer is
+        # needed. Pin that both caret and trigger are driven by `disabled`.
         js = _bh_select()
         assert re.search(
             r'!disabled\s*&&\s*<span className="bh-sel-caret"',
@@ -285,12 +269,11 @@ class TestReporterDropdownNoCaret:
 class TestImageInsertionAsAttachment:
     def test_app_js_no_legacy_pickimage_helper(self):
         js = _rich_editor()
-        # The old helper inserted <img> via insertHTML, which left images
-        # that could not be resized or removed. It must be gone.
+        # The old helper embedded images via insertHTML, leaving blobs that
+        # couldn't be resized or deleted. It must be gone.
         assert "_bhRtPickImage" not in js, (
             "Legacy inline-image picker must be removed"
         )
-        # And no insertHTML('<img …>') anywhere in the rich-text path.
         assert not re.search(
             r'insertHTML[^;]*<img\b',
             js,
@@ -301,7 +284,7 @@ class TestImageInsertionAsAttachment:
         assert "pickFileAsAttachment" in js, (
             "Toolbar image button must route through the attachment helper"
         )
-        # And the toolbar `bh-image` button is the one that calls it.
+        # The bh-image branch specifically must be the one calling it.
         m = re.search(
             r'cmd\s*===\s*"bh-image".*?pickFileAsAttachment',
             js, re.S,
@@ -313,8 +296,8 @@ class TestImageInsertionAsAttachment:
 # 5. Rich HTML in description / comment survives the round-trip
 # ===========================================================================
 class TestRichHtmlRoundtrip:
-    """End-to-end: post a description / comment containing the formatting
-    tags the toolbar can produce, fetch it back, assert each tag survives."""
+    """Post descriptions and comments with rich formatting, fetch them back,
+    and assert each tag survives the sanitiser round-trip."""
 
     @pytest.fixture()
     def bug(self, admin_client):
@@ -365,7 +348,7 @@ class TestRichHtmlRoundtrip:
 # 6. XSS / unsafe payloads are still scrubbed
 # ===========================================================================
 class TestSanitiserStillBlocksUnsafe:
-    """The rich-text round-trip must not weaken the sanitiser."""
+    """Rich-text support must not weaken the sanitiser."""
 
     @pytest.fixture()
     def bug(self, admin_client):
@@ -377,11 +360,9 @@ class TestSanitiserStillBlocksUnsafe:
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"description": html})
         assert r.status_code == 200
         got = r.json()["description"]
-        # The dangerous bit is the executable <script> wrapper. The
-        # in-house sanitiser drops tags from the allowlist but keeps
-        # surviving text content — so "alert(1)" survives as inert
-        # plain text. That's correct: no XSS surface because the
-        # wrapping tag is gone.
+        # The sanitiser drops the <script> tag but may keep the text content
+        # as inert plain text. That's acceptable — no XSS because the
+        # executable wrapper is gone.
         assert "<script" not in got.lower()
         assert "</script" not in got.lower()
         # Surrounding paragraph + neighbouring text must survive.
@@ -416,9 +397,8 @@ class TestAdminOnlyMutations:
     def _make_user(self, client, name, role="user"):
         body = {"name": name, "email": f"{name.lower()}@x.test",
                 "role": role, "password": "User12345Aa"}
-        # Project-scoped access: tag the new user to every existing project so
-        # these pre-scoping admin-only-mutation tests keep exercising the flat
-        # model (the user must SEE the bug before the admin-only rule applies).
+        # Give the new user access to all existing projects. The user must be
+        # able to see the bug before the admin-only rule can apply.
         pids = [p["id"] for p in client.get("/api/projects").json()]
         if pids:
             body["project_ids"] = pids
@@ -427,7 +407,6 @@ class TestAdminOnlyMutations:
         return r.json()
 
     def test_non_admin_cannot_edit_own_comment(self, client):
-        # admin sets things up
         _login(client, "admin@test.local", "Admin1234")
         proj = _make_project(client, name="Perm v2.6")
         u = self._make_user(client, "Beta")
@@ -438,7 +417,6 @@ class TestAdminOnlyMutations:
                         json={"body": "<p>Hello</p>"})
         assert r.status_code == 201
         cid = r.json()["id"]
-        # ...and tries to edit it
         r = client.put(f"/api/bugs/{bug['id']}/comments/{cid}",
                        json={"body": "<p>edited</p>"})
         assert r.status_code == 403, (
@@ -450,7 +428,7 @@ class TestAdminOnlyMutations:
         proj = _make_project(client, name="Perm v2.6 b")
         u = self._make_user(client, "Gamma")
         bug = _make_bug(client, proj["id"])
-        # admin posts the comment so the user is not the owner
+        # Post as admin so the user is not the owner of this comment.
         r = client.post(f"/api/bugs/{bug['id']}/comments",
                         json={"body": "<p>admin note</p>"})
         cid = r.json()["id"]
@@ -463,7 +441,6 @@ class TestAdminOnlyMutations:
         proj = _make_project(client, name="Perm v2.6 c")
         u = self._make_user(client, "Delta")
         bug = _make_bug(client, proj["id"])
-        # admin uploads an attachment
         r = client.post(
             f"/api/bugs/{bug['id']}/attachments",
             files={"file": ("doc.txt", io.BytesIO(b"hello"), "text/plain")},
@@ -495,9 +472,9 @@ class TestAdminOnlyMutations:
 # 8. Database safety: schema is unchanged across reboot (idempotent init)
 # ===========================================================================
 class TestInitDbIsIdempotent:
-    """init_db is a three-pass create-if-missing / add-column-if-missing /
-    index-if-missing routine. Running it twice on the same DB must leave the
-    schema identical, so a redeploy does not alter an existing database."""
+    """init_db is a three-pass routine (create-if-missing / add-column /
+    add-index). Running it twice on the same DB must leave the schema
+    identical, so a redeploy never alters an existing database."""
 
     def test_running_init_twice_does_not_recreate_tables(self, tmp_path, monkeypatch):
         import sys
@@ -528,9 +505,9 @@ class TestInitDbIsIdempotent:
         )
 
     def test_no_new_tables_introduced_by_v26_fixes(self, tmp_path, monkeypatch):
-        """init_db creates the canonical core tables. A newly introduced
-        table would still pass here, but the idempotence test above pairs
-        with this one to catch double-init drift."""
+        """Verify the canonical core tables are created by init_db. A new table
+        added in future still passes; the idempotence test above catches
+        double-init drift."""
         import sys
         db_file = tmp_path / "schema.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
@@ -551,10 +528,8 @@ class TestInitDbIsIdempotent:
 
         init_db()
         names = set(inspect(engine).get_table_names())
-        # The exact set is not pinned (that's brittle); this only checks
-        # the file actually creates the canonical core tables. A newly
-        # introduced table would still pass here — but the migration test
-        # above pairs with it in CI to catch any double-init drift.
+        # Only the canonical core tables are checked; pinning the full set
+        # would be brittle.
         for required in ("users", "projects", "bugs", "comments",
                          "attachments", "activity_log"):
             assert required in names, f"missing canonical table {required!r}"
@@ -564,7 +539,7 @@ class TestInitDbIsIdempotent:
 # Hardening
 # ===========================================================================
 class TestHardening:
-    """Pin hardening behaviors so an accidental revert is caught."""
+    """Pin security hardening so an accidental revert is caught early."""
 
     def test_uvicorn_host_defaults_to_loopback(self):
         """app/main.py's __main__ block must not hard-bind 0.0.0.0."""
@@ -590,7 +565,6 @@ class TestHardening:
     def test_cors_middleware_not_registered_when_no_origins(self):
         """No CORS_ORIGINS configured → CORSMiddleware must not be added."""
         from starlette.middleware.cors import CORSMiddleware
-        # Build a fresh app by importing main
         import importlib, os, sys
         os.environ.pop("CORS_ORIGINS", None)
         for m in list(sys.modules):
@@ -612,8 +586,6 @@ class TestHardening:
         """app/database.py must use narrowed SQLAlchemyError, not Exception."""
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1] / "app" / "database.py").read_text(encoding="utf-8")
-        # The try/except blocks must catch SQLAlchemyError specifically rather
-        # than a bare Exception.
         assert "except SQLAlchemyError:" in src
         assert src.count("except Exception:") == 0
 
@@ -622,7 +594,6 @@ class TestHardening:
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1] / "app" / "email_service.py").read_text(encoding="utf-8")
         assert "except (smtplib.SMTPException, OSError)" in src
-        # The broad form must not be present.
         assert "except Exception:\n        # Never let mailer failures" not in src
 
     def test_auth_uses_narrowed_except(self):

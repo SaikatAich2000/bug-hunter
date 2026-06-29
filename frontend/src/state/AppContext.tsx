@@ -185,8 +185,7 @@ export function useApp(): AppState {
 
 const PAGE_SIZE = 20;
 const SESSION_POLL_MS = 15_000;
-/** Shared cadence for all live-data pollers (list, stats, directory, open
- *  modal, per-view lists). Exported so view-local pollers use one interval. */
+/** Shared poll interval for list, stats, directory, open modal, and per-view pollers. */
 export const DATA_POLL_MS = 10_000;
 const VERSION_POLL_MS = 5 * 60_000;
 
@@ -198,10 +197,11 @@ function readLs(key: string, fallback: string): string {
   }
 }
 
-/** Shallow-compare the MeOut fields the session poll can change, so an
- *  unchanged /auth/me tick keeps the same currentUser object and React bails
- *  out of re-rendering every useApp() consumer. Keep the compared fields in
- *  sync with MeOut in types.ts. */
+/**
+ * Shallow-compare the fields that the session poll can change.
+ * Keeps the same object identity on unchanged ticks so React skips re-rendering
+ * every useApp() consumer. Keep in sync with MeOut in types.ts.
+ */
 function sameMe(a: MeOut, b: MeOut): boolean {
   return (
     a.id === b.id &&
@@ -258,12 +258,11 @@ export function AppProvider({
   const [notifications, setNotifications] = useState<NotificationOut[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Latest values for stable callbacks/pollers.
+  // Refs give stable callbacks and pollers access to the latest values without
+  // stale closures. notificationsRef is read outside setState updaters to avoid
+  // StrictMode's double-invoke of side effects.
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
-  // Latest notifications for callbacks that must read current state outside a
-  // setState updater (a side effect inside an updater double-fires under
-  // StrictMode's intentional double-invoke).
   const notificationsRef = useRef(notifications);
   notificationsRef.current = notifications;
   const pageRef = useRef(page);
@@ -271,14 +270,11 @@ export function AppProvider({
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
 
-  // Poll-equality guards: skip the state commit (and the whole-tree re-render
-  // + ~40 Intl formats it triggers) when a 10s poll returns byte-identical
-  // data — the common idle case.
+  // JSON signatures for each poll: skip the state commit when data hasn't
+  // changed, avoiding a full re-render (and the ~40 Intl.DateTimeFormat calls
+  // it triggers) on every quiet tick.
   const lastBugsSig = useRef("");
   const lastStatsSig = useRef("");
-  // Same guard for the directory poll: users/projects change rarely, so an
-  // unchanged 10s tick must not hand back fresh array identities (that busts
-  // the memoized context value and re-renders every consumer).
   const lastUsersSig = useRef("");
   const lastProjectsSig = useRef("");
 
@@ -324,9 +320,8 @@ export function AppProvider({
       const tab = tabRef.current;
       const params = new URLSearchParams();
       if (tab !== "all") params.set("item_type", tab);
-      // Pass the active status filter so the Analytics charts react to a KPI
-      // tile click (the headline KPI counts stay global server-side). The
-      // signature guard below still skips a no-op commit when nothing changed.
+      // Include the active status filter so Analytics charts respond to KPI
+      // tile clicks (headline counts are always global on the server side).
       for (const s of filtersRef.current.status) params.append("status", s);
       const qs = params.toString();
       const res = await api<StatsOut>(`/stats${qs ? `?${qs}` : ""}`);
@@ -339,8 +334,8 @@ export function AppProvider({
     }
   }, []);
 
-  // Cheap unread-badge refresh (a single SQL COUNT). setUnreadCount with an
-  // unchanged number is a no-op in React, so this is safe to call often.
+  // Single SQL COUNT; safe to call frequently since React skips re-renders
+  // when the unread count hasn't changed.
   const refreshUnread = useCallback(async () => {
     try {
       const c = await api<UnreadCountOut>("/notifications/unread_count");
@@ -351,9 +346,8 @@ export function AppProvider({
   }, []);
 
   const refreshAll = useCallback(async () => {
-    // Fold the unread badge into the shared refresh: every mutation site already
-    // calls refreshAll, so the bell now updates within ~1s of an action (and on
-    // the 10s data tick) instead of waiting up to 15s for the session poll.
+    // Piggyback the unread badge here so every mutation site gets a fresh count
+    // without waiting for the session poll.
     await Promise.all([refreshBugs(), refreshStats(), refreshUnread()]);
   }, [refreshBugs, refreshStats, refreshUnread]);
 
@@ -381,10 +375,8 @@ export function AppProvider({
     }
   }, []);
 
-  // Monotonic token so an out-of-order poll response (or one that started before
-  // an optimistic mark-read) can't overwrite newer state. Bumped by the
-  // optimistic mutations below as well, so a poll in flight when the user reads
-  // a row is discarded instead of resurrecting the unread dot.
+  // Monotonic token to discard out-of-order poll responses. Also bumped by
+  // optimistic mutations so an in-flight poll can't resurrect an unread dot.
   const notifSeqRef = useRef(0);
   const loadNotifications = useCallback(async () => {
     const seq = ++notifSeqRef.current;
@@ -424,8 +416,8 @@ export function AppProvider({
     })();
   }, [loadUsers, loadProjects, refreshAll, loadNotifications]);
 
-  // Re-fetch the list whenever page / filters / tab change. An effect keeps
-  // every mutation path covered without inlining a refresh at each site.
+  // Re-fetch the list on page / filter / tab change so mutation sites don't
+  // each need to call refreshBugs themselves.
   const firstListEffect = useRef(true);
   useEffect(() => {
     if (firstListEffect.current) {
@@ -448,13 +440,12 @@ export function AppProvider({
 
   // ----- pollers -----------------------------------------------------------
   useEffect(() => {
-    // Session poll: /auth/me every 15s + on tab focus; 401 inside api()
-    // handles the bounce. The unread notification count rides on the same tick
-    // (cheap COUNT query) so the bell badge stays live without a second timer.
+    // Session poll: /auth/me every 15s and on tab focus. 401 inside api()
+    // handles redirect. Unread count rides the same tick to keep the bell
+    // badge live without a separate timer.
     const tick = async () => {
       try {
         const m = await api<MeOut>("/auth/me", { cache: "no-store" });
-        // Bail when nothing changed so a quiet 15s tick re-renders nobody.
         setCurrentUser((prev) => (sameMe(prev, m) ? prev : m));
       } catch {
         /* 401 already bounced; network errors don't kick the user out */
@@ -477,16 +468,15 @@ export function AppProvider({
     };
   }, []);
 
-  // Keep a live ref so the data poll always calls the latest refreshAll
-  // without resetting its interval on every render.
+  // Live ref so the interval always calls the latest refreshAll without
+  // being re-registered on every render.
   const refreshAllRef = useRef(refreshAll);
   refreshAllRef.current = refreshAll;
 
   useEffect(() => {
-    // Live data poll: refetch the bug list + KPI stats on a fixed cadence so
-    // items created/edited by other users (or on another device) appear
-    // without a manual browser reload. Paused while the tab is hidden; fires
-    // immediately on refocus to feel instant.
+    // Poll the bug list and KPI stats so changes from other users appear
+    // without a manual reload. Paused while the tab is hidden; fires on
+    // refocus for an immediate update.
     const refresh = () => {
       if (!document.hidden) void refreshAllRef.current();
     };
@@ -498,11 +488,9 @@ export function AppProvider({
     };
   }, []);
 
-  // Live directory poll: users & projects are loaded once at boot and feed the
-  // sidebar, filter dropdowns, report chips and the audit actor picker. Poll
-  // them on the shared cadence so a user/project added on another device shows
-  // up without a manual reload. Kept separate from refreshAll (reused at ~10
-  // mutation sites) to avoid double-fetching on every bug save / view switch.
+  // Poll users and projects separately from refreshAll so bug saves and view
+  // switches don't double-fetch the directory. Kept on the shared cadence so
+  // changes on another device appear without a reload.
   const loadDirRef = useRef({ loadUsers, loadProjects });
   loadDirRef.current = { loadUsers, loadProjects };
   useEffect(() => {
@@ -520,7 +508,7 @@ export function AppProvider({
   }, []);
 
   useEffect(() => {
-    // Version drift poll.
+    // Notify once when the deployed asset version changes (new release).
     let warned = false;
     const boot = health?.asset_version;
     if (!boot) return;
@@ -632,11 +620,9 @@ export function AppProvider({
     setBugModal({ open: false, bug: null });
   }, []);
 
-  // Live refresh of the open bug modal so comments / attachments / activity /
-  // status from concurrent edits appear without a manual reload. reloadBugModal
-  // merges into modal state with no spinner and preserves in-progress form
-  // fields (the BugModal seed is keyed on [open, bugId]). Keyed on the numeric
-  // id so it only re-arms on open/close, not on every modal state change.
+  // Poll the open bug modal so concurrent edits (comments, status changes)
+  // appear without a reload. Keyed on the bug id so the interval is only
+  // re-registered when a different bug is opened or the modal closes.
   const reloadBugModalRef = useRef(reloadBugModal);
   reloadBugModalRef.current = reloadBugModal;
   const bugModalOpenId = bugModal.open && bugModal.bug ? bugModal.bug.id : null;
@@ -669,7 +655,7 @@ export function AppProvider({
 
   // ----- notification mutations --------------------------------------------
   const markNotificationRead = useCallback(async (id: number) => {
-    // Optimistic: stamp read locally, decrement unread, then persist.
+    // Optimistic update: stamp read locally, then persist to the server.
     notifSeqRef.current++;  // discard any poll in flight so it can't un-read this
     setNotifications((prev) =>
       prev.map((n) =>
@@ -700,9 +686,8 @@ export function AppProvider({
 
   const deleteNotification = useCallback(async (id: number) => {
     notifSeqRef.current++;
-    // Decide whether the deleted item was unread outside the updater (matches
-    // markNotificationRead): the setNotifications updater stays pure, and the
-    // unread count is adjusted exactly once after.
+    // Read unread status before the updater runs so the count adjustment
+    // happens exactly once and the updater itself stays pure.
     const gone = notificationsRef.current.find((n) => n.id === id);
     const wasUnread = !!gone && !gone.read_at;
     setNotifications((prev) => prev.filter((n) => n.id !== id));

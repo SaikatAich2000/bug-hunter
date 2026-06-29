@@ -1,20 +1,18 @@
-"""Guards that the assistant never corrupts the database. Specifically:
+"""DB-safety tests for the Sleuth assistant.
 
-  - Read intents (list / count / detail / stats / export / activity) must not
-    write anything to the database, not even an audit row.
-  - Write intents execute atomically: a permission failure or target-not-found
-    leaves the DB exactly as it was, with no partial state.
-  - Concurrent users do not interfere with each other's pending actions (Bob's
-    "yes" must not execute Alice's staged plan).
-  - Memory expiry, or "yes" with nothing pending, must not crash and must not
-    write to the DB.
-  - Sleuth never alters the schema: no DROP, no ALTER, no new tables sneaked in
-    by the chatbot module.
+Covers:
+- Read intents (list / count / detail / stats / export / activity) must not
+  write anything, not even an audit row.
+- Write intents are atomic: a permission failure or missing target leaves the
+  DB exactly as it was, with no partial state.
+- Concurrent users don't interfere with each other's pending actions.
+- Memory expiry, or "yes" with nothing pending, must not crash or write to DB.
+- Sleuth never alters the schema: no DROP, no ALTER, no surprise tables.
 """
 from __future__ import annotations
 
 import os as _os, sys as _sys
-# Make the bug-hunter root importable when run directly.
+# Make the repo root importable when this file is run directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
@@ -37,9 +35,9 @@ os.environ["SLEUTH_CLOUD_ENABLED"] = "0"   # never call the cloud in tests
 
 from sqlalchemy import inspect, text
 
-# Force a fresh app import bound to this file's dedicated DB. Avoids a
-# full-suite "no such table" from a shared engine bound to an earlier-collected
-# module's torn-down DB.
+# Force a fresh app import bound to this file's dedicated DB. Without this,
+# a shared engine from an earlier-collected module can point at a torn-down DB
+# and produce "no such table" errors mid-suite.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -56,9 +54,11 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind this file's module-level app.* references to the current import
-    generation each test (conftest's `client` fixture purges `app.*` to rebind
-    the engine per test; stale refs would otherwise diverge from execute()'s)."""
+    """Re-bind module-level app.* references each test.
+
+    conftest's `client` fixture purges app.* and re-imports to rebind the
+    engine; stale module-level refs here would diverge from execute()'s engine.
+    """
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -126,7 +126,7 @@ def seed():
 
 
 # ---------------------------------------------------------------------------
-# 1. Read operations are pure — they never write to the database.
+# 1. Read operations must not write to the database.
 # ---------------------------------------------------------------------------
 def test_reads_are_pure() -> None:
     section("Read operations don't mutate the database")
@@ -135,7 +135,7 @@ def test_reads_are_pure() -> None:
     try:
         admin = db.get(models.User, admin_id)
 
-        # Snapshot every counter we can observe.
+        # Snapshot every table we care about before running any reads.
         counts_before = {
             "users": db.query(models.User).count(),
             "projects": db.query(models.Project).count(),
@@ -144,7 +144,7 @@ def test_reads_are_pure() -> None:
             "activity": db.query(models.Activity).count(),
         }
 
-        # Run a wide set of read queries.
+        # Exercise a wide range of read-only intents.
         read_queries = [
             "hi",
             "help",
@@ -193,17 +193,14 @@ def test_schema_unchanged() -> None:
     try:
         insp = inspect(engine)
         tables = set(insp.get_table_names())
-        # The expected set is exactly the production schema.
         expected = {
             "users", "password_reset_tokens", "projects", "bugs",
             "bug_assignees", "comments", "activity_log",
             "attachments", "sessions",
         }
-        # The cloud assistant adds two durable conversation tables. They are
-        # additive (new tables created by create_all; existing tables and data
-        # untouched) and are intentional, so they are allow-listed here. This
-        # test still guards that Sleuth's operations never drop or alter the
-        # schema or sneak in any other table at runtime.
+        # The cloud assistant adds two durable conversation tables (additive,
+        # created by create_all, data untouched). Allow-listed here; the test
+        # still guards against drops, alters, and any other surprise tables.
         approved_chat_tables = {"chat_conversations", "chat_messages"}
         leaked = [t for t in tables
                   if t not in approved_chat_tables
@@ -232,7 +229,7 @@ def test_atomic_rollback() -> None:
             "comments": db.query(models.Comment).count(),
         }
 
-        # Try to assign to a non-existent user — should error cleanly.
+        # Assign to a non-existent user: expect a clean error, no partial write.
         plan = actions.ActionPlan(
             kind="assign", actor_user_id=admin_id,
             bug_id=1, target_user_ids=[999999],
@@ -251,7 +248,7 @@ def test_atomic_rollback() -> None:
             check(f"rollback-1: {k} count unchanged",
                   after[k] == v, f"before={v} after={after[k]}")
 
-        # Try to set status on a non-existent bug.
+        # Set status on a non-existent bug.
         plan2 = actions.ActionPlan(
             kind="set_status", actor_user_id=admin_id,
             bug_id=999999, new_value="Closed",
@@ -265,7 +262,7 @@ def test_atomic_rollback() -> None:
               after2 == before["activity"],
               f"before={before['activity']} after={after2}")
 
-        # Comment on non-existent bug.
+        # Comment on a non-existent bug.
         plan3 = actions.ActionPlan(
             kind="add_comment", actor_user_id=admin_id,
             bug_id=999999, comment_body="hi",
@@ -294,8 +291,8 @@ def test_permission_denial_no_writes() -> None:
         before_proj = db.query(models.Project).count()
         before_act = db.query(models.Activity).count()
 
-        # Bob is role=user. Sleuth writes are admin-only, so the create is
-        # denied up front and never staged, leaving the follow-up "yes" idle.
+        # Bob is role=user; Sleuth writes are admin-only. The create is denied
+        # before staging, so the follow-up "yes" has nothing to execute.
         denied = executor.execute("create project Saturn", db, bob)
         check("perm: regular user's write denied up front",
               denied.intent == "action_denied", f"got {denied.intent}")
@@ -325,19 +322,18 @@ def test_concurrent_users_isolated() -> None:
         admin = db.get(models.User, admin_id)
         bob = db.get(models.User, bob_id)
 
-        # Admin stages: close bug 1 (Sleuth writes are admin-only).
+        # Admin stages a close on bug 1 (only admins can stage writes).
         executor.execute("close bug 1", db, admin)
         sess_a = memstore.get(admin_id)
         check("isolated: admin has pending",
               sess_a is not None and sess_a.pending_action is not None)
 
-        # Bob's session is untouched.
+        # Bob has no session of his own.
         sess_b = memstore.get(bob_id)
         check("isolated: bob has NO pending",
               sess_b is None or sess_b.pending_action is None)
 
-        # Bob says "yes": should be a no-op (confirm_idle), not execute admin's
-        # plan.
+        # Bob's "yes" should be a no-op, not execute admin's plan.
         bug_status_before = db.get(models.Bug, 1).status
         resp = executor.execute("yes", db, bob)
         check("isolated: bob's 'yes' is confirm_idle",
@@ -348,12 +344,12 @@ def test_concurrent_users_isolated() -> None:
               bug_status_after == bug_status_before,
               f"before={bug_status_before} after={bug_status_after}")
 
-        # Admin's pending is still there.
+        # Admin's pending survives Bob's activity.
         sess_a2 = memstore.get(admin_id)
         check("isolated: admin's pending survives bob's 'yes'",
               sess_a2 is not None and sess_a2.pending_action is not None)
 
-        # Now admin confirms — works as expected.
+        # Admin confirms; the action should execute normally.
         resp_a = executor.execute("yes", db, admin)
         check("isolated: admin's 'yes' executes",
               resp_a.intent == "action_done", f"got {resp_a.intent}")
@@ -371,15 +367,15 @@ def test_memory_edge_cases() -> None:
     section("Memory: TTL eviction, max sessions, reset")
     memstore._clear_all_for_test()
 
-    # Fill up to the cap with synthetic sessions and verify the cap holds, using
-    # direct API calls (no DB needed).
+    # Fill past the cap using direct API calls (no DB needed) and verify the
+    # cap is enforced.
     for i in range(1, 250):
         memstore.remember_bug(i, i * 10)
     sessions = memstore._all_sessions_for_test()
     check("memory: capped at 200 sessions",
           len(sessions) <= 200, f"got {len(sessions)}")
 
-    # Reset for a specific user
+    # reset() for a specific user
     memstore.remember_bug(99001, 42)
     s = memstore.get(99001)
     check("memory: remember+get works",
@@ -389,7 +385,7 @@ def test_memory_edge_cases() -> None:
     check("memory: reset clears session",
           s2 is None)
 
-    # Pending action lifecycle
+    # Pending action: stage then take (single-use)
     memstore.stage_pending(99002, {"kind": "assign", "x": 1})
     pending = memstore.take_pending(99002)
     check("memory: stage+take returns plan",
@@ -398,7 +394,7 @@ def test_memory_edge_cases() -> None:
     check("memory: take is single-use (second take is None)",
           pending2 is None)
 
-    # Stage + clear
+    # stage then clear
     memstore.stage_pending(99003, {"kind": "close", "x": 2})
     memstore.clear_pending(99003)
     pending3 = memstore.take_pending(99003)
@@ -416,9 +412,9 @@ def test_new_action_overrides_pending() -> None:
     try:
         admin = db.get(models.User, admin_id)
         executor.execute("close bug 1", db, admin)
-        # User changes their mind without confirming and asks for something else.
+        # User changes their mind before confirming.
         executor.execute(f"set bug 1 priority to low", db, admin)
-        # Pending is now the priority change.
+        # The staged action should now be the priority change, not the close.
         sess = memstore.get(admin_id)
         check("override: latest pending is set_priority",
               sess and sess.pending_action and
@@ -514,14 +510,14 @@ def test_excel_in_memory_only() -> None:
     try:
         admin = db.get(models.User, admin_id)
         before_acts = db.query(models.Activity).count()
-        # Generate an export
+        # Trigger an export and confirm no audit row is created.
         executor.execute("export all bugs to excel", db, admin)
         after_acts = db.query(models.Activity).count()
         check("excel: no audit row for read-only export",
               after_acts == before_acts,
               f"before={before_acts} after={after_acts}")
 
-        # Schema introspection: no excel-related tables.
+        # Confirm no excel-related tables were created in the schema.
         insp = inspect(engine)
         tables = set(insp.get_table_names())
         leaked = [t for t in tables

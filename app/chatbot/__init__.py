@@ -1,4 +1,4 @@
-"""Sleuth — Bug Hunter's built-in assistant.
+"""Sleuth, Bug Hunter's built-in assistant.
 
 The in-app conversational assistant. Users can ask questions in natural
 language ("show open bugs assigned to alice") and request actions
@@ -20,13 +20,13 @@ Layers, ordered by cost:
                   fallback). Off unless SLEUTH_CLOUD_ENABLED and a key are
                   set. Read-only by construction: data questions are routed
                   back through the SQL handlers and any write intent is
-                  dropped. rag.py grounds it with bug / comment / doc
+                  dropped. rag.py grounds it with bug, comment and doc
                   retrieval; redaction.py scrubs secrets first.
                   Optional, flag-gated read-only helpers (off by default):
                   retrieval.py (keyword grounding), agent.py (bounded
                   multi-step reasoning over the same read-only tools and
-                  write firewall), verify.py (citation checking) and
-                  evals.py (LLM-as-judge that only annotates).
+                  the checks that block writes), verify.py (citation
+                  checking) and evals.py (LLM-as-judge that only annotates).
   - executor.py   Read intents (list/count/detail/stats/export) run SQL
                   SELECTs only.
   - actions.py    Write intents (assign/close/comment/create/...) are
@@ -40,16 +40,16 @@ Layers, ordered by cost:
 
 Database safety: the core read/write path adds no tables and issues
 SELECTs for reads; writes are atomic and roll back fully on error or
-permission denial. The optional cloud layer adds two additive conversation
+permission denial. The optional cloud layer adds two new conversation
 tables (chat_conversations, chat_messages); existing tables and data are
 untouched. See tests/test_sleuth_safety.py.
 
-Privacy: by default Sleuth makes no outbound HTTP calls — the Layer 3 LLM
+Privacy: by default Sleuth makes no outbound HTTP calls. The Layer 3 LLM
 runs locally via llama.cpp and there are no keys to configure. The Layer 4
 cloud LLM is opt-in (SLEUTH_CLOUD_ENABLED + a key); when enabled, it is the
 only component that sends data off-box, and everything it sends passes
-through redaction.py first. Leave it off for a fully local, no-egress
-deployment.
+through redaction.py first. Leave it off for a fully local deployment with
+no outbound data.
 """
 
 __all__ = [

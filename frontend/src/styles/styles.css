@@ -4902,6 +4902,34 @@ body.is-loading .events-detail-mode {
   -webkit-text-fill-color: transparent;
   overflow-wrap: anywhere;
 }
+/* Breakdown summaries (by type / status / priority …): a compact label→count
+   list instead of a raw JSON blob. */
+.reports-summary-breakdown {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.reports-summary-breakdown li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.reports-summary-bd-key {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.reports-summary-bd-val {
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
 
 .reports-table-scroll {
   overflow-x: auto;

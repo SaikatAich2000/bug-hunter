@@ -1,16 +1,11 @@
 /**
- * EventsView — the Events view, in two modes:
- *   • list   — card grid of every event, with a client-side search
- *              (debounced 200ms) + exact-match scheduled-date filter;
- *   • detail — one event open: header, meta (date · author · counts),
- *              managers, "+ Add Task", and the event's items rendered as
- *              the standard bug-table (minus the actions column) behind a
- *              client-side search + status/priority/assignee multi-filters.
+ * Events view — two modes:
+ *   • list   — card grid with debounced search and exact-date filter
+ *   • detail — single event with header, meta, managers, item table,
+ *              and status/priority/assignee multi-filters
  *
- * Items open in the shared bug modal; when that modal closes while the detail
- * panel is open, the detail is refetched (an effect watches bugModal.open
- * transitions). The detail filter multi-selects reuse the shared MsFilter
- * widget.
+ * When the shared bug modal closes while detail is open the detail refetches
+ * so counts and status stay current.
  */
 import {
   useCallback,
@@ -42,10 +37,7 @@ function itemTypeEmoji(t: string): string {
   return ITEM_TYPE_EMOJI[t] ?? "📝";
 }
 
-/**
- * Column set for the items table inside an event — the per-type "All" columns
- * minus the actions column (deletion happens from the bug modal).
- */
+/* Columns for the items table — "All" minus the actions column (items are deleted via the bug modal). */
 type DetailCol =
   | "id"
   | "title-with-type"
@@ -122,17 +114,17 @@ function itemMatchesAssignees(item: BugOut, assignees: Set<string>): boolean {
 
 function itemMatchesQuery(item: BugOut, q: string, idExact: boolean): boolean {
   if (!q) return true;
-  // A leading "#<n>" search targets the id specifically (exact match).
+  // "#<n>" prefix means exact id match only.
   if (idExact) return String(item.id) === q;
   const hay = `${item.title || ""} ${item.description || ""}`.toLowerCase();
-  // Plain numeric text ORs an id match with a substring match.
+  // Bare number: match by id OR substring.
   if (/^\d+$/.test(q)) return String(item.id) === q || hay.includes(q);
   return hay.includes(q);
 }
 
 function filterEventItems(items: BugOut[], f: EventDetailFilter): BugOut[] {
   const raw = (f.q || "").trim().toLowerCase();
-  // Detect (and strip) a leading "#<digits>" id search before normalizing.
+  // Strip a leading "#<digits>" id prefix before the rest of the filter runs.
   const idMatch = /^#(\d+)$/.exec(raw);
   const idExact = idMatch !== null;
   const q = idExact ? idMatch[1] : raw.replace(/^#/, "");
@@ -305,7 +297,7 @@ function EventItemRow({ b, onOpen }: Readonly<{ b: BugOut; onOpen: (id: number) 
   );
 }
 
-/** The event's items as the standard bug-table minus the actions column. */
+/* Items table — standard bug-table layout without the actions column. */
 function EventItemsTable({
   items,
   onOpen,
@@ -386,15 +378,14 @@ export default function EventsView() {
   const openedEventIdRef = useRef<number | null>(null);
   const openEventDetail = useCallback(async (eventId: number) => {
     if (openedEventIdRef.current !== eventId) {
-      // Opening a different event drops the previous event's filters/search so
-      // they don't carry over (and orphan an assignee chip absent from the new
-      // event). A same-event refresh (poll or after-save) keeps the filters.
+      // Different event: clear filters so previous selections don't bleed in.
+      // Same-event refreshes (poll, post-save) intentionally keep filters.
       setDetailFilters(EMPTY_DETAIL_FILTER);
       setDetailQInput("");
     }
     openedEventIdRef.current = eventId;
     setMode("detail");
-    setDetail(null); // header shows "Event", items show Loading…
+    setDetail(null); // clears stale data while the fetch is in flight
     setDetailLoading(true);
     try {
       setDetail(await api<EventDetail>(`/events/${eventId}`));
@@ -406,9 +397,7 @@ export default function EventsView() {
     }
   }, []);
 
-  // Silent detail refetch for the live poll. Unlike openEventDetail it does
-  // not toggle detailLoading, so a background tick won't flash "Loading…"
-  // over the open table.
+  // Background refetch — skips the detailLoading flag so the table doesn't flash.
   const refreshDetailSilently = useCallback(async (id: number) => {
     try {
       setDetail(await api<EventDetail>(`/events/${id}`));
@@ -420,7 +409,7 @@ export default function EventsView() {
   const showListMode = useCallback(() => {
     setMode("list");
     setDetail(null);
-    openedEventIdRef.current = null;  // re-opening an event later starts fresh
+    openedEventIdRef.current = null;  // so the next open always resets filters
   }, []);
 
   // Entering the Events view resets to list mode and refetches.
@@ -433,11 +422,9 @@ export default function EventsView() {
     prevView.current = view;
   }, [view, refreshEvents, showListMode]);
 
-  // Live poll while the Events view is active so items/events created,
-  // edited or deleted by other users show up without leaving & reopening.
-  // The list refreshes in list mode; the open detail refreshes *silently*
-  // in detail mode. A ref holds the tick body so the interval can read the
-  // latest mode/detail without resubscribing on every change.
+  // Live poll — list mode refreshes the grid; detail mode refreshes silently.
+  // Tick body lives in a ref so the interval always reads the latest state
+  // without being restarted on every render.
   const pollRef = useRef<() => void>(() => {});
   pollRef.current = () => {
     if (document.hidden) return;
@@ -455,8 +442,7 @@ export default function EventsView() {
     };
   }, [view]);
 
-  // When the shared bug modal closes while the detail panel is open, the
-  // user may have added/edited/moved an item — refetch the detail.
+  // Refetch detail when the bug modal closes — the user may have changed an item.
   const prevBugOpen = useRef(bugModal.open);
   useEffect(() => {
     const was = prevBugOpen.current;
@@ -491,8 +477,7 @@ export default function EventsView() {
   const handleSaved = useCallback(
     async (saved: EventOut, isEdit: boolean) => {
       await refreshEvents();
-      // Refresh the bell so a manager notification (incl. self-assignment on
-      // create) shows up immediately instead of waiting for the next poll.
+      // Refresh the bell so manager notifications appear right away.
       void refreshAll();
       if (isEdit) {
         if (mode === "detail" && detail?.id === saved.id) await openEventDetail(saved.id);
@@ -544,8 +529,7 @@ export default function EventsView() {
   const allItems = detail?.items ?? [];
   const filteredItems = filterEventItems(allItems, detailFilters);
 
-  // Assignee option pool from the event's items so the dropdown only shows
-  // people actually assigned to something in this event.
+  // Build the assignee dropdown from the event's items so only relevant people appear.
   const assigneeOptions: [string, string][] = [];
   {
     const seen = new Set<number>();
@@ -561,9 +545,8 @@ export default function EventsView() {
   const statusOptions: [string, string][] = meta.statuses.map((s) => [s, s]);
   const priorityOptions: [string, string][] = meta.priorities.map((p) => [p, p]);
 
-  // Prune any selected assignee_id that no longer exists in the recomputed
-  // option pool (e.g. the only item they were on left the event), so the
-  // filter can't reference an orphaned id with no chip to clear it.
+  // Drop any selected assignee that's no longer in the option pool (their last
+  // item left the event) so the filter doesn't hold an unclickable ghost id.
   const assigneeOptionKey = assigneeOptions.map(([v]) => v).join(",");
   useEffect(() => {
     const valid = new Set(assigneeOptions.map(([v]) => v));
@@ -571,7 +554,7 @@ export default function EventsView() {
       if (f.assignee_id.every((id) => valid.has(id))) return f;
       return { ...f, assignee_id: f.assignee_id.filter((id) => valid.has(id)) };
     });
-    // assigneeOptionKey captures the option-set identity for the dep array.
+    // assigneeOptionKey is a stable string representation of the option set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assigneeOptionKey]);
 

@@ -1,18 +1,11 @@
 """Deterministic verification of Sleuth's free-text cloud answers.
 
-The model may phrase an answer, but it must not invent facts. Data questions
-already run real SQL (the model never produces a number), so the remaining
+Data questions run real SQL, so the model never invents numbers. The remaining
 risk is fabricated bug references in "answer" mode. These checks are cheap and
-deterministic — no extra model call:
-
-  - extract the bug numbers an answer cites,
-  - partition them into grounded (present in the retrieved records) vs
-    ungrounded, and
-  - append a short transparency caveat for ungrounded citations rather than
-    silently trusting them.
-
-The answer text is never rewritten, only annotated, so a correct answer is
-left exactly as-is.
+require no extra model call: extract the bug numbers an answer cites, partition
+them into grounded (present in the retrieved records) and ungrounded, and
+append a short caveat for ungrounded citations. The answer text is never
+rewritten — a correct answer passes through unchanged.
 """
 from __future__ import annotations
 
@@ -21,14 +14,28 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 # Matches "#42", "bug 42", "bug #42", "issue 42", "issue #42" (case-insensitive).
-# The trailing (?!\d) ensures a longer run (e.g. a 13-digit timestamp like
-# #1700000000000) is not truncated to its first 9 digits and mistaken for a
-# citation.
+# The trailing (?!\d) prevents a long numeric run (e.g. a Unix-ms timestamp)
+# from being truncated to its first digits and mistaken for a bug citation.
 _CITE_RE = re.compile(r"(?:#|\bbug\s*#?|\bissue\s*#?)(\d{1,9})(?!\d)", re.IGNORECASE)
 
 _CAVEAT = (
     "\n\n_Note: I could not ground {refs} in the records I retrieved — "
     "please verify {pron} directly._"
+)
+
+# Strong "I did X to the tracker" forms only — "create/update" are too common
+# in normal prose and would produce too many false positives. The pattern has
+# no overlapping quantifiers, so there is no catastrophic-backtracking risk.
+_WRITE_CLAIM_RE = re.compile(
+    r"\bI(?:'ve| have| just| already| then| also| went ahead and)?\s+"
+    r"(?:closed|reopened|assigned|unassigned|deleted|removed|resolved|"
+    r"commented|marked)\b",
+    re.IGNORECASE,
+)
+
+_WRITE_CLAIM_CAVEAT = (
+    "\n\n_Note: I can't change anything in the tracker myself. To make that "
+    'change, type the command (for example "close #12") and confirm the prompt._'
 )
 
 
@@ -56,11 +63,9 @@ def verify(text: str, grounded_ids: Iterable[int]) -> Verdict:
 
 
 def annotate(text: str, grounded_ids: Iterable[int]) -> str:
-    """Return the answer unchanged when every citation is grounded, otherwise
-    append a short caveat naming the ungrounded references.
-
-    The answer is never silently edited; the caveat only flags what could not
-    be verified so the reader does not over-trust it.
+    """Return the answer unchanged if all citations are grounded; otherwise
+    append a short caveat naming the ungrounded references so the reader
+    knows to verify them directly.
     """
     verdict = verify(text, grounded_ids)
     if verdict.ok:
@@ -71,4 +76,17 @@ def annotate(text: str, grounded_ids: Iterable[int]) -> str:
     return text + _CAVEAT.format(refs=refs, pron=pron)
 
 
-__all__ = ["Verdict", "cited_bug_ids", "verify", "annotate"]
+def flag_write_claims(text: str) -> str:
+    """Append a correction when an answer claims it performed a tracker write.
+
+    Sleuth never writes from an answer (the executor's firewall blocks it), but
+    a confused model can still say it closed or assigned something, misleading
+    the user. Like annotate(), this only appends a clearly-marked note; the
+    original text is never changed.
+    """
+    if _WRITE_CLAIM_RE.search(text or ""):
+        return text + _WRITE_CLAIM_CAVEAT
+    return text
+
+
+__all__ = ["Verdict", "cited_bug_ids", "verify", "annotate", "flag_write_claims"]

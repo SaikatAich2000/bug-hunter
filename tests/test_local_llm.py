@@ -1,11 +1,10 @@
-"""Tests for app/chatbot/llm.py, Sleuth's optional local llama.cpp layer.
+"""Tests for app/chatbot/llm.py (Sleuth's optional local llama.cpp layer).
 
-This layer only runs against a GGUF model file plus llama-cpp-python, neither of
-which the hermetic suite provisions. These tests inject a fake ``llama_cpp`` and
-fake the ``/proc`` / ``/sys`` memory probes (the module reads them through the
-bare ``open`` builtin, so a module-level ``open`` shim intercepts them) to drive
-every branch: the RAM-budget math, availability gating, lazy load / idle-unload,
-JSON extraction, and the read-only intent dispatch.
+Neither a GGUF model file nor llama-cpp-python is available in the hermetic
+suite, so these tests inject a fake ``llama_cpp`` module and shim the bare
+``open`` builtin to intercept ``/proc``/``/sys`` memory reads. Together they
+cover the RAM-budget math, availability gating, lazy load/idle-unload, JSON
+extraction, and read-only intent dispatch.
 """
 from __future__ import annotations
 
@@ -21,11 +20,11 @@ from app.chatbot import executor
 
 @pytest.fixture(autouse=True)
 def _reset_module_state(monkeypatch):
-    # The conftest `client` fixture purges every app.* from sys.modules to force
-    # an engine re-import, so a test running after one would otherwise hold a
-    # stale `llm`/`executor` while llm's internal `import executor` resolves to a
-    # fresh generation, making our monkeypatches invisible inside the call.
-    # Rebind both to the current generation each test.
+    # The conftest `client` fixture purges all app.* from sys.modules to force
+    # a fresh engine import. Without this rebind, a test running after that
+    # would hold a stale `llm`/`executor` reference while llm's internal
+    # `import executor` resolves to a new generation, making monkeypatches
+    # invisible inside the call.
     import importlib
     global llm, executor
     llm = importlib.import_module("app.chatbot.llm")
@@ -215,7 +214,7 @@ def test_is_available_no_llama_cpp(monkeypatch, tmp_path):
     p.write_bytes(b"x")
     monkeypatch.setattr(llm, "_MODEL_PATH", p)
     monkeypatch.delitem(sys.modules, "llama_cpp", raising=False)
-    # Ensure import fails: block it.
+    # Setting the entry to None makes the import machinery treat it as a failed import.
     monkeypatch.setitem(sys.modules, "llama_cpp", None)
     assert llm.is_available() is False
 
@@ -231,7 +230,8 @@ def test_is_available_insufficient_ram(monkeypatch, tmp_path):
 
 
 def test_is_available_no_llama_cpp_already_warned(monkeypatch, tmp_path):
-    # _shortfall_warned already True → skip the (one-shot) warning log, still False.
+    # When the one-shot warning has already fired, the flag is True and the
+    # log is skipped, but the function still returns False.
     p = tmp_path / "m.gguf"
     p.write_bytes(b"x")
     monkeypatch.setattr(llm, "_MODEL_PATH", p)
@@ -347,7 +347,7 @@ def test_ensure_reaper_starts_once(monkeypatch):
             started.append(name)
 
         def start(self):
-            """No-op: the test only checks the thread is created once."""
+            pass
 
     monkeypatch.setattr(llm.threading, "Thread", _FakeThread)
     monkeypatch.setattr(llm, "_reaper_started", False)

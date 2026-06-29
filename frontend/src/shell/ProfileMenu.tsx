@@ -1,11 +1,9 @@
 /**
- * ProfileMenu — the top-right account control. The button shows the signed-in
- * user's avatar + name; clicking it opens a dropdown with the role/email,
- * change-password, theme toggle and log-out.
+ * Top-right account control. Avatar + name button opens a dropdown with
+ * role/email, change-password, theme toggle, and log-out.
  *
- * The name span keeps id="accountName" (the UI smoke test waits for it to be
- * populated as its "SPA booted" signal), and the change-password / logout /
- * theme controls keep their ids.
+ * id="accountName" must stay: the UI smoke test polls it as the SPA-ready
+ * signal. The other element ids are referenced by Playwright selectors.
  */
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
@@ -13,7 +11,7 @@ import { api } from "../lib/api";
 import { initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
 
-/** Read the live theme from the document (set by the inline boot script). */
+/** Reads the theme the inline boot script stamped on <html data-theme>. */
 function currentTheme(): "dark" | "light" {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
@@ -25,7 +23,7 @@ export default function ProfileMenu() {
   const [theme, setTheme] = useState<"dark" | "light">(currentTheme);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Close on outside click or Escape.
+  // Close on outside click or Escape
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -42,7 +40,6 @@ export default function ProfileMenu() {
     };
   }, [open]);
 
-  // ----- actions -----------------------------------------------------------
   const handleLogout = async () => {
     setOpen(false);
     const ok = await confirmDialog("Log out now?", {
@@ -51,19 +48,18 @@ export default function ProfileMenu() {
       danger: false,
     });
     if (!ok) return;
-    // Deregister this device's push token first (needs the still-valid session)
-    // so a logged-out or next user on a shared browser stops receiving the
-    // previous user's notifications. Best-effort; never blocks logout.
+    // Deregister the push token while the session is still valid so a shared
+    // browser doesn't keep delivering notifications to the previous user.
     try {
       const { unsubscribeOnLogout } = await import("../lib/push");
       await unsubscribeOnLogout();
     } catch {
-      /* push not configured / import failed — proceed with logout */
+      /* push not configured or unavailable — proceed */
     }
     try {
       await api("/auth/logout", { method: "POST" });
     } catch {
-      /* logging out locally regardless of the server result */
+      /* log out locally even if the server call fails */
     }
     location.replace("/login.html");
   };
@@ -75,7 +71,7 @@ export default function ProfileMenu() {
     try {
       localStorage.setItem("theme", next);
     } catch {
-      /* private mode — non-fatal */
+      /* private browsing — skip persistence */
     }
   };
 

@@ -1,5 +1,5 @@
 /**
- * BhDateInput — a custom date picker. Class names must match styles.css:
+ * BhDateInput — custom date picker. Class names must match styles.css:
  *
  *   <div class="bh-date-wrap">
  *     <input type="hidden" class="bh-date-native" …>   ← form-submission value
@@ -8,21 +8,19 @@
  *       <span class="bh-date-label [bh-date-placeholder]">Jun 12, 2026 | Select date</span>
  *     </button>
  *     <button class="bh-date-clear" type="button">×</button> ← only when a value is set
- *     <div class="bh-date-pop" role="dialog">           ← only while open
+ *     <div class="bh-date-pop" role="dialog">               ← only while open
  *       .bh-date-head  (‹ nav / .bh-date-title / › nav)
  *       .bh-date-grid  (7 × .bh-date-dow + 42 × .bh-date-cell)
  *       .bh-date-foot  (.bh-date-today)
  *     </div>
  *   </div>
  *
- * The popover is portaled to <body> and positioned with `position: fixed` by
- * placePop, so its coordinates are viewport-relative no matter what ancestor it
- * was triggered from. Rendered in-place, any ancestor with a transform / filter
- * / contain (a view-entrance animation, a modal's backdrop-filter, etc.) becomes
- * the containing block and the panel lands in the wrong spot — and, sitting
- * inside the scrolling <main>, inflates its scroll height and stutters on
- * scroll. popRef still points at the real node, so the outside-click guard and
- * placePop math keep working unchanged. The value is fully controlled via props.
+ * The popover is portaled to <body> so `position: fixed` coordinates are always
+ * viewport-relative. Rendering it in-place would make any ancestor with a
+ * transform/filter/contain (modal backdrop, entrance animation, etc.) the
+ * containing block, shifting the panel and inflating <main>'s scroll height.
+ * popRef still points at the real node, keeping the outside-click guard and
+ * placePop math correct. Value is fully controlled via props.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -41,15 +39,13 @@ function isoDate(d: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Parse YYYY-MM-DD as a local-time Date. Rejects impossible dates (e.g.
- *  2026-02-31, which JS would roll forward to Mar 3) via a round-trip
- *  equality check. */
+/** Parse YYYY-MM-DD as a local-time Date, rejecting impossible dates like
+ *  2026-02-31 (JS rolls those forward) via a round-trip equality check. */
 function parseIso(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split("-").map((n) => Number.parseInt(n, 10));
   const date = new Date(y, m - 1, d);
-  // If the constructed date doesn't round-trip back to the same string, the
-  // input named a day/month that doesn't exist — reject it.
+  // Round-trip check: JS silently rolls over out-of-range dates.
   if (isoDate(date) !== s) return null;
   return date;
 }
@@ -104,8 +100,8 @@ interface Props {
 
 export default function BhDateInput({ name, value, onChange, required, disabled, id }: Props) {
   const [open, setOpen] = useState(false);
-  // The month being viewed, independent of selection so the user can browse
-  // without committing. Re-seeded from value on every open.
+  // Viewed month is independent of the selected value so the user can browse
+  // without committing. Re-seeded from value each time the popover opens.
   const [view, setView] = useState<{ y: number; m: number }>(() => {
     const seed = parseIso(value) ?? new Date();
     return { y: seed.getFullYear(), m: seed.getMonth() };
@@ -114,8 +110,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Fixed-position against the trigger, flipping above when below would clip
-  // and above has more room.
+  // Align to the trigger button, flipping above when below would clip.
   const placePop = useCallback(() => {
     const btn = btnRef.current;
     const pop = popRef.current;
@@ -137,8 +132,8 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
     pop.style.left = `${left}px`;
   }, []);
 
-  // Place before paint on open, re-place next frame (fonts/styles may
-  // shift the measurement), and follow the trigger on scroll/resize.
+  // Place before paint, then again next frame (fonts/styles can shift
+  // measurements), and track the trigger on scroll/resize.
   useLayoutEffect(() => {
     if (!open) return;
     placePop();
@@ -170,7 +165,6 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
   }, [open]);
 
   const openPop = () => {
-    // Seed the viewed month from the value or today.
     const seed = parseIso(value) ?? new Date();
     setView({ y: seed.getFullYear(), m: seed.getMonth() });
     setOpen(true);
@@ -212,7 +206,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
 
   return (
     <div className="bh-date-wrap" ref={wrapRef}>
-      {/* Kept in the form so submission still finds name + value. */}
+      {/* Hidden input carries name/value for form submission. */}
       <input
         type="hidden"
         className="bh-date-native"

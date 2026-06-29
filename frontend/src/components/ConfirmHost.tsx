@@ -1,10 +1,9 @@
 /**
  * Promise-based confirm dialog.
  *
- * Usage anywhere: `if (await confirmDialog("Delete bug #5?", {...})) ...`
+ * Usage: `if (await confirmDialog("Delete bug #5?", {...})) ...`
  * The App shell renders <ConfirmHost/> once; it subscribes to a module-level
- * queue. Escape resolves false (wired in App's key handler via the
- * data-bh-modal close path calling onClose, which settles false).
+ * queue. Escape resolves false.
  */
 import { useEffect, useState } from "react";
 

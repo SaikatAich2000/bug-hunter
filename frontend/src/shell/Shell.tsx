@@ -1,14 +1,12 @@
 /**
- * App shell — the two-tier chrome:
+ * App shell — two-tier chrome:
+ *   TopChrome  — brand + view nav + Ask Sleuth / bell / profile
+ *   SuperNav   — work-item type tabs + search (list / analytics only)
+ *   frame      — Sidebar rail + main (PageHead + content)
  *
- *   TopChrome   — brand + horizontal view nav + Ask Sleuth / bell / profile
- *   SuperNav    — work-item type tabs + search (list / analytics only)
- *   frame       — library-rail Sidebar + main(PageHead + content)
- *
- * Mounting is the show/hide mechanism: only the active view is mounted, which
- * also re-fetches on entry for the views that own their data (events / audit /
- * sessions / reports). The list and analytics views read shared context data,
- * so their entry-refresh is done here.
+ * Only the active view is mounted. Views that own their data (events / audit /
+ * sessions / reports) re-fetch on mount; list and analytics re-fetch here
+ * because they read shared context rather than fetching privately.
  */
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
@@ -20,9 +18,8 @@ import PageHead from "./PageHead";
 import Sidebar from "./Sidebar";
 import KpiStrip from "./KpiStrip";
 import FilterBar from "./FilterBar";
-// ListView is the default view → keep it eager so first paint needs no extra
-// network round-trip. The other five views are route-split: each becomes its
-// own lazy chunk fetched on first navigation, shrinking the initial bundle.
+// ListView is eager so the first paint needs no extra round-trip.
+// The remaining views are lazy-split; each chunk loads on first navigation.
 import ListView from "../views/ListView";
 const EventsView = lazy(() => import("../views/EventsView"));
 const AnalyticsView = lazy(() => import("../views/AnalyticsView"));
@@ -39,15 +36,13 @@ export default function Shell() {
 
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // If the user already granted web-push permission, silently refresh their FCM
-  // token on boot so the backend always has the current one. Never prompts;
-  // never throws. No-op when web push is disabled/unsupported.
+  // Silently refresh the FCM token on boot so the backend stays current.
+  // No-op when push is unsupported or permission was never granted.
   useEffect(() => {
     void initPushOnBoot();
   }, []);
 
-  // Re-fetch shared data on view entry for the context-backed views; boot()
-  // already covers the initial load.
+  // Re-fetch shared data on view change; boot() covers the initial load.
   const firstView = useRef(true);
   useEffect(() => {
     if (firstView.current) {
@@ -58,12 +53,10 @@ export default function Shell() {
     else if (view === "analytics") void refreshStats();
   }, [view, refreshAll, refreshStats]);
 
-  // Role gate: hiding the nav button isn't enough. If `view` is ever set to a
-  // privileged view (deep link, stale state, a notification), the view would
-  // still mount and fire its on-entry fetch (and error toast) for an
-  // under-privileged user. Compute denial, bounce back to the list, and refuse
-  // to render the gated branch even for one frame. The backend is the real
-  // authority (these routes are role-gated server-side).
+  // Hiding the nav button isn't enough — a deep link or stale state can still
+  // land an under-privileged user on a gated view, triggering its fetch and an
+  // error toast. Bounce them to the list and skip rendering for one frame.
+  // The backend is the real authority; this is just UX protection.
   const need = VIEW_MIN_ROLE[view];
   const denied = need != null && roleRank(currentUser.role) < roleRank(need);
   useEffect(() => {
@@ -79,9 +72,7 @@ export default function Shell() {
         onClick={() => setMobileOpen(false)}
       ></div>
 
-      {/* Two-tier layout: a global chrome bar (brand + view nav + bell +
-          profile), a supernav (type tabs + search), then a fixed library-rail
-          Sidebar + scrolling main. Sidebar and nav coexist; no collapse. */}
+      {/* TopChrome + SuperNav above; Sidebar rail + scrolling main below. */}
       <TopChrome onOpenMobile={() => setMobileOpen(true)} />
       <SuperNav />
 
@@ -95,10 +86,7 @@ export default function Shell() {
             <KpiStrip />
             <FilterBar />
 
-            {/* Each view component renders its own <section class="view"
-                id="viewX"> root. Only the active view is mounted — mounting is
-                the show/hide mechanism, and it also re-fetches on entry for the
-                views that own their data. */}
+            {/* Only the active view is mounted; unmounting is the hide mechanism. */}
             <Suspense fallback={null}>
               {view === "list" && <ListView />}
               {view === "analytics" && <AnalyticsView />}

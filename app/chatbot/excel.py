@@ -24,7 +24,6 @@ import threading
 import time
 from typing import Any, Optional
 
-# openpyxl is a lightweight pure-Python xlsx writer.
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -187,15 +186,15 @@ def stage_bytes(payload: bytes, filename: str, owner_id: int) -> tuple[str, int]
 
 
 def fetch_staged(token: str, owner_id: int) -> Optional[tuple[bytes, str]]:
-    """Return (bytes, filename) if the token is valid AND owned by ``owner_id``,
+    """Return (bytes, filename) if the token is valid and owned by ``owner_id``,
     else None.
 
     The owner check makes the token a per-user capability: a staged report can
     contain data the requester was authorized to see (manager/admin reports), so
     another authenticated user who learns/guesses the token cannot download it.
-    A mismatch returns None (the router 404s — no existence enumeration). The
-    entry stays in the cache after a fetch so the owner can click the link again
-    within TTL.
+    A mismatch returns None (the router returns 404, so the token's existence
+    can't be probed). The entry stays in the cache after a fetch so the owner
+    can click the link again within TTL.
     """
     if not token:
         return None
@@ -215,7 +214,7 @@ def fetch_staged(token: str, owner_id: int) -> Optional[tuple[bytes, str]]:
 
 
 def clear_all_for_test() -> None:
-    """Hook for tests — never called from production code paths."""
+    """Hook for tests; never called from production code paths."""
     with _cache_lock:
         _cache.clear()
 

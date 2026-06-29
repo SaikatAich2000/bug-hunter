@@ -1,30 +1,26 @@
-"""Tests for the role-policy rules and the sessions admin feature.
+"""Role-policy and session-admin tests.
 
-What's covered:
-  - Bug deletion is admin-only (managers are blocked)
-  - Regular users CAN edit any bug (was reporter/assignee-only) and
-    reassign it (assignee changes), but can't change the reporter
-    (kept restricted to admin/manager) and can't delete.
-  - Project deletion is admin-only (managers used to be allowed)
-  - User create/update is now admin OR manager (was admin-only),
-    user delete is still admin-only
-  - Manager can't grant the admin role; can't edit/disturb admins
+Covers:
+  - Bug deletion is admin-only (managers blocked)
+  - Regular users can edit any bug and reassign it, but cannot change
+    the reporter (admin/manager only) or delete
+  - Project deletion is admin-only
+  - User create/update is admin or manager; delete is admin-only
+  - Manager cannot grant the admin role or touch admin accounts
   - Audit trail is hidden from regular users
-  - Sessions: list + revoke (admin-only); revoke removes the cookie's
-    ability to authenticate; user can't revoke their own current session
+  - Sessions: list and revoke are admin-only; revoking kills the cookie;
+    cannot revoke your own active session
 """
 from __future__ import annotations
 
 
-# ---------------------------------------------------------------------------
-# Helpers (duplicated from test_api so this file is self-contained)
-# ---------------------------------------------------------------------------
+# Helpers duplicated from test_api so this file is self-contained.
 def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X"):
     email = email or f"{name.lower()}@example.com"
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping role/permission tests keep exercising the flat "see
-    # everything" model. An untagged non-admin would otherwise see nothing.
+    # Tag the new user to every existing project so role/permission tests
+    # keep exercising the flat "see everything" model; an untagged
+    # non-admin would otherwise see nothing.
     pids = [p["id"] for p in client.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -101,7 +97,7 @@ class TestBugDeletePermissions:
         _logout(admin_client)
         _login(admin_client, "carol1@x.com", "Carol12345")
         bug = _make_bug(admin_client, p["id"], title="my own bug")
-        # Carol is the reporter, but still cannot delete.
+        # Reporter status doesn't grant delete rights.
         r = admin_client.delete(f"/api/bugs/{bug['id']}")
         assert r.status_code == 403
 
@@ -138,7 +134,6 @@ class TestBugEditPermissions:
         _logout(admin_client)
         _login(admin_client, "frank@x.com", "Frank12345")
 
-        # Frank reassigns the admin's bug to Eve
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={
             "assignee_ids": [someone["id"]],
         })
@@ -176,11 +171,9 @@ class TestProjectDeletePermissions:
                    role="manager", password="Mgr3_abc99")
         _logout(admin_client)
         _login(admin_client, "mgr3@x.com", "Mgr3_abc99")
-        # Create
         r = admin_client.post("/api/projects", json={"name": "MgrMade"})
         assert r.status_code == 201
         pid = r.json()["id"]
-        # Edit
         r = admin_client.put(f"/api/projects/{pid}", json={
             "name": "MgrRenamed", "color": "#abcdef",
         })
@@ -209,14 +202,12 @@ class TestUserManagementPermissions:
         _logout(admin_client)
         _login(admin_client, "mgr4@x.com", "Mgr4_abc99")
 
-        # Manager creates a regular user
         r = admin_client.post("/api/users", json={
             "name": "MgrMade", "email": "mgrmade@x.com",
             "role": "user", "password": "Made12345",
         })
         assert r.status_code == 201, r.text
         new_id = r.json()["id"]
-        # Edit
         r = admin_client.put(f"/api/users/{new_id}", json={"name": "Renamed"})
         assert r.status_code == 200
         assert r.json()["name"] == "Renamed"
@@ -292,15 +283,12 @@ class TestAuditVisibility:
 
 # ===========================================================================
 # 6. Sessions — admin-only list + revoke
-#
-# These tests need separate clients (the conftest fixtures all share one
-# TestClient). We make our own with the FastAPI TestClient and the running
-# app instance so each "device" has its own cookie jar.
 # ===========================================================================
 def _new_client():
-    """Build a brand-new TestClient against the same already-running app
-    instance. Each one has a fresh cookie jar — i.e. it's a separate
-    'device' for session-management tests."""
+    """Return a fresh TestClient with its own cookie jar, simulating a separate device.
+
+    Conftest fixtures share one TestClient, so session tests that need
+    multiple independent cookies must spin up their own clients."""
     from fastapi.testclient import TestClient
     from app.main import app
     return TestClient(app)
@@ -312,11 +300,8 @@ class TestSessionsAdmin:
         assert r.status_code == 200
         rows = r.json()
         assert len(rows) >= 1
-        # The admin's own session should be marked is_current=True
         assert any(row["is_current"] for row in rows)
-        # And has admin's email
         assert any(row.get("user_email") == "admin@test.local" for row in rows)
-        # ...and carries IP / user-agent
         for row in rows:
             assert "user_agent" in row
             assert "ip_address" in row
@@ -334,7 +319,7 @@ class TestSessionsAdmin:
         assert r.status_code == 403
 
     def test_user_cannot_revoke_session(self, admin_client):
-        # Log in as a user on a SEPARATE client so we get a separate cookie
+        # Use a separate client so the user has their own cookie jar.
         _make_user(admin_client, name="UU", email="uu@x.com",
                    role="user", password="UU_abc1234")
         user_dev = _new_client()
@@ -343,13 +328,11 @@ class TestSessionsAdmin:
         })
         assert r.status_code == 200
 
-        # admin enumerates and finds uu's session
         r = admin_client.get("/api/sessions")
         user_rows = [s for s in r.json() if s.get("user_email") == "uu@x.com"]
         assert user_rows, "user uu@x.com should have an active session"
         sid = user_rows[0]["id"]
 
-        # The user themselves shouldn't be allowed to call DELETE.
         r = user_dev.delete(f"/api/sessions/{sid}")
         assert r.status_code == 403
 
@@ -363,7 +346,6 @@ class TestSessionsAdmin:
             "email": "uv@x.com", "password": "UV_abc1234",
         })
         assert r.status_code == 200
-        # Confirm the user is logged in
         assert user_dev.get("/api/auth/me").status_code == 200
 
         r = admin_client.get("/api/sessions")
@@ -371,11 +353,10 @@ class TestSessionsAdmin:
         assert user_rows
         sid = user_rows[0]["id"]
 
-        # Admin revokes the user's session
         r = admin_client.delete(f"/api/sessions/{sid}")
         assert r.status_code == 200
 
-        # User's cookie should now be rejected
+        # Cookie should now be invalid.
         r = user_dev.get("/api/auth/me")
         assert r.status_code == 401
 
@@ -388,47 +369,39 @@ class TestSessionsAdmin:
         assert "log out" in r.json()["detail"].lower()
 
     def test_admin_can_revoke_their_own_OTHER_session(self, admin_client):
-        """If admin is logged in on two devices, they can revoke the other
-        device while keeping the current one."""
-        # Spin up a SECOND TestClient and log in as admin on it.
+        """Admin logged in on two devices can revoke the other while keeping the current."""
         other_dev = _new_client()
         r = other_dev.post("/api/auth/login", json={
             "email": "admin@test.local", "password": "Admin1234",
         })
         assert r.status_code == 200
 
-        # admin_client should see two admin sessions; the non-current one is
-        # the one on `other_dev`.
         r = admin_client.get("/api/sessions")
         admin_sessions = [s for s in r.json() if s.get("user_email") == "admin@test.local"]
         assert len(admin_sessions) == 2
+        # The non-current session belongs to other_dev.
         other = next(s for s in admin_sessions if not s["is_current"])
 
         r = admin_client.delete(f"/api/sessions/{other['id']}")
         assert r.status_code == 200
 
-        # The OTHER device is now logged out
         r = other_dev.get("/api/auth/me")
         assert r.status_code == 401
 
-        # The current device still works
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200
 
     def test_logout_removes_session_row(self, admin_client):
-        """After logout, the session row should be gone — admin's list
-        shouldn't include the logged-out cookie's session anymore."""
-        # Snapshot count of admin sessions
+        """After logout the session row is deleted; logging back in creates a fresh one."""
         r = admin_client.get("/api/sessions")
         admin_sessions = [s for s in r.json() if s.get("user_email") == "admin@test.local"]
         assert len(admin_sessions) == 1
 
         admin_client.post("/api/auth/logout")
-        # After logout, admin can't list sessions (no session)
+        # No active session, so the list endpoint should reject the request.
         r = admin_client.get("/api/sessions")
         assert r.status_code == 401
 
-        # Log back in
         admin_client.post("/api/auth/login", json={
             "email": "admin@test.local", "password": "Admin1234",
         })
@@ -453,10 +426,7 @@ class TestPasswordChangeKeepsCurrentDevice:
         })
         assert r.status_code == 204
 
-        # Current device still works
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200, r.text
 
-        # Reset password back so other tests in this file using the same
-        # password still work — actually conftest provides a fresh tmp DB
-        # per-fixture, so this one isn't strictly needed.
+        # No need to reset the password; conftest gives each fixture a fresh DB.

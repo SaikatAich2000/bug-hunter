@@ -13,9 +13,9 @@ from sqlalchemy import select
 
 
 def test_cov_is_current_false_on_unparseable_cookie(client):
-    """`_is_current` returns False when the request has no, or a garbage,
-    session cookie. Over HTTP the admin's own cookie always parses (auth
-    already validated it), so reach the branch directly."""
+    """`_is_current` returns False for a missing or malformed session cookie.
+    Over HTTP auth validates the cookie first, so this branch is only reachable
+    by calling the helper directly."""
     import app.routes.sessions as sessions
 
     class _Req:
@@ -23,17 +23,16 @@ def test_cov_is_current_false_on_unparseable_cookie(client):
             self.cookies = cookies
 
     sess = type("S", (), {"jti": "whatever"})()
-    # No cookie at all → parse fails → False.
+    # No cookie at all.
     assert sessions._is_current(_Req({}), sess) is False
-    # Present but unparseable → parse fails → False.
+    # Cookie present but not a valid token.
     assert sessions._is_current(_Req({sessions.COOKIE_NAME: "not-a-real-token"}), sess) is False
 
 
 def test_cov_last_admin_guardrail_blocks_demoting_sole_admin(client):
-    """The last-admin guardrail raises 400 when demoting the only admin. The
-    route pre-empts this via the self-edit guard (you can't demote yourself),
-    so exercise the helper directly against a fresh DB whose sole admin is the
-    bootstrap admin."""
+    """The last-admin guardrail raises 400 when demoting the only admin.
+    The route's self-edit guard normally fires first, so call the helper
+    directly against the bootstrap admin."""
     import app.routes.users as users
     from app.database import SessionLocal
     from app.models import User
@@ -46,7 +45,7 @@ def test_cov_last_admin_guardrail_blocks_demoting_sole_admin(client):
             users._check_last_admin_guardrail(db, admin, admin.id, {"role": "user"})
         assert ei.value.status_code == 400
         assert "last admin" in ei.value.detail.lower()
-        # And deactivating the sole admin is likewise blocked.
+        # Deactivating the sole admin must also be blocked.
         with pytest.raises(HTTPException):
             users._check_last_admin_guardrail(db, admin, admin.id, {"is_active": False})
     finally:
@@ -54,10 +53,10 @@ def test_cov_last_admin_guardrail_blocks_demoting_sole_admin(client):
 
 
 def test_cov_delete_last_admin_blocked(client):
-    """Deleting the only admin is rejected. Over HTTP `require_admin`
-    guarantees the actor is itself an active admin (so a second admin always
-    exists), pre-empting this guard; call the route function directly with a
-    non-admin actor to pin the defensive branch."""
+    """Deleting the only admin must be rejected. In normal HTTP flow
+    `require_admin` ensures a second admin always exists, so this guard is
+    never reached; call the route function directly with a non-admin actor to
+    exercise it."""
     import app.routes.users as users
     from app.database import SessionLocal
     from app.models import User
@@ -66,8 +65,8 @@ def test_cov_delete_last_admin_blocked(client):
     try:
         admin = db.scalar(select(User).where(User.role == "admin"))
         assert admin is not None
-        # A distinct, non-admin actor so actor.id != target and the
-        # "delete yourself" guard doesn't fire first.
+        # Use a distinct non-admin actor so actor.id != target.id and the
+        # "delete yourself" guard doesn't fire before the last-admin check.
         actor = User(name="probe", email="probe.cov@test.local", role="user",
                      is_active=True, password_hash="x")
         db.add(actor)

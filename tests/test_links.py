@@ -1,10 +1,10 @@
 """Tests for the item-linking feature.
 
-Covers: creating directed links with the right inverse label on each side, all
-three link types, idempotent re-linking, self-link / unknown-target / missing
-guards, edit-permission gating (a regular user can link Bugs but not Tasks),
-removal from either endpoint, the dedicated list endpoint, links embedded in
-the detail, cascade on bug delete, and the additive schema.
+Covers directed link creation with correct inverse labels, all three link
+types, idempotent re-linking, self-link/unknown-target/missing-source guards,
+edit-permission gating (regular users can link Bugs but not Tasks), removal
+from either endpoint, the list endpoint, links in the detail payload, cascade
+on bug delete, and additive schema migration.
 """
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
     body = {"name": name, "email": email, "role": role, "password": _PW}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping link-permission tests keep exercising the flat model (a user
-    # must SEE both endpoints before the per-type link rules apply).
+    # Tag the new user to every existing project so these permission tests
+    # exercise the flat model correctly — a user must be able to see both
+    # endpoints before the per-type link rules apply.
     pids = [p["id"] for p in admin.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -73,7 +73,7 @@ def test_add_blocks_link_shows_inverse_on_target(admin_client):
     assert link["label"] == "blocks"
     assert link["direction"] == "outgoing"
     assert link["other_bug_id"] == b["id"]
-    # From B's side it reads as "is blocked by".
+    # The inverse label is checked from B's side.
     b_links = admin_client.get(f"/api/bugs/{b['id']}/links").json()
     assert len(b_links) == 1
     assert b_links[0]["label"] == "is blocked by"
@@ -146,7 +146,7 @@ def test_regular_user_cannot_link_a_task(admin_client):
     other = _mk_bug(admin_client, proj["id"], "Other")
     userc = _new_client()
     _login(userc, "reg.link@test.local")
-    # A regular user can't edit Tasks, so they can't link from one.
+    # Regular users lack edit permission on Tasks, so linking from one is denied.
     r = userc.post(f"/api/bugs/{task['id']}/links", json={"target_bug_id": other["id"]})
     assert r.status_code == 403
 
@@ -170,7 +170,7 @@ def test_remove_link_from_either_end(admin_client):
     b = _mk_bug(admin_client, proj["id"], "Item B")
     link = admin_client.post(f"/api/bugs/{a['id']}/links",
                              json={"target_bug_id": b["id"], "link_type": "blocks"}).json()
-    # Remove via the target endpoint (B owns the path here).
+    # Delete through B's endpoint.
     assert admin_client.delete(f"/api/bugs/{b['id']}/links/{link['id']}").status_code == 200
     assert admin_client.get(f"/api/bugs/{a['id']}/links").json() == []
 
@@ -181,8 +181,7 @@ def test_remove_link_via_source(admin_client):
     b = _mk_bug(admin_client, proj["id"], "Item B")
     link = admin_client.post(f"/api/bugs/{a['id']}/links",
                              json={"target_bug_id": b["id"], "link_type": "blocks"}).json()
-    # Remove via the source endpoint (a owns the path) — the other branch of
-    # the source/target resolution in remove_link.
+    # Delete through A's endpoint — exercises the source branch of remove_link.
     assert admin_client.delete(f"/api/bugs/{a['id']}/links/{link['id']}").status_code == 200
     assert admin_client.get(f"/api/bugs/{b['id']}/links").json() == []
 
@@ -193,7 +192,7 @@ def test_remove_link_wrong_bug_404(admin_client):
     b = _mk_bug(admin_client, proj["id"], "Item B")
     c = _mk_bug(admin_client, proj["id"], "C unrelated")
     link = admin_client.post(f"/api/bugs/{a['id']}/links", json={"target_bug_id": b["id"]}).json()
-    # The link doesn't touch C → 404.
+    # C is not an endpoint of this link, so both deletes return 404.
     assert admin_client.delete(f"/api/bugs/{c['id']}/links/{link['id']}").status_code == 404
     assert admin_client.delete(f"/api/bugs/{a['id']}/links/99999").status_code == 404
 
@@ -213,7 +212,7 @@ def test_link_cascades_on_bug_delete(admin_client):
     a = _mk_bug(admin_client, proj["id"], "Item A")
     b = _mk_bug(admin_client, proj["id"], "Item B")
     admin_client.post(f"/api/bugs/{a['id']}/links", json={"target_bug_id": b["id"], "link_type": "blocks"})
-    # Deleting B removes the link; A's link list is empty afterwards.
+    # Deleting B should cascade and leave A's link list empty.
     assert admin_client.delete(f"/api/bugs/{b['id']}").status_code == 200
     assert admin_client.get(f"/api/bugs/{a['id']}/links").json() == []
 

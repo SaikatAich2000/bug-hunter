@@ -1,7 +1,6 @@
-"""GET /api/stats?status=... scopes the chart breakdowns but keeps the headline
-KPI counts global. This lets the Analytics view filter in place when a KPI tile
-is clicked without the KPI strip numbers collapsing to the filtered subset, so
-every tile stays visible and toggleable.
+"""Verify that GET /api/stats?status=... scopes chart breakdowns while leaving
+headline KPI counts global. The Analytics view filters in place on tile-click,
+but the KPI strip must stay stable so all tiles remain visible and toggleable.
 """
 from __future__ import annotations
 
@@ -35,31 +34,31 @@ def _bug(c, pid, status, priority="Medium") -> dict:
 def test_status_filter_scopes_charts_but_not_kpis(client):
     _admin(client)
     pid = _project(client)
-    # 2 open (New) + 1 resolved.
+    # 2 open (New) + 1 resolved
     _bug(client, pid, "New", priority="High")
     _bug(client, pid, "New", priority="Low")
     _bug(client, pid, "Resolved", priority="High")
 
     glob = client.get("/api/stats").json()
-    # Sanity: global KPIs see all three.
+    # Baseline: global KPIs cover all three bugs.
     assert glob["bugs"] >= 3
     assert glob["open"] >= 2
     assert glob["resolved"] >= 1
 
-    # Filter the charts to the "open" statuses.
+    # Filter charts to open statuses only.
     filt = client.get("/api/stats", params={"status": ["New", "In Progress", "Reopened"]}).json()
 
-    # KPI counts stay global (unchanged) so the strip remains toggleable.
+    # KPI counts must be unchanged regardless of the filter.
     assert filt["bugs"] == glob["bugs"]
     assert filt["open"] == glob["open"]
     assert filt["resolved"] == glob["resolved"]
 
-    # ...but the by_status chart now only contains open statuses.
+    # The by_status chart should only include the filtered statuses.
     assert "Resolved" not in filt["by_status"], filt["by_status"]
     assert filt["by_status"].get("New", 0) >= 2
 
-    # ...and the priority breakdown reflects only the open subset: the lone
-    # High-priority Resolved bug is excluded, so High drops vs the global view.
+    # The lone High-priority Resolved bug is excluded from the priority
+    # breakdown, so High drops by exactly one compared with the global view.
     assert filt["by_priority"].get("Low", 0) >= 1
     assert filt["by_priority"].get("High", 0) == glob["by_priority"].get("High", 0) - 1
 
@@ -69,6 +68,6 @@ def test_status_filter_empty_is_same_as_unfiltered(client):
     pid = _project(client)
     _bug(client, pid, "New")
     base = client.get("/api/stats").json()
-    # A blank status value is ignored (normalized away), matching the global view.
+    # A blank status value is normalized away, so the result matches global.
     blanked = client.get("/api/stats", params={"status": [""]}).json()
     assert blanked["by_status"] == base["by_status"]

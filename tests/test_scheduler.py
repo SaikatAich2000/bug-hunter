@@ -63,7 +63,7 @@ def test_sunday_accepts_zero_and_seven():
 
 
 def test_dom_dow_or_semantics():
-    # Both restricted -> match if 15th OR Monday.
+    # When both day-of-month and day-of-week are restricted, cron matches either.
     c = CronSchedule("0 0 15 * 1")
     assert c.matches(_dt(2026, 6, 15, 0, 0))   # the 15th
     assert c.matches(_dt(2026, 6, 1, 0, 0))    # a Monday

@@ -1,13 +1,10 @@
 /**
- * TopChrome — the global chrome bar: the mobile menu button + the brand mark +
- * the horizontal view nav (role-gated) + the right cluster (notifications bell,
- * profile menu).
+ * Top bar: hamburger, brand mark, horizontal nav (role-gated), notifications,
+ * profile menu.
  *
- * The brand mark and version live here (left edge), so the bar reads
- * "BUGHUNTER · Version X" in full and is never truncated. Role gating flows
- * from VIEW_MIN_ROLE in types.ts — the Shell consults the same map for view
- * mounting + fetch, and the Sidebar's mobile drawer renders the same
- * NAV_ITEMS — so the three nav surfaces can't drift.
+ * Nav visibility uses VIEW_MIN_ROLE from types.ts — the same map the Shell uses
+ * for view mounting and the Sidebar uses for its mobile drawer, so all three
+ * surfaces stay in sync automatically.
  */
 import { useApp } from "../state/AppContext";
 import NotificationsBell from "./NotificationsBell";
@@ -23,7 +20,7 @@ interface Props {
 export default function TopChrome({ onOpenMobile }: Props) {
   const { currentUser, view, setView, roleRank, health } = useApp();
 
-  // Same VIEW_MIN_ROLE source of truth the Shell uses to gate rendering.
+  // Shares VIEW_MIN_ROLE with the Shell and Sidebar so gating can't drift.
   const allowed = (v: ViewName): boolean => {
     const need = VIEW_MIN_ROLE[v];
     return !need || roleRank(currentUser.role) >= roleRank(need);
@@ -35,12 +32,12 @@ export default function TopChrome({ onOpenMobile }: Props) {
         ☰
       </button>
 
-      {/* Brand mark — the wordmark ("BUG" + accent "HUNTER") + version. */}
+      {/* Brand mark */}
       <div className="brandmark" id="brandMark">
         <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
         <div className="wm">
           <b>BUG<span>HUNTER</span></b>
-          <small id="brandVersion">{health ? `Version ${health.version}` : "Version 3.0"}</small>
+          <small id="brandVersion">{health ? `Version ${health.version}` : "Version 3.1"}</small>
         </div>
       </div>
 
@@ -61,9 +58,8 @@ export default function TopChrome({ onOpenMobile }: Props) {
       <div className="spacer"></div>
 
       <div className="chrome-right">
-        {/* Mobile-only Sleuth trigger. On phones the bottom-right floating FAB
-            is hidden; this button opens the same panel by forwarding the click
-            to the FAB, keeping the panel's open/close logic in one place. */}
+        {/* Mobile Sleuth entry point. The FAB is hidden on small screens; this
+            forwards to it so panel open/close logic stays in one place. */}
         <button
           type="button"
           className="chrome-sleuth-btn"

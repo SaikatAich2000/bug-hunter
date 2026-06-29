@@ -1,31 +1,28 @@
-"""Sleuth Layer 3 — optional local LLM via llama.cpp.
+"""Sleuth Layer 3: optional local LLM via llama.cpp.
 
-Handles the queries the rules + classifier can't: free-form sentences with
-unusual phrasing, multi-step requests, or unanticipated domain language. It
-makes no external API calls; inference runs on this server against a GGUF
-model file the operator drops into `models/`.
+Handles queries the rules and classifier can't: free-form sentences with
+unusual phrasing, multi-step requests, or unanticipated wording. No external
+API calls; inference runs on this server against a GGUF model file placed
+in `models/`.
 
-Hardware notes (target: 1 CPU, 2 GB RAM, no GPU):
-- A 0.5B-parameter GGUF model at Q4_K_M quantization is ~350 MB on disk
-  and roughly the same in RAM once loaded.
-- Inference on a single modern x86 core runs at 5-15 tokens/second; an
-  ~80-token JSON response takes 6-15 seconds.
-- The model loads lazily on the first call, not at startup, and stays
-  loaded between calls to avoid paying the load cost twice.
-- After 10 minutes of idle it is unloaded so the RAM returns to the
-  database / web workers.
+Hardware target: 1 CPU, 2 GB RAM, no GPU.
+- A 0.5B Q4_K_M GGUF is ~350 MB on disk and roughly the same in RAM.
+- CPU inference runs at ~5-15 tokens/second; an 80-token JSON reply takes
+  6-15 seconds.
+- The model loads lazily on the first call and stays in memory between
+  calls to avoid repeated load cost. After 10 minutes idle it is unloaded
+  so the RAM returns to Postgres and the web workers.
 
 Operator setup:
 - `pip install llama-cpp-python` (CPU build, no GPU deps).
-- Drop a GGUF file at `models/sleuth.gguf`. The README in `models/`
-  recommends Qwen2.5-0.5B-Instruct-Q4_K_M.gguf as a small starting point.
-  Larger models (Phi-3 mini Q4 ~2.5 GB, etc.) will not fit in 2 GB RAM
-  with FastAPI + Postgres also resident — measure first.
+- Drop a GGUF file at `models/sleuth.gguf`. The README there recommends
+  Qwen2.5-0.5B-Instruct-Q4_K_M.gguf as a small starting point. Larger
+  models (Phi-3 mini Q4 ~2.5 GB, etc.) won't fit in 2 GB RAM alongside
+  FastAPI and Postgres — measure first.
 - Sleuth detects the file at runtime via `is_available()`.
 
-If anything in this layer fails — model file missing, llama-cpp-python not
-installed, model corrupted, inference times out — the executor swallows the
-exception and falls back to "unknown", so the chat path stays up.
+Any failure here (missing model, import error, timeout) is caught by the
+executor, which falls back to "unknown" so the chat path stays up.
 """
 from __future__ import annotations
 
@@ -50,44 +47,37 @@ logger = logging.getLogger("bug_hunter.sleuth.llm")
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# Resolve the model path. Operators can override via env, but the default
-# matches the path the README points at.
+# Operators can override via env; the default matches the path in the README.
 _MODEL_PATH = Path(
     os.getenv("SLEUTH_LLM_MODEL_PATH",
               str(Path(__file__).resolve().parent.parent.parent / "models" / "sleuth.gguf"))
 )
 
-# Inference budget. 12 s is generous on a 1-CPU box; if the model takes
-# longer than this for one of our short prompts something is wrong and
-# we'd rather time out and fall back than block the request indefinitely.
+# 12 s is generous on a 1-CPU box; we'd rather time out and fall back
+# than block the request indefinitely if the model is slow.
 _INFERENCE_TIMEOUT_S = float(os.getenv("SLEUTH_LLM_TIMEOUT_S", "12"))
 
-# Memory hygiene: unload the model after this many seconds of no use.
-# 10 minutes balances load-cost amortization against keeping memory free.
+# Unload the model after this many idle seconds. 10 minutes balances
+# load-cost amortization against freeing the RAM for Postgres/web workers.
 _IDLE_UNLOAD_S = float(os.getenv("SLEUTH_LLM_IDLE_UNLOAD_S", "600"))
 
-# Cap how many tokens we ever generate. Big enough to fit the JSON intent
-# we ask for, small enough to bound worst-case latency.
+# Token cap: large enough for the JSON we ask for, small enough to bound
+# worst-case latency on a slow CPU.
 _MAX_NEW_TOKENS = int(os.getenv("SLEUTH_LLM_MAX_TOKENS", "120"))
 
-# Context length we tell llama.cpp to use. Smaller = less RAM. We never
-# send long messages so 1024 is plenty.
+# Smaller context = less RAM. Our prompts are short, so 1024 is plenty.
 _CTX_LEN = int(os.getenv("SLEUTH_LLM_CTX_LEN", "1024"))
 
-# CPU thread count. On a 1-CPU box this should be 1; setting more than
-# the actual number of cores will cause contention. We default to 1
-# because that's the documented deployment target. Operators with
-# bigger boxes can override.
+# Default to 1 thread (the documented deployment target). More threads than
+# physical cores causes contention; operators on bigger boxes can override.
 _THREADS = int(os.getenv("SLEUTH_LLM_THREADS", "1"))
 
-# Headroom multiplier on top of the GGUF file size, accounting for KV
-# cache, model load buffer, and Python/llama.cpp overhead. 1.4x is a
-# conservative estimate from llama.cpp's own benchmarks for 1024-token
-# context windows on Q4_K_M quantized models. Larger contexts need more.
+# 1.4x headroom over the file size covers the KV cache, load buffer, and
+# Python/llama.cpp overhead for Q4_K_M at 1024-token context (per llama.cpp
+# benchmarks). Larger contexts need more.
 _RAM_HEADROOM_MULT = float(os.getenv("SLEUTH_LLM_RAM_HEADROOM", "1.4"))
-# Hard floor in case someone uses a tiny model — even a 50 MB GGUF needs
-# at least ~200 MB of working memory once you count Python, llama.cpp
-# state, and a 1024-token context.
+# Even a 50 MB GGUF needs ~200 MB once you count Python, llama.cpp state,
+# and a 1024-token context window.
 _RAM_MIN_FLOOR_MB = 200
 
 
@@ -96,11 +86,7 @@ _RAM_MIN_FLOOR_MB = 200
 # ---------------------------------------------------------------------------
 @dataclass
 class _MemoryBudget:
-    """Snapshot of how much memory we have vs how much the model needs.
-
-    All sizes are in MB to keep the surface human-readable in error
-    messages — operators don't think in bytes.
-    """
+    """Snapshot of memory availability vs model requirements. All sizes in MB."""
     model_size_mb: int          # size of the GGUF file on disk
     estimated_need_mb: int      # what we expect to need at peak
     available_mb: int           # what we actually have to work with
@@ -109,7 +95,7 @@ class _MemoryBudget:
 
 
 def _read_int(path: str) -> Optional[int]:
-    """Read an integer from a single-line sysfs file, or None on miss."""
+    """Read a single integer from a sysfs file, or None on any failure."""
     try:
         with open(path) as fh:
             v = fh.read().strip()
@@ -134,8 +120,8 @@ def _read_meminfo_kb(key: str) -> Optional[int]:
 
 
 def _detect_container_limit_mb() -> Optional[int]:
-    """Return the cgroup memory limit in MB, or None if we're not in a
-    container (or if the limit is effectively unbounded).
+    """Return the cgroup memory limit in MB, or None if not in a container
+    or if the limit is effectively unbounded.
 
     Checks cgroup v2 first (modern Docker), then v1 (older systems).
     """
@@ -143,26 +129,20 @@ def _detect_container_limit_mb() -> Optional[int]:
     v = _read_int("/sys/fs/cgroup/memory.max")
     if v is not None and v > 0:
         return v // (1024 * 1024)
-    # cgroup v1
+    # cgroup v1 — the "no limit" sentinel is near INT64_MAX; skip above 2^62.
     v = _read_int("/sys/fs/cgroup/memory/memory.limit_in_bytes")
     if v is not None and 0 < v < (1 << 62):
-        # The "no limit" sentinel on v1 is a huge number near INT64_MAX;
-        # anything above 2^62 is treated as "unlimited".
         return v // (1024 * 1024)
     return None
 
 
 def _detect_available_mb() -> int:
-    """Best-effort estimate of MB this process can actually allocate.
+    """Estimate how many MB this process can actually allocate.
 
-    Order of preference:
-      1. cgroup limit (in containers this is the real ceiling)
-      2. /proc/meminfo MemAvailable (Linux host)
-      3. Fallback: 512 MB pessimistic guess
+    Preference order: cgroup limit, /proc/meminfo MemAvailable, 512 MB fallback.
+    In a container the cgroup ceiling is binding, so we take the smaller of
+    the two when both are known.
     """
-    # In a container with a memory limit, the cgroup ceiling is binding —
-    # MemAvailable from /proc/meminfo reflects the host's RAM, which the
-    # OOM killer will not let us touch, so use the smaller of the two.
     cg = _detect_container_limit_mb()
     mem_kb = _read_meminfo_kb("MemAvailable")
     if cg is not None and mem_kb is not None:
@@ -183,10 +163,7 @@ def _model_file_size_mb() -> Optional[int]:
 
 
 def memory_budget() -> Optional[_MemoryBudget]:
-    """Compute the LLM memory budget. Returns None when no model file
-    exists (in which case the LLM layer is simply disabled — there's
-    nothing to budget against).
-    """
+    """Compute the LLM memory budget, or None if no model file is present."""
     model_mb = _model_file_size_mb()
     if model_mb is None:
         return None
@@ -203,11 +180,10 @@ def memory_budget() -> Optional[_MemoryBudget]:
 
 
 def memory_shortfall_message() -> Optional[str]:
-    """Single-line user-facing notice. Returns None when there's no
-    shortfall (or no model). The detailed operator-facing breakdown
-    goes to the application log via is_available(); this function only
-    yields what's safe to show in the chat UI, for diagnostics or admin
-    tools that want a quick one-liner."""
+    """Return a short user-facing notice when the LLM is disabled due to
+    insufficient memory, or None if there's no shortfall. The detailed
+    operator breakdown is logged by is_available(); this only returns
+    what's safe to surface in the chat UI."""
     budget = memory_budget()
     if budget is None or budget.sufficient:
         return None
@@ -218,22 +194,18 @@ def memory_shortfall_message() -> Optional[str]:
     )
 
 
-# Module-level flag: have we already warned the operator about a memory
-# shortfall? We only want to log the long technical message once per
-# process so operators see it but the logs aren't spammed.
+# Log the detailed memory-shortfall message at most once per process.
 _shortfall_warned = False
 
 
 def is_available() -> bool:
-    """True iff a model file is present, llama-cpp-python is importable,
-    AND the box has enough RAM to actually run it.
+    """Return True only if a model file is present, llama-cpp-python is
+    importable, and the box has enough RAM to run the model.
 
-    The last check protects against the deployment described in the
-    docker-compose.yml's hard memory cap: if the box is too small to
-    load the model, we say "unavailable" rather than blowing up at load
-    time. The first time we detect a shortfall we log a detailed
-    operator-facing warning; the chat itself just falls back to the
-    rules + classifier without ever showing the user anything technical.
+    The memory check guards against the docker-compose hard cap: if the box
+    is too small we say "unavailable" rather than blowing up at load time.
+    On first shortfall detection we emit one detailed warning to the log;
+    the chat path just falls back silently to layers 1 and 2.
     """
     global _shortfall_warned
     if not _MODEL_PATH.exists():
@@ -274,12 +246,11 @@ def is_available() -> bool:
 # Lazy load state
 # ---------------------------------------------------------------------------
 _lock = threading.Lock()
-# A separate lock held across the whole llm(...) decode. The single shared Llama
-# instance has one internal context/KV-cache and its __call__ is not thread-safe;
-# the chat endpoint is a sync def so concurrent requests run on the anyio
-# threadpool and would otherwise interleave decodes, corrupting the cache
-# (garbled JSON / native crash). Distinct from _lock (load/unload) so a decode
-# doesn't block the idle-unload bookkeeping.
+# Separate lock held across the full llm(...) decode. The shared Llama instance
+# has a single KV-cache and is not thread-safe; the chat endpoint is a sync def
+# so concurrent requests run on the anyio threadpool and would otherwise
+# interleave, corrupting the cache (garbled JSON / native crash). Keeping this
+# distinct from _lock means a running inference doesn't block idle-unload.
 _inference_lock = threading.Lock()
 _llm: Any = None             # the Llama instance, or None
 _loaded_at: float = 0.0      # epoch seconds when we last loaded
@@ -287,13 +258,11 @@ _last_used_at: float = 0.0   # epoch seconds of last inference call
 
 
 def _ensure_loaded() -> Any:
-    """Lazy-load the model. Caller must not hold _lock; this acquires it.
-
-    Returns the Llama instance, or raises if loading fails.
-    """
+    """Lazy-load the model. Caller must not hold _lock. Returns the Llama
+    instance, or raises on failure."""
     global _llm, _loaded_at, _last_used_at
     with _lock:
-        # Auto-unload if idle past the threshold.
+        # Unload if idle past the threshold before deciding whether to load.
         if (_llm is not None and _last_used_at > 0
                 and (time.time() - _last_used_at) > _IDLE_UNLOAD_S):
             logger.info("Sleuth LLM idle past %.0fs — unloading", _IDLE_UNLOAD_S)
@@ -315,9 +284,8 @@ def _ensure_loaded() -> Any:
             model_path=str(_MODEL_PATH),
             n_ctx=_CTX_LEN,
             n_threads=_THREADS,
-            # Disable mmap if your filesystem is slow; we leave the
-            # default which is mmap=True. mlock=False to keep the RSS
-            # honest about cold pages getting evicted under pressure.
+            # mmap=True (default) speeds up load; mlock=False lets the OS
+            # evict cold pages under memory pressure rather than pinning them.
             verbose=False,
         )
         _loaded_at = time.time()
@@ -327,27 +295,26 @@ def _ensure_loaded() -> Any:
 
 
 def _unload() -> None:
-    """Forcibly drop the loaded model. Called by tests and on idle."""
+    """Drop the loaded model. Used by the idle reaper and tests."""
     global _llm
     with _lock:
         _llm = None
 
 
 # ---------------------------------------------------------------------------
-# Idle reaper — frees RAM while idle, not only on the next request.
+# Idle reaper — frees RAM proactively, not just on the next request.
 #
-# The lazy-unload in _ensure_loaded only triggers when a new request arrives,
-# so without this the model stays resident after a usage burst. A daemon thread
-# (started once, on the first successful load) periodically unloads the model
-# once it has been idle past _IDLE_UNLOAD_S, returning the ~350 MB to Postgres
-# / web workers.
+# The lazy-unload in _ensure_loaded only fires when a new request arrives, so
+# without this the model would stay resident indefinitely after a usage burst.
+# A daemon thread (started once on first load) periodically unloads the model
+# after _IDLE_UNLOAD_S of inactivity, returning the ~350 MB to Postgres/workers.
 # ---------------------------------------------------------------------------
 _reaper_started = False
 
 
 def _maybe_unload_idle() -> bool:
-    """Unload the model if idle past _IDLE_UNLOAD_S. Returns True if it
-    unloaded. Acquires _lock; safe to call from the reaper thread."""
+    """Unload the model if it has been idle past _IDLE_UNLOAD_S. Returns True
+    if it was unloaded. Safe to call from any thread."""
     global _llm
     with _lock:
         if (_llm is not None and _last_used_at > 0
@@ -359,8 +326,8 @@ def _maybe_unload_idle() -> bool:
 
 
 def _reaper_loop() -> None:  # pragma: no cover - infinite background daemon loop
-    # Wake at a fraction of the idle window (bounded to a sane range) so we free
-    # RAM within roughly _IDLE_UNLOAD_S of the last use without busy-spinning.
+    # Sleep at 1/4 of the idle window (clamped 5-60 s) so we reclaim RAM
+    # within ~_IDLE_UNLOAD_S of last use without busy-spinning.
     interval = min(60.0, max(5.0, _IDLE_UNLOAD_S / 4.0))
     while True:
         time.sleep(interval)
@@ -371,7 +338,7 @@ def _reaper_loop() -> None:  # pragma: no cover - infinite background daemon loo
 
 
 def _ensure_reaper() -> None:
-    """Start the idle-reaper daemon once. No-op if already running."""
+    """Start the idle-reaper daemon thread once per process."""
     global _reaper_started
     if _reaper_started:
         return
@@ -381,10 +348,10 @@ def _ensure_reaper() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Memory-budget cache — is_available() runs on every chat message, but the
-# budget (model file size, cgroup limit, MemAvailable) is essentially static
-# after startup. Memoize it briefly so we don't re-parse /proc + sysfs and
-# re-stat the model on every request. Cleared by _reset_caches_for_test().
+# Memory-budget cache — is_available() is called on every chat message, but
+# the budget inputs (file size, cgroup limit, MemAvailable) are essentially
+# static after startup. Cache briefly to avoid re-parsing /proc + sysfs on
+# every request. Cleared by _reset_caches_for_test().
 # ---------------------------------------------------------------------------
 _BUDGET_TTL_S = 300.0
 _budget_cache: Optional[tuple[float, Optional["_MemoryBudget"]]] = None
@@ -401,13 +368,13 @@ def _cached_budget() -> Optional["_MemoryBudget"]:
 
 
 def _reset_caches_for_test() -> None:
-    """Clear the memoized budget (test hook; production never needs this)."""
+    """Clear the memoized budget. Test hook only."""
     global _budget_cache
     _budget_cache = None
 
 
 # ---------------------------------------------------------------------------
-# Prompt — kept short to minimize prefill cost on a CPU-bound run
+# Prompt (kept short to minimise prefill cost on CPU)
 # ---------------------------------------------------------------------------
 _SYSTEM_PROMPT = (
     "You are Sleuth, an assistant for a bug tracker. Read the user's "
@@ -432,10 +399,9 @@ _SYSTEM_PROMPT = (
 
 
 def _build_prompt(user_message: str) -> str:
-    """Tiny chat-style prompt. Different model families want slightly
-    different chat templates; this generic one works for Qwen, Llama-3,
-    Phi-3, Gemma. If you swap models and quality drops, switch this to
-    the matching template — llama.cpp also accepts apply_chat_template."""
+    """Build the inference prompt. This generic chat template works for Qwen,
+    Llama-3, Phi-3, and Gemma. If you swap models and quality drops, switch
+    to the matching template (llama.cpp also supports apply_chat_template)."""
     return (
         f"<|system|>\n{_SYSTEM_PROMPT}\n"
         f"<|user|>\n{user_message}\n"
@@ -447,16 +413,15 @@ def _build_prompt(user_message: str) -> str:
 # Inference + JSON extraction
 # ---------------------------------------------------------------------------
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
-    """Pull the first JSON object out of the model's reply. Models sometimes
-    wrap JSON in markdown fences or prose; we tolerate both.
+    """Extract the first JSON object from the model's reply. Models sometimes
+    wrap output in markdown fences or prose; both are tolerated.
 
-    Uses the stdlib decoder's raw_decode, which is string-aware: a brace inside
-    a JSON string value (a regex or code snippet) doesn't truncate parsing and
-    silently drop the reply.
+    raw_decode is string-aware, so a brace inside a JSON string value (e.g. a
+    code snippet) doesn't truncate parsing.
     """
     if not raw:
         return None
-    # Scrub markdown fences, then decode the first JSON value at/after the brace.
+    # Strip markdown fences, then find and decode the first JSON object.
     s = raw.strip()
     s = s.replace("```json", "").replace("```JSON", "").replace("```", "")
     decoder = json.JSONDecoder()
@@ -465,19 +430,17 @@ def _extract_json(raw: str) -> Optional[dict[str, Any]]:
         try:
             obj, _end = decoder.raw_decode(s[idx:])
         except ValueError:
-            # json.JSONDecodeError is a ValueError subclass — this '{' didn't
-            # start valid JSON, so try the next one.
+            # json.JSONDecodeError is a ValueError subclass; this brace
+            # didn't start valid JSON, try the next one.
             idx = s.find("{", idx + 1)
             continue
-        # A JSON value that starts at '{' always decodes to an object (dict),
-        # so the first one that parses is our result.
         return obj
     return None
 
 
 def _run_inference(message: str) -> Optional[dict[str, Any]]:
-    """Synchronous LLM call. Returns the parsed JSON dict, or None on any
-    failure (timeout, parse error, model crash). Never raises."""
+    """Run a synchronous LLM call. Returns the parsed JSON dict, or None on
+    any failure (load error, timeout, parse error). Never raises."""
     global _last_used_at
     try:
         llm = _ensure_loaded()
@@ -488,8 +451,7 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
     prompt = _build_prompt(message)
     t0 = time.time()
     try:
-        # Serialize the decode: only one inference may touch the shared Llama
-        # instance at a time (its KV-cache is not concurrency-safe).
+        # One inference at a time: the KV-cache is not concurrency-safe.
         with _inference_lock:
             out = llm(
                 prompt,
@@ -507,10 +469,9 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
 
     elapsed = time.time() - t0
     if elapsed > _INFERENCE_TIMEOUT_S:
-        # We don't actually have a way to interrupt llama.cpp mid-call
-        # from Python (would need an extra thread + cancellation token),
-        # but we can at least log when we cross the budget so operators
-        # see it. The sync call already returned at this point.
+        # llama.cpp has no Python-level cancellation, so this is post-hoc.
+        # We log it so operators know to raise the timeout or use a smaller
+        # model; the call has already returned at this point.
         logger.warning("Sleuth LLM exceeded budget: %.2fs > %.2fs",
                        elapsed, _INFERENCE_TIMEOUT_S)
 
@@ -523,7 +484,7 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Public entry: try_understand
+# Public entry point
 # ---------------------------------------------------------------------------
 _LLM_STATUSES = frozenset({
     "New", "In Progress", "Resolved", "Closed",
@@ -534,8 +495,8 @@ _LLM_ENVIRONMENTS = frozenset({"DEV", "UAT", "PROD"})
 
 
 def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
-    """Translate the LLM's JSON guess into a ParsedQuery the rule-based
-    handlers can consume."""
+    """Translate the LLM's JSON output into a ParsedQuery for the rule-based
+    handlers."""
     from app.chatbot import nlu as _nlu
     pq = _nlu.ParsedQuery(raw_message=message)
     filters = parsed.get("filters") or {}
@@ -545,19 +506,16 @@ def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
     bid = parsed.get("bug_id")
     if isinstance(bid, int) and bid > 0:
         pq.bug_id = bid
-    # The compact LLM JSON schema has no role/time fields, so role and
-    # time-window filters from the user's phrasing ("managers only", "activity
-    # yesterday") would otherwise be silently dropped on the LLM-routed read
-    # path. Recover them deterministically from the raw message via the same
-    # rule helpers the NLU uses, so list_users / recent_activity stay scoped.
+    # The compact LLM schema has no role/time fields. Recover them from the raw
+    # message using the same NLU helpers so list_users and recent_activity still
+    # respect phrasing like "managers only" or "activity yesterday".
     _nlu._populate_role_filter(message, pq)
     pq.time_window = _nlu._parse_time_window(message)
     return pq
 
 
 def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Optional[Response]:
-    """Route the LLM-predicted intent to its rule-based handler.
-    Read-only — never returns a write path."""
+    """Route a predicted intent to its rule-based handler. Read-only."""
     from app.chatbot.executor import (
         _handle_help, _handle_stats, _handle_recent_activity,
         _handle_list_users, _handle_list_projects, _handle_bug_detail,
@@ -581,13 +539,12 @@ def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Opti
 
 
 def try_understand(message: str, db: Session, actor: User) -> Optional[Response]:
-    """Run the LLM, map its intent guess onto the existing read handlers,
-    and return a Response. Returns None if the LLM is unavailable, fails,
-    or the predicted intent is "unknown".
+    """Run the LLM, map its intent prediction onto a read handler, and return
+    a Response. Returns None if the LLM is unavailable, fails, or the
+    predicted intent is "unknown".
 
-    This routes only to read handlers. The LLM never triggers writes —
-    writes go through the rule-based parser so the user always sees a
-    confirmation prompt before anything mutates."""
+    Only read handlers are routed here. Writes always go through the
+    rule-based parser so the user sees a confirmation prompt first."""
     if not is_available():
         return None
     parsed = _run_inference(message)

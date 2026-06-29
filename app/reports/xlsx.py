@@ -2,20 +2,16 @@
 
 Produces a multi-sheet workbook from a ReportResult:
 
-  Sheet 1: Summary / aggregate table (matches what's shown on screen).
-  Sheet 2: Items (drill-down detail) — only present when the report has
-           detail rows (every aggregated report does; "item_detail" /
-           "pending_snapshot" / "aging" put their data in sheet 1
-           directly).
-  Sheet 3: Filters Applied — audit trail of what filters generated this
-           file, plus the date and run-time summary numbers. Crucial for
-           a manager who gets forwarded the file weeks later and wants
-           to know what it represents.
+  Sheet 1 — Summary/aggregate table (matches the on-screen view).
+  Sheet 2 — Items (drill-down detail). Only present when the report has
+             detail rows; "item_detail", "pending_snapshot", and "aging"
+             put their data in sheet 1 directly.
+  Sheet 3 — Filters Applied: what filters generated this file, plus the
+             run date and summary counts. Useful when the file is
+             forwarded weeks later and the recipient needs context.
 
-Reused by:
-  - app/routes/reports.py — streams the bytes as a download response.
-  - app/chatbot/excel.py  — re-stages the bytes under a download token
-                            for Sleuth's chat-bubble file block.
+Consumed by app/routes/reports.py (download response) and
+app/chatbot/excel.py (Sleuth chat-bubble file block).
 """
 from __future__ import annotations
 
@@ -45,22 +41,19 @@ _BANNER_FG = "FFFFFF"
 _ZEBRA_FILL = "F2F4F8"
 
 
-# Formula-injection defense: Excel / LibreOffice / Numbers interpret a cell
-# whose value starts with one of these characters as a formula, not text. A
-# bug title like `=cmd|'/c calc.exe'!A1` would therefore execute when the
-# workbook is opened. Prefixing such cells with a single quote (OWASP-
-# recommended) neutralizes it; the quote is consumed by Excel on display, so
-# the user still sees the original text.
+# Formula-injection guard: spreadsheet apps treat cells whose value starts
+# with these characters as formulas, so a bug title like `=cmd|'/c calc'!A1`
+# would execute on open. Prefixing with a single quote (OWASP recommendation)
+# neutralizes it; Excel hides the quote on display.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _defang_formula_text(s: str) -> str:
-    """Prefix a string with `'` when it leads with a formula trigger so
-    spreadsheet apps render it as text. Idempotent on already-safe text.
+    """Prefix s with a single quote when it starts with a formula trigger.
 
-    Tests both the raw first character (covers a leading tab/CR/newline) and the
-    first NON-whitespace character — spreadsheet apps trim leading spaces, so
-    `" =cmd"` is still evaluated as a formula and must be defanged too."""
+    Checks both the literal first character (catches leading whitespace control
+    chars) and the first non-whitespace character, because spreadsheet apps
+    trim leading spaces before formula evaluation, so " =cmd" still fires."""
     if not s:
         return s
     stripped = s.lstrip()
@@ -78,10 +71,9 @@ def _ensure_openpyxl() -> None:
 
 
 def _coerce(value: Any) -> Any:
-    """Coerce a row value into something openpyxl will accept without
-    raising. None → '', dicts/lists → repr, datetimes → ISO string. All
-    strings flow through _defang_formula_text so a malicious bug title
-    can't execute as an Excel formula when the workbook is opened."""
+    """Convert a row value to something openpyxl accepts. None becomes '',
+    datetimes become ISO strings, and all strings are passed through
+    _defang_formula_text to block formula injection."""
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -107,9 +99,9 @@ def _write_table(
     """Write a banner + header + rows. Returns the next free row index."""
     ncols = max(1, len(columns))
 
-    # Banner row. Defanged too: although the banner is a server constant today,
-    # routing it (and the header labels below) through _defang_formula_text
-    # removes a guard that silently depended on that staying true.
+    # Defang banner and header labels too. The banner is server-controlled
+    # today, but running everything through _defang_formula_text avoids a
+    # silent assumption that must be maintained forever.
     banner_cell = ws.cell(row=start_row, column=1, value=_defang_formula_text(banner))
     banner_cell.font = Font(bold=True, color=_BANNER_FG, size=12)
     banner_cell.fill = PatternFill("solid", fgColor=_BANNER_FILL)
@@ -195,9 +187,8 @@ def _write_filters_block(ws, result: ReportResult, start_row: int) -> int:
     f = result.filters or {}
     for key, label in _FILTER_LABELS:
         ws.cell(row=row, column=1, value=label)
-        # Defend the value column: text_search / label are user free-text whose
-        # leading =/+/-/@ survives .strip(), so route every value through _coerce
-        # (which defangs strings) — not just the data sheets.
+        # text_search and label are user free-text, so their values need the
+        # same formula-injection treatment as data cells.
         ws.cell(row=row, column=2, value=_coerce(_format_filter_display(f.get(key))))
         row += 1
     return row

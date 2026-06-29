@@ -1,13 +1,8 @@
 """Tests for type-based permissions and event-manager notifications.
 
-  1. Type-based permission tightening — users can't edit/delete tasks or
-     requirements; managers can edit but never delete.
-  2. Event managers (admin/manager users) receive event-level emails
-     (create / update / delete) — but NOT per-task emails.
-  3. Only admin/manager roles allowed as event managers.
-  4. Event delete is admin-only (managers can edit but not delete).
-  5. Manager validation: trying to add a regular user as event manager
-     returns 400.
+Covers: type-restricted edits/deletes per role, event-manager email
+delivery (create/update/delete), role validation for event managers,
+and admin-only event deletion.
 """
 from __future__ import annotations
 
@@ -24,10 +19,9 @@ def _login(client, email, password):
 def _make_user(client, name, role="user", email=None):
     email = email or f"{name.lower()}@x.test"
     body = {"name": name, "email": email, "role": role, "password": "User12345Aa"}
-    # Project-scoped access: tag the new user to every existing project so these
-    # (pre-scoping) per-type permission tests keep exercising the flat model —
-    # the user must be able to SEE an item to then be 403'd on editing the wrong
-    # TYPE. An untagged non-admin would 404 instead.
+    # Tag the new user to all existing projects so the permission tests exercise
+    # the type-restriction logic. Without this, an unscoped non-admin gets a 404
+    # before ever reaching the 403 type check.
     pids = [p["id"] for p in client.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -68,16 +62,15 @@ def test_user_can_edit_bug_but_not_task_or_requirement(admin_client):
     _make_user(admin_client, "Regular", role="user")
     _login(admin_client, "regular@x.test", "User12345Aa")
 
-    # Bug edit: allowed (every user can edit a bug).
+    # Bugs are editable by all roles.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
     assert r.status_code == 200, r.text
 
-    # Requirement edit: forbidden for regular users.
+    # Requirements and tasks are manager/admin only.
     r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "In Progress"})
     assert r.status_code == 403, r.text
     assert "requirement" in r.json()["detail"].lower()
 
-    # Task edit: forbidden for regular users.
     r = admin_client.put(f"/api/bugs/{task['id']}", json={"status": "In Progress"})
     assert r.status_code == 403, r.text
     assert "task" in r.json()["detail"].lower()
@@ -96,7 +89,7 @@ def test_user_cannot_convert_bug_to_task_via_item_type_overpost(admin_client):
     assert r.status_code == 403, r.text
     assert "convert" in r.json()["detail"].lower()
 
-    # Still a Bug — the guard rejects before any write (no partial update).
+    # Guard must reject before any write, so the row stays unchanged.
     got = admin_client.get(f"/api/bugs/{bug['id']}")
     assert got.status_code == 200, got.text
     assert got.json()["item_type"] == "Bug"
@@ -108,11 +101,9 @@ def test_manager_can_edit_task_and_requirement(admin_client):
     req = _make_item(admin_client, p["id"], item_type="Requirement")
     _make_user(admin_client, "Mgr", role="manager")
     _login(admin_client, "mgr@x.test", "User12345Aa")
-    # "In Progress" is a Task-valid status.
     r = admin_client.put(f"/api/bugs/{task['id']}", json={"status": "In Progress"})
     assert r.status_code == 200, r.text
-    # Requirements no longer share Bug-only statuses. "Approved" is the
-    # Requirement-flavor equivalent of the Bug-only "Resolved".
+    # Requirements use "Approved" rather than bug-flavored "Resolved".
     r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "Approved"})
     assert r.status_code == 200, r.text
 
@@ -171,8 +162,7 @@ def test_event_create_emails_only_managers(admin_client, monkeypatch):
         "name": "Sprint kickoff",
         "manager_ids": [m1["id"], m2["id"]],
     }).json()
-    # The admin is the actor and is excluded from recipients. Only the two
-    # managers should be addressed.
+    # Admin is the actor, so only the two managers are recipients.
     assert sent, "Expected an event-created email"
     subj, to, body = sent[-1]
     assert "New event" in subj
@@ -235,21 +225,18 @@ def test_task_creation_does_NOT_email_event_managers(admin_client, monkeypatch):
         "app.email_service.deliver",
         lambda subject, to, body: sent.append((subject, sorted(to), body)),
     )
-    # File a task inside the event, assigned to worker only.
     r = admin_client.post("/api/bugs", json={
         "title": "Do the thing",
         "project_id": p["id"], "item_type": "Task",
         "event_id": ev["id"], "assignee_ids": [worker["id"]],
     })
     assert r.status_code == 201, r.text
-    # Expect one bug-created email (to the assignee). The event manager's
-    # address must not appear anywhere.
+    # Only the assignee gets a task-created email; the event manager must not.
     flat = " ".join(b for _, _, b in sent) + " " + " ".join(s for s, _, _ in sent)
     all_to = [addr for _, to, _ in sent for addr in to]
     assert "wkr@x.test" in all_to, "Assignee should be notified"
     assert "evmgr@x.test" not in all_to, \
         "Event manager must NOT be cc'd on task-created emails"
-    # Sanity: the email subject is task-typed, not bug-typed.
     assert any("task" in s.lower() for s, _, _ in sent)
 
 
@@ -264,8 +251,7 @@ def test_event_managers_must_be_admin_or_manager(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# 4. Event delete admin-only — covered by test_manager_cannot_delete_anything,
-# also sanity-check that a regular user is forbidden too.
+# 4. Event delete is admin-only (also exercised in test_manager_cannot_delete_anything).
 # ---------------------------------------------------------------------------
 def test_regular_user_cannot_delete_event(admin_client):
     ev = admin_client.post("/api/events", json={"name": "user-delete-test"}).json()
@@ -292,7 +278,7 @@ def test_event_out_includes_managers(admin_client):
     }).json()
     assert len(ev["managers"]) == 1
     assert ev["managers"][0]["name"] == "Mgr5"
-    # Detail endpoint too.
+    # Verify the detail endpoint returns the same data.
     detail = admin_client.get(f"/api/events/{ev['id']}").json()
     assert len(detail["managers"]) == 1
     assert detail["managers"][0]["email"] == "m5@x.test"
@@ -304,36 +290,31 @@ def test_event_out_includes_managers(admin_client):
 # ---------------------------------------------------------------------------
 def test_stats_filters_kpis_by_item_type(admin_client):
     p = _make_project(admin_client)
-    # 3 bugs, 1 requirement, 2 tasks.
     for i in range(3):
         _make_item(admin_client, p["id"], item_type="Bug", title=f"Bug-{i}-name")
     _make_item(admin_client, p["id"], item_type="Requirement", title="Req-0-name")
     for i in range(2):
         _make_item(admin_client, p["id"], item_type="Task", title=f"Task-{i}-name")
 
-    # Global: total counts everything.
     global_s = admin_client.get("/api/stats").json()
     assert global_s["bugs"] == 6  # all non-excluded statuses
     assert global_s["by_type"]["Bug"] == 3
     assert global_s["by_type"]["Requirement"] == 1
     assert global_s["by_type"]["Task"] == 2
 
-    # Bug tab: counts shift to bugs only.
     bug_s = admin_client.get("/api/stats?item_type=Bug").json()
     assert bug_s["bugs"] == 3
     assert bug_s["open"] == 3        # default status is "New"
-    # by_type stays GLOBAL even when filtered — tab badges must keep
-    # showing reality.
+    # by_type stays global even when item_type is filtered so tab badges
+    # always reflect the full picture.
     assert bug_s["by_type"]["Bug"] == 3
     assert bug_s["by_type"]["Requirement"] == 1
     assert bug_s["by_type"]["Task"] == 2
 
-    # Task tab: counts shift to tasks only.
     task_s = admin_client.get("/api/stats?item_type=Task").json()
     assert task_s["bugs"] == 2
     assert task_s["open"] == 2
 
-    # Requirement tab.
     req_s = admin_client.get("/api/stats?item_type=Requirement").json()
     assert req_s["bugs"] == 1
 
@@ -346,7 +327,6 @@ def test_stats_filters_breakdowns_by_item_type(admin_client):
     _make_item(admin_client, p["id"], item_type="Requirement", priority="Medium")
 
     bug_s = admin_client.get("/api/stats?item_type=Bug").json()
-    # by_priority should only see bug rows.
     assert bug_s["by_priority"].get("High") == 2
     assert "Low" not in bug_s["by_priority"]    # task's Low excluded
     assert "Medium" not in bug_s["by_priority"]  # req's Medium excluded
@@ -366,12 +346,11 @@ def test_stats_rejects_unknown_item_type(admin_client):
 # Audit-trail preservation — deleting a bug must NOT wipe its history
 # ---------------------------------------------------------------------------
 def test_audit_history_survives_bug_delete(admin_client):
-    """Pre-fix behavior: cascade deletes ate every activity row for the bug
-    along with the bug. After fix: the rows are detached (bug_id NULL) before
-    delete so the global trail keeps the full history."""
+    """Regression: cascade deletes used to wipe all audit rows for a bug.
+    After the fix, rows are detached (bug_id set to NULL) before deletion
+    so the global trail stays intact."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug", title="Login broken thing")
-    # Generate a real history: edit it, leave a comment, then delete.
     admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
     admin_client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "Investigating"})
     audit_before = admin_client.get("/api/audit").json()
@@ -382,7 +361,6 @@ def test_audit_history_survives_bug_delete(admin_client):
     ]
     assert len(rows_for_bug_before) >= 3, rows_for_bug_before  # create + status + comment
 
-    # Delete the bug — admin only.
     r = admin_client.delete(f"/api/bugs/{bug['id']}")
     assert r.status_code == 200, r.text
 
@@ -392,7 +370,7 @@ def test_audit_history_survives_bug_delete(admin_client):
         if (r["entity_type"] == "bug" and r["entity_id"] == bug["id"])
         or f"#{bug['id']}" in (r["detail"] or "")
     ]
-    # The full history should still be there, PLUS the new "bug_deleted" row.
+    # Full history should remain, plus the new "bug_deleted" row.
     actions = [r["action"] for r in rows_for_bug_after]
     assert "bug_created" in actions, actions
     assert "comment_added" in actions, actions
@@ -401,9 +379,8 @@ def test_audit_history_survives_bug_delete(admin_client):
 
 
 def test_audit_search_by_bug_title(admin_client):
-    """Searching the audit trail by bug title should hit history rows for
-    that bug — both via the live bug.title (LEFT JOIN) and via the title
-    baked into the detail string when the row was written."""
+    """Audit search by bug title should match via the live bug.title (LEFT JOIN)
+    and via the title baked into the detail string at write time."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug", title="Payment gateway timeout")
     admin_client.put(f"/api/bugs/{bug['id']}", json={"priority": "Critical"})
@@ -416,15 +393,13 @@ def test_audit_search_by_bug_title(admin_client):
 
 
 def test_audit_search_by_item_type_word(admin_client):
-    """Typing 'task' should narrow to task-related audit events. The item
-    type appears both in the joined Bug.item_type and in the
-    bug_created detail string."""
+    """Searching 'task' should narrow to task-related audit events, matching
+    via the joined Bug.item_type and the detail string."""
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Task", title="Write the spec")
     _make_item(admin_client, p["id"], item_type="Bug",  title="Crash on submit")
     r = admin_client.get("/api/audit?q=task")
     rows = r.json()
-    # At least one row should mention/reference the task.
     assert any(
         "task" in (row["detail"] or "").lower() or
         "task" in (row["action"] or "").lower()
@@ -433,8 +408,8 @@ def test_audit_search_by_item_type_word(admin_client):
 
 
 def test_audit_search_by_assignee_name(admin_client):
-    """Assignment audit detail bakes the assignee names in. Searching by
-    a name should find the assignment event."""
+    """Assignee names are baked into the audit detail at write time,
+    so searching by name should surface the assignment event."""
     user = _make_user(admin_client, "Sandra", role="user", email="sandra@x.test")
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug",

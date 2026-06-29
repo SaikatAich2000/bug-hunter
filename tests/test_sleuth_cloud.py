@@ -1,15 +1,15 @@
-"""Tests for Sleuth's cloud LLM layer (Gemini / OpenRouter fallback).
+"""Tests for Sleuth's cloud LLM layer (Groq / OpenRouter fallback).
 
-These never hit the network — the provider calls are monkeypatched. They
+All provider calls are monkeypatched; nothing hits the network. The tests
 pin the safety contract:
 
   - Off by default (no key / flag => layer invisible).
-  - Data questions are answered by the same deterministic SQL path as the
-    rule engine — the model only picks the filter, so numbers are real and
-    identical to a direct rule query.
+  - Data questions go through the same deterministic SQL path as the rule
+    engine — the model only picks the filter, so numbers are real and match
+    a direct rule query.
   - The cloud layer can never initiate a write, even if the model emits a
     close/delete/assign canonical query.
-  - Gemini failure falls back to OpenRouter.
+  - Groq failure falls back to OpenRouter.
   - Everything sent outbound is redacted first.
 """
 from __future__ import annotations
@@ -40,14 +40,12 @@ def _rebind_app_modules():
     """Keep this file's module references on the live generation.
 
     The conftest `client` fixture purges every `app.*` entry from sys.modules
-    (it does `del sys.modules[mod]` to force an engine re-import). Any test
-    running after one of those would otherwise hold a stale `executor` /
-    `cloud_llm` / `engine`, while executor's internal `import cloud_llm`
-    resolves to a fresh generation, so a mock placed on our reference would
-    be invisible inside execute(), and the seeded DB (our engine) would differ
-    from the one executor queries. Re-importing all of them together each test
-    guarantees one consistent generation. (Production never purges modules;
-    this is purely test hygiene.)
+    to force an engine re-import. Any test running after one of those would
+    hold a stale `executor`/`cloud_llm`/`engine`, so a mock placed on our
+    reference would be invisible inside execute(), and the seeded DB would
+    differ from the one executor queries. Re-importing them all together each
+    test keeps everything on one consistent generation. (Production never
+    purges modules; this is purely test hygiene.)
     """
     import importlib
     g = globals()
@@ -78,7 +76,7 @@ def db():
         s.add_all([admin, john]); s.flush()
         proj = models.Project(name="Mobile", description="")
         s.add(proj); s.flush()
-        # 2 open + 1 closed work item.
+        # 2 open, 1 closed.
         s.add_all([
             models.Bug(project_id=proj.id, title="Crash on login", status="New",
                        priority="High", environment="PROD", reporter_id=john.id),
@@ -96,20 +94,19 @@ def db():
 
 @pytest.fixture()
 def enabled(monkeypatch):
-    """Force the cloud layer ON for the test, robustly.
+    """Force the cloud layer on for the test.
 
-    We mock is_available() directly rather than flipping settings, because
-    other suites call get_settings.cache_clear() which would rebuild Settings
-    from the real .env mid-test and silently re-disable the layer. Provider
-    calls are mocked per-test, so nothing hits the network. is_available() is
-    the single gate both try_understand() and the executor consult, so this
-    one patch reliably activates the whole path.
+    We patch is_available() directly rather than flipping settings, because
+    other suites call get_settings.cache_clear() which rebuilds Settings from
+    the real .env and would silently re-disable the layer. is_available() is
+    the single gate that both try_understand() and the executor consult, so
+    this one patch reliably activates the whole path.
     """
     monkeypatch.setattr(cloud_llm, "is_available", lambda: True)
 
 
-def _gemini_returns(monkeypatch, obj_json: str):
-    monkeypatch.setattr(cloud_llm, "_call_gemini", lambda system, user: obj_json)
+def _groq_returns(monkeypatch, obj_json: str):
+    monkeypatch.setattr(cloud_llm, "_call_groq", lambda system, user, **kw: obj_json)
 
 
 # ---------------------------------------------------------------------------
@@ -122,13 +119,13 @@ def test_disabled_by_default(db, monkeypatch):
 
 
 def test_data_question_uses_real_sql_not_a_guess(db, enabled, monkeypatch):
-    # Model maps the free-form question to a canonical filter only.
-    _gemini_returns(monkeypatch, '{"mode":"data","canonical_query":"open bugs"}')
+    # The model picks a canonical filter; the actual data comes from SQL.
+    _groq_returns(monkeypatch, '{"mode":"data","canonical_query":"open bugs"}')
     cloud_resp = cloud_llm.try_understand("which things are still outstanding?", db, db.actor)
     direct = executor.execute("open bugs", db, db.actor)
     assert cloud_resp is not None
     assert cloud_resp.intent.startswith("cloud_data:")
-    # Identical rows to the deterministic rule query.
+    # Must produce identical rows to the deterministic rule query.
     cloud_tables = [b for b in cloud_resp.blocks if b.kind == "table"]
     direct_tables = [b for b in direct.blocks if b.kind == "table"]
     assert cloud_tables and direct_tables
@@ -138,8 +135,8 @@ def test_data_question_uses_real_sql_not_a_guess(db, enabled, monkeypatch):
 def test_cloud_never_writes(db, enabled, monkeypatch):
     bug = db.query(models.Bug).filter_by(title="Crash on login").first()
     assert bug.status == "New"
-    # Even if the model emits a write canonical query, it must be dropped.
-    _gemini_returns(monkeypatch, f'{{"mode":"data","canonical_query":"close bug {bug.id}"}}')
+    # A write canonical query from the model must be silently dropped.
+    _groq_returns(monkeypatch, f'{{"mode":"data","canonical_query":"close bug {bug.id}"}}')
     resp = cloud_llm.try_understand("can you close the login crash please", db, db.actor)
     assert resp is None                      # dropped, fell through
     db.expire_all()
@@ -147,9 +144,9 @@ def test_cloud_never_writes(db, enabled, monkeypatch):
 
 
 def test_falls_back_to_openrouter(db, enabled, monkeypatch):
-    monkeypatch.setattr(cloud_llm, "_call_gemini", lambda system, user: None)
+    monkeypatch.setattr(cloud_llm, "_call_groq", lambda system, user, **kw: None)
     monkeypatch.setattr(cloud_llm, "_call_openrouter",
-                        lambda system, user: '{"mode":"answer","text":"Bug #1 is the login crash."}')
+                        lambda system, user, **kw: '{"mode":"answer","text":"Bug #1 is the login crash."}')
     resp = cloud_llm.try_understand("explain the login crash", db, db.actor)
     assert resp is not None
     assert resp.intent == "cloud_answer"
@@ -159,31 +156,31 @@ def test_falls_back_to_openrouter(db, enabled, monkeypatch):
 def test_secrets_redacted_before_send(db, enabled, monkeypatch):
     seen = {}
 
-    def capture(system, user):
+    def capture(system, user, **kw):
         seen["user"] = user
         return '{"mode":"unknown"}'
 
-    monkeypatch.setattr(cloud_llm, "_call_gemini", capture)
+    monkeypatch.setattr(cloud_llm, "_call_groq", capture)
     cloud_llm.try_understand("my key is AIzaSyABCDEFGHIJKLMNOaBcDeFgHiJkLmNoPqRs", db, db.actor)
     assert "AIzaSy" not in seen["user"]
     assert "[REDACTED]" in seen["user"]
 
 
 def test_report_person_date_matches_rule_path(db, enabled, monkeypatch):
-    # "How many bugs did John close last week?" → the model picks the report
-    # filter; the count comes from the same handler the rules use.
-    _gemini_returns(
+    # The model picks the report filter; counts come from the same SQL handler
+    # the rules use, so results are identical.
+    _groq_returns(
         monkeypatch,
         '{"mode":"data","canonical_query":"report of who solved how many bugs last week"}',
     )
     cloud_resp = cloud_llm.try_understand("how many did John close last week?", db, db.actor)
     direct = executor.execute("report of who solved how many bugs last week", db, db.actor)
     assert cloud_resp is not None
-    assert cloud_resp.summary == direct.summary   # identical deterministic output
+    assert cloud_resp.summary == direct.summary   # same deterministic output
 
 
 def test_answer_mode_returns_conversational_text(db, enabled, monkeypatch):
-    _gemini_returns(
+    _groq_returns(
         monkeypatch,
         '{"mode":"answer","text":"I can\'t add bugs myself, but you can type '
         '\'create bug Login crash\' and confirm it."}',
@@ -194,10 +191,9 @@ def test_answer_mode_returns_conversational_text(db, enabled, monkeypatch):
 
 
 def test_cloud_preempts_weak_classifier_in_execute(db, enabled, monkeypatch):
-    # A conversational message the rules don't parse should reach the cloud
-    # layer rather than being caught by the weaker classifier. With cloud
-    # enabled, execute() returns the AI answer.
-    _gemini_returns(monkeypatch,
+    # A conversational message the rules can't parse should bypass the weaker
+    # classifier and reach the cloud layer when it's enabled.
+    _groq_returns(monkeypatch,
                     '{"mode":"answer","text":"Happy to help with your bugs!"}')
     resp = executor.execute("be smart, not dumb", db, db.actor)
     assert resp.intent == "cloud_answer"
@@ -205,10 +201,9 @@ def test_cloud_preempts_weak_classifier_in_execute(db, enabled, monkeypatch):
 
 
 def test_ai_first_beats_greedy_rule_match(db, enabled, monkeypatch):
-    # A conversational permissions question contains the word "admin", which
-    # the keyword rules greedily match to list_users. With cloud enabled the
-    # AI answers first.
-    _gemini_returns(
+    # The word "admin" in a permissions question would greedy-match list_users
+    # in the keyword rules. With cloud enabled, the AI answers first.
+    _groq_returns(
         monkeypatch,
         '{"mode":"answer","text":"No - only an admin can revoke sessions, '
         'from the Sessions panel. Ask an admin to help."}',
@@ -221,19 +216,44 @@ def test_ai_first_beats_greedy_rule_match(db, enabled, monkeypatch):
 
 
 def test_trivial_greetings_skip_the_cloud(db, enabled, monkeypatch):
-    # One-worders keep their instant canned replies even in AI-first mode.
-    def boom(system, user):  # pragma: no cover - must never run
+    # One-word greetings get their canned replies even in AI-first mode.
+    def boom(system, user, **kw):  # pragma: no cover - must never run
         raise AssertionError("cloud should not be called for 'hi'")
 
-    monkeypatch.setattr(cloud_llm, "_call_gemini", boom)
+    monkeypatch.setattr(cloud_llm, "_call_groq", boom)
     monkeypatch.setattr(cloud_llm, "_call_openrouter", boom)
     resp = executor.execute("hi", db, db.actor)
     assert resp.intent == "greeting"
 
 
+def test_multiword_greetings_skip_the_cloud(db, monkeypatch):
+    # Regression for the "hi AI" -> "there are no bugs" bug. The cloud hop is
+    # gated on the parsed intent, so the whole greeting/thanks family stays on
+    # the canned path, not just bare exact tokens. Verified by counting calls
+    # to is_available(), which is the single gate into the cloud layer.
+    seen = {"n": 0}
+
+    def counting_is_available():
+        seen["n"] += 1
+        return True
+
+    monkeypatch.setattr(cloud_llm, "is_available", counting_is_available)
+    monkeypatch.setattr(cloud_llm, "_call_groq", lambda *a, **k: None)
+    monkeypatch.setattr(cloud_llm, "_call_openrouter", lambda *a, **k: None)
+    monkeypatch.setattr(cloud_llm, "_cooldown_until", 0.0, raising=False)
+
+    for msg, intent in [("hi AI", "greeting"), ("hello there", "greeting"),
+                        ("good morning team", "greeting"), ("thanks a lot", "thanks")]:
+        assert executor.execute(msg, db, db.actor).intent == intent, msg
+    assert seen["n"] == 0   # cloud layer never consulted for greetings
+
+    # A genuine free-form question should consult the cloud layer.
+    executor.execute("why is the login page slow lately", db, db.actor)
+    assert seen["n"] >= 1
+
+
 def test_history_passed_to_model(db, enabled, monkeypatch):
-    # Prior turns are pulled from the transcript and sent so follow-ups have
-    # context. Seed a conversation, then assert it reaches the prompt.
+    # Prior turns must be included in the prompt so follow-ups have context.
     conv = models.ChatConversation(user_id=db.actor.id)
     db.add(conv); db.flush()
     db.add(models.ChatMessage(conversation_id=conv.id, role="user",
@@ -241,10 +261,10 @@ def test_history_passed_to_model(db, enabled, monkeypatch):
     db.commit()
     seen = {}
 
-    def capture(system, user):
+    def capture(system, user, **kw):
         seen["user"] = user
         return '{"mode":"answer","text":"ok"}'
 
-    monkeypatch.setattr(cloud_llm, "_call_gemini", capture)
+    monkeypatch.setattr(cloud_llm, "_call_groq", capture)
     cloud_llm.try_understand("and the high priority ones?", db, db.actor)
-    assert "show me critical bugs" in seen["user"]   # history reached the model
+    assert "show me critical bugs" in seen["user"]   # prior turn made it into the prompt

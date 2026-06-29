@@ -177,7 +177,7 @@ def test_typo_fallback_no_typo_run_when_filled():
     from app.chatbot.nlu import _typo_fallback, _PRIORITY_SYNONYMS
     out = ["Critical"]
     _typo_fallback("blocker", _PRIORITY_SYNONYMS, out)
-    # already populated → noop
+    # list already has a value, so typo_fallback should leave it unchanged
     assert out == ["Critical"]
 
 
@@ -307,7 +307,6 @@ def test_list_bugs_order_oldest():
     pq = ParsedQuery(raw_message="oldest open bugs")
     pq.sort_oldest = True
     cols = _list_bugs_order(pq)
-    # asc(): ASC order
     assert "ASC" in str(cols[0])
 
 

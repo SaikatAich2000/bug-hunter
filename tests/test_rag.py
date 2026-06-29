@@ -1,10 +1,9 @@
 """Tests for app/chatbot/rag.py, the optional RAG layer.
 
-RAG only runs when wired to a live Gemini embedding API (httpx) plus a chromadb
-vector store, neither of which the hermetic suite provisions. These tests inject
-fakes for both so every branch runs offline: embed success/failure, the
-redact-before-egress gate, collection availability, DB/file gathering, batched
-upsert, and the fenced/defanged retrieval block.
+RAG requires a live Gemini embedding API and a chromadb store, neither of which
+the test suite provisions. These tests inject fakes for both so every branch runs
+offline: embed success/failure, the redact-before-egress gate, collection
+availability, DB/file gathering, batched upsert, and fenced retrieval output.
 """
 from __future__ import annotations
 
@@ -70,14 +69,14 @@ def test_embed_empty_texts_returns_none(monkeypatch):
 def test_embed_success_redacts_and_truncates(monkeypatch):
     monkeypatch.setattr(rag, "get_settings", lambda: _settings())
     hx = _install_httpx(monkeypatch, payload={"embeddings": [{"values": [0.1, 0.2]}]})
-    # Use spaced words so redaction (which collapses long high-entropy tokens)
-    # leaves the length intact and we can observe the 8000-char truncation.
+    # Spaced words keep redaction from collapsing the text so we can observe
+    # the 8000-char truncation separately.
     out = rag._embed(["word " * 2000])  # 10000 chars
     assert out == [[0.1, 0.2]]
-    # API key travels in a header, never the URL.
+    # API key goes in a header, not the URL.
     assert hx._captured["headers"]["x-goog-api-key"] == "k"
     assert "key=" not in hx._captured["url"]
-    # Redact-then-truncate to 8000 chars.
+    # Redact then truncate to 8000 chars.
     sent = hx._captured["json"]["requests"][0]["content"]["parts"][0]["text"]
     assert len(sent) == 8000
 
@@ -247,7 +246,7 @@ def test_embed_upsert_writes_then_stops_on_failure(monkeypatch):
     docs = [f"d{i}" for i in range(100)]
     metas = [{"k": i} for i in range(100)]
     written = rag._embed_upsert(col, ids, docs, metas)
-    # First 64-doc batch embedded + upserted; second batch returns None → break.
+    # First 64-doc batch succeeds; second returns None, so the loop stops.
     assert written == 64
     assert len(col.upserts) == 1
 

@@ -1,12 +1,12 @@
 """Pytest fixtures.
 
-Tests run against a temporary SQLite file so they don't need Postgres
-running. Same SQLAlchemy models work on both backends.
+Tests run against a temporary SQLite file — no Postgres needed. The same
+SQLAlchemy models work on both backends.
 
-Three client fixtures:
-  - client          : raw, unauthenticated. For testing 401 behaviour.
+Three client fixtures are provided:
+  - client          : unauthenticated, for testing 401 behaviour.
   - admin_client    : logged in as the bootstrap admin.
-  - user_client     : logged in as a regular user (created by admin in fixture).
+  - user_client     : logged in as a regular (non-admin) user.
 """
 from __future__ import annotations
 
@@ -20,11 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Force Sleuth's optional/cloud layers OFF for the whole suite, even if a
-# developer's local .env enables them (config.py auto-loads .env). Tests that
-# exercise these paths opt in by monkeypatching the settings object, so the
-# suite never makes a real network call and behaves identically on every
-# machine. Hard-set (not setdefault) so a stray .env can't turn them on in CI.
+# Disable Sleuth's optional/cloud layers for the whole suite. config.py
+# auto-loads .env, so we hard-set (not setdefault) to prevent a local .env
+# from enabling them in CI. Tests that exercise these paths opt in by
+# monkeypatching the settings object directly.
 for _flag in (
     "SLEUTH_CLOUD_ENABLED",
     "SLEUTH_RETRIEVAL_ENABLED",
@@ -35,11 +34,9 @@ for _flag in (
 ):
     os.environ[_flag] = "0"
 
-# Force the email digest OFF regardless of a developer's local .env (which may
-# set EMAIL_DIGEST_ENABLED=true). With the digest on, the immediate notify_*
-# email functions defer to the batch job instead of sending, so the unit tests
-# that assert on the immediate emails (test_item_types / test_events) would see
-# nothing delivered. Hard-set like the Sleuth flags above; the digest tests opt
+# Disable the email digest. When it's on, immediate notify_* calls defer to
+# the batch job instead of sending, which breaks tests that assert on those
+# immediate emails (test_item_types / test_events). Digest-specific tests opt
 # back in per-test via monkeypatch.setattr(get_settings(), ...).
 os.environ["EMAIL_DIGEST_ENABLED"] = "false"
 
@@ -58,16 +55,15 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", BOOTSTRAP_EMAIL)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "Test Admin")
-    # Disable the HaveIBeenPwned API call so the suite stays hermetic. The
-    # test_security.py cases that exercise the breach path monkeypatch
-    # app.password_breach directly instead of making real network calls.
+    # Keep the suite hermetic — no real HaveIBeenPwned call. Tests that cover
+    # the breach path monkeypatch app.password_breach directly.
     monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
-    # Web push off by default so the suite is hermetic regardless of the
-    # deployment .env (which may have WEB_PUSH_ENABLED=true) and never makes a
-    # real FCM call. Tests that need it on enable it explicitly via monkeypatch.
+    # Web push off by default — a deployment .env may have WEB_PUSH_ENABLED=true,
+    # but we never want real FCM calls in tests. Tests that need push enabled
+    # turn it on via monkeypatch.
     monkeypatch.setenv("WEB_PUSH_ENABLED", "false")
 
-    # Force re-import so the engine picks up the env-var override.
+    # Re-import so the SQLAlchemy engine picks up the overridden DATABASE_URL.
     for mod in list(sys.modules):
         if mod == "app" or mod.startswith("app."):
             del sys.modules[mod]
@@ -100,7 +96,7 @@ def user_client(client):
     Uses a *separate* TestClient instance so the admin's session cookie
     doesn't bleed into the user's session.
     """
-    # Step 1: log in as admin (in same client) and create the user.
+    # Log in as admin and create the regular user.
     res = client.post("/api/auth/login", json={
         "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD,
     })
@@ -112,8 +108,8 @@ def user_client(client):
         "password": "User12345",
     })
     assert res.status_code == 201, res.text
-    # Step 2: log out, then log in as the user (same TestClient is fine —
-    # cookie just gets replaced).
+    # Log out, then log in as the regular user (same TestClient is fine;
+    # the cookie is simply replaced).
     client.post("/api/auth/logout")
     res = client.post("/api/auth/login", json={
         "email": "user@test.local", "password": "User12345",

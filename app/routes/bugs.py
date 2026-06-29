@@ -1,4 +1,4 @@
-"""Bugs API + comments + attachments + activity (per-bug)."""
+﻿"""Bugs API + comments + attachments + activity (per-bug)."""
 from __future__ import annotations
 
 import re
@@ -45,40 +45,32 @@ from app.schemas import (
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 
-# Repeated HTTPException detail strings, extracted so the wording stays
-# consistent across endpoints.
+# Centralised detail strings so error wording stays consistent.
 _DETAIL_BUG_NOT_FOUND = "Bug not found"
 _DETAIL_ATTACHMENT_NOT_FOUND = "Attachment not found"
 _DEFAULT_MIME = "application/octet-stream"
 
-# Soft cap on individual attachment size, protecting the DB from an oversized
-# upload.
-MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
+MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per attachment
 
-# Largest value the integer primary key can hold (32-bit signed, the Postgres
-# `integer` type). A numeric search token longer than this overflows the column
-# and raises a DataError on Postgres, so over-range digit strings are treated as
-# free text rather than an id lookup.
+# Numeric search tokens above Postgres int4 max overflow the column and raise
+# DataError; treat them as free text instead.
 _MAX_PK_INT = 2**31 - 1
 
-# Read uploads in 1 MB chunks so over-sized requests are aborted before they
-# consume RAM. Anything above MAX_FILE_BYTES is rejected mid-stream.
+# Stream uploads in 1 MB chunks so the request fails before consuming RAM.
 _UPLOAD_CHUNK = 1024 * 1024
 
-# Per-user rate limit on attachment uploads. Without it, an authenticated user
-# (or a stolen session) could chain 50 MB POSTs and bloat the DB. 20/min covers
-# normal use while making automated abuse obvious.
+# Per-user upload rate limit (20/min). An authenticated session could otherwise
+# chain 50 MB POSTs and bloat the DB.
 _UPLOAD_RATE_WINDOW_SECONDS = 60
 _UPLOAD_RATE_MAX = 20
 _upload_buckets: dict[int, deque] = {}
 _upload_rate_lock = threading.Lock()
-# Bound the dict so a churn of users doesn't grow memory forever.
+# Bound the dict size to avoid unbounded growth under high user churn.
 _UPLOAD_BUCKETS_MAX = 5_000
 
-# Per-user comment rate limit. Each comment writes a row and fans out
-# notifications and emails to the reporter and every assignee, so unbounded
-# commenting is a notification/email-amplification vector. 30/min covers normal
-# discussion.
+# Per-user comment rate limit (30/min). Each comment fans out notifications and
+# emails to the reporter and all assignees, so unbounded posting is an
+# amplification risk.
 _COMMENT_RATE_WINDOW_SECONDS = 60
 _COMMENT_RATE_MAX = 30
 _comment_buckets: dict[int, deque] = {}
@@ -89,10 +81,10 @@ def _check_user_rate(
     buckets: dict[int, deque], lock: threading.Lock, user_id: int,
     *, max_req: int, window: int, detail: str, cap: int = _UPLOAD_BUCKETS_MAX,
 ) -> None:
-    """Per-user sliding-window rate guard; raises 429 when exceeded.
+    """Per-user sliding-window rate guard; raises 429 on limit breach.
 
-    Cheap, in-process, no Redis. Multi-worker deployments get per-worker
-    buckets — for a tighter global limit put nginx limit_req in front.
+    In-process only (no Redis). Multi-worker deployments get per-worker buckets;
+    put nginx limit_req in front if a global limit is needed.
     """
     now = time.monotonic()
     cutoff = now - window
@@ -129,32 +121,26 @@ def _check_comment_rate(user_id: int) -> None:
         detail="Too many comments, slow down a moment.",
     )
 
-# Content types that must not be served as-is, because a browser would render
-# them inline and execute embedded scripts in our same-origin context. These
-# are downgraded to application/octet-stream at download time and served with
-# Content-Disposition: attachment so the browser saves rather than renders them.
+# Types a browser renders inline and executes (same-origin risk). These are
+# downgraded to application/octet-stream and served as attachments.
 _ACTIVE_CONTENT_TYPES = {
     "text/html", "application/xhtml+xml", "application/xml", "text/xml",
     "image/svg+xml", "application/javascript", "text/javascript",
     "application/x-javascript",
 }
 
-# MIME types a browser may render inline without executing anything. Everything
-# outside this safelist is forced to Content-Disposition: attachment, since a
-# blocklist alone can't keep up with every actively-rendered type. SVG is
-# deliberately absent (scriptable) and is also in the blocklist above.
+# Types safe to render inline. Everything else is forced to
+# Content-Disposition: attachment — a blocklist can't cover every executable
+# type. SVG is absent because it's scriptable.
 _INLINE_SAFE_PREFIXES = ("image/", "video/", "audio/")
 _INLINE_SAFE_TYPES = {"application/pdf", "text/plain", "text/csv"}
 
-# Executable / script extensions refused at upload time. This is the
-# authoritative server-side denylist; the frontend blocklist is advisory and
-# client-side only. Compared against the filename's final extension after
-# stripping trailing dots/spaces (Windows trims those on download, so
-# "evil.exe." would otherwise slip past a naive suffix check). .js is
-# intentionally not blocked: plain JavaScript source is a legitimate
-# attachment, and the download path already neutralizes active content
-# (octet-stream + Content-Disposition: attachment + a sandboxed CSP). Windows
-# script hosts (.jse/.vbs/.wsf/.ps1/etc.) and native executables are blocked.
+# Server-side denylist checked at upload time (the frontend list is advisory
+# only). The extension is taken from the filename after stripping trailing dots
+# and spaces; Windows silently strips them on download, so "evil.exe." would
+# slip past a naive suffix check. .js is omitted: JS source is a legitimate
+# attachment, and the download path already neutralizes it via octet-stream +
+# Content-Disposition: attachment.
 _DANGEROUS_UPLOAD_EXTS = frozenset({
     "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "hta", "jar",
     "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "psm1", "sh", "bash",
@@ -164,8 +150,10 @@ _DANGEROUS_UPLOAD_EXTS = frozenset({
 
 
 def _dangerous_upload_ext(filename: str) -> Optional[str]:
-    """Return the offending extension if the filename looks executable, else
-    None. Strips trailing dots/whitespace before taking the extension."""
+    """Return the blocked extension if the filename is executable, else None.
+
+    Strips trailing dots and whitespace before checking (Windows drops them on
+    download, so "evil.exe." would otherwise bypass the check)."""
     name = (filename or "").strip().rstrip(". \t")
     if "." not in name:
         return None
@@ -173,25 +161,23 @@ def _dangerous_upload_ext(filename: str) -> Optional[str]:
     return ext if ext in _DANGEROUS_UPLOAD_EXTS else None
 
 
-# Sanitize the filename when echoed in headers; the original is still kept in
-# the DB. HTTP header values must be ASCII (RFC 7230), and RFC 6266 makes the
-# plain `filename=` parameter US-ASCII only, with `filename*=` carrying any
-# non-ASCII form via percent-encoding. ASCII is enforced here.
+# The original filename lives in the DB; this sanitized copy is used only in
+# headers. RFC 6266 restricts plain filename= to US-ASCII; non-ASCII goes in
+# filename*= (percent-encoded), added by the caller.
 _HEADER_FILENAME_BAD = re.compile(r'[\r\n"\\]+')
 
 
 def _safe_filename_for_header(name: str) -> str:
     """Return an ASCII-only, header-safe version of the filename.
 
-    Strips CR/LF/quotes/backslashes that would break the Content-Disposition
-    header and replaces any non-ASCII byte with an underscore. The original
-    (possibly-Unicode) form is preserved on the wire via the RFC 5987
-    ``filename*=`` parameter the caller appends (see ``download_attachment``).
-    Without this ASCII pass, a non-ASCII filename would be Latin-1 encoded by
-    the HTTP layer and arrive as garbage bytes or be rejected.
+    Strips CR/LF/quotes/backslashes (they break Content-Disposition) and
+    replaces non-ASCII characters with underscores. The HTTP layer would
+    otherwise Latin-1 encode a non-ASCII filename and it would arrive as
+    garbage. The original Unicode form is sent separately via filename*=
+    (RFC 5987).
     """
     cleaned = _HEADER_FILENAME_BAD.sub("_", name)
-    # Replace anything outside printable ASCII.
+    # Replace everything outside printable ASCII.
     ascii_only = "".join(c if 32 <= ord(c) < 127 else "_" for c in cleaned)
     return ascii_only or "file"
 
@@ -200,8 +186,7 @@ def _safe_filename_for_header(name: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 def _item_type(bug: Bug) -> str:
-    """Work-item flavour ('Bug' / 'Requirement' / 'Task'), defaulting rows with
-    no item_type to 'Bug'."""
+    """Return the work-item type, defaulting to 'Bug' for rows with no item_type."""
     return getattr(bug, "item_type", None) or "Bug"
 
 
@@ -251,8 +236,7 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
         reporter=(UserSnapshot(id=bug.reporter.id, name=bug.reporter.name, email=bug.reporter.email)
                   if bug.reporter else None),
         assignees=tuple(UserSnapshot(id=a.id, name=a.name, email=a.email) for a in bug.assignees),
-        # Default "Bug" lets rows with no item_type still render
-        # correct-flavored emails without raising AttributeError.
+        # _item_type() handles old rows with no item_type set.
         item_type=_item_type(bug),
         event_name=bug.event.name if getattr(bug, "event", None) else None,
     )
@@ -277,10 +261,11 @@ def _resolve_user(db: Session, user_id: int | None) -> User | None:
 
 
 def _reject_inactive(users: list[User], noun: str = "user") -> None:
-    """Reject newly assigning/reporting work to a deactivated account: a
-    disabled user can't log in, so routing notifications to them is a dead-end.
-    Only new additions pass through here; an item that already references a
-    since-deactivated user is left editable."""
+    """Reject new assignments to deactivated accounts.
+
+    A disabled user can't log in, so notifications would be dead-ends. Existing
+    references are left in place; only new additions are checked.
+    """
     inactive = sorted((u.name for u in users if not u.is_active))
     if inactive:
         raise HTTPException(
@@ -289,10 +274,8 @@ def _reject_inactive(users: list[User], noun: str = "user") -> None:
         )
 
 
-# Human phrasing for a stored link_type, per direction. Outgoing is the
-# source's view of its own row; incoming is the target's (inverse) view.
+# Human-readable labels for each link type, as (outgoing, incoming) pairs.
 _LINK_LABELS: dict[str, tuple[str, str]] = {
-    # link_type: (outgoing label, incoming label)
     "relates": ("relates to", "relates to"),
     "blocks": ("blocks", "is blocked by"),
     "duplicate": ("duplicates", "is duplicated by"),
@@ -305,9 +288,11 @@ def _link_phrase(link_type: str, direction: str) -> str:
 
 
 def _serialize_link(link: BugLink, from_bug_id: int) -> dict:
-    """Render a BugLink from the perspective of `from_bug_id`, picking the other
-    end of the edge and the direction-appropriate label. Both FKs are NOT NULL
-    and cascade-delete, so `other` is always present."""
+    """Render a BugLink from the perspective of from_bug_id.
+
+    Both FKs are NOT NULL with cascade-delete, so the other end is always
+    present.
+    """
     outgoing = link.source_bug_id == from_bug_id
     other = link.target if outgoing else link.source
     direction = "outgoing" if outgoing else "incoming"
@@ -325,8 +310,7 @@ def _serialize_link(link: BugLink, from_bug_id: int) -> dict:
 
 
 def _bug_links(db: Session, bug_id: int) -> list[dict]:
-    """All links touching this bug (either direction), newest first, serialised
-    from this bug's perspective."""
+    """Return all links touching this bug (either direction), newest first."""
     rows = list(db.scalars(
         select(BugLink)
         .options(selectinload(BugLink.source), selectinload(BugLink.target))
@@ -367,36 +351,35 @@ def _attachment_count(db: Session, bug_id: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Project-scoped access. A manager/regular user only acts on items in their
-# projects; an admin (accessible is None) is unrestricted. A bug outside scope
-# is surfaced as 404 / "does not exist" so the restriction never leaks which
-# items or projects exist.
+# Project-scoped access. Managers and regular users can only act on items in
+# their projects; admins (accessible is None) are unrestricted. Items outside
+# scope are surfaced as 404 so the response never leaks whether a bug or
+# project exists.
 # ---------------------------------------------------------------------------
 def _assert_bug_accessible(accessible, bug: Bug) -> None:
-    """404 when ``bug`` is outside the actor's project scope."""
+    """Raise 404 when the bug is outside the actor's project scope."""
     if not can_access_project(accessible, bug.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
 
 
 def _assert_project_accessible(db: Session, accessible, project_id: int) -> None:
-    """400 'Project does not exist' when the project is missing OR outside the
-    actor's scope (a project you can't see is treated as nonexistent)."""
+    """Raise 400 when the project is missing or outside the actor's scope.
+
+    A project the caller can't see is treated as nonexistent.
+    """
     if db.get(Project, project_id) is None or not can_access_project(accessible, project_id):
         raise HTTPException(status_code=400, detail="Project does not exist")
 
 
 def _assert_event_accessible(db: Session, accessible, event_id: int) -> None:
-    """400 'Event does not exist' when the event is missing OR its owning
-    project is outside the actor's scope."""
+    """Raise 400 when the event is missing or its project is out of scope."""
     ev = db.get(Event, event_id)
     if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=400, detail="Event does not exist")
 
 
 def _load_accessible_bug(db: Session, bug_id: int, accessible) -> Bug:
-    """Load a bug (no eager options) and 404 if it's missing or out of scope.
-    Used by the per-bug sub-resource endpoints that only need an existence +
-    access gate before reading/writing the bug's children."""
+    """Load a bug and raise 404 if it's missing or out of scope."""
     bug = db.get(Bug, bug_id)
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
@@ -405,10 +388,11 @@ def _load_accessible_bug(db: Session, bug_id: int, accessible) -> Bug:
 
 
 def _assert_attachment_in_scope(db: Session, accessible, bug_id: int) -> None:
-    """404 (like a missing file) when the attachment's owning bug is outside the
-    actor's project scope. Unrestricted actors (``accessible is None``, i.e.
-    admins) skip the project lookup entirely — keeping it off the hot Range-
-    request path that video seeking hammers."""
+    """Raise 404 when the owning bug is outside the actor's project scope.
+
+    Admins (accessible is None) skip the DB lookup to keep this off the hot
+    Range-request path that video seeking hammers.
+    """
     if accessible is None:
         return
     proj_id = db.scalar(select(Bug.project_id).where(Bug.id == bug_id))
@@ -417,8 +401,7 @@ def _assert_attachment_in_scope(db: Session, accessible, bug_id: int) -> None:
 
 
 def _like_escape(needle: str) -> str:
-    """Escape SQL LIKE wildcards so a user typing `_` or `%` matches the
-    literal characters. Paired with `escape='\\\\'` on the LIKE clause."""
+    """Escape SQL LIKE wildcards so user-typed `_` and `%` match literally."""
     return (
         needle.replace("\\", "\\\\")
               .replace("%", "\\%")
@@ -430,8 +413,7 @@ def _like_escape(needle: str) -> str:
 # List
 # ---------------------------------------------------------------------------
 def _normalize_choice_list(values: Optional[list[str]], allowed: list[str], label: str) -> list[str]:
-    """Normalize a multi-valued enum query param: strip empties and reject
-    unknown values with 400."""
+    """Normalize a multi-valued enum query param; strip empties, reject unknowns with 400."""
     if not values:
         return []
     out: list[str] = []
@@ -450,14 +432,14 @@ def _apply_where_both(stmt, count_stmt, clause):
 
 
 def _apply_q_filter(stmt, count_stmt, q: str):
-    """Bug-id-or-text search: #123 / 123 → exact id match; otherwise LIKE."""
+    """Bug-id-or-text search: #123 or 123 does an exact id match, otherwise LIKE."""
     q_clean = q.strip().lstrip("#")
     if q_clean.isascii() and q_clean.isdigit() and int(q_clean) <= _MAX_PK_INT:
         return _apply_where_both(stmt, count_stmt, Bug.id == int(q_clean))
     if not q_clean:
         return stmt, count_stmt
-    # Match on the cleaned query: building the LIKE pattern from the raw `q`
-    # would embed leading/trailing spaces and make `?q=  needle  ` never match.
+    # Use the cleaned string for the LIKE pattern so leading/trailing spaces in
+    # the raw query (e.g. "?q=  needle  ") don't prevent any match.
     like = f"%{_like_escape(q_clean.lower())}%"
     clause = or_(
         func.lower(Bug.title).like(like, escape="\\"),
@@ -467,26 +449,25 @@ def _apply_q_filter(stmt, count_stmt, q: str):
 
 
 def _reject_overflow_ids(**named_ids) -> None:
-    """Reject id-valued query params outside a column's integer range.
+    """Reject id-valued query params that would overflow Postgres int4.
 
-    A bare numeric filter like ?reporter_id=99999999999999 would otherwise
-    reach Postgres and raise a DataError (500). This mirrors the _MAX_PK_INT
-    guard _apply_q_filter uses for the numeric `q` search, returning a clean 422
-    instead. (SQLite tolerates big ints, so this only matters on Postgres.)"""
+    Without this, ?reporter_id=99999999999999 reaches the DB and raises a
+    DataError (500). SQLite tolerates oversized ints, so this only matters
+    on Postgres. Returns a clean 422 instead.
+    """
     for name, value in named_ids.items():
         if value is None:
             continue
         values = value if isinstance(value, list) else [value]
         for v in values:
-            # Reject only values outside the int4 range. A small negative like
-            # -1 is in range and simply matches nothing, so keep returning an
-            # empty list for it rather than a 422.
+            # Small negatives like -1 are in range and simply match nothing;
+            # reject only values truly outside int4.
             if v is not None and (v > _MAX_PK_INT or v < -_MAX_PK_INT - 1):
                 raise HTTPException(status_code=422, detail=f"{name} is out of range")
 
 
 def _apply_event_filter(stmt, count_stmt, event_id: int):
-    """event_id=0 means "not in any event" — distinct from "any event"."""
+    """event_id=0 means "no event"; any other value filters by that event id."""
     if event_id == 0:
         return _apply_where_both(stmt, count_stmt, Bug.event_id.is_(None))
     return _apply_where_both(stmt, count_stmt, Bug.event_id == event_id)
@@ -495,7 +476,7 @@ def _apply_event_filter(stmt, count_stmt, event_id: int):
 def _apply_list_filters(stmt, count_stmt, *, statuses, priorities, environments,
                         item_types, project_ids, assignee_ids, reporter_id,
                         due_date, event_id, q):
-    """Layer every list_bugs filter onto the select+count statement pair."""
+    """Apply all list_bugs filters to the select+count statement pair."""
     if project_ids:
         stmt, count_stmt = _apply_where_both(stmt, count_stmt, Bug.project_id.in_(project_ids))
     if statuses:
@@ -538,9 +519,8 @@ def list_bugs(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> BugListResponse:
-    """List bugs with filtering. Enum-like filters accept multiple values via
-    repeated query params (?status=New&status=Resolved); a single-value call
-    is parsed into a list of one and matched with `.in_(...)`."""
+    """List bugs with optional filters. Enum filters accept repeated params
+    (?status=New&status=Resolved); a single value is matched with .in_()."""
     if page < 1 or page_size < 1 or page_size > 200:
         raise HTTPException(status_code=400, detail="Invalid pagination parameters")
     _reject_overflow_ids(
@@ -553,7 +533,7 @@ def list_bugs(
     environments = _normalize_choice_list(environment, ALLOWED_ENVIRONMENTS, "environment")
     item_types = _normalize_choice_list(item_type, ALLOWED_ITEM_TYPES, "item_type")
 
-    # Strip None / 0 from the int lists so callers can send blanks safely.
+    # Drop None/0 from the int lists so callers can send blanks safely.
     project_ids = [p for p in (project_id or []) if p]
     assignee_ids = [a for a in (assignee_id or []) if a]
 
@@ -564,26 +544,23 @@ def list_bugs(
         reporter_id=reporter_id, due_date=due_date, event_id=event_id, q=q,
     )
 
-    # Project-scope the whole list: a restricted manager/user only sees items in
-    # their projects (an untagged one sees nothing); an admin is unrestricted.
-    # Applied to both the page and the count so totals/pagination stay correct.
+    # Restrict to the actor's projects. Applied to both page and count so
+    # totals and pagination stay correct. Admins are unrestricted.
     accessible = accessible_project_ids(db, _user)
     stmt = scope_bug_query(stmt, accessible)
     count_stmt = scope_bug_query(count_stmt, accessible)
 
     total = db.scalar(count_stmt) or 0
     offset = (page - 1) * page_size
-    # Skip the query when the requested page is past the end: it returns the
-    # correct empty page and avoids a huge OFFSET scan for a deep-page request
-    # like ?page=10000000.
+    # Skip the DB query when the page is past the end; avoids a huge OFFSET
+    # scan for requests like ?page=10000000.
     if total and offset >= total:
         bugs: list[Bug] = []
     else:
         stmt = stmt.order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(page_size).offset(offset)
         bugs = list(db.scalars(stmt).all())
 
-    # One aggregate query for attachment counts keyed by bug_id, instead of an
-    # N+1 per-bug count.
+    # Batch attachment counts in one query to avoid N+1.
     bug_ids_in_page = [b.id for b in bugs]
     if bug_ids_in_page:
         att_counts = dict(db.execute(
@@ -614,10 +591,8 @@ def list_bugs(
 # ---------------------------------------------------------------------------
 # Detail
 # ---------------------------------------------------------------------------
-# Detail-view caps: the modal loads at most this many of the newest comments /
-# activity rows, bounding the response for a long-lived item with unbounded
-# history. Older history stays reachable via the dedicated /activity and
-# /comments endpoints.
+# Caps for the detail view. Older history is still reachable via the dedicated
+# /activity and /comments endpoints.
 _DETAIL_COMMENTS_MAX = 500
 _DETAIL_ACTIVITIES_MAX = 500
 _DETAIL_ATTACHMENTS_MAX = 500
@@ -632,11 +607,11 @@ def get_bug(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # Project scope: a bug outside the actor's projects reads as not-found.
+    # A bug outside the actor's projects reads as not-found.
     _assert_bug_accessible(accessible_project_ids(db, user), bug)
 
-    # Bounded loads instead of the unbounded relationships. Newest first, which
-    # matches the Bug.comments / Bug.activities relationship ordering.
+    # Bounded queries instead of the unbounded relationship collections.
+    # Newest first, matching the Bug.comments / Bug.activities ordering.
     recent_comments = list(db.scalars(
         select(Comment).where(Comment.bug_id == bug_id)
         .order_by(Comment.created_at.desc(), Comment.id.desc())
@@ -648,8 +623,7 @@ def get_bug(
         .limit(_DETAIL_ACTIVITIES_MAX)
     ).all())
 
-    # Pull all attachments (bug-level and comment-level), grouped per-comment,
-    # newest first.
+    # Load all attachments (bug-level and comment-level), grouped by comment.
     all_atts = list(db.scalars(
         select(Attachment).where(Attachment.bug_id == bug_id)
         .order_by(Attachment.created_at.desc(), Attachment.id.desc())
@@ -665,8 +639,8 @@ def get_bug(
 
     payload = _bug_to_out_dict(
         bug,
-        # Exact count via aggregate; the loaded `all_atts` list is capped at
-        # _DETAIL_ATTACHMENTS_MAX, so len() would under-report on busy items.
+        # Use an aggregate count, not len(all_atts): that list is capped at
+        # _DETAIL_ATTACHMENTS_MAX and would under-report on busy items.
         _attachment_count(db, bug_id),
         can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees],
                      item_type=_item_type(bug)),
@@ -703,22 +677,19 @@ def create_bug(
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> BugOut:
-    # Project scope: a restricted creator can only file into their own projects;
-    # an inaccessible (or missing) project reads as "does not exist".
     accessible = accessible_project_ids(db, actor)
     _assert_project_accessible(db, accessible, payload.project_id)
 
-    # Per-type policy: only admins/managers may create Tasks/Requirements
-    # (regular users get Bugs only), the same rule can_edit_bug enforces on
-    # edit, so a user can't create an item they could never edit.
+    # Only admins/managers may create Tasks/Requirements. This mirrors the
+    # can_edit_bug rule so a user can't create an item they couldn't edit.
     if not can_edit_bug(actor, actor.id, [], item_type=payload.item_type):
         raise HTTPException(
             status_code=403,
             detail=f"Only admins or managers can create a {payload.item_type.lower()}.",
         )
 
-    # Reporter: if explicit one provided, only admin/manager can override.
-    # Otherwise reporter = the current user.
+    # Only admins/managers can set an explicit reporter; everyone else files as
+    # themselves.
     if payload.reporter_id is not None and payload.reporter_id != actor.id:
         if actor.role not in ("admin", "manager"):
             raise HTTPException(
@@ -730,10 +701,8 @@ def create_bug(
         reporter = actor
 
     assignees = _resolve_users(db, payload.assignee_ids)
-    # Don't route new work to a deactivated reporter/assignee.
     _reject_inactive([reporter, *assignees])
 
-    # Validate optional event link (must exist and be in the creator's scope).
     if payload.event_id is not None:
         _assert_event_accessible(db, accessible, payload.event_id)
 
@@ -754,7 +723,6 @@ def create_bug(
     db.flush()
     _log(
         db, bug.id, actor, "bug_created",
-        # Include the title so a future search for the title hits this row.
         f"{bug.item_type} #{bug.id} '{bug.title}' created with status '{bug.status}'.",
     )
     if assignees:
@@ -763,12 +731,10 @@ def create_bug(
             db, bug.id, actor, "assignees_added",
             f"Bug #{bug.id} '{bug.title}' assigned to: {names}",
         )
-    # In-app notifications to the same recipients the emails target, written on
-    # this session so they commit transactionally with the bug.
+    # Write in-app notifications on this session so they commit with the bug.
     _itype = _item_type(bug).lower()
     assignee_ids = [a.id for a in assignees]
-    # No ``exclude`` here: a self-assignment still notifies the actor, since
-    # being assigned is meaningful even when you assign yourself.
+    # No exclude here: a self-assignment still notifies the actor.
     notification_service.notify(
         db, assignee_ids, kind="assigned", background=background,
         title=f"Assigned to {_itype} #{bug.id}",
@@ -822,16 +788,15 @@ def _validate_update_authorization(bug: Bug, actor: User) -> None:
         )
 
 
-# Link types whose reverse direction would contradict the forward one — e.g.
-# "A blocks B" and "B blocks A" can't both be true. `relates` is symmetric and
-# is intentionally excluded.
+# Link types where the reverse would contradict the forward ("A blocks B" and
+# "B blocks A" can't both be true). `relates` is symmetric so it's excluded.
 _DIRECTIONAL_LINK_TYPES = {"blocks", "duplicate"}
 
 
 def _require_can_edit_link_endpoint(item: Bug, actor: User) -> None:
-    """A link touches BOTH endpoints' relationship views, so adding or removing
-    one requires edit rights on each endpoint — otherwise a user who can edit a
-    Bug could attach/detach links on a Task/Requirement they cannot touch."""
+    """Require edit rights on both link endpoints. Without this, a user who can
+    edit a Bug could attach or detach links on a Task/Requirement they can't
+    otherwise touch."""
     if not can_edit_bug(actor, item.reporter_id, [a.id for a in item.assignees],
                         item_type=_item_type(item)):
         noun = _item_type(item).lower()
@@ -841,8 +806,8 @@ def _require_can_edit_link_endpoint(item: Bug, actor: User) -> None:
         )
 
 
-# Bound the cycle-detection walk so a pathological link graph can't turn a
-# single link insert into an unbounded traversal.
+# Bound the cycle-detection BFS so a pathological graph can't make a single
+# link insert run forever.
 _LINK_CYCLE_MAX_NODES = 10_000
 
 
@@ -874,10 +839,9 @@ def _reject_inverse_directional_link(
 ) -> None:
     """Block a directional link A->B that would create a cycle.
 
-    Walk forward edges of the same type from the target: if the target can
-    already reach the source, adding source->target closes a loop (A
-    transitively blocked by itself), so reject. This covers both transitive
-    cycles and the direct inverse B->A."""
+    If the target can already reach the source by forward edges of the same
+    type, adding source->target closes a loop (A transitively blocked by
+    itself). This catches both the direct inverse B->A and transitive cycles."""
     if link_type not in _DIRECTIONAL_LINK_TYPES:
         return
     if _directional_link_reaches(db, target.id, source_id, link_type):
@@ -892,10 +856,9 @@ def _reject_inverse_directional_link(
 
 
 def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
-    """Over-post guard: re-authorize a client-supplied item_type change against
-    the target type. _validate_update_authorization only checked the current
-    type, so without this a regular user could PUT {"item_type": "Task"} to
-    convert a Bug into a type they aren't allowed to edit.
+    """Guard against over-posting an item_type change. The earlier auth check
+    only saw the current type, so without this a regular user could PUT
+    {"item_type": "Task"} to convert a Bug into a type they can't edit.
     """
     new_type = fields.get("item_type")
     if new_type is None or new_type == _item_type(bug):
@@ -913,23 +876,20 @@ def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
 
 def _normalize_update_event_id(fields: dict, db: Session, accessible) -> None:
     if "event_id" in fields and fields["event_id"]:
-        # Must exist and be in the actor's scope (an out-of-scope event is
-        # surfaced as "does not exist").
         _assert_event_accessible(db, accessible, fields["event_id"])
     if "event_id" in fields and fields["event_id"] == 0:
-        # Treat 0 as "unlink" for clients that can't easily send JSON null.
+        # Treat 0 as a "clear event" signal for clients that can't send null.
         fields["event_id"] = None
 
 
 def _validate_update_status(fields: dict, bug: Bug) -> None:
-    """Per-type status validation. Pydantic only checks the union; this checks
-    the per-type set against the (possibly changing) type.
+    """Per-type status validation. Pydantic only checks the union of all
+    allowed statuses; this enforces the per-type subset.
 
-    When item_type changes, the effective status (the new one if supplied, else
-    the current one) is re-validated against the new type, so converting e.g. a
-    Resolved Bug into a Task can't persist a Task stuck on the Bug-only status
-    'Resolved'. The tolerance for an already-invalid status the client re-sends
-    unchanged only applies when the type isn't changing."""
+    When item_type changes, the effective status is re-validated against the
+    new type, so converting a Resolved Bug into a Task can't leave it stuck on
+    a Bug-only status. An unchanged status is tolerated only when the type
+    isn't also changing."""
     new_type = fields.get("item_type")
     type_changing = new_type is not None and new_type != _item_type(bug)
     has_new_status = "status" in fields and fields["status"] is not None
@@ -940,9 +900,8 @@ def _validate_update_status(fields: dict, bug: Bug) -> None:
     allowed_for_type = statuses_for_type(effective_type)
     if effective_status in allowed_for_type:
         return
-    # Invalid for the effective type. Tolerate an unchanged status only when the
-    # type isn't changing (a row keeping its value); a type conversion must land
-    # on a status valid for the new type.
+    # Tolerate an unchanged status only when the type isn't changing; a type
+    # conversion must land on a valid status for the target type.
     if not type_changing and has_new_status and effective_status == bug.status:
         return
     raise HTTPException(
@@ -956,7 +915,6 @@ def _validate_update_status(fields: dict, bug: Bug) -> None:
 
 def _validate_update_payload(fields: dict, bug: Bug, db: Session, accessible) -> None:
     if "project_id" in fields and fields["project_id"] is not None:
-        # Can't move an item into a project outside the actor's scope.
         _assert_project_accessible(db, accessible, fields["project_id"])
     _normalize_update_event_id(fields, db, accessible)
     _validate_update_status(fields, bug)
@@ -973,10 +931,9 @@ def _stale_edit_conflict() -> HTTPException:
 def _reject_if_updated_at_drifted(
     expected_updated_at: str, current_updated: datetime,
 ) -> None:
-    """Timestamp path of the optimistic-concurrency check. Unparseable input is
-    a hard 400 so a client that opts in gets a clear signal instead of silently
-    losing the protection. current_updated is the locked row's updated_at (a
-    NOT NULL column), so it's always present."""
+    """Timestamp path of the optimistic-concurrency check. Unparseable input
+    returns 400 so a client that opts in gets a clear signal. current_updated
+    comes from a NOT NULL column, so it's always present."""
     try:
         seen = datetime.fromisoformat(str(expected_updated_at).replace("Z", "+00:00"))
     except ValueError as exc:
@@ -989,7 +946,7 @@ def _reject_if_updated_at_drifted(
     current = current_updated
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
-    # updated_at is stored at whole-second resolution, so compare seconds.
+    # updated_at is whole-second resolution, so compare at second granularity.
     if int(seen.timestamp()) != int(current.timestamp()):
         raise _stale_edit_conflict()
 
@@ -999,13 +956,12 @@ def _enforce_optimistic_concurrency(
     expected_version: Optional[int],
     expected_updated_at: Optional[str],
 ) -> None:
-    """Opt-in optimistic concurrency.
+    """Opt-in optimistic concurrency check.
 
-    Locks the item row (``FOR UPDATE``) so concurrent writers to the same item
-    serialize, then rejects (409) when the client's last-seen ``version``
-    (preferred, sub-second safe) or ``updated_at`` (whole-second) no longer
-    matches the current value. No-op when the client sends neither field,
-    preserving last-write-wins.
+    Locks the row (FOR UPDATE) so concurrent writers serialize, then rejects
+    with 409 when the client's last-seen version (preferred, sub-second safe)
+    or updated_at (whole-second) no longer matches. Does nothing when neither
+    field is sent, preserving last-write-wins behavior.
     """
     if expected_version is None and not expected_updated_at:
         return
@@ -1015,7 +971,7 @@ def _enforce_optimistic_concurrency(
         .with_for_update()
     ).first()
     if locked is None:
-        # Row vanished (concurrent delete); the caller's load will 404.
+        # Row vanished under a concurrent delete; the caller's load will 404.
         return
     current_version, current_updated = locked
     if expected_version is not None:
@@ -1026,8 +982,7 @@ def _enforce_optimistic_concurrency(
 
 
 def _compute_tracked_changes(bug: Bug, fields: dict) -> list[tuple[str, str, str]]:
-    """List of (field, old, new) tuples for every tracked field that differs.
-    Description is included so a description-only edit isn't a no-op."""
+    """Return (field, old, new) for each tracked field that changed."""
     changes: list[tuple[str, str, str]] = []
     for f in _UPDATE_TRACKED_FIELDS:
         if f in fields and getattr(bug, f) != fields[f]:
@@ -1037,8 +992,8 @@ def _compute_tracked_changes(bug: Bug, fields: dict) -> list[tuple[str, str, str
 
 def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int],
                            changes: list[tuple[str, str, str]]) -> None:
-    """Swap the reporter and append the audit row. Caller has already gated
-    on permission."""
+    """Swap the reporter and record the change. Permission is checked by the
+    caller."""
     old_reporter_label = bug.reporter.name if bug.reporter else "—"
     if new_reporter_id is None:
         bug.reporter_id = None
@@ -1054,9 +1009,8 @@ def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int]
 
 def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]],
                         changes: list[tuple[str, str, str]]) -> tuple[list[User], list[User]]:
-    """Diff and re-bind assignees if the set actually changed. Returns
-    (newly-added, newly-removed) users so the caller can notify both; being
-    unassigned is as meaningful as being assigned."""
+    """Diff and re-bind assignees. Returns (added, removed) so the caller
+    can notify both sides (removal is as worth notifying as a new assignment)."""
     if assignee_ids is None:
         return [], []
     new_users = _resolve_users(db, assignee_ids)
@@ -1069,7 +1023,6 @@ def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]
         return [], []
     added = [u for u in new_users if u.id in added_ids]
     removed = [u for u in old_users if u.id in removed_ids]
-    # Don't route new work to a deactivated account (only NEW additions).
     _reject_inactive(added)
     old_names = sorted(a.name for a in old_users)
     new_names = sorted(u.name for u in new_users)
@@ -1078,13 +1031,13 @@ def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]
         ", ".join(old_names) or "(none)",
         ", ".join(new_names) or "(none)",
     ))
-    bug.assignees = new_users  # only re-bind when actually different
+    bug.assignees = new_users
     return added, removed
 
 
 def _persist_update(db: Session, bug: Bug, actor: User,
                     changes: list[tuple[str, str, str]]) -> None:
-    """Commit when there are tracked changes; roll back otherwise so a no-op
+    """Commit if there are tracked changes; roll back otherwise so a no-op
     PUT doesn't bump updated_at."""
     if not changes:
         db.rollback()
@@ -1095,9 +1048,8 @@ def _persist_update(db: Session, bug: Bug, actor: User,
             db, bug.id, actor, f"{field}_changed",
             f"{prefix}{field}: '{old}' → '{new}'",
         )
-    # Bump the optimistic-concurrency version on every committed change so a
-    # second writer holding a stale copy is detected at sub-second resolution.
-    # version is NOT NULL (server_default 1), so it's always an int.
+    # Bump the version so a concurrent writer with a stale copy gets a 409 at
+    # sub-second resolution. version is NOT NULL (server_default 1).
     bug.version = bug.version + 1
     db.commit()
 
@@ -1108,9 +1060,9 @@ def _stage_update_notifications(
     newly_assigned: list[User], newly_removed: list[User],
     actor: User, background: BackgroundTasks,
 ) -> None:
-    """Add the in-app notification rows for an update to the current session
-    (no commit) so they persist atomically with the change in _persist_update's
-    single commit, rather than in a second transaction a crash could drop."""
+    """Stage in-app notification rows on the current session (no commit).
+    They commit atomically with the change in _persist_update, so a crash
+    between two commits cannot persist the change without its notifications."""
     new_ids = {u.id for u in newly_assigned}
     itype = _item_type(bug).lower()
     if changes:
@@ -1125,8 +1077,7 @@ def _stage_update_notifications(
             bug_id=bug.id, actor_name=actor.name, exclude=actor.id,
         )
     if newly_assigned:
-        # No ``exclude``: a self-assignment still notifies the actor, since
-        # they are now assigned to this item.
+        # No exclude: a self-assignment still notifies the actor.
         notification_service.notify(
             db, list(new_ids), kind="assigned", background=background,
             title=f"Assigned to {itype} #{bug.id}",
@@ -1134,7 +1085,6 @@ def _stage_update_notifications(
             bug_id=bug.id, actor_name=actor.name,
         )
     if newly_removed:
-        # Being taken off an item is as meaningful as being added to one.
         notification_service.notify(
             db, [u.id for u in newly_removed], kind="updated", background=background,
             title=f"Unassigned from {itype} #{bug.id}",
@@ -1173,29 +1123,22 @@ def update_bug(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # Project scope first: an item outside the actor's projects reads as
-    # not-found (404), never a 403, so the restriction doesn't leak existence.
+    # Out-of-scope items return 404, not 403, so the restriction doesn't leak
+    # which bugs or projects exist.
     accessible = accessible_project_ids(db, actor)
     _assert_bug_accessible(accessible, bug)
-    # Authorize before the optimistic-concurrency check so an unauthorized
-    # caller gets a clean 403, never a 409. Checking the version first would let
-    # a caller with no edit rights probe a protected item's version/existence
+    # Authorize before the optimistic-concurrency check. Checking the version
+    # first would let an unauthorized caller probe a protected item's version
     # via 409-vs-403 differential responses.
     _validate_update_authorization(bug, actor)
-    # Optimistic concurrency (opt-in): lock the row and compare the client's
-    # last-seen version/timestamp before mutating, so concurrent writers to the
-    # same item serialize and the stale one gets a clean 409.
     _enforce_optimistic_concurrency(db, bug_id, expected_version, expected_updated_at)
     _validate_update_payload(fields, bug, db, accessible)
-    # Over-post guard: block converting a Bug into a Task/Requirement the caller
-    # can't edit (the auth check above only saw the CURRENT type).
     _authorize_item_type_change(fields, bug, actor)
 
     assignee_ids = fields.pop("assignee_ids", None)
     has_reporter_in_payload = "reporter_id" in fields
     new_reporter_id = fields.pop("reporter_id", None)
 
-    # Only run the reporter-change gate when the reporter actually changes.
     reporter_actually_changes = (
         has_reporter_in_payload and new_reporter_id != bug.reporter_id
     )
@@ -1213,10 +1156,6 @@ def update_bug(
         _apply_reporter_change(bug, db, new_reporter_id, changes)
     newly_assigned, newly_removed = _apply_assignee_diff(bug, db, assignee_ids, changes)
 
-    # Stage the in-app notifications on the same session before the persist
-    # commit so the change, its activity rows, the version bump, and the
-    # notifications all land in one transaction; otherwise a crash between two
-    # commits could persist the change with no notification/digest fan-out.
     if changes or newly_assigned or newly_removed:
         _stage_update_notifications(
             db, bug, changes, newly_assigned, newly_removed, actor, background,
@@ -1236,23 +1175,23 @@ def update_bug(
 
 
 # ---------------------------------------------------------------------------
-# Shared stakeholder notification for the secondary operations (delete,
-# attachments, comment edit/delete, links). The create/update/assign paths
-# above build their own tailored notifications; these reuse one helper so every
-# mutating operation on an item reaches its reporter + assignees and, when
-# EMAIL_DIGEST_ENABLED, is batched into the cron digest email (notify() leaves
-# emailed_at NULL, so the digest job picks it up once).
+# Shared stakeholder notification for delete, attachments, comment edits, and
+# links. The create/update paths build their own tailored notifications; these
+# secondary operations all go through one helper so every mutation reaches the
+# reporter + assignees and feeds the email digest.
 # ---------------------------------------------------------------------------
 def _notify_item_stakeholders(
     db: Session, bug: Bug, actor: User, *, kind: str, title: str, body: str,
     background: "BackgroundTasks | None" = None, link_bug: bool = True,
 ) -> None:
-    """In-app notify a work item's reporter + assignees (minus the actor).
-    Written on the caller's session; the caller commits.
+    """Notify a work item's reporter and assignees, excluding the actor.
 
-    link_bug=False omits the bug deep-link, used by delete: the bug_id FK is
-    ON DELETE CASCADE, so a notification pointing at the about-to-be-deleted bug
-    would be cascaded away before the digest could mail it."""
+    Rows are written on the caller's session; the caller commits.
+
+    Pass link_bug=False when deleting: the bug_id FK cascades on delete, so a
+    notification that deep-links to the bug would vanish before the digest
+    could send it.
+    """
     notification_service.notify(
         db, [bug.reporter_id, *[a.id for a in bug.assignees]],
         kind=kind, background=background, title=title, body=body,
@@ -1274,8 +1213,7 @@ def delete_bug(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # Item deletion is admin-only across every type; managers can edit but not
-    # delete, and reporters/assignees cannot delete.
+    # Deletion is admin-only; managers can edit but not delete.
     if not can_delete_bug(actor, item_type=_item_type(bug)):
         raise HTTPException(
             status_code=403,
@@ -1283,22 +1221,17 @@ def delete_bug(
         )
     title = bug.title
     itype = _item_type(bug)
-    # Tell the reporter + assignees their item is gone before the delete; the
-    # notification can't carry a bug deep-link (FK cascade), so link_bug=False.
+    # Notify before deleting; link_bug=False because the FK cascade would
+    # remove a notification pointing at the now-deleted bug.
     _notify_item_stakeholders(
         db, bug, actor, kind="updated", background=background, link_bug=False,
         title=f"{itype} #{bug_id} deleted",
         body=f"{actor.name} deleted “{title}”.",
     )
-    # Detach the bug's audit history before deleting the bug so the trail
-    # survives. Two-step:
-    #   1. UPDATE activity_log SET bug_id = NULL WHERE bug_id = <id>
-    #   2. DELETE FROM bugs WHERE id = <id>
-    # This works whether the FK is ondelete="SET NULL" or a legacy
-    # ondelete="CASCADE": by the time the DELETE fires no activity row
-    # references this bug, so a cascade has nothing to remove. The rows keep
-    # entity_id pointing at the now-gone bug, and their `detail` still carries
-    # the original title, so the global audit search still works.
+    # Detach audit history before deleting, so the trail survives. Setting
+    # bug_id = NULL first works whether the FK is SET NULL or CASCADE: by the
+    # time the DELETE fires no activity row references this bug. entity_id and
+    # detail still carry the bug id and title, so audit search keeps working.
     db.execute(
         update(Activity)
         .where(Activity.bug_id == bug_id)
@@ -1306,7 +1239,6 @@ def delete_bug(
     )
     db.flush()
     db.delete(bug)
-    # Add one summary row so the trail records the delete itself.
     db.add(Activity(
         bug_id=None, entity_type="bug", entity_id=bug_id,
         actor_user_id=actor.id, actor_name=actor.name,
@@ -1326,9 +1258,8 @@ def list_comments(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
-    # Existence + project scope (out-of-scope bug reads as not-found).
     _load_accessible_bug(db, bug_id, accessible_project_ids(db, _user))
-    # Newest comments first (matches the detail endpoint's ordering).
+    # Newest first, matching the detail endpoint's ordering.
     comments = list(db.scalars(
         select(Comment).where(Comment.bug_id == bug_id)
         .order_by(Comment.created_at.desc(), Comment.id.desc())
@@ -1362,13 +1293,11 @@ def add_comment(
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # Project scope: can't comment on (or learn of) a bug outside your projects.
     _assert_bug_accessible(accessible_project_ids(db, author), bug)
-    # Same per-type policy as edit/link: a regular user can discuss a Bug but
-    # not a Task/Requirement they have no edit rights on.
+    # Same per-type policy as edit/link: regular users can comment on Bugs but
+    # not on Tasks/Requirements.
     _validate_update_authorization(bug, author)
-    # Rate-limit after the 404 and authz check so a probing/forbidden request
-    # doesn't burn the caller's budget; it still bounds actual comment writes.
+    # Rate-limit after auth so probing/forbidden requests don't burn the budget.
     _check_comment_rate(author.id)
 
     c = Comment(
@@ -1381,7 +1310,6 @@ def add_comment(
     db.flush()
     _log(db, bug_id, author, "comment_added",
          f"#{bug.id} '{bug.title}' — comment by {author.name}: {payload.body[:80]}")
-    # In-app notification to reporter + assignees, minus the author.
     notification_service.notify(
         db, [bug.reporter_id, *[a.id for a in bug.assignees]],
         kind="comment", background=background,
@@ -1407,9 +1335,8 @@ def add_comment(
 # Attachments — upload, list, download, delete
 # ---------------------------------------------------------------------------
 async def _read_upload_with_limit(file: UploadFile, limit: int) -> bytes:
-    """Stream the upload in chunks and abort early if it exceeds the limit, so
-    an oversized request can't buffer its entire body into memory before the
-    size is checked."""
+    """Stream the upload in chunks, aborting early if the size limit is
+    exceeded so the body is never fully buffered."""
     buf = bytearray()
     while True:
         chunk = await file.read(_UPLOAD_CHUNK)
@@ -1439,25 +1366,20 @@ async def upload_attachment(
     bug = db.get(Bug, bug_id)
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # Project scope: can't attach to a bug outside your projects.
     _assert_bug_accessible(accessible_project_ids(db, uploader), bug)
-    # Same per-type policy as edit/link: regular users can attach to a Bug but
-    # not to a Task/Requirement they can't edit.
+    # Same per-type policy as edit/link: regular users can attach to Bugs but
+    # not to Tasks/Requirements they can't edit.
     _validate_update_authorization(bug, uploader)
     if comment_id is not None:
         c = db.get(Comment, comment_id)
         if c is None or c.bug_id != bug_id:
             raise HTTPException(status_code=400, detail="Invalid comment_id for this bug")
 
-    # Per-user rate limit: the upload endpoint writes up to a 50 MB BLOB per
-    # call, so without this a hostile authenticated client could bloat the DB.
-    # Checked after 404/authz/comment validation (so a probing or forbidden
-    # request doesn't burn the budget) but before reading the body.
+    # Check rate limit after auth/404 so probing requests don't burn the budget,
+    # but before reading the body.
     _check_upload_rate(uploader.id)
 
-    # Refuse executable/script attachments server-side (the client check is
-    # advisory). Done before reading the body so a blocked upload doesn't stream
-    # megabytes first.
+    # Refuse dangerous extensions before streaming the body.
     bad_ext = _dangerous_upload_ext(file.filename or "")
     if bad_ext is not None:
         raise HTTPException(
@@ -1469,12 +1391,10 @@ async def upload_attachment(
     if not data:
         raise HTTPException(status_code=400, detail="This file is empty, so there's nothing to attach.")
 
-    # Strip EXIF / GPS / camera-serial / XMP / ICC from raster image uploads.
-    # No-op for non-images and fails open on errors so an exotic image format
-    # doesn't block the upload.
+    # Strip EXIF/GPS/XMP/ICC metadata from raster images. No-op for non-images;
+    # fails open on errors so an exotic format doesn't block the upload.
     data = strip_image_metadata(data, file.content_type)
-    # The cap was checked on the pre-strip bytes; re-assert it in case the
-    # re-encode grew the file past the limit.
+    # Re-check the cap: stripping and re-encoding could grow the file slightly.
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(
             status_code=413,
@@ -1518,16 +1438,16 @@ _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 def _parse_range(header: str | None, size: int) -> Optional[tuple[int, int]]:
     """Parse a single-range ``Range: bytes=start-end`` header.
 
-    Returns an inclusive ``(start, end)`` byte span clamped to ``[0, size-1]``,
-    or ``None`` when the header is absent/empty/unsatisfiable/multi-range (the
-    caller then serves the full body). Browsers need this to seek a ``<video>``:
-    without a 206 reply, setting ``currentTime`` snaps back to 0.
+    Returns an inclusive (start, end) span clamped to [0, size-1], or None
+    when the header is absent, malformed, unsatisfiable, or multi-range (the
+    caller then serves the full body). Browsers need 206 replies to seek
+    <video>: without them, setting currentTime snaps back to 0.
     """
     if not header or size <= 0:
         return None
     m = _RANGE_RE.match(header.strip())
     if not m:
-        return None  # malformed or multi-range — serve whole body
+        return None  # malformed or multi-range; serve whole body
     start_s, end_s = m.group(1), m.group(2)
     if not start_s and not end_s:
         return None
@@ -1540,7 +1460,7 @@ def _parse_range(header: str | None, size: int) -> Optional[tuple[int, int]]:
         end = int(end_s) if end_s else size - 1
     end = min(end, size - 1)
     if start > end or start >= size:
-        return None  # unsatisfiable — fall back to full body (200)
+        return None  # unsatisfiable; fall back to a full 200
     return start, end
 
 
@@ -1551,11 +1471,8 @@ def download_attachment(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    # Load metadata without the BLOB column: a range request must not pull the
-    # whole (up to 50 MB) `data` into memory just to slice a few bytes, or a
-    # video seek (which fires many small Range requests) becomes repeated
-    # full-column reads. The bytes are fetched below, sliced in SQL for ranges
-    # and read whole only for a full-body download.
+    # Fetch metadata without the BLOB column so a video seek (many small Range
+    # requests) doesn't repeatedly load up to 50 MB just to slice a few bytes.
     meta = db.execute(
         select(
             Attachment.bug_id, Attachment.filename,
@@ -1564,19 +1481,12 @@ def download_attachment(
     ).first()
     if meta is None or meta[0] != bug_id:
         raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
-    # Project scope: a restricted actor can't download an attachment on a bug
-    # outside their projects (surfaced as a 404 like a missing file). Admins
-    # skip the lookup — see the helper.
     _assert_attachment_in_scope(db, accessible_project_ids(db, _user), bug_id)
     _att_bug_id, att_filename, att_content_type, att_size = meta
 
-    # Decide content-type and disposition.
-    #
-    # Active types like text/html, image/svg+xml, and JS can carry executable
-    # script; rendering them inline would run that script in our origin's
-    # context (same-origin XSS via stored attachment). For those types, force
-    # `attachment` disposition and downgrade the content-type to octet-stream so
-    # the browser saves rather than executes.
+    # Active types (HTML, SVG, JS) can carry executable script; rendering them
+    # inline would run it in our origin. Downgrade to octet-stream and force
+    # Content-Disposition: attachment.
     ct_lower = (att_content_type or "").lower().split(";")[0].strip()
     is_active = ct_lower in _ACTIVE_CONTENT_TYPES
     safe_ct = _DEFAULT_MIME if is_active else (att_content_type or _DEFAULT_MIME)
@@ -1587,7 +1497,7 @@ def download_attachment(
     disposition = "inline" if inline_ok else "attachment"
 
     safe_fname = _safe_filename_for_header(att_filename)
-    # RFC 5987 form for non-ASCII filenames; keeps a plain ASCII fallback.
+    # filename*= carries the Unicode form (RFC 5987); filename= is the ASCII fallback.
     cd = (
         f'{disposition}; filename="{safe_fname}"; '
         f"filename*=UTF-8''{quote(att_filename, safe='')}"
@@ -1595,21 +1505,17 @@ def download_attachment(
 
     headers = {
         "Content-Disposition": cd,
-        # Browsers only attempt to seek <video>/<audio> when the server
-        # advertises byte-range support; without it currentTime resets to 0.
+        # Without Accept-Ranges, browsers don't attempt to seek <video>/<audio>
+        # and currentTime resets to 0.
         "Accept-Ranges": "bytes",
-        # Opt this response out of GZipMiddleware: attachments are already
-        # compressed media, and gzipping a 206 partial body corrupts the
-        # byte-range math the player relies on to seek. An explicit
-        # Content-Encoding makes Starlette's GZip responder pass us through.
+        # Explicit Content-Encoding opts out of GZipMiddleware. Gzipping a 206
+        # partial body corrupts the byte offsets the player uses to seek.
         "Content-Encoding": "identity",
-        # Defense-in-depth: even if some future code path ends up
-        # serving HTML inline, these headers make it harder to weaponize.
+        # Defense-in-depth for any future code path that might serve HTML.
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
         "X-Frame-Options": "DENY",
-        # Keep a Cache-Control here so the global middleware doesn't
-        # try to override us — attachments may be private.
+        # Explicit Cache-Control so global middleware doesn't override it.
         "Cache-Control": "private, max-age=0, no-cache",
     }
 
@@ -1617,15 +1523,14 @@ def download_attachment(
     if span is not None:
         start, end = span
         length = end - start + 1
-        # Slice in the database (1-indexed substr) so only the requested bytes
-        # leave storage. Works on both Postgres (bytea) and SQLite (blob).
+        # Slice in the DB (substr is 1-indexed) so only the requested bytes
+        # cross the wire. Works on both Postgres (bytea) and SQLite (blob).
         raw = db.scalar(
             select(func.substr(Attachment.data, start + 1, length))
             .where(Attachment.id == att_id)
         )
         if raw is None:
-            # Row was deleted between the metadata read and this slice; return a
-            # clean 404 rather than a protocol-inconsistent empty 206.
+            # Row was deleted between the metadata read and this slice.
             raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
         chunk = bytes(raw)
         headers["Content-Range"] = f"bytes {start}-{end}/{att_size}"
@@ -1637,8 +1542,8 @@ def download_attachment(
             headers=headers,
         )
 
-    # Full download: fetch the whole column once. A plain Response sets an
-    # accurate Content-Length (StreamingResponse drops the explicit one).
+    # Full download: fetch the whole column. Response sets Content-Length
+    # accurately; StreamingResponse would drop an explicit value.
     data = db.scalar(select(Attachment.data).where(Attachment.id == att_id))
     return Response(content=bytes(data) if data is not None else b"",
                     media_type=safe_ct, headers=headers)
@@ -1654,8 +1559,7 @@ def delete_attachment(
     a = db.get(Attachment, att_id)
     if a is None or a.bug_id != bug_id:
         raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
-    # Attachment deletion is admin-only for both bug-level and comment-level
-    # attachments. Uploaders and managers cannot remove their own files.
+    # Admin-only: uploaders and managers cannot remove their own files.
     if not can_delete_attachment(actor):
         raise HTTPException(
             status_code=403,
@@ -1668,8 +1572,7 @@ def delete_attachment(
         f"Deleted attachment '{fname}'",
         entity_type="attachment", entity_id=att_id,
     )
-    # The attachment's FK guarantees its bug exists (a cascade would have
-    # removed the attachment otherwise), so no None-guard is needed here.
+    # The FK from Attachment.bug_id guarantees the bug still exists here.
     bug = db.get(Bug, bug_id)
     _notify_item_stakeholders(
         db, bug, actor, kind="updated", background=background,
@@ -1708,7 +1611,6 @@ def update_comment(
         f"Comment #{c.id} edited by {actor.name}: {payload.body[:80]}",
         entity_type="comment", entity_id=c.id,
     )
-    # The comment's FK guarantees its bug exists, so use it directly.
     bug = db.get(Bug, bug_id)
     _notify_item_stakeholders(
         db, bug, actor, kind="comment", background=background,
@@ -1756,7 +1658,6 @@ def delete_comment(
         f"Comment #{comment_id} by {author_name} deleted: {preview}",
         entity_type="comment", entity_id=comment_id,
     )
-    # The comment's FK guarantees its bug exists, so use it directly.
     bug = db.get(Bug, bug_id)
     _notify_item_stakeholders(
         db, bug, actor, kind="comment", background=background,
@@ -1776,7 +1677,6 @@ def list_activity(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[Activity]:
-    # Existence + project scope (out-of-scope bug reads as not-found).
     _load_accessible_bug(db, bug_id, accessible_project_ids(db, _user))
     return list(db.scalars(
         select(Activity).where(Activity.bug_id == bug_id)
@@ -1794,7 +1694,6 @@ def list_links(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
-    # Existence + project scope (out-of-scope bug reads as not-found).
     _load_accessible_bug(db, bug_id, accessible_project_ids(db, _user))
     return _bug_links(db, bug_id)
 
@@ -1806,21 +1705,20 @@ def _reload_link(db: Session, link_id: int) -> BugLink:
         .where(BugLink.id == link_id)
     )
     if link is None:
-        # Concurrently deleted between insert/find and this reload; return a
-        # clean 409 instead of AttributeError-ing in _serialize_link.
+        # Deleted between the insert/find and this reload; 409 beats
+        # AttributeError in _serialize_link.
         raise HTTPException(status_code=409,
                             detail="Link was modified concurrently. Please retry.")
     return link
 
 
 def _insert_link_or_existing(db: Session, link: BugLink, refetch) -> tuple[BugLink, bool]:
-    """Flush a new BugLink; on a unique-index race, roll back and return the
-    existing edge. Returns ``(edge, created)``.
+    """Flush a new BugLink; on a unique-index race roll back and return the
+    existing edge. Returns (edge, created).
 
-    Keeps the "re-linking returns the existing edge" contract atomic: a
-    concurrent identical request that wins the race raises IntegrityError here,
-    converted into the existing edge instead of a 500. ``refetch`` re-runs the
-    existence lookup after the rollback.
+    A concurrent identical request that wins the race raises IntegrityError
+    here, which is converted to the existing edge rather than a 500. refetch
+    re-runs the existence lookup after the rollback.
     """
     db.add(link)
     try:
@@ -1843,11 +1741,9 @@ def _notify_link_endpoints(
     db: Session, recipients: list[int | None], primary_id: int, actor: User, *,
     background: "BackgroundTasks | None", title: str, body: str,
 ) -> None:
-    """Notify the (already-collected) reporters + assignees of both ends of a
-    link, since a link is a change to both items. ``notify()`` dedupes ids and
-    drops the actor, so a user on both ends gets a single bell entry, and the
-    same row feeds the email digest. Deep-links to ``primary_id`` (the item the
-    request was on)."""
+    """Notify the reporters + assignees of both link endpoints. notify()
+    deduplicates ids and drops the actor, so a user on both ends gets one
+    notification. Deep-links to primary_id (the item the request was on)."""
     notification_service.notify(
         db, recipients, kind="updated", background=background,
         title=title, body=body, bug_id=primary_id,
@@ -1864,14 +1760,13 @@ def add_link(
     actor: User = Depends(get_current_user),
 ) -> dict:
     """Create a directed link from this bug to another. Requires edit rights on
-    the source item (linking changes that item's relationships). Idempotent on
-    (source, target, type): re-linking returns the existing edge."""
+    the source item. Idempotent on (source, target, type): re-linking returns
+    the existing edge."""
     bug = db.scalar(_eager_bug().where(Bug.id == bug_id))
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
-    # Project scope: both ends must be in the actor's projects. The source reads
-    # as not-found; an out-of-scope target reads as "does not exist", so a
-    # restricted user can only link within their own projects.
+    # Both ends must be in the actor's projects. The source returns 404 if
+    # out-of-scope; the target returns "does not exist" for the same reason.
     accessible = accessible_project_ids(db, actor)
     _assert_bug_accessible(accessible, bug)
     _validate_update_authorization(bug, actor)
@@ -1883,10 +1778,9 @@ def add_link(
     _require_can_edit_link_endpoint(target, actor)
     _reject_inverse_directional_link(db, bug_id, target, payload.link_type)
 
-    # 'relates' is symmetric, so A->B and B->A are the same relationship. The
-    # unique index is direction-specific, so without this a reverse-relates
-    # would create a duplicate row; return the existing reverse edge idempotently
-    # instead (mirrors the same-direction idempotency below).
+    # 'relates' is symmetric: A->B and B->A are the same edge. The unique index
+    # is direction-specific, so a reverse-relates would create a duplicate row
+    # without this check. Return the existing edge idempotently instead.
     if payload.link_type == "relates":
         reverse = db.scalar(
             select(BugLink).where(
@@ -1920,8 +1814,7 @@ def add_link(
         _find_existing,
     )
     if not created:
-        # A concurrent identical request won the unique-index race; return the
-        # existing edge idempotently instead of 500ing.
+        # A concurrent identical request won the race; return the existing edge.
         return _serialize_link(_reload_link(db, link.id), bug_id)
     _log(
         db, bug_id, actor, "link_added",
@@ -1962,8 +1855,6 @@ def remove_link(
     _validate_update_authorization(bug, actor)
     other_id = link.target_bug_id if link.source_bug_id == bug_id else link.source_bug_id
     other = db.scalar(_eager_bug().where(Bug.id == other_id))
-    # Build the notify recipients inside the existing endpoint guard so both
-    # ends are covered without a second None branch.
     recipients = _link_stakeholders(bug)
     if other is not None:
         _require_can_edit_link_endpoint(other, actor)
@@ -1980,10 +1871,9 @@ def remove_link(
 
 
 # ---------------------------------------------------------------------------
-# Bulk actions: one toolbar request mutates many selected items, each through
-# the same permission, audit, and notification path as its single-item
-# endpoint. Items the caller can't action are skipped rather than erroring, so
-# a mixed selection partially succeeds and the response reports the tally.
+# Bulk actions. Each item goes through the same permission, audit, and
+# notification path as its single-item endpoint. Items the caller can't touch
+# are skipped so a mixed selection partially succeeds.
 # ---------------------------------------------------------------------------
 def _norm_or_400(value: Optional[str], allowed: list[str], label: str) -> str:
     try:
@@ -1993,9 +1883,8 @@ def _norm_or_400(value: Optional[str], allowed: list[str], label: str) -> str:
 
 
 def _bulk_resolve_value(payload: BulkActionIn):
-    """Validate the action's value once up front so a bad value is a single 400
-    for the whole request. Returns the canonical status/priority/env string, or
-    None for delete."""
+    """Validate and canonicalize the action's value once, so a bad value gives
+    a single 400 for the whole request. Returns None for delete."""
     action = payload.action
     if action == "set_status":
         return _norm_or_400(payload.value, ALLOWED_STATUSES, "status")
@@ -2020,16 +1909,14 @@ def _bulk_notify_update(db: Session, bug: Bug, actor: User, what: str,
 
 def _bulk_set_status(db: Session, bug: Bug, actor: User, value: str,
                      background: BackgroundTasks) -> str:
-    # Per-type validity: a status legal for a Bug may be illegal for a Task.
+    # A status valid for Bug may be invalid for Task; skip if so.
     if value not in statuses_for_type(_item_type(bug)):
         return "skipped"
     if bug.status == value:
         return "skipped"
     old = bug.status
     bug.status = value
-    # Bump the optimistic-concurrency version so a client holding a stale copy
-    # detects the bulk change (mirrors the single-item _persist_update);
-    # otherwise a later expected_version PUT would clobber the bulk change.
+    # Bump the version so a later expected_version PUT can detect this change.
     bug.version = (bug.version or 1) + 1
     _log(db, bug.id, actor, "status_changed",
          f"#{bug.id} '{bug.title}' — status: '{old}' → '{value}' (bulk)")
@@ -2043,8 +1930,6 @@ def _bulk_set_field(db: Session, bug: Bug, actor: User, field_name: str,
     if old == value:
         return "skipped"
     setattr(bug, field_name, value)
-    # Bump version so the bulk change is visible to version-tracking clients
-    # (see _bulk_set_status).
     bug.version = (bug.version or 1) + 1
     _log(db, bug.id, actor, f"{field_name}_changed",
          f"#{bug.id} '{bug.title}' — {field_name}: '{old}' → '{value}' (bulk)")
@@ -2053,12 +1938,9 @@ def _bulk_set_field(db: Session, bug: Bug, actor: User, field_name: str,
 
 
 def _bulk_delete(db: Session, bug: Bug, actor: User, background: BackgroundTasks) -> str:
-    # Mirror delete_bug: notify the reporter + assignees before the row is gone
-    # (link_bug=False, since the bug_id FK cascades and the notification can't
-    # deep-link the about-to-vanish item), then detach audit history
-    # (bug_id -> NULL) so the trail survives, delete the row, and record the
-    # delete. The notify row also feeds the email digest, so a bulk delete
-    # reaches assignees on every channel like a single delete.
+    # Same pattern as delete_bug: notify first (link_bug=False, since the FK
+    # would cascade the notification away), detach audit history, delete, then
+    # record the delete in the trail.
     title, itype, bug_id = bug.title, _item_type(bug), bug.id
     _notify_item_stakeholders(
         db, bug, actor, kind="updated", background=background, link_bug=False,
@@ -2077,8 +1959,8 @@ def _bulk_delete(db: Session, bug: Bug, actor: User, background: BackgroundTasks
 
 
 def _bulk_version_conflict(bug: Bug, payload: BulkActionIn) -> bool:
-    """True when the caller supplied an expected version for this bug and it
-    drifted, so the bulk op must skip it rather than clobber a concurrent edit."""
+    """Return True if the caller sent an expected version for this bug and it
+    no longer matches, meaning a concurrent edit landed in between."""
     if payload.expected_versions is None:
         return False
     expected = payload.expected_versions.get(bug.id)
@@ -2087,9 +1969,9 @@ def _bulk_version_conflict(bug: Bug, payload: BulkActionIn) -> bool:
 
 def _apply_bulk_to_bug(db: Session, bug: Bug, actor: User, payload: BulkActionIn,
                        resolved, background: BackgroundTasks) -> str:
-    """Apply one bulk action to one bug. Returns 'updated' / 'skipped' /
-    'conflict'. Permission failures are 'skipped' so a mixed selection partially
-    succeeds; a version drift is a 'conflict'."""
+    """Apply one bulk action to one bug. Returns 'updated', 'skipped', or
+    'conflict'. Permission failures become 'skipped' so a mixed selection
+    partially succeeds."""
     if _bulk_version_conflict(bug, payload):
         return "conflict"
     action = payload.action
@@ -2115,17 +1997,12 @@ def bulk_action(
     actor: User = Depends(get_current_user),
 ) -> BulkActionResult:
     """Apply one action to many selected items at once. Each item is gated by
-    the same permission rules as its single-item endpoint; items the caller
-    can't touch are skipped. Returns the updated / skipped / not-found tally."""
+    the same rules as its single-item endpoint; items the caller can't touch are
+    skipped. Returns the updated/skipped/not-found tally."""
     resolved = _bulk_resolve_value(payload)
     updated = skipped = failed = conflicts = 0
-    # Batch-load every selected item in one eager query (selectinload batches
-    # the relationship loads across all of them) instead of a fresh eager query
-    # per id. Iterate the caller's id order against the map so the not-found
-    # tally stays accurate.
-    # Project scope: out-of-scope ids simply don't load, so they fall through to
-    # the not-found tally below — a restricted actor can't bulk-act outside their
-    # projects even by guessing ids.
+    # Batch-load all selected items in one eager query. Out-of-scope ids simply
+    # don't appear in the result and fall through to the not-found tally.
     by_id = {
         b.id: b
         for b in db.scalars(

@@ -1,20 +1,19 @@
-"""Tests for the chatbot actions, router, excel, redaction, and classifier
-error and edge branches.
+"""Edge-case and failure-path tests for chatbot actions, router, excel,
+redaction, and classifier.
 
-This file covers the failure paths: permission denials, not-found targets,
-invalid field values, the rollback exception handler, router rate-limit
-eviction, transcript persistence, graceful executor-crash handling, the Excel
-cache eviction and expiry paths, the redaction fail-closed branch, and the
-classifier's empty-example skip.
+Covers permission denials, not-found targets, invalid field values, rollback
+exception handling, rate-limit eviction, transcript persistence, graceful
+executor-crash handling, Excel cache eviction/expiry, the redaction fail-closed
+branch, and the classifier's empty-example skip.
 
-  - The `client` fixture re-imports every ``app.*`` module per test, so all
-    app imports happen inside the test bodies to bind the current generation.
-  - To toggle a config flag we set the ``config.Settings`` class attribute via
-    ``monkeypatch`` (module-level refs go stale on reimport).
-  - DB objects are created through ``app.database.SessionLocal`` which, after
-    the fixture runs, points at the per-test temp SQLite file. The bootstrap
-    admin already exists; we add extra users/projects/bugs directly.
-  - Hermetic: SLEUTH_CLOUD_ENABLED is 0 (conftest) so no network is touched.
+Design notes:
+- App imports happen inside test bodies because the `client` fixture re-imports
+  every ``app.*`` module per test; module-level imports would bind stale refs.
+- Config flags are toggled via ``monkeypatch`` on ``config.Settings`` class
+  attributes for the same reason.
+- DB rows are created through ``app.database.SessionLocal`` after the fixture
+  wires it to a per-test SQLite file. The bootstrap admin already exists.
+- SLEUTH_CLOUD_ENABLED is 0 (set by conftest) so no network calls occur.
 """
 from __future__ import annotations
 
@@ -22,15 +21,14 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Small seeding helpers — used by the actions tests. They run against the
-# live (re-imported) app.database / app.models for the current test.
+# Seeding helpers for actions tests, run against the live re-imported modules.
 # ---------------------------------------------------------------------------
 def _seed_basic():
-    """Create alice (manager), bob (user), one project + one bug reported by
-    alice and assigned to bob. Returns a dict of ids.
+    """Create alice (manager), bob (user), one project, and one bug reported by
+    alice and assigned to bob. Returns a dict of their ids.
 
-    Uses a fresh SessionLocal session and closes it; callers open their own
-    session afterwards so they see committed rows.
+    Opens and closes its own session; callers should open a fresh one so they
+    see the committed rows.
     """
     from app.database import SessionLocal
     from app import models
@@ -74,8 +72,8 @@ def _seed_basic():
 # actions.py
 # ===========================================================================
 def test_cov_create_bug_inactive_account(client):
-    """actions.py:144 + 332 — _check_can_create_bug rejects an inactive actor,
-    and _apply_create_bug surfaces that error."""
+    """actions.py:144 + 332 — inactive actor is rejected by _check_can_create_bug,
+    and _apply_create_bug surfaces that as an error response."""
     ids = _seed_basic()
     from app.database import SessionLocal
     from app import models
@@ -86,12 +84,11 @@ def test_cov_create_bug_inactive_account(client):
         bob = db.get(models.User, ids["bob_id"])
         bob.is_active = False
         db.commit()
-        # 144: helper returns the inactive string.
+        # 144: confirm helper returns the inactive string.
         assert actions._check_can_create_bug(bob) == "Your account is inactive"
-        # 332: _apply_create_bug returns the error response from that helper.
-        # Call the applier directly: execute_plan now gates all non-admins via
-        # sleuth_write_denied (admin-only Sleuth writes), so the per-action
-        # inactive-account branch is reached by calling _apply_create_bug.
+        # 332: call the applier directly; execute_plan gates non-admins via the
+        # admin-only Sleuth-write policy, so the inactive-account branch is only
+        # reachable through _apply_create_bug.
         plan = actions.ActionPlan(
             kind="create_bug", actor_user_id=bob.id,
             new_title="Anything", summary_human="Create bug",
@@ -104,8 +101,8 @@ def test_cov_create_bug_inactive_account(client):
 
 
 def test_cov_success_response_without_bug_id(client):
-    """actions.py:190->201 — _success_response with bug_id=None skips the
-    suggestions block and returns a single text block."""
+    """actions.py:190->201 — _success_response with bug_id=None returns a
+    single text block (no suggestions block)."""
     from app.chatbot import actions
 
     resp = actions._success_response("plain done message", bug_id=None)
@@ -128,20 +125,19 @@ def test_cov_assign_bug_not_found_and_perm_denied(client):
         bob = db.get(models.User, ids["bob_id"])
 
         # 228 — bug_id points at a non-existent bug.
+        # Call the applier directly; execute_plan gates non-admins via the
+        # admin-only Sleuth-write policy, so per-action branches are only
+        # reachable through _apply_assign.
         plan_missing = actions.ActionPlan(
             kind="assign", actor_user_id=alice.id, bug_id=987654,
             target_user_ids=[bob.id], target_user_names=["Bob"],
             summary_human="Assign",
         )
-        # Call the applier directly: execute_plan now gates non-admins via the
-        # admin-only Sleuth-write policy, so the per-action branches (missing
-        # bug, per-type permission) are exercised through _apply_assign.
         r_missing = actions._apply_assign(db, plan_missing, alice)
         assert r_missing.intent == "action_error"
         assert "not found" in r_missing.blocks[0].payload["text"].lower()
 
-        # 231 — make the work item a Task so a regular user (bob) is denied
-        # edit permission (chat/REST parity).
+        # 231 — bob (regular user) is denied edit permission on a Task.
         bug = db.get(models.Bug, ids["bug_id"])
         if hasattr(bug, "item_type"):
             bug.item_type = "Task"
@@ -172,8 +168,8 @@ def test_cov_unassign_branches(client):
         alice = db.get(models.User, ids["alice_id"])
         bob = db.get(models.User, ids["bob_id"])
 
-        # Per-action branches are exercised via the applier directly, since
-        # execute_plan now gates non-admins (admin-only Sleuth writes).
+        # Per-action branches are tested via the applier directly (execute_plan
+        # gates non-admins via the admin-only Sleuth-write policy).
         # 256 — bug missing.
         r_missing = actions._apply_unassign(
             db,
@@ -208,8 +204,8 @@ def test_cov_unassign_branches(client):
             bug.item_type = "Bug"
             db.commit()
 
-        # 265 — no-op: drop a user that isn't assigned. Now reported as a
-        # skip (intent action_noop), not an error.
+        # 265 — dropping a user that isn't assigned is a no-op (action_noop),
+        # not an error.
         r_noop = actions._apply_unassign(
             db,
             actions.ActionPlan(kind="unassign", actor_user_id=alice.id,
@@ -240,9 +236,8 @@ def test_cov_set_field_permission_denied(client):
         bug.item_type = "Requirement"
         db.commit()
         bob = db.get(models.User, ids["bob_id"])
-        # set_status routes through _apply_set_field — bob can't edit a
-        # Requirement. Call the applier directly (execute_plan now gates
-        # non-admins before the per-action check).
+        # Call the applier directly; bob can't edit a Requirement and
+        # execute_plan gates non-admins before the per-action check anyway.
         resp = actions._apply_set_field(
             db,
             actions.ActionPlan(kind="set_status", actor_user_id=bob.id,
@@ -267,7 +262,7 @@ def test_cov_add_comment_empty_and_too_long(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 309 — whitespace-only body counts as empty.
+        # 309 — whitespace-only body is treated as empty.
         r_empty = actions.execute_plan(
             actions.ActionPlan(kind="add_comment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], comment_body="   ",
@@ -277,7 +272,7 @@ def test_cov_add_comment_empty_and_too_long(client):
         assert r_empty.intent == "action_error"
         assert "comment text" in r_empty.blocks[0].payload["text"].lower()
 
-        # 314 — body over the 4000-char cap.
+        # 314 — body over the 4000-char limit.
         r_long = actions.execute_plan(
             actions.ActionPlan(kind="add_comment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], comment_body="x" * 4001,
@@ -302,7 +297,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 335 — empty title.
+        # 335 — whitespace-only title.
         r_empty = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
                                new_title="   ", summary_human="Create"),
@@ -321,7 +316,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
         assert r_long.intent == "action_error"
         assert "too long" in r_long.blocks[0].payload["text"].lower()
 
-        # 352 — explicit project id that doesn't exist.
+        # 352 — project id that doesn't exist.
         r_badproj = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
                                new_title="Valid title", new_project_id=888777,
@@ -331,7 +326,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
         assert r_badproj.intent == "action_error"
         assert "doesn't exist" in r_badproj.blocks[0].payload["text"].lower()
 
-        # 365-368 — create with assignee targets attaches them.
+        # 365-368 — assignee targets on create get attached to the new bug.
         before = db.query(models.Bug).count()
         r_ok = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
@@ -352,11 +347,11 @@ def test_cov_create_bug_title_validation_and_targets(client):
 
 
 def test_cov_create_bug_no_projects_exist(client):
-    """actions.py:347 — when no project is given and none exist, error out.
+    """actions.py:347 — creating a bug with no project id when no projects exist
+    returns an error.
 
-    The conftest bootstrap creates an admin but no projects, so a fresh DB
-    (without _seed_basic) has zero Project rows. We delete any stragglers to
-    be certain, then create a bug with no project id.
+    The conftest bootstrap creates an admin but no projects. We delete any
+    stragglers (bugs must go first due to the FK), then attempt to create.
     """
     from app.database import SessionLocal
     from app import models
@@ -364,7 +359,6 @@ def test_cov_create_bug_no_projects_exist(client):
 
     db = SessionLocal()
     try:
-        # Ensure no projects/bugs (bugs FK projects) exist.
         db.query(models.Bug).delete()
         db.query(models.Project).delete()
         db.commit()
@@ -392,7 +386,7 @@ def test_cov_create_project_validation(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 384 — empty name.
+        # 384 — whitespace-only name.
         r_empty = actions.execute_plan(
             actions.ActionPlan(kind="create_project", actor_user_id=admin.id,
                                new_project_name="   ", summary_human="Create"),
@@ -411,7 +405,7 @@ def test_cov_create_project_validation(client):
         assert r_long.intent == "action_error"
         assert "too long" in r_long.blocks[0].payload["text"].lower()
 
-        # 392 — duplicate (case-insensitive) of the seeded "Apollo Cov".
+        # 392 — case-insensitive duplicate of the seeded "Apollo Cov".
         r_dupe = actions.execute_plan(
             actions.ActionPlan(kind="create_project", actor_user_id=admin.id,
                                new_project_name="apollo cov",
@@ -436,7 +430,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 417 — plan staged for a different user id than the actor.
+        # 417 — plan's actor_user_id doesn't match the authenticated actor.
         r_mismatch = actions.execute_plan(
             actions.ActionPlan(kind="set_status", actor_user_id=999999,
                                bug_id=ids["bug_id"], new_value="Closed",
@@ -446,7 +440,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         assert r_mismatch.intent == "action_error"
         assert "different user" in r_mismatch.blocks[0].payload["text"].lower()
 
-        # 429 — set_environment dispatch (admin may edit; PROD->DEV).
+        # 429 — set_environment dispatch path (admin changing PROD->DEV).
         r_env = actions.execute_plan(
             actions.ActionPlan(kind="set_environment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], new_value="DEV",
@@ -457,7 +451,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         db.expire_all()
         assert db.get(models.Bug, ids["bug_id"]).environment == "DEV"
 
-        # 431 — set_due_date dispatch.
+        # 431 — set_due_date dispatch path.
         r_due = actions.execute_plan(
             actions.ActionPlan(kind="set_due_date", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], new_value="2026-06-15",
@@ -466,7 +460,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         )
         assert r_due.intent == "action_done"
 
-        # 438 — a kind the dispatch chain doesn't recognise.
+        # 438 — unknown action kind falls through to the error branch.
         r_unknown = actions.execute_plan(
             actions.ActionPlan(kind="totally_bogus", actor_user_id=admin.id,
                                summary_human="x"),
@@ -475,9 +469,9 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         assert r_unknown.intent == "action_error"
         assert "unknown action" in r_unknown.blocks[0].payload["text"].lower()
 
-        # 439-446 — force an exception inside the try: a non-string
-        # comment_body makes (body or "").strip() raise AttributeError, which
-        # the handler catches, rolls back, and reports as "Action failed".
+        # 439-446 — a non-string comment_body makes (body or "").strip() raise
+        # AttributeError; the handler catches it, rolls back, and returns
+        # "Action failed".
         r_exc = actions.execute_plan(
             actions.ActionPlan(kind="add_comment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"],
@@ -492,9 +486,8 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
 
 
 def test_cov_execute_plan_rollback_itself_fails(client, monkeypatch):
-    """actions.py:444-445 — when the outer handler's db.rollback() also raises
-    SQLAlchemyError, the inner try/except swallows it (best-effort) and we
-    still return an 'Action failed' error response.
+    """actions.py:444-445 — when db.rollback() also raises SQLAlchemyError, the
+    inner try/except swallows it and we still get an 'Action failed' response.
     """
     ids = _seed_basic()
     from app.database import SessionLocal
@@ -506,13 +499,13 @@ def test_cov_execute_plan_rollback_itself_fails(client, monkeypatch):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # Make rollback explode so the inner `except SQLAlchemyError: pass`
-        # (444-445) executes.
+        # Make rollback explode to exercise the inner `except SQLAlchemyError: pass`
+        # on lines 444-445.
         def boom_rollback():
             raise SQLAlchemyError("rollback also broke")
         monkeypatch.setattr(db, "rollback", boom_rollback)
 
-        # Outer exception trigger: non-string comment body -> AttributeError.
+        # Trigger the outer exception: non-string body causes AttributeError.
         resp = actions.execute_plan(
             actions.ActionPlan(kind="add_comment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"],
@@ -523,7 +516,7 @@ def test_cov_execute_plan_rollback_itself_fails(client, monkeypatch):
         assert resp.intent == "action_error"
         assert "action failed" in resp.blocks[0].payload["text"].lower()
     finally:
-        # Restore happens via monkeypatch teardown before close.
+        # monkeypatch teardown restores rollback before close.
         db.close()
 
 
@@ -531,11 +524,8 @@ def test_cov_execute_plan_rollback_itself_fails(client, monkeypatch):
 # router.py
 # ===========================================================================
 def test_cov_persist_turn_disabled(client, monkeypatch):
-    """router.py:60 — _persist_turn early-returns when chat memory is off.
-
-    With the flag off, no chat_* rows are written even though the request
-    succeeds.
-    """
+    """router.py:60 — _persist_turn early-returns when chat memory is off,
+    so no chat rows are written even though the request succeeds."""
     import app.config as config
     monkeypatch.setattr(config.Settings, "SLEUTH_CHAT_MEMORY_ENABLED", False)
 
@@ -560,13 +550,13 @@ def test_cov_persist_turn_disabled(client, monkeypatch):
         after = db.query(models.ChatMessage).count()
     finally:
         db.close()
-    assert after == before  # 60: nothing persisted when disabled
+    assert after == before  # 60: nothing written when disabled
 
 
 def test_cov_persist_turn_cloud_engine_label(admin_client):
-    """router.py:77 — _persist_turn tags the assistant row engine='cloud'
-    when the response intent starts with 'cloud_'. We call _persist_turn
-    directly with a synthetic cloud response so no network is needed."""
+    """router.py:77 — _persist_turn tags the assistant row engine='cloud' when
+    the response intent starts with 'cloud_'. Called directly with a synthetic
+    response so no network is needed."""
     from app.database import SessionLocal
     from app import models
     from app.chatbot import router, executor
@@ -583,14 +573,14 @@ def test_cov_persist_turn_cloud_engine_label(admin_client):
                .filter_by(role="assistant")
                .order_by(models.ChatMessage.id.desc()).first())
         assert row is not None
-        assert row.engine == "cloud"  # 77
+        assert row.engine == "cloud"  # line 77
     finally:
         db.close()
 
 
 def test_cov_persist_turn_swallows_exception(admin_client, monkeypatch):
-    """router.py:93-95 — a failure inside _persist_turn is caught, rolled
-    back, and logged (best-effort); it must not propagate."""
+    """router.py:93-95 — failures inside _persist_turn are caught and rolled
+    back (best-effort); they must not propagate to the caller."""
     from app.database import SessionLocal
     from app import models
     from app.chatbot import router, executor
@@ -599,7 +589,7 @@ def test_cov_persist_turn_swallows_exception(admin_client, monkeypatch):
     try:
         admin = db.query(models.User).filter_by(role="admin").first()
 
-        # Make the very first DB touch inside the try: explode.
+        # Force the first DB access inside the try block to raise.
         def boom(*a, **k):
             raise RuntimeError("simulated persist failure")
         monkeypatch.setattr(db, "query", boom)
@@ -608,34 +598,33 @@ def test_cov_persist_turn_swallows_exception(admin_client, monkeypatch):
             blocks=[executor.Block("text", {"text": "hi"})],
             summary="s", intent="stats",
         )
-        # Must not raise — the except on 93-95 swallows it.
+        # Must not raise — lines 93-95 swallow it.
         router._persist_turn(db, admin, "summary", resp)
     finally:
-        # db.query is restored by monkeypatch teardown before close.
+        # monkeypatch teardown restores db.query before close.
         db.close()
 
 
 def test_cov_check_rate_evicts_stale_then_allows(client):
-    """router.py:117 — _check_rate pops timestamps older than the window so a
-    user who was busy a minute ago isn't blocked now."""
+    """router.py:117 — _check_rate evicts timestamps outside the window so a
+    user isn't blocked by old activity."""
     from app.chatbot import router
 
     uid = 4242
     router._rate_state.pop(uid, None)
-    # Seed the bucket with stale timestamps (well outside the window).
     stale = 1000.0
     router._rate_state[uid] = [stale, stale + 1, stale + 2]
-    # A real 'now' is far ahead of `stale`, so the while-loop pops them all
-    # (117) and the call succeeds without raising 429.
+    # Real 'now' is far ahead of `stale`, so the while-loop (line 117) pops
+    # all three and the call succeeds without raising 429.
     router._check_rate(uid)
-    # All stale entries gone; exactly one fresh timestamp remains.
+    # All stale entries gone; one fresh timestamp remains.
     assert len(router._rate_state[uid]) == 1
     router._rate_state.pop(uid, None)
 
 
 def test_cov_ask_passes_through_httpexception(admin_client, monkeypatch):
-    """router.py:171 — an HTTPException raised by the executor propagates out
-    of /ask (it is not swallowed into a graceful 200)."""
+    """router.py:171 — HTTPException from the executor propagates; it is not
+    swallowed into a graceful 200."""
     from fastapi import HTTPException
     from app.chatbot import executor
 
@@ -649,8 +638,8 @@ def test_cov_ask_passes_through_httpexception(admin_client, monkeypatch):
 
 
 def test_cov_ask_graceful_on_executor_crash(admin_client, monkeypatch):
-    """router.py:174-178 — a non-HTTP exception is caught and turned into a
-    friendly 200 error reply (intent='error') instead of crashing."""
+    """router.py:174-178 — a non-HTTP exception becomes a friendly 200 error
+    reply (intent='error') rather than crashing."""
     from app.chatbot import executor
 
     def raise_value(*a, **k):
@@ -668,12 +657,10 @@ def test_cov_ask_graceful_on_executor_crash(admin_client, monkeypatch):
 # excel.py
 # ===========================================================================
 def test_cov_excel_evict_expired(client):
-    """excel.py:69 — _evict_expired_locked drops entries whose expiry has
-    passed."""
+    """excel.py:69 — _evict_expired_locked removes entries whose expiry has passed."""
     from app.chatbot import excel
     excel.clear_all_for_test()
     now = 10_000.0
-    # One expired, one live (relative to `now`).
     excel._cache["dead"] = (b"x", "a.xlsx", now - 1, 1)
     excel._cache["live"] = (b"y", "b.xlsx", now + 1000, 1)
     excel._evict_expired_locked(now)  # 69: pops 'dead'
@@ -684,24 +671,24 @@ def test_cov_excel_evict_expired(client):
 
 def test_cov_excel_evict_oldest_over_cap(client):
     """excel.py:77-78 — _evict_oldest_locked drops the soonest-expiring entry
-    once the cache is at capacity."""
+    when the cache is at capacity."""
     from app.chatbot import excel
     excel.clear_all_for_test()
     cap = excel._MAX_ENTRIES
     base = 50_000.0
-    # Fill exactly to capacity; 'tok0' has the soonest expiry.
+    # Fill to capacity; 'tok0' has the earliest expiry.
     for i in range(cap):
         excel._cache[f"tok{i}"] = (b"x", f"f{i}.xlsx", base + i, 1)
     assert len(excel._cache) == cap
-    excel._evict_oldest_locked()  # 77 (len check passes) + 78 (pop oldest)
+    excel._evict_oldest_locked()  # 77 (len check) + 78 (pop oldest)
     assert "tok0" not in excel._cache
     assert len(excel._cache) == cap - 1
     excel.clear_all_for_test()
 
 
 def test_cov_excel_build_workbook_unavailable(client, monkeypatch):
-    """excel.py:119 — _build_workbook raises ExcelGenerationError when
-    openpyxl is reported unavailable."""
+    """excel.py:119 — _build_workbook raises ExcelGenerationError when openpyxl
+    is unavailable."""
     from app.chatbot import excel
     monkeypatch.setattr(excel, "OPENPYXL_AVAILABLE", False)
     with pytest.raises(excel.ExcelGenerationError):
@@ -711,28 +698,27 @@ def test_cov_excel_build_workbook_unavailable(client, monkeypatch):
 def test_cov_excel_fetch_staged_empty_token_and_expired(client, monkeypatch):
     """excel.py:200 (falsy token -> None) + 209-210 (expired entry popped).
 
-    fetch_staged sweeps _evict_expired_locked() first (line 203), which uses
-    the same `exp <= now` predicate as the explicit guard on line 208, so a
-    truly-expired entry is already gone before the guard runs, making 209-210
-    a defensive last line. We isolate that guard by no-opping the sweep, then
-    insert an entry whose expiry is in the past so line 208's `expires <= now`
-    fires the pop+return on 209-210.
+    fetch_staged runs _evict_expired_locked() first (line 203), which uses the
+    same predicate as the guard on line 208. A truly expired entry is therefore
+    already gone before line 208 runs, making 209-210 defensive. To isolate
+    that guard we no-op the sweep, then insert an entry whose expiry is in the
+    past so line 208 fires the pop-and-return.
     """
     from app.chatbot import excel
     excel.clear_all_for_test()
 
-    # 200 — empty/None token short-circuits to None.
+    # 200 — falsy token short-circuits to None.
     assert excel.fetch_staged("", 1) is None
 
     # Freeze the clock and bypass the upfront eviction sweep.
     frozen = 9_999_999.0
     monkeypatch.setattr(excel.time, "time", lambda: frozen)
     monkeypatch.setattr(excel, "_evict_expired_locked", lambda now: None)
-    # Entry already expired relative to `frozen` (expires < now). 4-tuple now
-    # carries the owner id as the last element.
+    # 4-tuple: (data, filename, expires, owner_id). expires < frozen so line
+    # 208 treats it as expired and pops it.
     excel._cache["stale_tok"] = (b"data", "f.xlsx", frozen - 1, 1)
     assert excel.fetch_staged("stale_tok", 1) is None   # expired -> popped
-    assert "stale_tok" not in excel._cache              # popped on expiry
+    assert "stale_tok" not in excel._cache              # confirmed gone
     excel.clear_all_for_test()
 
 
@@ -740,11 +726,10 @@ def test_cov_excel_fetch_staged_empty_token_and_expired(client, monkeypatch):
 # redaction.py
 # ===========================================================================
 def test_cov_redaction_fail_closed(client, monkeypatch):
-    """redaction.py:75-77 — if a pattern substitution raises, redact() fails
-    closed and returns [REDACTED] rather than leaking the raw text."""
+    """redaction.py:75-77 — a pattern substitution failure causes redact() to
+    fail closed and return [REDACTED] rather than leak the raw text."""
     from app.chatbot import redaction
 
-    # Replace the compiled-pattern list with one whose .sub blows up.
     class _Boom:
         def sub(self, *a, **k):
             raise RuntimeError("regex exploded")
@@ -758,17 +743,16 @@ def test_cov_redaction_fail_closed(client, monkeypatch):
 # classifier.py
 # ===========================================================================
 def test_cov_classifier_train_skips_empty_example(client):
-    """classifier.py:185 — _train skips corpus examples that tokenize to
-    nothing (all-stopword / empty phrasings)."""
+    """classifier.py:185 — _train skips examples that tokenize to nothing
+    (all stopwords or blank strings)."""
     from app.chatbot import classifier
 
-    # "the a is to of" are all stopwords -> _tokenize returns [] -> line 185
-    # `continue` skips it. "list bugs" still produces a usable doc, so the
-    # trained model isn't empty.
+    # "the a is to of" are all stopwords, so _tokenize returns [] and line 185
+    # skips it. "list bugs" survives, so the model isn't empty.
     corpus = [
         ("list_bugs", ["the a is to of", "", "list bugs"]),
     ]
     model = classifier._train(corpus)
-    # Only the one non-empty example survived as a doc.
+    # Only "list bugs" survived as a usable doc.
     assert len(model.docs) == 1
     assert model.docs[0][0] == "list_bugs"

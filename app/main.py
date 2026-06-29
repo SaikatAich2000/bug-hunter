@@ -1,4 +1,4 @@
-"""FastAPI entry point — Bug Hunter."""
+"""FastAPI application entry point for Bug Hunter."""
 from __future__ import annotations
 
 import hashlib
@@ -49,20 +49,17 @@ logging.basicConfig(level=get_settings().LOG_LEVEL)
 
 
 # ---------------------------------------------------------------------------
-# Asset version, recomputed on every server start.
+# Asset version hash, recomputed on every server start.
 #
-# Hashing the bytes of every static asset and injecting that hash into the HTML
-# placeholders gives each asset a fresh URL on every redeploy, so browsers don't
-# serve a stale cached copy.
+# The hash is injected into the HTML placeholder so each asset URL changes on
+# redeploy, preventing browsers from serving a stale cached copy.
 # ---------------------------------------------------------------------------
 ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
 APP_VERSION_PLACEHOLDER = "__APP_VERSION__"
 
 
-# Per-file byte cap when hashing the static bundle. A file larger than this is
-# unexpected (e.g. stray media under STATIC_DIR), so its path + size is folded
-# into the hash instead of reading megabytes at startup. Bounds boot time and
-# the memory the hash can touch regardless of what lands in the directory.
+# Files larger than this cap (e.g. stray media in STATIC_DIR) contribute their
+# path and size to the hash rather than their content, to keep startup fast.
 _MAX_ASSET_FILE_BYTES = 8 * 1024 * 1024
 
 
@@ -76,8 +73,7 @@ def _compute_asset_version(static_dir: Path) -> str:
                 h.update(path.relative_to(static_dir).as_posix().encode("utf-8"))
                 h.update(b"|")
                 if path.stat().st_size > _MAX_ASSET_FILE_BYTES:
-                    # Skip reading an oversized file into the hash; its path +
-                    # size still changes the version on replacement.
+                    # Path + size still shifts the version if the file is replaced.
                     h.update(f"size={path.stat().st_size}".encode("utf-8"))
                 else:
                     h.update(path.read_bytes())
@@ -87,8 +83,10 @@ def _compute_asset_version(static_dir: Path) -> str:
 
 
 def _bootstrap() -> None:
-    """Run once at startup. Creates the default project and first admin user
-    if the DB is empty. Idempotent and safe to call repeatedly."""
+    """Seed the DB on first run: create the default project and admin user.
+
+    Idempotent — safe to call on every startup.
+    """
     s = get_settings()
     with SessionLocal() as db:
         if db.query(Project).count() == 0:
@@ -98,14 +96,14 @@ def _bootstrap() -> None:
                 color="#c9764f",
             ))
 
-        # First-run admin, so a fresh DB allows an immediate login without
-        # touching SQL. The admin should change the password after first login.
+        # Create the admin only when the users table is empty, so a fresh
+        # install can log in without touching SQL. Change the password immediately.
         if db.query(User).count() == 0:
             if s.is_production and s.BOOTSTRAP_ADMIN_PASSWORD == "ChangeMe123!":
-                # Don't stand up a live admin with a publicly-known password on
-                # a production deploy. Keyed on is_production (APP_ENV, falling
-                # back to COOKIE_SECURE) so an HTTP/intranet production behind a
-                # TLS-terminating proxy is covered too, not only HTTPS deploys.
+                # Refuse to start with the default password on a production
+                # deploy. is_production covers HTTP/intranet deployments behind
+                # TLS-terminating proxies (not just HTTPS), since it checks
+                # APP_ENV first and falls back to COOKIE_SECURE.
                 raise RuntimeError(
                     "Refusing to bootstrap the default admin with the built-in "
                     "default password in a production deploy. Set "
@@ -128,19 +126,17 @@ def _bootstrap() -> None:
 
 
 def _runtime_config_warnings(s) -> list[str]:
-    """Non-fatal startup warnings for insecure-but-allowed configuration.
+    """Collect non-fatal startup warnings for insecure-but-allowed config.
 
-    Returned rather than just logged so the policy is unit-testable without
-    driving the whole lifespan. The fatal fail-closed checks stay inline in
-    lifespan().
+    Returned as a list (rather than just logged) so tests can verify the policy
+    without driving the full lifespan. Fatal checks remain inline in lifespan().
     """
     warnings: list[str] = []
     if not s.SESSION_SECRET:
-        # Fine for dev (a random secret is generated per process), but on any
-        # long-lived deploy, including HTTP/intranet (COOKIE_SECURE=false) where
-        # the fatal check below doesn't fire, every restart invalidates every
-        # session and multi-worker uvicorn gives each worker its own secret,
-        # logging users out unpredictably.
+        # Without a stable secret, every restart invalidates all sessions, and
+        # multi-worker uvicorn gives each worker its own secret, randomly logging
+        # users out. A random per-process fallback is fine for throwaway dev
+        # instances, but not for any long-lived deploy (HTTP or HTTPS).
         warnings.append(
             "SESSION_SECRET is not set. Using a random per-process fallback, so "
             "sessions will NOT survive a restart and multi-worker deployments log "
@@ -148,9 +144,9 @@ def _runtime_config_warnings(s) -> list[str]:
             "for any non-throwaway deploy, HTTP or HTTPS."
         )
     if s.is_production and s.EMAIL_BACKEND == "console":
-        # The console backend logs full email bodies — including live, single-use
-        # password-reset links — to stdout/log aggregation. Fine for dev; a
-        # credential-in-logs exposure on a production-signalled deploy.
+        # The console backend writes full email bodies to stdout, including live
+        # single-use password-reset links. Fine for dev; a credentials-in-logs
+        # exposure on a production deploy.
         warnings.append(
             "EMAIL_BACKEND=console on a production deploy: every email body, "
             "INCLUDING password-reset links, is written to the logs. Set "
@@ -160,23 +156,24 @@ def _runtime_config_warnings(s) -> list[str]:
 
 
 def _safe_init_db() -> bool:
-    """Run schema init and bootstrap, swallowing a DB-down failure so a
-    transient outage at boot starts the app degraded instead of crash-looping
-    with no observable cause."""
+    """Run schema init and bootstrap, swallowing a DB-down error.
+
+    A transient outage at boot starts the app degraded rather than crash-looping.
+    /api/health will report the database as unavailable until it recovers.
+    """
     try:
         init_db()
         _bootstrap()
         return True
     except (SQLAlchemyError, OSError):
         logger.exception(
-            "Database initialization failed at startup — starting degraded; "
-            "/api/health will report the database as unavailable until it recovers."
+            "Database initialization failed at startup; starting degraded."
         )
         return False
 
 
 def _check_db_health() -> bool:
-    """Cheap DB liveness probe for /api/health."""
+    """Quick DB liveness probe used by /api/health."""
     try:
         db = SessionLocal()
         try:
@@ -194,10 +191,9 @@ async def lifespan(app: FastAPI):
 
     _settings = get_settings()
     if _settings.is_production and len(_settings.SESSION_SECRET) < 32:
-        # Production signal (APP_ENV=production, or COOKIE_SECURE=true / HTTPS
-        # when APP_ENV is unset) but no stable, strong secret: fail closed
-        # rather than weaken every session (a per-process random secret logs
-        # users out on every restart and across workers).
+        # Fail closed rather than weaken every session. A short or missing
+        # secret in production means every restart logs users out and workers
+        # share no common signing key.
         raise RuntimeError(
             "SESSION_SECRET must be set to a strong value (>= 32 chars) in "
             "production (APP_ENV=production or COOKIE_SECURE=true). Generate "
@@ -206,8 +202,7 @@ async def lifespan(app: FastAPI):
     for _w in _runtime_config_warnings(_settings):
         logger.warning(_w)
 
-    # Optional in-app email-digest scheduler. No-op unless EMAIL_DIGEST_CRON
-    # is configured (see app/scheduler.py); never breaks startup.
+    # Optional email-digest scheduler. No-op unless EMAIL_DIGEST_CRON is set.
     from app import scheduler
     scheduler.start()
 
@@ -218,9 +213,7 @@ async def lifespan(app: FastAPI):
 
 
 settings = get_settings()
-# Interactive API docs (/docs, /redoc, /openapi.json) publish the full endpoint
-# surface, so keep them in dev and drop them once COOKIE_SECURE (the
-# production/https signal) is set, unless ENABLE_API_DOCS forces them on.
+# Expose interactive docs in dev; disable in production unless explicitly opted in.
 _docs_enabled = settings.ENABLE_API_DOCS or not settings.is_production
 app = FastAPI(
     title=settings.APP_NAME,
@@ -231,33 +224,27 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
-# Computed once at import time, used by middleware and the HTML serving helper.
-# Kept on app.state so tests can override it deterministically.
+# Computed once at import time. Kept on app.state so tests can override it.
 app.state.asset_version = _compute_asset_version(settings.STATIC_DIR)
 
 
 # ---------------------------------------------------------------------------
 # CORS
 #
-# The CORS spec forbids `Access-Control-Allow-Origin: *` together with
-# `Allow-Credentials: true`, and browsers reject this combination silently.
-# The SPA uses cookies (credentials=true), so the response must echo the
-# request's actual Origin (only when it is in the allowlist), never "*".
-# Starlette's CORSMiddleware does that when given a concrete origin list, but
-# a sole "*" entry breaks credentialed requests; detect that case and disable
-# credentials rather than silently breaking auth from non-same-origin clients.
+# The CORS spec forbids `Access-Control-Allow-Origin: *` with credentials, and
+# browsers silently reject that combination. The SPA uses cookies, so the
+# response must echo the actual request Origin (when allowlisted), not "*".
+# Starlette's CORSMiddleware handles that correctly with a concrete origin list.
 # ---------------------------------------------------------------------------
 _origins = list(settings.CORS_ORIGINS)
 _allow_credentials = True
 if not _origins:
-    # Empty list = same-origin only. A wildcard fallback would let any site
-    # read authenticated responses; same-origin SPA usage doesn't pass through
-    # CORS middleware anyway, so this is the safe default.
+    # No origins configured: same-origin only. A wildcard would let any site
+    # read authenticated responses; same-origin traffic skips CORS anyway.
     _allow_credentials = False
 elif "*" in _origins:
-    # Wildcard + credentials is forbidden by the CORS spec and silently broken
-    # by browsers — fall back to no-credentials so the OPTIONS preflight at
-    # least succeeds.
+    # Wildcard + credentials is forbidden. Fall back to no-credentials so
+    # OPTIONS preflights still succeed rather than breaking silently.
     _allow_credentials = False
     logger.warning(
         "CORS_ORIGINS contains '*' which disables credentialed CORS. Set "
@@ -265,21 +252,16 @@ elif "*" in _origins:
         "https://bugs.example.com) to allow cross-origin browser sessions."
     )
 
-# CORSMiddleware is added last in this file so it runs outermost in the ASGI
-# chain. Starlette stacks middleware in reverse-registration order, so the last
-# add_middleware() call wraps the outside, which CORS needs to handle preflight
-# OPTIONS before other middleware (rate-limit, CSP) can short-circuit it.
+# CORSMiddleware is registered last so it sits outermost in the ASGI chain.
+# Starlette stacks middleware in reverse order, so the last add_middleware()
+# wraps the outside. CORS must be outermost to intercept OPTIONS before the
+# rate-limit or CSP middleware can short-circuit it.
 
 # ---------------------------------------------------------------------------
 # Gzip compression
 #
-# Compresses JSON / HTML / JS / CSS responses over the wire. Skips bodies under
-# 1 KB (compression CPU cost isn't worth it) and already-compressed binary
-# types (images / video), via Starlette's Accept-Encoding handling.
-#
-# Attachment downloads are unaffected: they ship their own Cache-Control header
-# which exits the cache middleware early, and gzip doesn't help already-
-# compressed media.
+# Compresses JSON/HTML/JS/CSS over the wire; skips bodies under 1 KB (not
+# worth the CPU) and already-compressed types (images/video).
 # ---------------------------------------------------------------------------
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
@@ -287,16 +269,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 # ---------------------------------------------------------------------------
 # Request body size limit
 #
-# Pydantic caps individual string fields and the attachment endpoint aborts at
-# 50 MB, but a request with a huge Content-Length and no schema-relevant fields
-# (or a multipart upload to an unexpected endpoint) would still buffer body
-# bytes into RAM before validation fails.
-#
-# This middleware rejects with 413 before the body is read whenever
-# Content-Length exceeds MAX_REQUEST_BODY_BYTES, a coarse second-line defense
-# alongside the per-endpoint limits. Requests without a Content-Length (chunked
-# transfer) are allowed through; the per-endpoint streamed reads still bound
-# them.
+# Pydantic and the attachment endpoint cap individual fields and uploads, but a
+# request with a huge Content-Length and no matching schema would still buffer
+# into RAM before validation fails. This middleware rejects with 413 before the
+# body is read, as a coarse second line of defense. Chunked requests (no
+# Content-Length) are allowed through; StreamingBodyLimitMiddleware covers them.
 # ---------------------------------------------------------------------------
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -305,7 +282,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
             try:
                 length = int(cl_header)
             except ValueError:
-                # Malformed Content-Length is the client's bug; reject.
+                # Malformed Content-Length; reject.
                 return JSONResponse(
                     status_code=400,
                     content={"detail": "We couldn't process this request. Please try again."},
@@ -326,22 +303,18 @@ app.add_middleware(BodySizeLimitMiddleware)
 
 
 class _RequestBodyTooLarge(Exception):
-    """Raised by the streaming guard's wrapped receive when the accumulated
-    request body exceeds the cap. Caught in StreamingBodyLimitMiddleware."""
+    """Raised by the wrapped receive callable when the body exceeds the cap."""
 
 
 class StreamingBodyLimitMiddleware:
     """Pure-ASGI backstop for the Content-Length check.
 
-    BodySizeLimitMiddleware can only see headers, so a chunked request that
-    omits Content-Length would stream an unbounded body into RAM, defeating
-    MAX_REQUEST_BODY_BYTES. This wraps `receive` and counts the actual bytes,
-    aborting with 413 once they exceed the cap regardless of Content-Length.
+    BodySizeLimitMiddleware only sees headers, so a chunked request without
+    Content-Length could stream an unbounded body into RAM. This wraps `receive`
+    and counts actual bytes, rejecting with 413 once the cap is exceeded.
 
-    Implemented as raw ASGI (not BaseHTTPMiddleware, which can't wrap receive).
-    As a user middleware it sits outside Starlette's ExceptionMiddleware but
-    inside ServerErrorMiddleware, so a _RequestBodyTooLarge raised deep in a
-    body read propagates back up to the try/except here.
+    Implemented as raw ASGI rather than BaseHTTPMiddleware because
+    BaseHTTPMiddleware cannot wrap the receive callable.
     """
 
     def __init__(self, app):
@@ -376,8 +349,7 @@ class StreamingBodyLimitMiddleware:
             await self.app(scope, counting_receive, tracking_send)
         except _RequestBodyTooLarge:
             if started:
-                # Response already began and can't be cleanly replaced; re-raise
-                # so the outer error handling tears the connection down.
+                # Response already started; can't replace it cleanly.
                 raise
             logger.warning(
                 "Streaming body exceeded %d bytes on %s",
@@ -398,36 +370,33 @@ app.add_middleware(StreamingBodyLimitMiddleware)
 # ---------------------------------------------------------------------------
 # Cache-Control middleware
 #
-# Prevents stale HTML on redeploy: cached HTML pointing at old asset URLs would
-# otherwise render a broken page until a hard refresh.
+# Prevents stale HTML after redeploy (cached HTML with old asset URLs renders
+# a broken page until a hard refresh).
 #
-#   - HTML       -> no-store, must-revalidate. Cheap to refetch.
-#   - /static/*  -> public, max-age=1 year, immutable. Safe because the URL
-#                  changes on every deploy via the injected asset_version.
-#   - /api/*     -> no-store. API responses must not be cached.
+#   HTML             -> no-store, must-revalidate
+#   /static/assets/  -> immutable for a year (Vite content-hashed filenames)
+#   /static/         -> 1 hour (other static files, not fingerprinted)
+#   /api/            -> no-store
 # ---------------------------------------------------------------------------
 class CacheControlMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
         path = request.url.path
-        # Don't override if the route already set a Cache-Control header
-        # (e.g. attachment downloads).
+        # Don't override if the route already set Cache-Control (e.g. downloads).
         if response.headers.get("Cache-Control"):
             return response
         if path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         elif path.startswith("/static/assets/"):
-            # Vite emits content-hashed filenames under /static/assets/, so
-            # these URLs change whenever the bytes change — safe to cache
-            # immutably for a year.
+            # Vite emits content-hashed filenames here, so the URL changes
+            # whenever the file changes — safe to cache for a year.
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         elif path.startswith("/static/"):
-            # Other static files (favicon, icons, fonts, vendored Firebase SDK)
-            # aren't fingerprinted, so they aren't cached immutably; a one-hour
-            # cache lets a redeploy replace them within the day.
+            # Other static files (favicon, fonts, vendored SDK) aren't
+            # fingerprinted, so use a shorter cache.
             response.headers["Cache-Control"] = "public, max-age=3600"
         else:
-            # HTML pages aren't cached so a redeploy is reflected immediately.
+            # HTML must not be cached so a redeploy is reflected immediately.
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
         return response
@@ -439,32 +408,24 @@ app.add_middleware(CacheControlMiddleware)
 # ---------------------------------------------------------------------------
 # Security headers
 #
-# Set on every response so even cached HTML and 304s get the same protections.
+# Applied to every response, including cached HTML and 304s.
 #
 # CSP notes:
-#   - script-src 'self'         no inline <script> in the HTML, so no
-#                               'unsafe-inline' or hash juggling needed.
-#   - style-src 'self' 'unsafe-inline'
-#                               the app sets a few inline styles via the DOM
-#                               (.style.x = …) which CSP treats as inline
-#                               styles. 'unsafe-inline' is the practical
-#                               escape; a nonce strategy would require
-#                               touching every dynamic-style site.
-#   - img-src 'self' data: blob:
-#                               attachments and generated avatars use data:
-#                               URLs; downloaded blobs use blob:.
-#   - frame-ancestors 'none'    refuses iframe embedding (modern X-Frame-Options).
-#   - base-uri 'self'           prevents <base href=…> hijack.
-#   - object-src 'none'         no plugins.
-#   - form-action 'self'        forms can only post to this origin.
+#   script-src 'self'             no inline <script>, so no 'unsafe-inline' needed.
+#   style-src 'self' 'unsafe-inline'  the app sets inline styles via .style.x; a
+#                                     nonce strategy would require touching every site.
+#   img-src 'self' data: blob:   data: for attachments/avatars; blob: for downloads.
+#   frame-ancestors 'none'       blocks iframe embedding (supersedes X-Frame-Options).
+#   base-uri 'self'              prevents <base href> hijack.
+#   object-src 'none'            no plugins.
+#   form-action 'self'           forms post only to this origin.
 #
-# HSTS is conditional on COOKIE_SECURE to avoid emitting it behind an
-# HTTP-only dev proxy and locking the browser into https://.
+# HSTS is gated on COOKIE_SECURE to avoid locking a dev/HTTP deploy into HTTPS.
 # ---------------------------------------------------------------------------
-# When web push is on, the browser's Firebase Messaging SDK talks to these
-# Google endpoints to mint/refresh the device token. They are added to
-# connect-src only then, so the default posture stays locked to 'self' when
-# push is off. Firebase scripts are vendored locally, so script-src stays 'self'.
+# When web push is enabled, the Firebase Messaging SDK calls these Google
+# endpoints to mint/refresh device tokens. They are added to connect-src only
+# then; the default stays 'self'. Firebase scripts are vendored locally, so
+# script-src stays 'self'.
 _FCM_CONNECT_SRC = (
     " https://fcm.googleapis.com https://fcmregistrations.googleapis.com"
     " https://firebaseinstallations.googleapis.com https://www.googleapis.com"
@@ -496,10 +457,9 @@ _CSP = _build_csp()
 def _apply_security_headers(h) -> None:
     """Set the standard security headers on a response header map.
 
-    Shared so the normal path (this middleware), the middleware-generated
-    short-circuits (429 rate-limit, 403 CSRF, which sit outside this middleware)
-    and the generic 500 handler all emit one identical, complete set.
-    `setdefault` lets a downstream layer still override.
+    Shared by the middleware, middleware-generated short-circuits (429/403),
+    and the 500 handler, so all responses carry the same complete set.
+    Uses setdefault so a downstream handler can still override.
     """
     h.setdefault("Content-Security-Policy", _CSP)
     h.setdefault("X-Content-Type-Options", "nosniff")
@@ -509,13 +469,13 @@ def _apply_security_headers(h) -> None:
                  "camera=(), microphone=(), geolocation=(), "
                  "payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()")
     h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    # CORP blocks other origins from fetching our responses as subresources.
+    # CORP prevents other origins from loading our responses as subresources.
     h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     h.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-    # Strip uvicorn's default "server: uvicorn" so the stack isn't advertised.
+    # Remove uvicorn's default "server" header to avoid advertising the stack.
     if "server" in h:
         del h["server"]
-    # HSTS only behind real https; COOKIE_SECURE doubles as the https signal.
+    # HSTS only when behind real HTTPS (COOKIE_SECURE doubles as the signal).
     if settings.COOKIE_SECURE:
         h.setdefault("Strict-Transport-Security",
                      "max-age=63072000; includeSubDomains")
@@ -534,42 +494,42 @@ app.add_middleware(SecurityHeadersMiddleware)
 # ---------------------------------------------------------------------------
 # Rate limiting on auth-sensitive endpoints
 #
-# An in-memory sliding-window limiter with no Redis dependency. Per-IP buckets
-# so one bad actor doesn't lock out everyone. Keys are time-pruned on every
-# check so memory stays bounded. Multi-worker deployments get per-worker
-# buckets, so a tighter global limit needs nginx limit_req in front.
+# In-memory sliding window per IP, no Redis required. Timestamps are pruned on
+# each check to keep memory bounded. Multi-worker deployments get per-worker
+# buckets; for a strict global limit add nginx limit_req in front.
 #
-# Limits allow for occasional human typos while slowing credential-stuffing:
-#   /api/auth/login           — 8 attempts / 60s per IP
-#   /api/auth/forgot-password — 3 attempts / 60s per IP
+# Limits are tuned to absorb human typos while slowing credential stuffing:
+#   /api/auth/login           — 8 attempts / 60s
+#   /api/auth/forgot-password — 3 attempts / 60s
 # ---------------------------------------------------------------------------
 _RATE_RULES: dict[str, tuple[int, int]] = {
-    # path: (max_requests, window_seconds)
+    # (max_requests, window_seconds)
     "/api/auth/login": (8, 60),
     "/api/auth/forgot-password": (3, 60),
-    # reset-password validates a 256-bit token (brute-force already infeasible)
-    # but we cap it anyway; change-password bcrypt-verifies the current password
-    # on every call, so an unthrottled endpoint is an auth-amplification vector.
+    # reset-password validates a 256-bit token (brute force is already
+    # infeasible), but we cap it anyway. change-password bcrypt-verifies the
+    # current password on every call, making an unthrottled endpoint an
+    # auth-amplification vector.
     "/api/auth/reset-password": (5, 60),
     "/api/auth/change-password": (5, 60),
 }
 _rate_buckets: dict[tuple[str, str], deque] = {}
 _rate_lock = Lock()
-# Soft cap to keep memory bounded if someone hammers from many IPs.
+# Soft cap to bound memory when hammered from many IPs.
 _RATE_BUCKETS_MAX = 10_000
-# Longest configured window; a bucket whose newest timestamp is older than this
-# can't be throttling anything, so it's safe to reclaim.
+# A bucket whose newest timestamp is older than this isn't throttling anything
+# and can be reclaimed.
 _MAX_RATE_WINDOW = max((w for _, w in _RATE_RULES.values()), default=60)
 
 
 def _evict_one_rate_bucket(now: float) -> None:
     """Make room for a new bucket without dropping an active throttle.
 
-    First reclaim buckets with no in-window activity (empty, or newest entry
-    older than the longest window). Only if everything is still active is the
-    least-recently-active bucket evicted. Eviction is never by insertion order,
-    so an attacker can't churn fresh keys to flush their own recently-active
-    throttled bucket and reset the counter. Caller holds _rate_lock.
+    Preference: reclaim buckets with no in-window activity first (empty, or
+    newest entry older than the longest window). Only if all buckets are still
+    active is the least-recently-active one evicted. Eviction is never by
+    insertion order, so an attacker can't churn new keys to flush their own
+    throttled bucket. Caller must hold _rate_lock.
     """
     horizon = now - _MAX_RATE_WINDOW
     dead = [k for k, b in _rate_buckets.items() if not b or b[-1] < horizon]
@@ -581,12 +541,14 @@ def _evict_one_rate_bucket(now: float) -> None:
 
 
 def _client_ip(request: Request) -> str:
-    """Resolve the client IP. X-Forwarded-For is not trusted by default
-    because spoofing it bypasses the limit; deploys behind a reverse proxy
-    can opt into trusting it via TRUST_PROXY_FORWARDED_FOR (and configure the
-    proxy-hop count via TRUST_PROXY_HOP_COUNT). Uses the shared
-    trusted_forwarded_ip so the right-most-entry semantics match the audit IP
-    resolver in routes/auth.py."""
+    """Resolve the client IP for rate limiting.
+
+    X-Forwarded-For is not trusted by default because a client can spoof it to
+    bypass the limit. Set TRUST_PROXY_FORWARDED_FOR=true and configure
+    TRUST_PROXY_HOP_COUNT to enable it behind a reverse proxy. Uses
+    trusted_forwarded_ip to share right-most-entry semantics with the audit
+    IP resolver in routes/auth.py.
+    """
     if settings.TRUST_PROXY_FORWARDED_FOR:
         xff = request.headers.get("x-forwarded-for")
         if xff:
@@ -611,13 +573,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         with _rate_lock:
             bucket = _rate_buckets.get((path, ip))
             if bucket is None:
-                # Bound the dict without evicting an active throttle: reclaim
-                # idle/empty buckets first, then least-recently-active.
+                # Evict idle buckets first; only fall back to least-recently-active.
                 if len(_rate_buckets) >= _RATE_BUCKETS_MAX:
                     _evict_one_rate_bucket(now)
                 bucket = deque()
                 _rate_buckets[(path, ip)] = bucket
-            # Evict timestamps older than the window.
+            # Drop timestamps outside the window.
             while bucket and bucket[0] < cutoff:
                 bucket.popleft()
             if len(bucket) >= max_req:
@@ -642,51 +603,42 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
-# CSRF defense-in-depth
+# CSRF defense in depth
 #
-# The session cookie is SameSite=Lax, which blocks most cross-site CSRF, but
-# Lax has gaps:
-#   - it doesn't apply to subdomain attackers (evil.example.com and
-#     app.example.com are "same site").
-#   - older / non-standard browser behaviour for some top-level POSTs.
+# The session cookie is SameSite=Lax, which stops most CSRF, but Lax has gaps:
+#   - subdomain attackers (evil.example.com and app.example.com are "same site")
+#   - some older browsers on top-level navigation POSTs
 #
-# A second check covers this: for state-changing requests (POST / PUT / PATCH /
-# DELETE) to the JSON API, the Origin (or Referer) header must match one of the
-# allowed origins. Same-origin SPA requests satisfy this since fetch() includes
-# Origin automatically. Clients that send neither Origin nor Referer (e.g. curl,
-# httpx) pass, since CSRF only matters when a browser is abused as a deputy.
+# For state-changing requests (POST/PUT/PATCH/DELETE) to /api/, the Origin (or
+# Referer) header must match an allowed origin. Same-origin SPA requests satisfy
+# this automatically because fetch() includes Origin. Clients sending neither
+# header (curl, httpx) pass through — CSRF requires a browser as a deputy.
 #
-# Allowed origins: settings.CORS_ORIGINS (when not "*"). The request's own Host
-# is always implicitly allowed; the Origin scheme is checked against the
-# cookie-secure mode to avoid http/https confusion behind a reverse proxy.
+# Allowed origins: settings.CORS_ORIGINS (excluding "*"), plus the Host from
+# the request itself.
 # ---------------------------------------------------------------------------
 def _allowed_origins() -> set[str]:
-    """Build the set of allowed origins for the CSRF check.
+    """Return the set of origins allowed by the CSRF check.
 
-    Always includes the configured CORS_ORIGINS (skipping "*"). Same-host
-    requests are accepted unconditionally via Host comparison so an
-    operator who hasn't bothered to configure CORS still gets working
-    SPA usage.
+    Includes CORS_ORIGINS (excluding "*"). The request Host is always added
+    separately, so SPA usage works even without CORS configuration.
     """
     return {o.rstrip("/") for o in settings.CORS_ORIGINS if o and o != "*"}
 
 
-# Methods that mutate state; safe methods (GET/HEAD/OPTIONS) skip the check.
+# Safe methods (GET/HEAD/OPTIONS) skip the check.
 _CSRF_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-# Endpoints exempt from the Origin check. Empty: login is not exempt, so a
-# cross-site forced-login (session fixation) is blocked. Operator scripts send
-# no Origin/Referer and pass via the no-fingerprint branch; an allow-listed
-# cross-origin browser client passes via CORS_ORIGINS.
+# No paths are exempt: login included, so cross-site forced-login (session
+# fixation) is blocked. Operator scripts have no Origin/Referer and pass via
+# the no-fingerprint branch; allowlisted cross-origin clients pass via CORS_ORIGINS.
 _CSRF_EXEMPT_PATHS: frozenset[str] = frozenset()
 
 
 class CsrfOriginMiddleware(BaseHTTPMiddleware):
-    """Reject browser-driven mutating requests whose Origin doesn't match
-    the app's own host (or an explicitly-allowed CORS origin).
+    """Block mutating requests whose Origin doesn't match the app's host.
 
-    Non-browser clients (no Origin and no Referer) are allowed through —
-    CSRF is exclusively a browser-confused-deputy attack, so a request
-    that came from curl is by definition not a CSRF.
+    Non-browser clients (no Origin, no Referer) pass through — CSRF is a
+    browser confused-deputy attack, so a curl request is not CSRF by definition.
     """
     async def dispatch(self, request: Request, call_next):
         method = request.method.upper()
@@ -701,16 +653,15 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
         origin = request.headers.get("origin", "").rstrip("/")
         referer = request.headers.get("referer", "")
 
-        # No browser fingerprint at all → not a browser → cannot be CSRF.
+        # No browser fingerprint: not a browser, cannot be CSRF.
         if not origin and not referer:
             return await call_next(request)
 
-        # Build the expected same-origin URLs from the request itself,
-        # accepting both schemes. Behind a TLS-terminating reverse proxy,
-        # request.url.scheme is whatever the proxy claims; trusting it here is
-        # fine because a compromised proxy makes CSRF the least concern. Schemes
-        # are concatenated rather than inline literals so static analyzers don't
-        # flag "http://"; it describes the client connection, not an outbound one.
+        # Build the same-origin URLs from the request. Behind a TLS-terminating
+        # proxy, request.url.scheme reflects what the proxy reports; trusting it
+        # is fine because a compromised proxy makes CSRF the least concern.
+        # Schemes are concatenated (not literal "http://") to avoid static-analyzer
+        # warnings about hardcoded URLs.
         host = request.headers.get("host", "")
         allowed = _allowed_origins()
         if host:
@@ -722,7 +673,7 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
             if origin in allowed:
                 return await call_next(request)
         elif referer:
-            # Origin missing but Referer present — match by URL prefix.
+            # Origin absent but Referer present: match by URL prefix.
             if any(referer.startswith(a + "/") or referer == a for a in allowed if a):
                 return await call_next(request)
 
@@ -741,14 +692,12 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(CsrfOriginMiddleware)
 
-# CORS is registered last so it sits outermost in the ASGI chain (see the block
-# near _origins above). Skip registration entirely when no origins are
-# configured: same-origin traffic never hits CORSMiddleware anyway.
+# CORS is registered last (see note near _origins). Skip when no origins are
+# configured; same-origin traffic never reaches CORSMiddleware anyway.
 if _origins:
-    # Scope methods/headers to what the SPA uses rather than "*". With
-    # allow_credentials=True a wildcard would let any allow-listed origin send
-    # any method/header on a credentialed cross-origin request, wider than a
-    # cookie-auth SPA needs and a larger blast radius if an origin is XSS'd.
+    # Restrict methods/headers to what the SPA actually uses. A wildcard with
+    # credentials would let any allowlisted origin send anything, which is a
+    # larger blast radius if one of those origins is XSS'd.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_origins,
@@ -761,21 +710,18 @@ if _origins:
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
-# Rendered-HTML cache. The placeholders depend only on asset_version (fixed at
-# process start) and APP_VERSION (fixed for the process lifetime), so the
-# rendered page doesn't change between restarts and need not be re-read from
-# disk per request. The cache is keyed on asset_version so tests that mutate it
-# stay correct.
+# Both placeholders depend on values fixed at process start (asset_version,
+# APP_VERSION), so the rendered page doesn't change within a process lifetime.
+# Keyed on asset_version so tests that swap it stay correct.
 _html_cache: dict[tuple[str, str], str] = {}
 
 
 def _serve_html(filename: str) -> HTMLResponse:
-    """Render an HTML file with the asset-version and app-version
-    placeholders replaced, caching the result per (file, asset_version).
+    """Serve an HTML file with version placeholders replaced, cached per (file, asset_version).
 
-    __ASSET_VERSION__ -> 12-char hash of the static bundle, for cache-busting.
-    __APP_VERSION__   -> settings.APP_VERSION, so the login page can show the
-                        running version without an extra request to /api/health.
+    __ASSET_VERSION__: 12-char bundle hash for cache-busting asset URLs.
+    __APP_VERSION__: the running version, so the login page can display it
+    without an extra /api/health call.
     """
     key = (filename, app.state.asset_version)
     body = _html_cache.get(key)
@@ -783,25 +729,22 @@ def _serve_html(filename: str) -> HTMLResponse:
         body = (settings.STATIC_DIR / filename).read_text(encoding="utf-8")
         body = body.replace(ASSET_VERSION_PLACEHOLDER, app.state.asset_version)
         body = body.replace(APP_VERSION_PLACEHOLDER, settings.APP_VERSION)
-        if len(_html_cache) > 32:  # bound; only a few pages are served
+        if len(_html_cache) > 32:  # only a few pages exist; clear if somehow large
             _html_cache.clear()
         _html_cache[key] = body
     return HTMLResponse(body)
 
 
 def _has_valid_session(request: Request) -> bool:
-    """Check whether the request has a valid, non-revoked session cookie.
+    """Return True if the request carries a valid, non-revoked session cookie.
 
-    The HTML page handlers (/ and /login.html) must reject a revoked session
-    (one whose server-side sessions row was deleted while the browser still
-    holds the signed cookie), not just verify the signature. Otherwise the
-    SPA's API calls 401 and redirect to /login.html while this function reports
-    the cookie valid and bounces the user back to /, an infinite redirect loop.
+    The HTML page handlers must check for revoked sessions, not just a valid
+    signature. If a revoked cookie is accepted here, the SPA's API calls 401
+    and redirect to /login.html, which bounces back to / — an infinite loop.
 
-    When the cookie carries a jti, look it up in the sessions table and return
-    True only if the row exists and isn't expired. Legacy tokens without a jti
-    predate the sessions table, so they keep the cookie-only check here; they
-    still get the full API-side check on /api/auth/me.
+    For cookies with a jti, the sessions table row must exist and not be
+    expired. Legacy tokens (no jti) predate the sessions table and are accepted
+    on signature alone; they still get the full check on /api/auth/me.
     """
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
@@ -809,10 +752,9 @@ def _has_valid_session(request: Request) -> bool:
         return False
     user_id, _session_version, jti = parsed
     if jti is None:
-        # Legacy cookie predates the sessions table; accept based on signature
-        # alone. _user_from_request still validates fully on any API call.
+        # Legacy cookie: accept on signature alone.
         return True
-    # Modern cookie: verify the session row still exists and isn't expired.
+    # Modern cookie: the session row must exist and not be expired.
     db = SessionLocal()
     try:
         sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
@@ -823,10 +765,9 @@ def _has_valid_session(request: Request) -> bool:
             expires = expires.replace(tzinfo=timezone.utc)
         return expires >= datetime.now(timezone.utc)
     except SQLAlchemyError:
-        # Called from the HTML page handlers (/ and /login.html). If the DB is
-        # momentarily unreachable, fall back to "no valid session" (sending the
-        # user to the login page) rather than 500 the HTML route. The next API
-        # call surfaces the real DB error to the SPA.
+        # If the DB is momentarily unreachable, treat the session as invalid
+        # and send the user to the login page rather than 500'ing. The next API
+        # call will surface the real error to the SPA.
         logger.exception("_has_valid_session: DB lookup failed for jti=%s", jti)
         return False
     finally:
@@ -835,8 +776,8 @@ def _has_valid_session(request: Request) -> bool:
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def home(request: Request):
-    # Redirect to the login page server-side when not logged in, so the user
-    # never sees a flash of the app shell with no data.
+    # Server-side redirect keeps the user from seeing a flash of the app shell
+    # with no data when they aren't logged in.
     if not _has_valid_session(request):
         return RedirectResponse(url="/login.html", status_code=302)
     return _serve_html("index.html")
@@ -845,8 +786,7 @@ def home(request: Request):
 @app.get("/login.html", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
 def login_page(request: Request):
-    # Send an already-logged-in user straight to the app rather than the login
-    # form.
+    # Skip the login form for users who are already logged in.
     if _has_valid_session(request):
         return RedirectResponse(url="/", status_code=302)
     return _serve_html("login.html")
@@ -855,16 +795,14 @@ def login_page(request: Request):
 @app.get("/reset.html", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/reset", response_class=HTMLResponse, include_in_schema=False)
 def reset_page() -> HTMLResponse:
-    # The reset page is always reachable; even logged-in users may need to
-    # reset another account's password from a link.
+    # Always reachable — even a logged-in user may follow a reset link.
     return _serve_html("reset.html")
 
 
-# Firebase Cloud Messaging background service worker, served from the root scope
-# (a service worker only controls pages at or below its own URL path, so
-# /static/ would be too narrow). Firebase's compat SDK is self-hosted under
-# /static/vendor; the public web config is injected here the same way the HTML
-# pages get their version placeholders.
+# FCM background service worker served from root scope. A service worker only
+# controls pages at or below its own path, so /static/ would be too narrow.
+# Firebase's compat SDK is vendored under /static/vendor; the web config is
+# injected the same way as the HTML version placeholders.
 _FIREBASE_SW = """\
 importScripts('/static/vendor/firebase-app-compat.js');
 importScripts('/static/vendor/firebase-messaging-compat.js');
@@ -894,9 +832,11 @@ self.addEventListener('notificationclick', function (event) {
 
 @app.get("/firebase-messaging-sw.js", include_in_schema=False)
 def firebase_messaging_sw() -> Response:
-    """Serve the FCM background service worker with the public Firebase config
-    injected. Returns a no-op worker when web push isn't configured, so
-    registration doesn't 404."""
+    """Serve the FCM background service worker with the Firebase config injected.
+
+    Returns a no-op comment when web push isn't configured, so the client-side
+    service worker registration doesn't 404.
+    """
     media = "application/javascript"
     headers = {"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"}
     if not (settings.WEB_PUSH_ENABLED and settings.FIREBASE_API_KEY):
@@ -919,11 +859,10 @@ def firebase_messaging_sw() -> Response:
 def health() -> Response:
     """Liveness and readiness probe.
 
-    Returns HTTP 503 (not 200) when the database is unreachable so the Docker
-    HEALTHCHECK / orchestrator / load balancer treat a DB-down app as unhealthy
-    instead of in-rotation. version/asset_version are exposed unauthenticated:
-    the SPA reads asset_version to detect a redeploy, and the app version is
-    already shown on the public login page.
+    Returns 503 when the database is unreachable so the Docker HEALTHCHECK and
+    load balancer treat a DB-down app as unhealthy. version and asset_version
+    are unauthenticated: the SPA uses asset_version to detect a redeploy, and
+    the app version is already shown on the public login page.
     """
     db_ok = _check_db_health()
     payload = {
@@ -937,8 +876,7 @@ def health() -> Response:
 
 @app.get("/api/meta", tags=["meta"])
 def meta() -> dict[str, object]:
-    """Expose static enums and the per-item-type status sets so the frontend
-    can swap the status dropdown when the user changes type."""
+    """Return static enums and per-item-type status sets for the frontend."""
     return {
         "statuses": ALLOWED_STATUSES,
         "statuses_by_type": STATUSES_BY_TYPE,
@@ -964,9 +902,8 @@ app.include_router(chatbot_router)
 
 @app.exception_handler(HTTPException)
 async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    # Preserve any headers the raiser attached (e.g. Retry-After on 429,
-    # WWW-Authenticate on 401); the default handler drops them, which breaks
-    # client retry behaviour for rate-limited endpoints.
+    # Preserve headers attached by the raiser (Retry-After on 429,
+    # WWW-Authenticate on 401); FastAPI's default handler drops them.
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
@@ -976,10 +913,10 @@ async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse
 
 @app.exception_handler(Exception)
 async def unhandled_exc_handler(request: Request, exc: Exception) -> JSONResponse:
-    # Starlette serves unhandled errors from ServerErrorMiddleware, which sits
-    # outside the security-headers middleware, so without this an unexpected 500
-    # would ship as bare text with no CSP/anti-clickjacking headers. Log it and
-    # return a generic, header-complete JSON 500 with no internals.
+    # ServerErrorMiddleware sits outside the security-headers middleware, so
+    # without this handler an unhandled 500 would ship as bare text with no
+    # CSP or anti-clickjacking headers. Return a generic JSON response with the
+    # full header set and no internal details.
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     resp = JSONResponse(status_code=500, content={"detail": "Internal server error."})
     _apply_security_headers(resp.headers)
@@ -989,10 +926,8 @@ async def unhandled_exc_handler(request: Request, exc: Exception) -> JSONRespons
 
 if __name__ == "__main__":
     import uvicorn
-    # Host defaults to 127.0.0.1 (loopback only). In containerised deploys, set
-    # UVICORN_HOST=0.0.0.0 so the container is reachable from the host network;
-    # the container boundary and reverse proxy make binding to all interfaces
-    # safe. Running directly on a host should stay local.
+    # Default to loopback. Set UVICORN_HOST=0.0.0.0 in containers where the
+    # container boundary and reverse proxy make it safe to bind all interfaces.
     _host = os.getenv("UVICORN_HOST", "127.0.0.1")
     _port = int(os.getenv("UVICORN_PORT", "8000"))
     uvicorn.run("app.main:app", host=_host, port=_port, reload=False)

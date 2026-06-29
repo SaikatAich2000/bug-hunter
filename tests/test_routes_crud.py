@@ -1,10 +1,8 @@
-"""Tests for the CRUD routes (projects / users / sessions / audit / notifications).
+"""Coverage tests for the CRUD routes: projects, users, sessions, audit, notifications.
 
-The suite is hermetic: it relies entirely on the ``client`` / ``admin_client`` /
-``user_client`` fixtures from conftest.py (temp SQLite, email/push/HIBP
-disabled), and the few tests that need to manipulate persisted rows
-(expired-session sweep) do so through the app's own SQLAlchemy ``SessionLocal``
-with no real network.
+Relies entirely on the ``client`` / ``admin_client`` / ``user_client`` fixtures
+from conftest.py (temp SQLite, email/push/HIBP disabled). Tests that need to
+manipulate persisted rows directly use the app's own SQLAlchemy ``SessionLocal``.
 """
 from __future__ import annotations
 
@@ -14,9 +12,7 @@ _BOOTSTRAP_EMAIL = "admin@test.local"
 _BOOTSTRAP_PW = "Admin1234"
 
 
-# ---------------------------------------------------------------------------
-# Small local helpers (kept independent of other test files' helpers)
-# ---------------------------------------------------------------------------
+# Local helpers, kept independent of other test files.
 def _login(c: TestClient, email: str, password: str) -> None:
     c.post("/api/auth/logout")
     r = c.post("/api/auth/login", json={"email": email, "password": password})
@@ -52,8 +48,8 @@ def _mk_bug(c: TestClient, project_id: int, **extra) -> dict:
 
 
 def _new_client() -> TestClient:
-    """A second TestClient bound to the same already-imported app/db, so two
-    users can hold independent session cookies at once."""
+    """Return a second TestClient sharing the same app/db, so two users can hold
+    independent session cookies simultaneously."""
     from app.main import app
     return TestClient(app)
 
@@ -62,7 +58,7 @@ def _new_client() -> TestClient:
 # projects.py
 # ===========================================================================
 def test_cov_get_project_by_id_ok(admin_client):
-    """GET /api/projects/{id} happy path returns the row."""
+    """GET /api/projects/{id} returns the created row."""
     p = _mk_project(admin_client, "Cov Get OK")
     r = admin_client.get(f"/api/projects/{p['id']}")
     assert r.status_code == 200
@@ -79,8 +75,7 @@ def test_cov_get_project_by_id_404(admin_client):
 
 
 def test_cov_update_project_duplicate_name_409(admin_client):
-    """PUT renaming a project onto an existing name hits the IntegrityError
-    rollback branch → 409."""
+    """PUT that renames a project to an existing name hits the IntegrityError rollback → 409."""
     _mk_project(admin_client, "Cov Dup First")
     second = _mk_project(admin_client, "Cov Dup Second")
     r = admin_client.put(f"/api/projects/{second['id']}",
@@ -97,13 +92,11 @@ def test_cov_update_project_404(admin_client):
 
 
 def test_cov_delete_project_success(admin_client):
-    """DELETE a project with no bugs runs the success path (name snapshot,
-    delete, audit, commit) and returns the message."""
+    """DELETE a project with no bugs returns the success message and removes the row."""
     p = _mk_project(admin_client, "Cov Del OK")
     r = admin_client.delete(f"/api/projects/{p['id']}")
     assert r.status_code == 200
     assert r.json()["message"] == "Project deleted"
-    # And it's really gone.
     assert admin_client.get(f"/api/projects/{p['id']}").status_code == 404
 
 
@@ -127,10 +120,8 @@ def test_cov_delete_project_conflict_when_bugs_exist(admin_client):
 # users.py
 # ===========================================================================
 def test_cov_list_users_exclude_inactive(admin_client):
-    """GET /api/users?include_inactive=false filters out the deactivated
-    user via the is_active branch."""
+    """GET /api/users?include_inactive=false omits deactivated users."""
     dormant = _mk_user(admin_client, "Cov Dormant", "cov.dormant@example.com")
-    # Deactivate them.
     r = admin_client.put(f"/api/users/{dormant['id']}", json={"is_active": False})
     assert r.status_code == 200 and r.json()["is_active"] is False
 
@@ -143,7 +134,7 @@ def test_cov_list_users_exclude_inactive(admin_client):
 
 
 def test_cov_get_user_by_id_ok(admin_client):
-    """GET /api/users/{id} happy path returns the row."""
+    """GET /api/users/{id} returns the created user."""
     u = _mk_user(admin_client, "Cov GetUser", "cov.getuser@example.com")
     r = admin_client.get(f"/api/users/{u['id']}")
     assert r.status_code == 200
@@ -158,8 +149,7 @@ def test_cov_get_user_by_id_404(admin_client):
 
 
 def test_cov_update_user_cannot_deactivate_self(admin_client):
-    """Admin setting is_active=false on their own account is rejected with
-    400 (self-edit guardrail)."""
+    """Admin cannot set is_active=false on their own account (self-edit guardrail → 400)."""
     me = admin_client.get("/api/auth/me").json()
     r = admin_client.put(f"/api/users/{me['id']}", json={"is_active": False})
     assert r.status_code == 400
@@ -167,11 +157,8 @@ def test_cov_update_user_cannot_deactivate_self(admin_client):
 
 
 def test_cov_update_user_last_admin_demote_self_blocked(admin_client):
-    """The sole admin demoting themselves to user is blocked with 400. This
-    is the reachable form of the last-admin protection on update: the
-    self-edit guard fires before _check_last_admin_guardrail. The guardrail's
-    own raise is unreachable here (see the note at the bottom of this file).
-    """
+    """The sole admin demoting themselves is blocked with 400 (self-edit guard fires
+    before the last-admin guardrail; the guardrail raise is unreachable — see note below)."""
     me = admin_client.get("/api/auth/me").json()
     r = admin_client.put(f"/api/users/{me['id']}", json={"role": "user"})
     assert r.status_code == 400
@@ -179,10 +166,10 @@ def test_cov_update_user_last_admin_demote_self_blocked(admin_client):
 
 
 def test_cov_update_user_demote_other_admin_runs_last_admin_check(admin_client):
-    """Demoting a different admin (actor != target) skips the self-edit guard
-    and runs the last-admin count query. Another active admin (the bootstrap
-    actor) remains, so the count is >=1 and the demotion succeeds. This
-    exercises the count branch without hitting the unreachable raise."""
+    """Demoting a different admin (actor != target) skips the self-edit guard and
+    runs the last-admin count. The bootstrap actor is still an active admin, so
+    the count is >= 1 and the demotion succeeds. Covers the count branch; the
+    unreachable raise is documented below."""
     other = _mk_user(admin_client, "Cov Admin3", "cov.admin3@example.com",
                      role="admin", password="Admin3Pass9")
     r = admin_client.put(f"/api/users/{other['id']}", json={"role": "user"})
@@ -198,8 +185,7 @@ def test_cov_update_user_404(admin_client):
 
 
 def test_cov_update_user_duplicate_email_409(admin_client):
-    """Updating a user's email to one already taken hits the IntegrityError
-    branch → 409."""
+    """Updating a user's email to one already in use hits the IntegrityError branch → 409."""
     a = _mk_user(admin_client, "Cov EmailA", "cov.email.a@example.com")
     _mk_user(admin_client, "Cov EmailB", "cov.email.b@example.com")
     r = admin_client.put(f"/api/users/{a['id']}",
@@ -209,15 +195,14 @@ def test_cov_update_user_duplicate_email_409(admin_client):
 
 
 def test_cov_update_user_role_change_and_password_reset(admin_client):
-    """Field-change plus admin password-reset path: promote a user to manager
-    and reset their password in one PUT. 'changeme' must be accepted (legacy
-    exception), so we use it for the reset to prove it stays valid."""
+    """Promote a user to manager and reset their password in one PUT. 'changeme'
+    must still be accepted (legacy exception), so we use it to prove the path works."""
     u = _mk_user(admin_client, "Cov Promote", "cov.promote@example.com")
     r = admin_client.put(f"/api/users/{u['id']}",
                          json={"role": "manager", "password": "changeme"})
     assert r.status_code == 200
     assert r.json()["role"] == "manager"
-    # The reset password ('changeme') really works for login.
+    # Confirm the new password actually works.
     other_c = _new_client()
     rl = other_c.post("/api/auth/login",
                       json={"email": "cov.promote@example.com", "password": "changeme"})
@@ -232,10 +217,9 @@ def test_cov_delete_user_404(admin_client):
 
 
 def test_cov_delete_user_admin_runs_last_admin_count(admin_client):
-    """Deleting an admin target (actor != target) executes the admin-branch
-    last-admin count query. Another active admin (the bootstrap actor)
-    remains, so the count is >=1 and the delete succeeds. This covers the
-    count query; the raise is unreachable (see the note at the bottom)."""
+    """Deleting an admin (actor != target) runs the last-admin count. The
+    bootstrap actor is still active, so count >= 1 and the delete succeeds.
+    Covers the count query; the unreachable raise is documented below."""
     target = _mk_user(admin_client, "Cov DelAdmin", "cov.deladmin@example.com",
                       role="admin", password="DelAdmin99")
     r = admin_client.delete(f"/api/users/{target['id']}")
@@ -257,8 +241,8 @@ def test_cov_delete_user_success(admin_client):
 # sessions.py
 # ===========================================================================
 def test_cov_sessions_list_and_is_current(admin_client):
-    """List happy path plus _is_current True for the admin's own row. Also
-    creates a second user's session so the list has more than one row."""
+    """Session list returns multiple rows and marks exactly the admin's own row
+    as is_current."""
     _mk_user(admin_client, "Cov SessU", "cov.sessu@example.com")
     other_c = _new_client()
     _login(other_c, "cov.sessu@example.com", "User12345")
@@ -271,9 +255,9 @@ def test_cov_sessions_list_and_is_current(admin_client):
 
 
 def test_cov_sessions_sweep_expired_rows(admin_client):
-    """Listing sessions sweeps (deletes) rows whose expires_at is in the past.
-    We back-date a user's session row directly via the app's own SessionLocal,
-    then assert the GET removes it."""
+    """Listing sessions deletes rows whose expires_at is in the past. We
+    back-date a session row via SessionLocal directly, then confirm the
+    GET sweeps it."""
     from datetime import datetime, timezone, timedelta
     from app.database import SessionLocal
     from app.models import Session as SessionRow
@@ -282,7 +266,7 @@ def test_cov_sessions_sweep_expired_rows(admin_client):
     other_c = _new_client()
     _login(other_c, "cov.expired@example.com", "User12345")
 
-    # Find that user's freshly-created session row and back-date it.
+    # Back-date the user's session row so the sweep logic will remove it.
     db = SessionLocal()
     try:
         from app.models import User
@@ -294,11 +278,10 @@ def test_cov_sessions_sweep_expired_rows(admin_client):
     finally:
         db.close()
 
-    # Listing triggers the sweep branch; the expired row must be gone.
     rows = admin_client.get("/api/sessions").json()
     assert all(r["id"] != target_id for r in rows), "expired row should be swept"
 
-    # Confirm at the DB level too.
+    # Double-check at the DB level.
     db2 = SessionLocal()
     try:
         assert db2.get(SessionRow, target_id) is None
@@ -307,8 +290,7 @@ def test_cov_sessions_sweep_expired_rows(admin_client):
 
 
 def test_cov_revoke_specific_session(admin_client):
-    """Revoke happy path — admin revokes another user's session (not their
-    own), returns the message, and the row is deleted."""
+    """Admin revokes another user's session, gets the message, and the row is gone."""
     _mk_user(admin_client, "Cov Revoke", "cov.revoke@example.com")
     other_c = _new_client()
     _login(other_c, "cov.revoke@example.com", "User12345")
@@ -318,7 +300,6 @@ def test_cov_revoke_specific_session(admin_client):
     r = admin_client.delete(f"/api/sessions/{victim['id']}")
     assert r.status_code == 200
     assert r.json()["message"] == "Session revoked"
-    # Gone from the list now.
     after = {row["id"] for row in admin_client.get("/api/sessions").json()}
     assert victim["id"] not in after
 
@@ -343,13 +324,10 @@ def test_cov_revoke_session_404(admin_client):
 # audit.py
 # ===========================================================================
 def test_cov_audit_filter_by_entity_actor_and_numeric_query(admin_client):
-    """Exercises the filter/pagination branch including the numeric query path
-    (entity_type filter, actor_user_id filter, digit match that appends the
-    entity_id / bug_id / cast clauses, plus limit/offset).
-
-    We search with numeric queries and an entity_type so the OR-clause builder
-    runs end-to-end. Asserts only that the endpoint returns 200 and a list;
-    the exact rows depend on ids, which we don't pin."""
+    """Exercises the audit filter/pagination branch: entity_type, actor_user_id,
+    numeric free-text (triggers the OR-clause builder for entity_id/bug_id/cast),
+    and limit/offset. Only checks that the response is 200 + list; exact rows
+    vary by id."""
     me = admin_client.get("/api/auth/me").json()
     p = _mk_project(admin_client, "Cov Audit Proj")
     bug = _mk_bug(admin_client, p["id"], title="Cov Audit Bug")
@@ -368,15 +346,13 @@ def test_cov_audit_filter_by_entity_actor_and_numeric_query(admin_client):
     assert r.status_code == 200
     rows = r.json()
     assert isinstance(rows, list)
-    # The numeric/entity filters should still surface this bug's creation row.
     assert any(row.get("bug_id") == bug["id"] or row.get("entity_id") == bug["id"]
                for row in rows), rows
 
 
 def test_cov_audit_query_with_hash_and_offset(admin_client):
-    """Second pass over the numeric branch using a '#'-prefixed query and a
-    non-zero offset, plus the entity_id substring cast clause. Just needs to
-    run and return a list."""
+    """'#'-prefixed numeric query with a non-zero offset hits the entity_id
+    substring cast clause. Just checks 200 + list."""
     p = _mk_project(admin_client, "Cov Audit Proj 2")
     _mk_bug(admin_client, p["id"], title="Cov Audit Bug 2")
     r = admin_client.get("/api/audit", params={"q": "#1", "limit": 10, "offset": 1})
@@ -388,12 +364,9 @@ def test_cov_audit_query_with_hash_and_offset(admin_client):
 # notifications.py
 # ===========================================================================
 def test_cov_mark_read_already_read_skips_commit(admin_client):
-    """Calling mark-read on an already-read notification skips the
-    read_at/commit block and returns {'ok': True}.
-
-    We generate a real notification (admin reports a bug assigned to a user),
-    read it once (sets read_at), then read it again — the second call must
-    short-circuit past the commit (read_at is not None) and still return ok."""
+    """Mark-read on an already-read notification must short-circuit (read_at is not None)
+    and still return {'ok': True}. We generate a real notification, read it once, then
+    call read again to hit the skip branch."""
     p = _mk_project(admin_client, "Cov Notif Proj")
     bob = _mk_user(admin_client, "Cov Notif Bob", "cov.notif.bob@example.com")
     _mk_bug(admin_client, p["id"], title="Cov Notif Bug", assignee_ids=[bob["id"]])
@@ -404,47 +377,36 @@ def test_cov_mark_read_already_read_skips_commit(admin_client):
     assert notifs, "Bob should have an 'assigned' notification"
     nid = notifs[0]["id"]
 
-    # First read marks it read (read_at is None on this branch).
     r1 = bob_c.post(f"/api/notifications/{nid}/read")
     assert r1.status_code == 200 and r1.json() == {"ok": True}
 
-    # Second read: read_at is already set, so it short-circuits past commit.
+    # Second call hits the skip branch (read_at already set).
     r2 = bob_c.post(f"/api/notifications/{nid}/read")
     assert r2.status_code == 200 and r2.json() == {"ok": True}
 
-    # Idempotent: still exactly one row, still read.
+    # Still exactly one row, still marked read.
     row = next(n for n in bob_c.get("/api/notifications").json() if n["id"] == nid)
     assert row["read_at"] is not None
 
 
-# ===========================================================================
 # Intentionally-uncovered lines
-# ===========================================================================
-# A few defensive / dead-code paths cannot be reached by any clean,
-# non-brittle API test. Rather than ship a contorted test, they are left
-# uncovered and documented here:
 #
-#   - sessions.py _is_current (`if not parsed: return False`)
-#       Unreachable. Every endpoint that calls _is_current is admin-gated, and
-#       auth (`_user_from_request`) authenticates only via the same
-#       `parse_session_token(cookie)`. So any request that reaches the handler
-#       necessarily has a cookie that parses to a truthy tuple, and the `not
-#       parsed` guard can't fire. It is defensive-only against a malformed
-#       cookie that would already have been rejected at auth.
+# A few defensive/dead-code paths can't be reached by any clean, non-brittle
+# API test and are left uncovered intentionally:
 #
-#   - audit.py (`except ValueError: pass` after `int(digits_match...)`)
-#       Unreachable. `digits_match` comes from `re.search(r"\d+", raw)`, so the
-#       captured group is pure ASCII digits, and Python's `int()` parses any
-#       pure-digit string (arbitrary precision, no overflow). The `int(...)`
-#       call therefore never raises ValueError, so the except body is dead.
+#   sessions.py _is_current — `if not parsed: return False`
+#     Unreachable. Every caller is admin-gated, and auth already rejects
+#     malformed cookies before the handler runs, so parse_session_token always
+#     returns a truthy tuple by the time _is_current is called.
 #
-#   - users.py last-admin guardrail raise on update
-#   - users.py last-admin guardrail raise on delete
-#       Unreachable raises. Both are pre-empted: when actor == target the
-#       self-edit / self-delete guards fire first; when actor != target the
-#       actor is themselves an active admin, so the other-admin count is
-#       always >= 1 and the `== 0` branch is never taken. The reachable count
-#       queries are exercised by
-#       test_cov_update_user_demote_other_admin_runs_last_admin_check and
-#       test_cov_delete_user_admin_runs_last_admin_count; only the dead raises
-#       remain uncovered.
+#   audit.py — `except ValueError: pass` after int(digits_match...)
+#     Unreachable. The captured group comes from re.search(r"\d+", raw),
+#     so it is always pure ASCII digits and int() never raises here.
+#
+#   users.py — last-admin guardrail raise on update and on delete
+#     Both raises are pre-empted: actor == target hits the self-edit/self-delete
+#     guard first; actor != target means the actor is an active admin, so the
+#     other-admin count is always >= 1 and the == 0 branch is never taken.
+#     The count queries themselves are covered by
+#     test_cov_update_user_demote_other_admin_runs_last_admin_check and
+#     test_cov_delete_user_admin_runs_last_admin_count.

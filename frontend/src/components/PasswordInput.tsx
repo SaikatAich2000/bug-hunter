@@ -1,18 +1,10 @@
 /**
- * PasswordInput — a password <input> with an "eye" button to reveal/hide the
- * typed value.
+ * Password input with a toggle button to show/hide the typed value.
  *
- * Renders:
- *   <div class="pw-wrap">
- *     <input type="password|text" … />
- *     <button class="pw-toggle" aria-label="Show password|Hide password">…</button>
- *   </div>
- *
- * It forwards every prop (name, value, onChange, ref, required, minLength,
- * autoComplete, placeholder, disabled, autoFocus, …) straight onto the input,
- * so it is a drop-in replacement for the bare <input type="password"> it
- * replaces and keeps the same `name` that login/Playwright rely on. Only the
- * `type` is owned internally (toggled by the button).
+ * Forwards all props onto the underlying <input>, making it a drop-in
+ * replacement for a bare <input type="password">. The `name` attribute
+ * passes through unchanged, which login forms and Playwright selectors depend
+ * on. Only `type` is managed internally.
  *
  * No inline styles (strict CSP) — see `.pw-wrap` / `.pw-toggle` in styles.css.
  */

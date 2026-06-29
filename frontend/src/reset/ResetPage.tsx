@@ -1,6 +1,4 @@
-// Reset-password page.
-//
-// No inline scripts/styles (strict CSP); the theme bootstrap lives in main.tsx.
+// Reset-password page. No inline scripts/styles (strict CSP); theme bootstrap is in main.tsx.
 import { useState } from "react";
 import type { FormEvent } from "react";
 import PasswordInput from "../components/PasswordInput";
@@ -14,12 +12,11 @@ interface AlertState {
 }
 
 export default function ResetPage() {
-  // The token arrives in the query string of the emailed link; it never
-  // changes during the page's lifetime, so read it once.
+  // Token comes from the emailed link's query string; read once.
   const [token] = useState(
     () => new URLSearchParams(location.search).get("token") || "",
   );
-  // No token → show the error immediately and disable the whole form.
+  // Missing token: surface the error immediately and disable the form.
   const [resetAlert, setResetAlert] = useState<AlertState | null>(
     token
       ? null
@@ -59,12 +56,10 @@ export default function ResetPage() {
           location.replace("/login.html");
         }, 1500);
       } else {
-        // Render the error legibly. /api/auth/reset-password returns 422 with
-        // `detail` as an ARRAY of Pydantic error objects when the new password
-        // fails the server-side strength/blocklist checks (reachable because the
-        // client only enforces length>=8). The old `String(detail)` produced
-        // "[object Object]" for that case, masking the real reason and blocking
-        // a legitimate reset.
+        // /api/auth/reset-password can return 422 with `detail` as a Pydantic
+        // error array (server-side strength/blocklist checks, reachable because
+        // the client only enforces length>=8). Stringify each item so the user
+        // sees a real message rather than "[object Object]".
         let msg = "Reset failed";
         try {
           const detail: unknown = ((await res.json()) as { detail?: unknown }).detail;

@@ -1,15 +1,12 @@
-"""Tests for security-hardening and performance behavior.
+"""Security hardening and performance tests.
 
 Covers:
-  1. Chatbot Excel export — formula triggers are defanged the same way
-     the CSV and reports exports already were.
-  2. Attachment downloads — inline rendering is safelist-based; unknown
-     MIME types are forced to Content-Disposition: attachment.
-  3. Security headers — X-Permitted-Cross-Domain-Policies joins the
-     existing COOP / CORP set on every response.
-  4. Cached HTML serving still renders both placeholders.
-  5. Events list — batched aggregates return the same counts the old
-     per-event queries produced.
+  1. Chatbot Excel export: formula triggers defanged (same policy as CSV/reports).
+  2. Attachment downloads: inline rendering is safelist-based; unknown MIME types
+     get Content-Disposition: attachment.
+  3. Security headers: X-Permitted-Cross-Domain-Policies present alongside COOP/CORP.
+  4. Cached HTML serving still replaces all placeholders.
+  5. Events list: batched aggregate counts match what per-event queries produce.
 """
 from __future__ import annotations
 
@@ -40,7 +37,7 @@ class TestChatbotExcelDefang:
         }]
         data = _build_workbook(rows, "test export")
         ws = load_workbook(io.BytesIO(data)).active
-        # Row 3 is the first data row (banner + header above it).
+        # Row 3 is the first data row (rows 1-2 are the banner and header).
         assert ws.cell(row=3, column=2).value.startswith("'=")
         assert ws.cell(row=3, column=7).value.startswith("'@")
         assert ws.cell(row=3, column=8).value.startswith("'+")
@@ -81,8 +78,8 @@ class TestAttachmentDispositionSafelist:
         assert r.headers["content-disposition"].startswith("inline;")
 
     def test_unknown_type_forced_to_attachment(self, admin_client):
-        # application/x-anything is not on the safelist — must download,
-        # never render inline.
+        # application/x-anything is not on the safelist, so the browser must
+        # download it rather than render it inline.
         bug_id, att_id = self._make_bug_with_attachment(
             admin_client, "blob.bin", b"\x00\x01", "application/x-custom")
         r = admin_client.get(f"/api/bugs/{bug_id}/attachments/{att_id}/download")
@@ -115,8 +112,8 @@ class TestSecurityHeaders:
 # ---------------------------------------------------------------------------
 class TestCachedHtml:
     def test_login_page_renders_placeholders_repeatedly(self, client):
-        # Two requests — second is served from the render cache and must
-        # be byte-identical with no leaked placeholders.
+        # Second request is served from the render cache; both responses must
+        # be identical with no unreplaced placeholders.
         r1 = client.get("/login.html")
         r2 = client.get("/login.html")
         assert r1.status_code == r2.status_code == 200
@@ -130,8 +127,8 @@ class TestCachedHtml:
 # ---------------------------------------------------------------------------
 class TestEventListAggregates:
     def test_counts_match_after_batching(self, admin_client):
-        # Two events, one with two items, one empty — the batched list
-        # view must report the same counts the detail view computes.
+        # One event gets two items, the other gets none. The list endpoint
+        # (which uses batched aggregates) must report the same counts.
         r = admin_client.post("/api/projects", json={"name": "EvProj", "color": "#000000"})
         project = r.json()
         r = admin_client.post("/api/events", json={"name": "Ev One"})
@@ -152,5 +149,5 @@ class TestEventListAggregates:
         by_id = {e["id"]: e for e in r.json()}
         assert by_id[ev1["id"]]["item_count"] == 2
         assert by_id[ev2["id"]]["item_count"] == 0
-        # creator name still resolved through the batched lookup
+        # creator name must also be resolved via the batched lookup
         assert by_id[ev1["id"]]["created_by_name"] == "Test Admin"

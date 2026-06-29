@@ -1,23 +1,25 @@
 """Keyword retrieval over bugs, used to ground Sleuth's cloud answers.
 
-A LIKE-based keyword search rather than a vector store, so grounding works
-within the low-memory / low-CPU target without pulling in chromadb or an
-embedding model.
+Uses LIKE-based search rather than a vector store, so grounding works on
+low-memory, low-CPU targets without pulling in chromadb or an embedding model.
 
-Read scope matches the REST API: every authenticated user can read every
-bug, so retrieval applies no per-user filter and cannot surface anything the
-caller could not already fetch through the normal API. Retrieved text is
-treated as data, not instructions — format_context wraps it so the contents
-of a bug cannot steer the model (indirect prompt-injection defense).
+Searches are project-scoped via scope_bug_query, so a restricted manager or
+user only ever retrieves bugs from projects they belong to (admins pass
+accessible=None and stay unrestricted). This prevents grounding from becoming
+a side door around the per-project access boundary. Retrieved text is treated
+as data, not instructions; format_context wraps it to guard against prompt
+injection through bug contents.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.access import scope_bug_query
 from app.models import Bug
 
 # High-frequency words that add noise to a keyword search.
@@ -83,12 +85,19 @@ def _snippet(text: str, terms: list[str]) -> str:
     return prefix + body[start:start + _SNIPPET_LEN].rstrip()
 
 
-def retrieve_bugs(db: Session, message: str, *, limit: int = 5) -> list[RetrievedBug]:
-    """Top bugs whose title or description match the message's keywords.
+def retrieve_bugs(db: Session, message: str, *,
+                  accessible: Optional[set[int]] = None,
+                  limit: int = 5) -> list[RetrievedBug]:
+    """Return the top bugs whose title or description match the message's keywords.
 
-    Ranked by how many distinct keywords hit (more specific matches first,
-    newest as the tiebreak). Returns an empty list when the message has no
+    Ranked by the number of distinct keyword hits (more specific matches first,
+    newest as tiebreak). Returns an empty list when the message yields no
     usable keywords or nothing matches.
+
+    ``accessible`` is the caller's project scope (None = unrestricted admin),
+    applied via scope_bug_query to keep out-of-scope bug text out of the
+    grounding context. The None default exists so DB-backed unit tests can call
+    this without specifying it; production callers always pass it explicitly.
     """
     terms = keywords(message)
     if not terms:
@@ -98,14 +107,14 @@ def retrieve_bugs(db: Session, message: str, *, limit: int = 5) -> list[Retrieve
         like = f"%{_like_escape(t)}%"
         clauses.append(func.lower(Bug.title).like(like, escape="\\"))
         clauses.append(func.lower(Bug.description).like(like, escape="\\"))
-    stmt = (
-        select(Bug.id, Bug.title, Bug.description)
-        .where(or_(*clauses))
-        .order_by(Bug.updated_at.desc(), Bug.id.desc())
-        .limit(_MAX_CANDIDATES)
-    )
-    # Every candidate matched at least one term in SQL, so score >= 1; the
-    # count just ranks how many distinct terms hit.
+    # Scope before order_by/limit so the candidate window is computed within
+    # the actor's reach, not narrowed to a global top-N and then filtered.
+    stmt = scope_bug_query(
+        select(Bug.id, Bug.title, Bug.description).where(or_(*clauses)),
+        accessible,
+    ).order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(_MAX_CANDIDATES)
+    # Every candidate matched at least one term in SQL (score >= 1); count
+    # just ranks how many distinct terms hit.
     scored: list[RetrievedBug] = []
     for bid, title, desc in db.execute(stmt).all():
         hay = f"{title or ''} {desc or ''}".lower()
@@ -119,29 +128,27 @@ def retrieve_bugs(db: Session, message: str, *, limit: int = 5) -> list[Retrieve
     return scored[: max(1, limit)]
 
 
-# Fence markers mirror app/chatbot/agent.py. Wrapping the records as a delimited
-# data block (and defanging any literal marker a record's text contains) gives
-# both the single-shot grounding path and the agent's retrieve tool the same
-# structural injection defense. Keep in sync with agent.py's _FENCE_OPEN /
-# _FENCE_CLOSE / _fence_safe.
+# Fence markers mirror app/chatbot/agent.py. Wrapping records in a delimited
+# data block (and neutralising any literal marker they contain) gives both the
+# single-shot grounding path and the agent's retrieve tool the same structural
+# injection defense. Keep in sync with agent.py's _FENCE_OPEN / _FENCE_CLOSE /
+# _fence_safe.
 _FENCE_OPEN = "<<DATA>>"
 _FENCE_CLOSE = "<<END DATA>>"
 
 
 def _defang_markers(text: str) -> str:
-    """Neutralise fence markers a record's text might contain so the record can
-    never close the DATA block early and smuggle instructions to the model."""
+    """Neutralise fence markers in record text so a record can't close the DATA
+    block early and slip instructions to the model."""
     return text.replace("<<", "< <")
 
 
 def format_context(records: list[RetrievedBug]) -> str:
-    """Render retrieved bugs as a fenced, injection-safe context block.
+    """Render retrieved bugs as a fenced context block.
 
-    The header tells the model the records are reference data only and must
-    not be followed as instructions, and the records sit inside a data fence
-    with their own marker characters defanged, so a bug whose text says "ignore
-    your rules" (or forges the fence) cannot hijack the answer. Bug numbers are
-    included so the answer's citations can be verified.
+    Records sit inside a data fence with their marker characters neutralised,
+    so a bug whose text contains instructions (or tries to forge the fence)
+    can't influence the model's answer. Bug numbers are included for citation.
     """
     if not records:
         return ""

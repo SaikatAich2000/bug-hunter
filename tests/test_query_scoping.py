@@ -1,8 +1,8 @@
-"""Tests for NLU scoping and related guards.
+"""NLU scoping tests.
 
-Unit-level coverage of NLU over-match handling, the classifier degenerate-input
-guard, the shared permission helpers, and item-type scoping. DB-backed behavior
-(item-type filtering end to end, get_event truncation) uses the client fixture.
+Covers NLU over-match guards, the classifier degenerate-input check, and
+item-type scoping. DB-backed tests (end-to-end filtering, get_event truncation)
+use the client fixture.
 """
 from __future__ import annotations
 
@@ -15,9 +15,7 @@ def _ctx(projects=None, users=None):
     return nlu.Context(users=users or [], projects=projects or [])
 
 
-# ---------------------------------------------------------------------------
-# A named time window survives irregular internal whitespace.
-# ---------------------------------------------------------------------------
+# Time window parsing tolerates irregular internal whitespace.
 def test_time_window_tolerates_extra_whitespace():
     now = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
     for phrase in ("this week", "this  week", "this\tweek"):
@@ -26,29 +24,23 @@ def test_time_window_tolerates_extra_whitespace():
         assert tw.label == "this week"
 
 
-# ---------------------------------------------------------------------------
-# The free-text tail strips reporter/status/environment clauses.
-# ---------------------------------------------------------------------------
+# The free-text extractor should strip trailing filter clauses.
 def test_free_text_strips_trailing_filter_clauses():
     assert nlu._extract_text_search("bugs about crash reported by alice") == "crash"
     assert nlu._extract_text_search("issues about login with environment PROD") == "login"
     assert nlu._extract_text_search("bugs about timeout with status closed") == "timeout"
 
 
-# ---------------------------------------------------------------------------
-# A project named like a common word isn't matched without an explicit cue.
-# ---------------------------------------------------------------------------
+# A project whose name is a common keyword requires an explicit cue to match.
 def test_project_named_open_not_matched_without_cue():
     ctx = _ctx(projects=[(1, "open", "Open")])
     pq = nlu.parse("show me open bugs", ctx)
-    assert pq.project_ids == []           # "open" is a status word, not the project
+    assert pq.project_ids == []           # "open" reads as a status word here
     pq2 = nlu.parse("show bugs in project Open", ctx)
-    assert pq2.project_ids == [1]         # explicit cue still resolves it
+    assert pq2.project_ids == [1]         # explicit "in project" cue resolves it
 
 
-# ---------------------------------------------------------------------------
-# Ambiguous status/environment words don't over-match.
-# ---------------------------------------------------------------------------
+# Ambiguous status/environment words should not over-match.
 def test_bare_later_is_not_a_status():
     assert nlu._extract_statuses("I'll look at this later") == []
     assert nlu._extract_statuses("mark it resolve later") == ["Resolve Later"]
@@ -61,13 +53,11 @@ def test_ambiguous_env_words_require_context():
     assert nlu._extract_environments("bugs in test") == ["UAT"]
     assert nlu._extract_environments("deploy to live") == ["PROD"]
     assert nlu._extract_environments("the local environment") == ["DEV"]
-    # Unambiguous env words still work as before.
+    # Unambiguous words still work.
     assert nlu._extract_environments("bugs in prod") == ["PROD"]
 
 
-# ---------------------------------------------------------------------------
-# _RECENT_RE boundary precedence
-# ---------------------------------------------------------------------------
+# _RECENT_RE should respect word boundaries.
 def test_recent_re_word_boundaries():
     assert nlu._RECENT_RE.search("prehistory") is None
     assert nlu._RECENT_RE.search("what happenedx") is None
@@ -76,9 +66,7 @@ def test_recent_re_word_boundaries():
     assert nlu._RECENT_RE.search("the audit log") is not None
 
 
-# ---------------------------------------------------------------------------
-# The classifier rejects degenerate number-only input.
-# ---------------------------------------------------------------------------
+# The classifier should reject number-only input rather than guessing an intent.
 def test_classifier_rejects_num_only_input():
     assert classifier.predict("is it 5?") is None
     assert classifier.predict("42") is None
@@ -89,24 +77,20 @@ def test_classifier_still_classifies_real_queries():
     assert pred is not None and pred.intent
 
 
-# ---------------------------------------------------------------------------
-# Item-type scoping in the NLU
-# ---------------------------------------------------------------------------
+# Item-type scoping via noun detection.
 def test_item_types_detected_from_nouns():
     ctx = _ctx()
     assert nlu.parse("list tasks", ctx).item_types == ["Task"]
     assert nlu.parse("show requirements", ctx).item_types == ["Requirement"]
     assert nlu.parse("how many bugs", ctx).item_types == ["Bug"]
     assert nlu.parse("how many defects", ctx).item_types == ["Bug"]
-    # Generic "items" stays type-agnostic.
+    # "items" is generic and should not scope to any type.
     assert nlu.parse("list all items", ctx).item_types == []
-    # Word-boundary: "multitask" / "debug" don't scope.
+    # Substrings like "multitask" and "debug" must not trigger scoping.
     assert nlu.parse("debug the multitask runner", ctx).item_types == []
 
 
-# ---------------------------------------------------------------------------
-# Item-type scope is applied to the list/count SQL (DB-backed).
-# ---------------------------------------------------------------------------
+# DB-backed: item-type scope is applied to list/count queries.
 def _texts(resp):
     return " ".join(b.payload.get("text", "") for b in resp.blocks if b.kind == "text")
 
@@ -129,7 +113,7 @@ def test_chat_count_scopes_to_item_type(client):
                        project_id=proj.id, reporter_id=admin.id, item_type="Task"),
         ])
         db.commit()
-        # 1 task, 1 bug, 2 items total → the type scope changes the count.
+        # 1 task + 1 bug = 2 items total; scoped queries should see only 1 each.
         assert "**1**" in _texts(executor.execute("how many tasks", db, admin))
         assert "**1**" in _texts(executor.execute("how many bugs", db, admin))
         assert "**2**" in _texts(executor.execute("how many items", db, admin))
@@ -137,9 +121,7 @@ def test_chat_count_scopes_to_item_type(client):
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Create-bug priority uses normalize_choice, matching REST behavior.
-# ---------------------------------------------------------------------------
+# Priority normalization via normalize_choice, consistent with the REST layer.
 def test_create_bug_normalizes_lowercase_priority(client):
     from app.database import SessionLocal
     from app import models
@@ -158,7 +140,7 @@ def test_create_bug_normalizes_lowercase_priority(client):
         resp = actions._apply_create_bug(db, plan, admin)
         assert resp.intent == "action_done"
         bug = db.query(models.Bug).filter_by(title="Lower pri").first()
-        assert bug.priority == "High"   # "high" → canonical "High"
+        assert bug.priority == "High"   # lowercase "high" must be canonicalized
     finally:
         db.close()
 
@@ -185,9 +167,7 @@ def test_create_bug_rejects_bogus_priority(client):
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# get_event surfaces items_truncated when the item list is capped.
-# ---------------------------------------------------------------------------
+# get_event sets items_truncated when the result is capped by _EVENT_ITEMS_MAX.
 def test_get_event_items_truncated(admin_client, monkeypatch):
     import app.routes.events as ev_mod
     from app.database import SessionLocal

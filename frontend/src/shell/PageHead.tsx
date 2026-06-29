@@ -1,8 +1,4 @@
-/**
- * PageHead — the page header for the main content area: the view title + a
- * contextual subtitle, and (on the list view) the green "+ New" split button
- * with its type menu.
- */
+/** Header strip: view title, contextual subtitle, and the "+ New" split button (list view only). */
 import { useEffect, useState, type ReactNode } from "react";
 import { useApp } from "../state/AppContext";
 import type { ItemType, ViewName } from "../types";
@@ -16,10 +12,7 @@ const VIEW_TITLES: Record<ViewName, string> = {
   reports: "Reports",
 };
 
-/**
- * One-line purpose per view, shown under the title. The list view computes a
- * live portfolio summary instead (see below); the rest are static.
- */
+/* Static subtitles for every view except "list", which builds its own live summary below. */
 const VIEW_SUBTITLES: Partial<Record<ViewName, string>> = {
   events:
     "Group work items into an event — a standup, a sprint meeting, a release — and track them together",
@@ -51,10 +44,10 @@ export default function PageHead() {
 
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // The active tab wins, else the last-chosen default.
+  // Active tab takes priority over the persisted default type.
   const resolvedNewType: ItemType = activeTab !== "all" ? activeTab : defaultNewType;
 
-  // Close the new-item menu when clicking outside it.
+  // Dismiss the type menu on any outside click.
   useEffect(() => {
     if (!menuOpen) return;
     const onDocClick = (e: MouseEvent) => {
@@ -68,8 +61,7 @@ export default function PageHead() {
 
   const showListChrome = view === "list";
 
-  // Contextual subtitle — the list view shows a live portfolio summary; every
-  // other view shows its static one-liner (ported from the old page-intro).
+  // List view gets a live portfolio summary; all other views use the static subtitle.
   let sub: ReactNode = VIEW_SUBTITLES[view] ?? null;
   if (view === "list") {
     const open = stats?.open ?? 0;
@@ -83,8 +75,7 @@ export default function PageHead() {
 
   return (
     <div className="pagehead">
-      {/* key={view} re-mounts the title block on navigation so it replays the
-          entrance animation. */}
+      {/* key={view} re-mounts on navigation to replay the entrance animation */}
       <div className="pagehead-titles" key={view}>
         <h1 id="pageTitle">{VIEW_TITLES[view]}</h1>
         {sub && <div className="sub">{sub}</div>}

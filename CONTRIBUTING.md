@@ -1,8 +1,7 @@
 # Contributing
 
-Thanks for considering a contribution. Bug Hunter is built to run on a small
-server with no external dependencies, so changes that keep it small and
-self-contained are the easiest to merge.
+Thanks for your interest. Bug Hunter runs on a small server with no external
+dependencies — keep changes small and self-contained and they will merge faster.
 
 ## Setup
 
@@ -14,13 +13,13 @@ pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env       # edit values you care about
 ```
 
-Run the app locally:
+Run locally:
 
 ```bash
 python -m uvicorn app.main:app --reload    # http://127.0.0.1:8000
 ```
 
-Or via Docker, the canonical run path:
+Or via Docker (the canonical run path):
 
 ```bash
 ./deploy.sh                                 # http://localhost:8765
@@ -28,9 +27,9 @@ Or via Docker, the canonical run path:
 
 ### Frontend
 
-The SPA source is in `frontend/` (React + TypeScript + Vite); the build emits
-the static bundle into `app/static/`, which FastAPI serves. After changing
-frontend code, rebuild so the running app picks it up:
+The SPA source lives in `frontend/` (React + TypeScript + Vite). The build
+writes the static bundle to `app/static/`, which FastAPI serves. After any
+frontend change, rebuild:
 
 ```bash
 cd frontend
@@ -40,15 +39,14 @@ npm run build
 
 ## Tests
 
-The full suite must pass for every pull request. Coverage is enforced
-(`fail_under = 99`). `addopts` doesn't add `--cov`, so pass it yourself:
+All tests must pass on every pull request. Coverage is enforced (`fail_under = 99`).
+`addopts` does not include `--cov`, so pass it manually:
 
 ```bash
 python -m pytest -m "not ui" --cov=app      # backend suite + coverage gate
 ```
 
-UI smoke tests use Playwright + Chromium and serve the built SPA, so build the
-frontend first:
+UI smoke tests run Playwright against Chromium and require the built SPA:
 
 ```bash
 cd frontend && npm run build && cd ..
@@ -58,27 +56,26 @@ python -m pytest -m ui
 
 ## Code style
 
-- Match the surrounding code; the repo follows consistent patterns.
-- Skip comments unless the *why* isn't obvious (a hidden constraint, a subtle
-  rule, or a workaround for a specific bug).
-- New routes get tests; new schemas get validators.
+- Match the surrounding code.
+- Only add comments when the *why* is not obvious — a hidden constraint, a
+  subtle rule, or a workaround for a specific bug.
+- New routes need tests; new schemas need validators.
 - Database changes must only *add* — see *Live-data safety* in
   [README.md](README.md). No destructive migrations.
 - If you add or change an API route, regenerate the docs with
-  `python scripts/gen-api-docs.py` (the artifacts under `docs/api/` are
+  `python scripts/gen-api-docs.py` (artifacts under `docs/api/` are
   gitignored; the live FastAPI app is the source of truth).
 
 ## Pull requests
 
 - One concern per pull request.
-- Describe the change in a short paragraph and list any DB or config
-  implications.
-- The test suite must pass and coverage must stay at or above the gate.
-- Reference the related issue, if any.
+- Write a short description of the change and list any DB or config implications.
+- Tests must pass and coverage must stay at or above the gate.
+- Reference the related issue if one exists.
 
 ## Security
 
-Do not open a public issue for vulnerabilities — see [SECURITY.md](SECURITY.md)
+Do not open a public issue for vulnerabilities. See [SECURITY.md](SECURITY.md)
 for the private disclosure path.
 
 ## License

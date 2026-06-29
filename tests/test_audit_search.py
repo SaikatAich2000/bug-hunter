@@ -1,12 +1,11 @@
-"""Audit-search and forgot-password verification tests.
+"""Audit search and forgot-password tests.
 
-Covers:
+Audit search must match on bug numbers (entity_id), entity types, and actor
+names, not just action/detail/actor_name.
 
-* Audit search must cover bug numbers (entity_id), entity types and actor
-  names — not just action/detail/actor_name.
-* Forgot-password validates the email against the DB and returns 404 for
-  unknown addresses (the product owner overrode the anti-enumeration
-  default in favour of friendlier UX).
+Forgot-password validates emails against the DB. By default unknown addresses
+get 204 (enumeration-safe), but the product owner added an opt-out flag that
+restores the friendlier 404 for unknown addresses.
 """
 from __future__ import annotations
 
@@ -32,8 +31,7 @@ def _seed_audit_data(admin_client):
 
 def test_audit_search_by_bug_number(admin_client):
     bug1, _bug2 = _seed_audit_data(admin_client)
-    # The bug-create produces an Activity with entity_id = bug.id. The new
-    # audit search should find it via the bug id directly.
+    # Bug creation produces an Activity with entity_id = bug.id; search should hit it.
     rows = admin_client.get(f"/api/audit?q={bug1['id']}").json()
     assert any(r.get("entity_id") == bug1["id"] for r in rows), \
         f"Expected audit row for bug #{bug1['id']} in {rows}"
@@ -41,7 +39,7 @@ def test_audit_search_by_bug_number(admin_client):
 
 def test_audit_search_with_hash_prefix(admin_client):
     bug1, _ = _seed_audit_data(admin_client)
-    # "#42" / "bug 42" / "ticket #42" all should hit the bug row.
+    # A "#<id>" prefix should still resolve to the same bug row.
     rows = admin_client.get(f"/api/audit?q=%23{bug1['id']}").json()
     assert any(r.get("entity_id") == bug1["id"] for r in rows)
 
@@ -50,7 +48,7 @@ def test_audit_search_by_entity_type(admin_client):
     _seed_audit_data(admin_client)
     rows = admin_client.get("/api/audit?q=bug").json()
     assert len(rows) >= 2
-    # All matching rows should be related to bugs.
+    # Every returned row should relate to bugs.
     assert all(
         (r.get("entity_type") == "bug") or ("bug" in (r.get("action") or "").lower())
         for r in rows
@@ -59,7 +57,7 @@ def test_audit_search_by_entity_type(admin_client):
 
 def test_audit_search_keeps_existing_behaviour(admin_client):
     _seed_audit_data(admin_client)
-    # Search by actor name still works.
+    # Searching by actor name should still work.
     rows = admin_client.get("/api/audit?q=Test").json()  # admin name is "Test Admin"
     assert any("test admin" in (r.get("actor_name") or "").lower() for r in rows)
 
@@ -78,9 +76,9 @@ def test_forgot_password_unknown_email_returns_204_by_default(client):
 
 
 def test_forgot_password_inactive_email_returns_204_by_default(admin_client):
-    """An inactive account shouldn't receive reset emails — and in the
-    enumeration-safe default it returns the same 204 as any other email."""
-    # Create a user, then deactivate them.
+    """Inactive accounts should not receive reset emails. Under the enumeration-safe
+    default, the response is still 204, same as any other address."""
+    # Create a user and immediately deactivate them.
     u = admin_client.post("/api/users", json={
         "name": "Inactive", "email": "off@test.local",
         "role": "user", "password": "Inactive99",
@@ -89,7 +87,7 @@ def test_forgot_password_inactive_email_returns_204_by_default(admin_client):
         "name": "Inactive", "email": "off@test.local",
         "role": "user", "is_active": False,
     })
-    # Log out to hit the public endpoint as an anonymous caller.
+    # Log out so we hit the public endpoint as an anonymous caller.
     admin_client.post("/api/auth/logout")
     r = admin_client.post("/api/auth/forgot-password",
                           json={"email": "off@test.local"})
@@ -97,9 +95,9 @@ def test_forgot_password_inactive_email_returns_204_by_default(admin_client):
 
 
 def test_forgot_password_enumeration_optout_returns_404(client, monkeypatch):
-    """With FORGOT_PASSWORD_ENUMERATION_SAFE=False the legacy friendlier-but-
-    leakier behaviour is restored: an unknown address gets a 404. Patch the live
-    Settings class so the route (which reads get_settings() per request) sees it.
+    """FORGOT_PASSWORD_ENUMERATION_SAFE=False restores the friendlier (but leakier)
+    legacy behaviour: unknown addresses get a 404. We patch the live Settings class
+    so the route (which calls get_settings() per request) picks up the change.
     """
     import app.config as config
     monkeypatch.setattr(config.Settings, "FORGOT_PASSWORD_ENUMERATION_SAFE", False)

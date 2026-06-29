@@ -1,7 +1,7 @@
 """Tests for the Bug / Requirement / Task work-item type feature.
 
-A single "bugs" table now holds three flavors of work item; the column
-that distinguishes them is `item_type`. These tests cover:
+A single "bugs" table holds three flavors of work item distinguished by
+the `item_type` column. Coverage includes:
 
 - /api/meta exposes the allowed types
 - create/update/list/filter honor item_type
@@ -176,8 +176,7 @@ def test_xlsx_export_includes_type_column(admin_client):
 # Email subject / body uses the work-item type
 # ---------------------------------------------------------------------------
 def test_email_subject_uses_item_type(monkeypatch):
-    """notify_assignment must say 'task' / 'requirement' / 'bug' based on the
-    item type, not always 'bug'."""
+    """Email subjects and bodies should reflect the actual item type, not always 'bug'."""
     from app.email_service import (
         BugSnapshot, UserSnapshot,
         notify_assignment, notify_bug_created, notify_bug_updated,
@@ -202,7 +201,7 @@ def test_email_subject_uses_item_type(monkeypatch):
             item_type=item_type,
         )
 
-    # CREATE — subject and body should not say "bug" when the row is a Task
+    # CREATE
     sent.clear()
     notify_bug_created(snap("Task"), actor_user_id=None)
     assert sent, "expected exactly one email for create"
@@ -285,26 +284,24 @@ def test_audit_log_delete_uses_item_type(admin_client):
 # Migration safety
 # ---------------------------------------------------------------------------
 def test_init_db_is_idempotent(admin_client):
-    """Re-running init_db() against a populated database must be a no-op
-    and must not raise — this is what protects the prod DB on every
-    redeploy."""
+    """Re-running init_db() against a populated database must be a no-op —
+    this is what protects the prod DB on every redeploy."""
     from app.database import init_db
-    # First call already ran via app startup; calling it again must succeed.
+    # The first call already ran at app startup; a second and third must be safe.
     init_db()
     init_db()
-    # And data still works after.
+    # Writes must still work afterward.
     p = _make_project(admin_client, name="Idempotent")
     row = _make_item(admin_client, p["id"], item_type="Requirement")
     assert row["item_type"] == "Requirement"
 
 
 def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch):
-    """Simulate a row that was inserted before the item_type column existed:
-    the ALTER TABLE must add the column with DEFAULT 'Bug' so the row is
-    interpreted as a Bug, the same guarantee the live production database
-    gets on upgrade."""
-    # Build a minimal "old" SQLite DB that has a bugs table without the
-    # item_type column, then point the engine at it and call init_db().
+    """Simulate a row inserted before the item_type column existed.
+    init_db() adds the column with DEFAULT 'Bug', so legacy rows stay
+    interpreted as bugs — same guarantee the live DB gets on upgrade."""
+    # Build a minimal "old" SQLite DB without the item_type column, then
+    # point the engine at it and call init_db().
     import sqlite3
     db_file = tmp_path / "legacy.db"
     con = sqlite3.connect(db_file)

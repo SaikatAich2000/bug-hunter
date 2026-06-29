@@ -1,9 +1,9 @@
 /**
- * Change-password modal.
+ * Modal for changing the current user's password.
  *
- * Driven by `changePasswordOpen` in AppContext. Validates match first, then
- * min length, then POSTs /api/auth/change-password with {current_password,
- * new_password} (204 on success).
+ * Validates that the two new-password fields match and meet the policy, then
+ * POSTs to /api/auth/change-password. Controlled by `changePasswordOpen` in
+ * AppContext.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -51,8 +51,8 @@ export default function ChangePasswordModal() {
           method: "POST",
           json: { current_password: current, new_password: next },
         });
-        // Zero the plaintext credentials out of state / the inputs immediately
-        // on success rather than leaving them until the modal is reopened.
+        // Clear credentials from state immediately so they aren't retained
+        // if the modal is opened again.
         setCurrent("");
         setNext("");
         setConfirm("");

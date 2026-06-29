@@ -1,13 +1,12 @@
-"""Source guards for the password-field UX:
+"""Source guards for the password-field UX.
 
-  * the reveal ("eye") toggle on every password input, and
-  * the permanent 'changeme' exception in the client-side password validator.
+Covers two things: the reveal ("eye") toggle on every password input, and the
+permanent 'changeme' exception in the client-side password validator.
 
-These sniff the source wiring so a refactor can't silently drop the eye button
-from a password field, nor re-introduce a client-side check that rejects the
-legacy 'changeme' default the server still accepts (mirrors
-app/schemas._check_password_strength and app/password_breach._ALWAYS_ALLOWED,
-which are covered behaviourally elsewhere).
+Guards against refactors that silently drop the toggle or reintroduce a
+client-side check that rejects 'changeme' — a password the server accepts
+(see app/schemas._check_password_strength and
+app/password_breach._ALWAYS_ALLOWED, covered behaviourally elsewhere).
 """
 from __future__ import annotations
 
@@ -44,16 +43,16 @@ def test_password_input_component_exists():
 
 def test_password_input_toggles_type_and_renders_eye():
     src = _read(PASSWORD_INPUT)
-    # The eye button flips the input between hidden and plain text.
+    # Toggling between text/password drives the eye button's state.
     assert 'type={visible ? "text" : "password"}' in src
-    # Structural class hooks the stylesheet targets.
+    # CSS class hooks that the stylesheet targets.
     assert 'className="pw-wrap"' in src
     assert 'className="pw-toggle"' in src
-    # Accessible name that reflects the current state.
+    # Aria label must reflect current visibility state.
     assert "Show password" in src and "Hide password" in src
-    # The toggle must never submit the surrounding form.
+    # Explicit type="button" prevents accidental form submission.
     assert 'type="button"' in src
-    # forwardRef so callers that need the DOM node (focus) still work.
+    # forwardRef lets callers reach the DOM node for focus management.
     assert "forwardRef" in src
 
 
@@ -67,15 +66,15 @@ def test_password_forms_use_password_input(path):
         f"{path.name} must import PasswordInput"
     )
     assert "<PasswordInput" in src, f"{path.name} must render PasswordInput"
-    # No raw password <input> should remain — they all go through the component
-    # so they all get the eye toggle.
+    # No bare <input type="password"> should remain; everything routes through
+    # PasswordInput so the toggle is guaranteed.
     assert 'type="password"' not in src, (
         f'{path.name} still has a bare type="password" input'
     )
 
 
 def test_password_input_count_matches_fields():
-    # The multi-field forms wire one PasswordInput per password field.
+    # One PasswordInput per field — no field may share or be skipped.
     assert _read(CHANGE_PW).count("<PasswordInput") == 3  # current/new/confirm
     assert _read(RESET).count("<PasswordInput") == 2  # new/confirm
 
@@ -92,7 +91,7 @@ def test_password_toggle_css_present(cls):
 # The permanent 'changeme' client-side exception
 # ---------------------------------------------------------------------------
 def test_client_validator_allows_changeme():
-    # The validator must short-circuit 'changeme' (case-insensitive) before the
-    # length/letter+digit rules, so the UI never rejects a password the backend
-    # would store.
+    # 'changeme' must be whitelisted case-insensitively before the
+    # length/complexity rules, so the UI never rejects a password the backend
+    # accepts.
     assert 'toLowerCase() === "changeme"' in _read(CONSTANTS)

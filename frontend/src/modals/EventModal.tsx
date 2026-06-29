@@ -1,16 +1,10 @@
 /**
- * EventModal — the Event create / edit form.
+ * EventModal — create / edit form for an Event.
  *
- *  - Create mode defaults scheduled_for to today (UTC).
- *  - The manager picker only offers active admin/manager users (the backend
- *    rejects regular users in that slot).
- *  - Submit POSTs /events or PUTs /events/{id} under the blocking loader.
- *  - After a successful save the modal closes and `onSaved` runs inside the
- *    loader (the parent refreshes the list and drills into the event).
- *
- * The date field uses the shared BhDateInput widget, and the modal head comes
- * from the shared <Modal> wrapper — #modalEventTitle is kept as a span inside
- * the h2 so selectors keep resolving.
+ * Create mode defaults scheduled_for to today. The manager picker is limited
+ * to active admin/manager users because the backend rejects regular users in
+ * that role. #modalEventTitle is a span inside the h2 so test selectors keep
+ * working across Modal wrapper changes.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -38,12 +32,10 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
   const [description, setDescription] = useState("");
   const [scheduledFor, setScheduledFor] = useState("");
   const [managerIds, setManagerIds] = useState<number[]>([]);
-  // Owning project (required). "" = nothing picked yet. The dropdown only offers
-  // projects the current actor can see — exactly the set the backend allows.
+  // "" = nothing picked yet; dropdown is scoped to projects the actor can see.
   const [projectId, setProjectId] = useState<number | "">("");
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Seed the form whenever the modal opens.
   useEffect(() => {
     if (!open) return;
     if (event) {
@@ -55,26 +47,22 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
     } else {
       setName("");
       setDescription("");
-      // Default scheduled date to today so the morning-standup case is one click.
+      // Default to today — covers the common same-day scheduling case.
       setScheduledFor(new Date().toISOString().slice(0, 10));
       setManagerIds([]);
-      // Default to the first project the actor can see (projects are loaded at
-      // app boot, so this is populated by the time the modal opens).
+      // Projects are loaded at app boot, so this is already populated.
       setProjectId(projects[0]?.id ?? "");
     }
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, event]);
 
-  // Manager picker: filter to admin/manager users only (the backend
-  // rejects regular users in that slot, so don't even show them as
-  // options to avoid a confusing 400 response).
+  // Backend rejects non-admin/manager users as event managers, so exclude them here.
   const eligibleManagers = users.filter(
     (u) => u.is_active && (u.role === "admin" || u.role === "manager"),
   );
-  // Render chips for the eligible managers PLUS any already-assigned manager
-  // that's no longer eligible (e.g. since deactivated) — otherwise it has no
-  // chip to deselect yet is silently re-submitted on save.
+  // Include previously assigned managers who are now ineligible (e.g. deactivated)
+  // so they can be deselected; without a chip they'd be silently re-submitted.
   const managerPickerItems = eligibleManagers.map((u) => ({ id: u.id, label: u.name, title: u.role }));
   const eligibleManagerIds = new Set(managerPickerItems.map((i) => i.id));
   for (const m of event?.managers ?? []) {

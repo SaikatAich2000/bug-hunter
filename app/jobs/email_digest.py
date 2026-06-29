@@ -4,31 +4,26 @@ Run once a day (e.g. from host cron) with::
 
     python -m app.jobs.email_digest
 
-When ``EMAIL_DIGEST_ENABLED`` is on, the per-operation work-item emails (new
-item / update / assignment / comment / event) are not sent immediately; each
-operation is recorded as a notification row instead (the same rows that power
-the in-app bell, written by ``app.notification_service.notify``). This job
-sweeps up every user's un-emailed operations from the last
-``EMAIL_DIGEST_LOOKBACK_HOURS`` and sends one grouped email per user, then
-stamps ``notifications.emailed_at`` so the same operation is never re-sent.
+When ``EMAIL_DIGEST_ENABLED`` is on, work-item emails are not sent immediately.
+Instead each operation is recorded as a notification row (the same rows that
+power the in-app bell). This job sweeps up every user's un-emailed operations
+from the last ``EMAIL_DIGEST_LOOKBACK_HOURS`` and sends one grouped email per
+user, then stamps ``notifications.emailed_at`` so the same row is never
+re-sent.
 
-Notes
------
-* Idempotent. Rows are selected on ``emailed_at IS NULL`` and stamped after a
-  successful send, so re-running the job (or running it twice a day) never
-  double-sends. The select also claims its rows with ``FOR UPDATE SKIP LOCKED``
-  (Postgres; a no-op on SQLite), so two runners racing in the same minute claim
-  disjoint rows instead of both stamping the same ones.
-* Bounded. The ``created_at >= now - lookback`` window means the first run
-  after enabling this feature can't replay the entire notification history;
-  only the last ~day is considered. Older rows age out of the window instead
-  of flooding inboxes.
-* Per-user and role-respecting. Notification rows only exist for users already
-  entitled to know about the operation, so the digest inherits that scoping
-  with no extra checks.
-* Security emails are untouched. Password-reset and other transactional emails
-  never become notification rows and always send immediately; this job only
-  deals with the five work-item operation categories.
+A few design properties worth knowing:
+
+* **Idempotent.** Rows are selected on ``emailed_at IS NULL`` and stamped after
+  a successful send, so re-running (or running twice in a day) never
+  double-sends. The actual claim uses a guarded UPDATE rather than SELECT FOR
+  UPDATE, so it works correctly on SQLite too (see ``run_digest`` for details).
+* **Bounded.** The ``created_at >= now - lookback`` window prevents the first
+  run after enabling the feature from replaying the entire notification history.
+  Older rows age out of the window instead of flooding inboxes.
+* **Role-scoped.** Notification rows only exist for users already entitled to
+  see the operation, so the digest inherits that scoping with no extra checks.
+* **Security emails are unaffected.** Password-reset and other transactional
+  emails never become notification rows and always send immediately.
 """
 from __future__ import annotations
 
@@ -47,8 +42,7 @@ logger = logging.getLogger("bug_hunter.digest")
 
 _SUBJECT_PREFIX = "[Bug Hunter]"
 
-# Display order + human label for each notification ``kind``. Mirrors the five
-# operation categories the in-app bell already uses.
+# Display order and labels for the five notification kinds, matching the in-app bell.
 _CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
     ("assigned", "🎯 Assigned to you"),
     ("reported", "🆕 Reported by / with you"),
@@ -149,21 +143,18 @@ def run_digest(
         return {"users": 0, "emails_sent": 0, "operations": 0}
 
     by_user = _group_by_user(rows)
-    # Phase 1 — for each deliverable user, atomically claim their rows with a
-    # guarded UPDATE (set emailed_at WHERE emailed_at IS NULL) and only build a
-    # digest when the claim affected rows. This is atomic on both backends,
-    # unlike FOR UPDATE SKIP LOCKED, which SQLite ignores, so two overlapping
-    # runs there would otherwise both stamp and both send. The loser of a race
-    # sees rowcount 0 and skips, so each row is emailed once. Claim and commit
-    # before the blocking SMTP sends so a slow mail server can't pin a DB
-    # connection for the whole batch.
+    # Claim rows with a guarded UPDATE (emailed_at IS NULL) rather than SELECT
+    # FOR UPDATE, which SQLite silently ignores. This way two concurrent runs
+    # can't both claim and send the same rows — the loser sees rowcount 0 and
+    # skips. We commit the claims before the SMTP loop so a slow mail server
+    # can't hold a DB connection for the entire batch.
     outbox: list[tuple[str, str, str]] = []  # (email, subject, body)
     operations = 0
     for user_id, user_rows in by_user.items():
         user = db.get(User, user_id)
         if user is None or not user.is_active or not user.email:
-            # Nothing to deliver to — leave the rows un-stamped; the lookback
-            # window ages them out on its own (they remain visible in-app).
+            # No deliverable address; leave rows un-stamped so they stay
+            # visible in-app and age out of the window naturally.
             continue
         ids = [r.id for r in user_rows]
         claimed = (
@@ -172,7 +163,7 @@ def run_digest(
             .update({Notification.emailed_at: now}, synchronize_session=False)
         )
         if not claimed:
-            # Another runner already claimed these rows — don't double-send.
+            # Another runner already claimed these rows.
             continue
         subject, body = render_digest(user, user_rows)
         outbox.append((user.email, subject, body))
@@ -180,9 +171,9 @@ def run_digest(
 
     db.commit()  # claimed rows are now stamped (at-most-once)
 
-    # Phase 2 — deliver OUTSIDE the transaction. A crash here drops at most this
-    # batch's emails (already stamped), which is preferable to double-sending or
-    # to holding DB locks across network I/O.
+    # Deliver outside the transaction. A crash here drops this batch's emails
+    # (already stamped), which is better than double-sending or holding DB
+    # locks across network I/O.
     for email, subject, body in outbox:
         email_service.deliver(subject, [email], body)
 
@@ -212,8 +203,8 @@ def main() -> int:
         )
         return 0
     except Exception:
-        # Broad on purpose: any failure becomes a non-zero exit code (logged
-        # below) so a cron wrapper can detect it, rather than a raw traceback.
+        # Broad catch so any failure becomes a non-zero exit code that a cron
+        # wrapper can detect, rather than an uncaught traceback.
         logger.exception("Email digest job failed.")
         return 1
     finally:

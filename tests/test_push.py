@@ -1,20 +1,18 @@
 """Tests for web push (Firebase Cloud Messaging).
 
-The FCM network transport (app.fcm_transport.send) is mocked everywhere, so
-nothing here needs firebase-admin or a live Firebase project. Covers:
+app.fcm_transport.send is mocked throughout, so no firebase-admin or live
+Firebase project is needed. Covers:
   - /api/push/config (disabled by default; exposes public config when enabled)
   - subscribe / unsubscribe (auth required, per-user scoped, token upsert)
   - push_service.push_to_users: disabled no-op, send + dead-token pruning
-  - the immediacy guarantee: an operation fires a push right away (no cron)
+  - immediacy guarantee: an operation fires a push during the request (no cron)
 """
 from __future__ import annotations
 
 BOOTSTRAP_EMAIL = "admin@test.local"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# -- helpers -----------------------------------------------------------------
 def _enable_push(monkeypatch, on=True):
     from app.config import get_settings
     s = get_settings()
@@ -24,7 +22,7 @@ def _enable_push(monkeypatch, on=True):
 
 
 def _capture_fcm(monkeypatch, dead=None):
-    """Mock the FCM transport; record calls, return the given dead tokens."""
+    """Patch the FCM transport to record calls and return the given dead tokens."""
     calls: list[dict] = []
 
     def fake_send(tokens, *, title, body, url="", data=None):
@@ -62,12 +60,10 @@ def _register(user_id: int, token: str):
     db.close()
 
 
-# ---------------------------------------------------------------------------
-# /api/push/config
-# ---------------------------------------------------------------------------
+# -- /api/push/config --------------------------------------------------------
 def test_config_reports_disabled_when_off(admin_client, monkeypatch):
-    # Force-disabled so the test is hermetic regardless of the deployment's
-    # ambient .env (which may legitimately have WEB_PUSH_ENABLED=true).
+    # Force off so the test is hermetic regardless of the host's .env
+    # (which may legitimately have WEB_PUSH_ENABLED=true).
     _enable_push(monkeypatch, on=False)
     r = admin_client.get("/api/push/config")
     assert r.status_code == 200
@@ -82,11 +78,9 @@ def test_config_exposes_public_values_when_enabled(admin_client, monkeypatch):
     assert j["vapid_key"] == "test-vapid-key"
 
 
-# ---------------------------------------------------------------------------
-# Service worker (served from the root scope)
-# ---------------------------------------------------------------------------
+# -- service worker (served from the root scope) -----------------------------
 def test_service_worker_noop_when_disabled(client, monkeypatch):
-    _enable_push(monkeypatch, on=False)  # hermetic regardless of ambient .env
+    _enable_push(monkeypatch, on=False)  # hermetic regardless of host .env
     r = client.get("/firebase-messaging-sw.js")
     assert r.status_code == 200
     assert "javascript" in r.headers["content-type"]
@@ -103,9 +97,7 @@ def test_service_worker_injects_config_when_enabled(client, monkeypatch):
     assert "onBackgroundMessage" in r.text
 
 
-# ---------------------------------------------------------------------------
-# subscribe / unsubscribe
-# ---------------------------------------------------------------------------
+# -- subscribe / unsubscribe -------------------------------------------------
 def test_subscribe_requires_auth(client):
     assert client.post("/api/push/subscribe", json={"token": "t1"}).status_code == 401
     assert client.post("/api/push/unsubscribe", json={"token": "t1"}).status_code == 401
@@ -144,18 +136,18 @@ def test_subscribe_same_token_upserts(admin_client):
         .where(PushSubscription.token == "dup")
     )
     db.close()
-    assert n == 1  # re-homed, not duplicated
+    assert n == 1  # upserted, not duplicated
 
 
 def test_unsubscribe_is_user_scoped(admin_client):
-    # Admin registers a token, then a different user tries to remove it.
+    # Admin registers a token, then another user attempts to remove it.
     admin_client.post("/api/push/subscribe", json={"token": "admins-token"})
     _mk_user(admin_client, "Mallory", "mallory@test.local")
     admin_client.post("/api/auth/logout")
     admin_client.post("/api/auth/login", json={"email": "mallory@test.local", "password": "User12345"})
 
     r = admin_client.post("/api/push/unsubscribe", json={"token": "admins-token"})
-    assert r.json()["ok"] is False  # not yours → nothing removed
+    assert r.json()["ok"] is False  # wrong owner, nothing removed
 
     from sqlalchemy import select
     from app.models import PushSubscription
@@ -164,11 +156,9 @@ def test_unsubscribe_is_user_scoped(admin_client):
     db.close()
 
 
-# ---------------------------------------------------------------------------
-# push_service.push_to_users
-# ---------------------------------------------------------------------------
+# -- push_service.push_to_users ----------------------------------------------
 def test_push_to_users_noop_when_disabled(admin_client, monkeypatch):
-    _enable_push(monkeypatch, on=False)  # hermetic regardless of ambient .env
+    _enable_push(monkeypatch, on=False)  # hermetic regardless of host .env
     calls = _capture_fcm(monkeypatch)
     from app import push_service
     db = _session()
@@ -177,7 +167,7 @@ def test_push_to_users_noop_when_disabled(admin_client, monkeypatch):
     _register(admin_id, "tok")
 
     assert push_service.push_to_users([admin_id], title="x", body="y") == 0
-    assert calls == []  # transport never touched when disabled
+    assert calls == []  # transport is never called when push is disabled
 
 
 def test_push_to_users_sends_and_prunes_dead_tokens(admin_client, monkeypatch):
@@ -193,7 +183,7 @@ def test_push_to_users_sends_and_prunes_dead_tokens(admin_client, monkeypatch):
     delivered = push_service.push_to_users([admin_id], title="T", body="B", url="/#bug=1")
     assert len(calls) == 1
     assert set(calls[0]["tokens"]) == {"live-tok", "dead-tok"}
-    assert delivered == 1  # 2 sent − 1 dead
+    assert delivered == 1  # 2 tokens sent, 1 reported dead
 
     from sqlalchemy import select
     from app.models import PushSubscription
@@ -203,9 +193,7 @@ def test_push_to_users_sends_and_prunes_dead_tokens(admin_client, monkeypatch):
     db.close()
 
 
-# ---------------------------------------------------------------------------
-# Immediacy: an operation fires a push right away (no cron / no digest)
-# ---------------------------------------------------------------------------
+# -- immediacy: push fires during the request, not in a cron/digest ----------
 def test_operation_fires_push_immediately(admin_client, monkeypatch):
     _enable_push(monkeypatch, on=True)
     calls = _capture_fcm(monkeypatch)
@@ -219,8 +207,8 @@ def test_operation_fires_push_immediately(admin_client, monkeypatch):
     })
     assert r.status_code == 201, r.text
 
-    # The assignment push fired to Xavier's device during the request (the
-    # BackgroundTask runs before TestClient returns) — no daily job involved.
+    # BackgroundTasks run before TestClient returns, so the push arrives
+    # synchronously here — no daily job or cron needed.
     pushed = [c for c in calls if "xavier-token" in c["tokens"]]
     assert pushed, calls
     assert "Push me" in pushed[0]["body"]
@@ -235,8 +223,8 @@ def test_actor_does_not_get_their_own_push(admin_client, monkeypatch):
     db.close()
     _register(admin_id, "admin-token")
 
-    # Admin files a bug with no other assignee — admin is the actor, so the
-    # only would-be recipient is excluded; no push.
+    # Admin is both actor and sole assignee, so the recipient list is empty
+    # after self-exclusion; no push should fire.
     proj = admin_client.post("/api/projects", json={"name": "Solo"}).json()
     admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "Just me", "priority": "Low",
@@ -246,8 +234,8 @@ def test_actor_does_not_get_their_own_push(admin_client, monkeypatch):
 
 
 def test_bulk_delete_fires_push_immediately(admin_client, monkeypatch):
-    """A bulk delete pushes to assignees just like a single delete — parity on
-    every channel for the bulk path that was previously silent."""
+    """Bulk delete must push to assignees, same as a single delete. The bulk
+    path was previously silent; this guards against regression."""
     _enable_push(monkeypatch, on=True)
     calls = _capture_fcm(monkeypatch)
     yid = _mk_user(admin_client, "Yolanda", "yolanda@test.local")
@@ -258,7 +246,7 @@ def test_bulk_delete_fires_push_immediately(admin_client, monkeypatch):
         "project_id": proj["id"], "title": "Bulk push me", "priority": "Medium",
         "environment": "DEV", "assignee_ids": [yid],
     }).json()
-    calls.clear()  # drop the assignment push; isolate the bulk-delete push
+    calls.clear()  # discard the creation push; only inspect the bulk-delete push
 
     r = admin_client.post("/api/bugs/bulk", json={"action": "delete", "ids": [bug["id"]]})
     assert r.status_code == 200, r.text

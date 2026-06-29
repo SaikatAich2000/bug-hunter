@@ -1,7 +1,7 @@
-"""Scheduled / out-of-band jobs for Bug Hunter.
+"""Out-of-band jobs for Bug Hunter.
 
-These are standalone entry points meant to be run by an external scheduler
-(host cron, Windows Task Scheduler, a Kubernetes CronJob, etc.) rather than
-inside the request path. Each module exposes a ``main()`` and is runnable with
+Each module is a standalone entry point designed to be invoked by an external
+scheduler (host cron, Windows Task Scheduler, Kubernetes CronJob, etc.), not
+from the request path. Every module exposes a ``main()`` and can be run with
 ``python -m app.jobs.<name>``.
 """

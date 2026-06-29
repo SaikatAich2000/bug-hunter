@@ -1,19 +1,16 @@
 /**
- * Shared attachment-upload limits and checks. Mirrors the server policy
- * (MAX_FILE_BYTES in app/routes/bugs.py) so the UI can stop an oversized file
- * before the upload starts and explain why in plain language.
+ * Attachment upload limits, mirroring MAX_FILE_BYTES in app/routes/bugs.py so
+ * the UI can reject oversized files client-side before a request is made.
  */
 import { formatBytes } from "./format";
 
-/** Largest file the server accepts per attachment (mirrors MAX_FILE_BYTES). */
+/** Server-enforced per-attachment size cap. */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /** Human-readable size limit used in messages. */
 export const MAX_UPLOAD_LABEL = "50 MB";
 
-/**
- * Return a user-facing message if the file is over the size limit, else null.
- */
+/** Returns an error message when the file exceeds the size limit, otherwise null. */
 export function fileTooLargeMessage(file: File): string | null {
   if (file.size <= MAX_UPLOAD_BYTES) return null;
   const name = file.name || "This file";
@@ -21,8 +18,8 @@ export function fileTooLargeMessage(file: File): string | null {
 }
 
 /**
- * Split files into those within the size limit and a ready-to-show message
- * naming any that were too large (null when none were).
+ * Splits files into allowed and oversized groups. Returns a display-ready
+ * error message listing the oversized files, or null if all fit.
  */
 export function partitionBySize(files: File[]): {
   allowed: File[];

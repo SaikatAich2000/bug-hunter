@@ -1,22 +1,18 @@
-"""Source guards for the frontend theme and layout.
+"""Source-level guards for the frontend theme and layout.
 
-These tests can't run a DOM through the TestClient, so they pin the theme and
-layout invariants by sniffing the React/CSS/HTML sources.
+These tests inspect React/CSS/HTML source files directly because there is no
+real DOM to drive. Invariants covered:
 
-The invariants pinned here:
-
-  1. Unified Steam page header — every view's title/subtitle lives once in
-     PageHead. The old per-view `.page-intro` banners (which duplicated the
-     title once PageHead rendered it for all views) are gone.
-  2. Mobile drawer view-nav — the desktop chrome bar hides its horizontal nav
-     on phones, so the view nav is surfaced inside the drawer (Sidebar) from a
-     shared NAV_ITEMS module both nav surfaces consume, role-gated identically.
-  3. Steam field-gradient modal headers (same surface family as the table
-     panel header) and the title/subtitle stack styling.
-  4. The Sessions help text points at the profile menu (where Log out lives),
+  1. Unified page header: titles/subtitles live only in PageHead; the old
+     per-view `.page-intro` banners that duplicated those titles are gone.
+  2. Mobile drawer nav: the desktop chrome hides its horizontal nav on phones,
+     so view navigation is surfaced in the Sidebar drawer via a shared
+     NAV_ITEMS module, role-gated the same way on both surfaces.
+  3. Steam field-gradient modal headers and title/subtitle stack styling.
+  4. Sessions help text references the profile menu (where Log out now lives),
      not the old sidebar.
-  5. The reduced-radius token scale and dead-CSS cleanup.
-  6. `meta theme-color` (Steam chrome) on all three HTML entry points.
+  5. Reduced-radius token scale and dead-CSS removal.
+  6. `meta theme-color` on all three HTML entry points.
 """
 from __future__ import annotations
 
@@ -48,12 +44,12 @@ def _read(p: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. Unified page header — the duplicate per-view intro banners are gone
+# 1. Unified page header
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("view_file", [AUDIT, SESSIONS, REPORTS, EVENTS])
 def test_views_no_longer_render_duplicate_page_intro(view_file):
     """PageHead renders the title for every view, so a per-view `.page-intro`
-    banner would print the same title twice. All four were removed."""
+    banner would duplicate the title. All four were removed."""
     src = _read(view_file)
     assert "page-intro" not in src, (
         f"{view_file.name} still renders a .page-intro banner — that duplicates "
@@ -62,8 +58,8 @@ def test_views_no_longer_render_duplicate_page_intro(view_file):
 
 
 def test_pagehead_supplies_per_view_subtitles():
-    """Every view gets the same Steam header (title + subtitle). The static
-    one-liners moved from the old intros into PageHead's VIEW_SUBTITLES."""
+    """Static subtitle strings that lived in each view's intro banner were
+    centralised into PageHead's VIEW_SUBTITLES map."""
     src = _read(PAGEHEAD)
     assert "VIEW_SUBTITLES" in src, "PageHead must define the per-view subtitle map"
     for key in ("events", "analytics", "audit", "sessions", "reports"):
@@ -71,17 +67,17 @@ def test_pagehead_supplies_per_view_subtitles():
 
 
 def test_pagehead_dead_intro_css_removed():
-    """With every intro gone, the `.page-intro*` rules are dead and removed."""
+    """With the intro banners gone, the `.page-intro*` rules are dead and should be absent."""
     css = _read(STYLES)
     assert ".page-intro" not in css, ".page-intro CSS should be removed (no intros left)"
 
 
 # ---------------------------------------------------------------------------
-# 2. Mobile drawer view-nav (the fix for the nav vanishing on phones)
+# 2. Mobile drawer view-nav
 # ---------------------------------------------------------------------------
 def test_nav_items_is_a_shared_module():
-    """NAV_ITEMS lives in one module so the desktop chrome bar and the mobile
-    drawer can't drift. All six top-level views are present."""
+    """NAV_ITEMS is defined once so the desktop chrome and mobile drawer stay in
+    sync. All six top-level views must be present."""
     src = _read(NAVITEMS)
     assert "export const NAV_ITEMS" in src
     for view in ("list", "events", "analytics", "reports", "audit", "sessions"):
@@ -96,8 +92,8 @@ def test_topchrome_and_sidebar_share_nav_items():
 
 
 def test_sidebar_renders_role_gated_drawer_nav():
-    """The Sidebar surfaces the view nav (mobile drawer) behind the same
-    VIEW_MIN_ROLE gate the chrome uses, and closes the drawer on navigate."""
+    """The Sidebar drawer nav uses the same VIEW_MIN_ROLE gate as the desktop
+    chrome and fires onNavigate so the drawer can close after selection."""
     src = _read(SIDEBAR)
     assert 'className="sidebar-nav"' in src, "Sidebar must render the drawer nav"
     assert "NAV_ITEMS" in src
@@ -106,11 +102,11 @@ def test_sidebar_renders_role_gated_drawer_nav():
 
 
 def test_drawer_nav_css_is_desktop_hidden_mobile_shown():
-    """`.sidebar-nav` is hidden on desktop (chrome owns the nav) and unfolds
-    inside the drawer at the phone breakpoint."""
+    """`.sidebar-nav` is hidden at desktop widths (the chrome bar owns nav there)
+    and shown as a flex column inside the 900px breakpoint."""
     css = _read(STYLES)
     assert ".sidebar-nav { display: none; }" in css, "drawer nav must be hidden on desktop"
-    # In the phone breakpoint it becomes a flex column.
+    # Becomes flex inside the phone breakpoint.
     assert "max-width: 900px" in css
     nav_idx = css.find(".sidebar-nav {", css.find("max-width: 900px"))
     assert nav_idx != -1, ".sidebar-nav must be re-shown inside the 900px breakpoint"
@@ -119,19 +115,16 @@ def test_drawer_nav_css_is_desktop_hidden_mobile_shown():
 
 
 def test_frame_layout_and_drawer_outranks_chrome():
-    """The shipped layout is the two-tier mockup: a full-width chrome (brand +
-    nav) and supernav above a fixed 236px library-rail + scrolling main (the
-    `.frame` grid). The rail can collapse to a narrow strip via the
-    `body.sidebar-collapsed` class (see the collapse-feature tests), but the
-    earlier `--rail-w` / `.app-shell` collapsible-grid experiment was reverted.
-    On phones the off-canvas drawer must outrank the chrome (z 20) + backdrop
-    (z 44)."""
+    """Layout is a full-width chrome bar above a fixed 236px rail and scrolling
+    main (the `.frame` grid). The rail collapses via `body.sidebar-collapsed`
+    (see collapse tests). An earlier `--rail-w` / `.app-shell` approach was
+    reverted in favour of the body-class method. On phones the off-canvas
+    drawer sits above both the chrome (z 20) and the backdrop (z 44)."""
     css = _read(STYLES)
     assert ".frame {" in css, "the two-tier frame grid must exist"
     assert "grid-template-columns: 236px 1fr" in css, "frame = fixed rail + main"
     assert ".brandmark" in css, "the brand mark lives in the chrome"
-    # The earlier custom-property-driven collapsible-rail layout was reverted in
-    # favour of the body.sidebar-collapsed approach.
+    # The --rail-w / .app-shell custom-property approach was reverted in favour of the body class.
     assert "--rail-w" not in css, "collapsible-rail custom property must be gone"
     assert ".app-shell" not in css, "the app-shell grid wrapper must be gone"
     assert "z-index: 45" in css, "mobile drawer must sit above chrome + backdrop"
@@ -150,25 +143,25 @@ def test_modal_head_uses_steam_field_gradient():
         "modal header must use the Steam field-gradient (same surface family as "
         "the table panel header)"
     )
-    # The title + subtitle stack styling the Modal wrapper relies on.
+    # Both are referenced by the Modal wrapper component.
     assert ".modal-head-text" in css
     assert ".modal-subtitle" in css
 
 
 # ---------------------------------------------------------------------------
-# 4. Stale Sessions copy fixed (Log out moved to the profile menu)
+# 4. Sessions copy updated (Log out moved from sidebar to profile menu)
 # ---------------------------------------------------------------------------
 def test_sessions_copy_points_at_profile_menu_not_sidebar():
     src = _read(SESSIONS)
     assert "profile menu" in src, "Sessions help must direct users to the profile menu"
     assert "the sidebar" not in src, (
         "Sessions copy still references the old sidebar Log out (it moved to the "
-        "profile menu in the v3.0 shell)"
+        "profile menu in the v3.1 shell)"
     )
 
 
 # ---------------------------------------------------------------------------
-# 5. Reduced-radius token scale + dead-CSS cleanup
+# 5. Reduced-radius token scale and dead-CSS cleanup
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("css_file", [STYLES, CHATBOT])
 def test_oversized_radii_were_reduced(css_file):
@@ -191,13 +184,12 @@ def test_dead_selectors_removed(dead):
 
 
 # ---------------------------------------------------------------------------
-# 5b. Collapse Sidebar (GitLab-style rail collapse) — a real, persisted feature
-#     keyed off `body.sidebar-collapsed`. These pin the wiring end to end so a
-#     refactor can't silently break the collapse without tripping CI.
+# 5b. Collapse sidebar (GitLab-style rail) keyed off `body.sidebar-collapsed`.
+#     These pin the wiring so a refactor can't silently break it.
 # ---------------------------------------------------------------------------
 def test_collapse_sidebar_button_wired_in_sidebar():
-    """The footer collapse control toggles the shared state and exposes its
-    open/closed status to assistive tech."""
+    """The footer collapse control toggles shared state and exposes its
+    open/closed status via aria-expanded."""
     src = _read(SIDEBAR)
     assert 'className="sidebar-collapse-btn"' in src, "collapse control must render"
     assert "toggleSidebarCollapsed" in src, "the button must call the toggle"
@@ -206,8 +198,8 @@ def test_collapse_sidebar_button_wired_in_sidebar():
 
 
 def test_collapse_state_is_persisted_in_appcontext():
-    """The collapsed flag survives reloads via localStorage and drives the
-    `body.sidebar-collapsed` class the CSS keys off."""
+    """The collapsed flag is persisted in localStorage and reflected as
+    `body.sidebar-collapsed`, which the CSS keys off."""
     src = _read(APPCONTEXT)
     assert "sidebarCollapsed" in src and "toggleSidebarCollapsed" in src
     assert 'readLs("sidebarCollapsed"' in src, "initial state must hydrate from storage"
@@ -216,16 +208,16 @@ def test_collapse_state_is_persisted_in_appcontext():
 
 
 def test_collapse_class_applied_before_first_paint():
-    """The persisted state is applied in main.tsx before React mounts so a
-    reload doesn't flash the expanded rail."""
+    """Applied in main.tsx before React mounts so a reload doesn't flash the
+    expanded rail."""
     src = _read(MAIN)
     assert 'localStorage.getItem("sidebarCollapsed")' in src
     assert '"sidebar-collapsed"' in src, "main must add the body class pre-paint"
 
 
 def test_collapse_css_is_live_and_animated():
-    """`body.sidebar-collapsed` narrows the rail at the desktop breakpoint and
-    the chevron rotates; the grid width change is transitioned, not abrupt."""
+    """`body.sidebar-collapsed` narrows the rail at desktop widths and flips the
+    chevron; the grid-column change is transitioned, not abrupt."""
     css = _read(STYLES)
     assert "body.sidebar-collapsed" in css, "the collapse selector must be live"
     assert ".sidebar-collapse-btn" in css, "the collapse control must be styled"
@@ -245,13 +237,12 @@ def test_html_has_steam_theme_color(html):
 
 
 # ---------------------------------------------------------------------------
-# Steam identity tokens (pin the palette so a token reskin can't silently
-# revert the theme)
+# Steam identity tokens — pin the palette so a reskin can't silently revert it.
 # ---------------------------------------------------------------------------
 def test_steam_identity_tokens_present():
     css = _read(STYLES)
     assert "--chrome: #171a21" in css, "Steam chrome token"
     assert "--panel-field:" in css, "Steam steel field-gradient token"
     assert "--green-face:" in css, "Steam green install-button token"
-    # The Steam font stack + self-hosted Asap stand-in.
+    # Motiva Sans is the Steam font; Asap is the self-hosted stand-in.
     assert '"Motiva Sans", "Asap"' in css

@@ -1,34 +1,27 @@
-"""Pure-unit coverage for app/schemas.py — the Pydantic schemas, their
-field/model validators, and the in-house HTML sanitizer.
+"""Pure-unit tests for app/schemas.py: Pydantic schemas, field/model
+validators, and the in-house HTML sanitizer.
 
-These tests import classes/helpers straight from ``app.schemas`` and exercise
-them directly; no TestClient / DB is needed. Each validator branch gets one
-passing case and one failing case so both the "valid" early-return path and
-the "raise" path are covered.
+Tests import directly from ``app.schemas`` with no TestClient or DB. Each
+validator branch gets a passing case and a failing case.
 
-IMPORTANT (mirrors tests/test_password_policy.py): the ``client`` fixture in
-conftest.py deletes and re-imports every ``app.*`` module between tests, so a
-module captured at THIS file's top level would go stale. We therefore import
-``app.schemas`` / ``app.config`` INSIDE each test (via the ``_S()`` helper) so
-we always patch and assert against the SAME import generation the validators
-read at call time.
+The ``client`` fixture in conftest.py deletes and re-imports every ``app.*``
+module between tests, so a top-level module reference would go stale. We
+import ``app.schemas`` / ``app.config`` inside each test via the ``_S()``
+helper to always hit the same import generation the validators see at
+call time.
 
-The permanent 'changeme' password exception must keep passing — see
-test_cov_password_changeme_exception_always_passes.
-
-Some branches (``not isinstance(v, str)`` guards and the ``if v is None:
-return None`` early returns) can't be reached through normal Pydantic model
-construction because Pydantic coerces/rejects the value before the plain
-validator body runs. For those we call the validator/helper function directly,
-which is exactly the code path the model would execute for an already-correct
-type.
+Some branches (``not isinstance(v, str)`` guards and ``if v is None: return
+None`` early returns) can't be reached through normal Pydantic model
+construction because Pydantic coerces/rejects the value before the validator
+body runs. For those we call the validator/helper directly.
 """
 import pytest
 from pydantic import ValidationError
 
 
 def _S():
-    """Return the live app.schemas module for the current import generation."""
+    """Return the live app.schemas module for the current import generation.
+    See module docstring for why this is imported lazily."""
     import app.schemas as schemas
     return schemas
 
@@ -37,16 +30,16 @@ def _S():
 # HTML sanitizer (_HTMLAllowlistSanitizer / sanitize_html)
 # ---------------------------------------------------------------------------
 def test_cov_sanitize_html_none_returns_empty():
-    # A None value returns the empty string.
+    # None input returns an empty string.
     s = _S()
     assert s.sanitize_html(None) == ""
 
 
 def test_cov_sanitize_html_keeps_allowed_strips_disallowed():
     s = _S()
-    # <b> kept; <script> AND its text content are dropped entirely (the script
-    # body is RCDATA — re-emitting it even escaped is a parser-differential
-    # hazard), while surrounding text ("x") survives.
+    # <b> is kept; <script> and its body are dropped entirely. Re-emitting
+    # the body even escaped is a parser-differential hazard, so we strip it.
+    # Surrounding text ("x") must survive.
     out = s.sanitize_html("<b>hi</b><script>alert(1)</script>x")
     assert "<b>hi</b>" in out
     assert "<script>" not in out
@@ -63,21 +56,19 @@ def test_cov_sanitize_html_idempotent():
 
 
 def test_cov_sanitize_url_empty_returns_none():
-    # An href present but empty is dropped.
+    # An empty href is dropped; the <a> tag is still emitted with the forced rel.
     s = _S()
     out = s.sanitize_html('<a href="">link</a>')
-    # empty href is dropped; a-tag still emitted with forced rel.
     assert 'href=' not in out
     assert 'rel="noopener nofollow"' in out
 
 
 def test_cov_sanitize_url_data_image_ok_and_too_big():
-    # A valid data:image is kept; an oversized data:image is dropped.
+    # A small data:image is kept; one over the 14 MB limit has its src stripped.
     s = _S()
     small = '<img src="data:image/png;base64,AAAA" alt="x">'
     out = s.sanitize_html(small)
     assert 'src="data:image/png;base64,AAAA"' in out
-    # > 14 MB after the data: prefix -> src dropped.
     big_payload = "A" * (14 * 1024 * 1024 + 10)
     big = f'<img src="data:image/png;base64,{big_payload}" alt="x">'
     out_big = s.sanitize_html(big)
@@ -86,22 +77,21 @@ def test_cov_sanitize_url_data_image_ok_and_too_big():
 
 
 def test_cov_sanitize_url_allowed_scheme_kept():
-    # An allowed scheme (http:) is returned as-is.
+    # https: is an allowed scheme and is kept unchanged.
     s = _S()
     out = s.sanitize_html('<a href="https://example.com">ex</a>')
     assert 'href="https://example.com"' in out
 
 
 def test_cov_sanitize_url_disallowed_scheme_dropped():
-    # javascript: is not allowed, so the href is stripped.
+    # javascript: is not an allowed scheme, so the href is stripped.
     s = _S()
     out = s.sanitize_html('<a href="javascript:alert(1)">x</a>')
     assert "javascript:" not in out
 
 
 def test_cov_sanitize_attr_disallowed_dropped():
-    # An attribute not in the per-tag allowlist is skipped
-    # (`onclick` is not in <a>'s {href,title,rel}).
+    # onclick is not in <a>'s allowed attribute set, so it is dropped.
     s = _S()
     out = s.sanitize_html('<a href="https://e.com" onclick="evil()">y</a>')
     assert "onclick" not in out
@@ -109,8 +99,7 @@ def test_cov_sanitize_attr_disallowed_dropped():
 
 
 def test_cov_sanitize_attr_none_value_skipped():
-    # An allowed attribute present with no value is skipped
-    # (`<a href>` -> href is allowed but valueless).
+    # <a href> — href is in the allowlist but has no value, so it is skipped.
     s = _S()
     out = s.sanitize_html("<a href>link</a>")
     assert "href=" not in out
@@ -119,7 +108,7 @@ def test_cov_sanitize_attr_none_value_skipped():
 
 
 def test_cov_sanitize_attr_value_html_escaped():
-    # The attribute value gets &/<>/" escaped on the way out.
+    # Attribute values are HTML-escaped on output.
     s = _S()
     out = s.sanitize_html('<a href="https://e.com" title=\'a"b<c&d\'>x</a>')
     assert "&quot;" in out
@@ -128,15 +117,14 @@ def test_cov_sanitize_attr_value_html_escaped():
 
 
 def test_cov_sanitize_a_tag_forces_rel_over_user_value():
-    # A user-supplied rel is NOT accepted: it's dropped and replaced by the
-    # forced rel="noopener nofollow" so a rel="" / rel="opener" can't strip the
-    # reverse-tabnabbing/nofollow hardening.
+    # Any user-supplied rel is dropped and replaced with "noopener nofollow" to
+    # prevent rel="" or rel="opener" from stripping reverse-tabnabbing protection.
     s = _S()
     out = s.sanitize_html('<a href="https://e.com" rel="author">x</a>')
     assert out.count("rel=") == 1
     assert 'rel="noopener nofollow"' in out
     assert "author" not in out
-    # And a missing rel still gets the forced one.
+    # A missing rel also gets the forced value.
     out2 = s.sanitize_html('<a href="https://e.com">y</a>')
     assert 'rel="noopener nofollow"' in out2
 
@@ -148,7 +136,7 @@ def test_cov_sanitize_a_tag_forces_rel_when_missing():
 
 
 def test_cov_sanitize_void_elements_no_closing_tag():
-    # br/img end-tags produce no output.
+    # Closing tags for void elements (br, img) are silently discarded.
     s = _S()
     out = s.sanitize_html("<br></br>")
     assert out == "<br>"
@@ -158,7 +146,7 @@ def test_cov_sanitize_void_elements_no_closing_tag():
 
 
 def test_cov_sanitize_endtag_disallowed_dropped():
-    # handle_endtag early-return for a non-allowed tag (e.g. </script>).
+    # handle_endtag early-returns for non-allowed tags such as </script>.
     s = _S()
     out = s.sanitize_html("text</script>")
     assert "</script>" not in out
@@ -166,14 +154,14 @@ def test_cov_sanitize_endtag_disallowed_dropped():
 
 
 def test_cov_sanitize_startendtag_self_closing():
-    # <br/> self-closing is routed through handle_startendtag.
+    # <br/> goes through handle_startendtag and is normalized to <br>.
     s = _S()
     out = s.sanitize_html("a<br/>b")
     assert out == "a<br>b"
 
 
 def test_cov_sanitize_entityref_and_charref_preserved():
-    # The &amp; entity ref and &#169; char ref are re-emitted.
+    # Named entity refs (&amp;) and numeric char refs (&#169;) pass through unchanged.
     s = _S()
     out = s.sanitize_html("A&amp;B &#169; C")
     assert "&amp;" in out
@@ -196,7 +184,7 @@ def test_cov_normalize_choice_invalid_value_raises():
 
 
 def test_cov_normalize_choice_non_string_raises():
-    # A non-string value raises ValueError.
+    # Non-string input raises ValueError.
     s = _S()
     with pytest.raises(ValueError):
         s.normalize_choice(123, s.ALLOWED_ITEM_TYPES, "item_type")
@@ -211,21 +199,21 @@ def test_cov_strip_and_check_min_length_ok():
 
 
 def test_cov_strip_and_check_min_length_non_string_raises():
-    # A non-string value raises ValueError.
+    # Non-string input raises ValueError.
     s = _S()
     with pytest.raises(ValueError):
         s._strip_and_check_min_length(123, 2, "Name")
 
 
 def test_cov_strip_and_check_min_length_too_short_raises():
-    # Below min_len (min_len != 1) -> "at least N characters".
+    # Below min_len (when min_len != 1) produces an "at least N characters" error.
     s = _S()
     with pytest.raises(ValueError):
         s._strip_and_check_min_length("a", 3, "Title")
 
 
 def test_cov_strip_and_check_min_length_empty_when_min_one():
-    # min_len == 1 -> "cannot be empty".
+    # When min_len is 1, an empty/whitespace string produces a "cannot be empty" error.
     s = _S()
     with pytest.raises(ValueError) as exc:
         s._strip_and_check_min_length("   ", 1, "Field")
@@ -241,7 +229,7 @@ def test_cov_normalize_role_ok():
 
 
 def test_cov_normalize_role_non_string_raises():
-    # A non-string value raises ValueError.
+    # Non-string input raises ValueError.
     s = _S()
     with pytest.raises(ValueError):
         s._normalize_role(5)
@@ -271,7 +259,7 @@ def test_cov_validate_email_invalid_raises():
 # _check_password_strength  (incl. the permanent 'changeme' exception)
 # ---------------------------------------------------------------------------
 def test_cov_password_changeme_exception_always_passes(monkeypatch):
-    # 'changeme' must stay valid, even with a raised minimum.
+    # 'changeme' bypasses normal strength checks regardless of the configured minimum.
     import app.config as config
     monkeypatch.setattr(config.Settings, "PASSWORD_MIN_LENGTH", 24)
     s = _S()
@@ -285,14 +273,14 @@ def test_cov_password_valid_default():
 
 
 def test_cov_password_non_string_raises():
-    # A non-string value raises ValueError.
+    # Non-string input raises ValueError.
     s = _S()
     with pytest.raises(ValueError):
         s._check_password_strength(12345678)
 
 
 def test_cov_password_too_long_raises():
-    # > 200 chars trips the length guard.
+    # A password over 200 characters trips the length guard.
     s = _S()
     with pytest.raises(ValueError):
         s._check_password_strength("a1" * 200)
@@ -360,7 +348,7 @@ def test_cov_userin_weak_password_raises():
 
 
 def test_cov_userin_changeme_password_passes():
-    # 'changeme' must pass through the model too.
+    # 'changeme' must pass the model-level check as well.
     s = _S()
     u = s.UserIn(name="Alice", email="a@b.com", password="changeme")
     assert u.password == "changeme"
@@ -370,10 +358,8 @@ def test_cov_userin_changeme_password_passes():
 # UserUpdate  (Optional fields: None -> early-return branches)
 # ---------------------------------------------------------------------------
 def test_cov_userupdate_all_none_passes():
-    # Each optional validator hits its `if v is None: return None` branch.
-    # Pydantic only runs a field validator when a value is explicitly
-    # supplied, so we pass None explicitly rather than letting the fields fall
-    # back to their (un-validated) defaults.
+    # Pydantic only runs a field validator when a value is explicitly supplied,
+    # so we pass None explicitly to exercise each optional validator's early-return.
     s = _S()
     u = s.UserUpdate(name=None, email=None, role=None, password=None,
                      is_active=None)
@@ -430,7 +416,7 @@ def test_cov_changepassword_validates_new():
     assert ok.new_password == "abcd1234"
     with pytest.raises(ValidationError):
         s.ChangePasswordIn(current_password="anything", new_password="short")
-    # current_password must be non-empty (Field min_length=1).
+    # Field(min_length=1) catches an empty current_password before the validator.
     with pytest.raises(ValidationError):
         s.ChangePasswordIn(current_password="", new_password="abcd1234")
 
@@ -511,6 +497,7 @@ def test_cov_bugcreate_short_title_raises():
 
 
 def test_cov_bugcreate_description_sanitized():
+    # Description is stripped and HTML-sanitized on creation.
     s = _S()
     b = s.BugCreate(project_id=1, title="Title here",
                     description="  <b>x</b><script>bad</script>  ")
@@ -546,7 +533,7 @@ def test_cov_bugcreate_due_date_valid_and_empty():
     s = _S()
     b = s.BugCreate(project_id=1, title="Title here", due_date="2026-01-31")
     assert b.due_date == "2026-01-31"
-    # An empty string returns None.
+    # An empty string is coerced to None.
     b2 = s.BugCreate(project_id=1, title="Title here", due_date="")
     assert b2.due_date is None
 
@@ -564,7 +551,7 @@ def test_cov_bugcreate_assignee_dedup():
 
 
 def test_cov_bugcreate_status_invalid_for_type_raises():
-    # The model_validator rejects 'Done', a Task status, for a Bug.
+    # 'Done' belongs to Task statuses, not Bug; the model_validator rejects the combination.
     s = _S()
     with pytest.raises(ValidationError):
         s.BugCreate(project_id=1, title="Title here", item_type="Bug",
@@ -579,10 +566,8 @@ def test_cov_bugcreate_status_valid_for_type_passes():
 
 
 def test_cov_bugcreate_strip_desc_non_string_passthrough():
-    # The validator's `if not isinstance(v, str): return v` branch. Pydantic
-    # would reject a non-str for the model field, so call the field validator
-    # directly with a non-str — that's the same body the model runs for an
-    # already-correct value.
+    # Pydantic rejects non-str before the validator runs, so we call the
+    # validator directly to hit the isinstance guard.
     s = _S()
     assert s.BugCreate._strip_desc(None) is None
 
@@ -591,9 +576,7 @@ def test_cov_bugcreate_strip_desc_non_string_passthrough():
 # BugUpdate — Optional everything (None early-returns)
 # ---------------------------------------------------------------------------
 def test_cov_bugupdate_all_none_passes():
-    # Explicit None forces each optional validator to run its None-return
-    # branch (title/description and the item_type/status/priority/environment/
-    # due_date None paths).
+    # Explicit None exercises each optional validator's early-return branch.
     s = _S()
     u = s.BugUpdate(project_id=None, title=None, description=None,
                     reporter_id=None, assignee_ids=None, item_type=None,
@@ -656,20 +639,20 @@ def test_cov_bugupdate_bad_environment_raises():
 
 
 def test_cov_bugupdate_due_date_bad_raises():
-    # An invalid date raises a validation error.
+    # A wrongly formatted date raises a validation error.
     s = _S()
     with pytest.raises(ValidationError):
         s.BugUpdate(due_date="2026/02/02")
 
 
 def test_cov_bugupdate_due_date_empty_is_none():
-    # An empty string returns None.
+    # An empty string is coerced to None.
     s = _S()
     assert s.BugUpdate(due_date="").due_date is None
 
 
 def test_cov_bugupdate_strip_desc_non_string_passthrough():
-    # The `if not isinstance(v, str): return v` branch (called directly).
+    # Call the validator directly to hit the isinstance guard.
     s = _S()
     assert s.BugUpdate._strip_desc(123) == 123
 
@@ -685,29 +668,29 @@ def test_cov_commentin_valid_sanitized():
 
 
 def test_cov_commentin_whitespace_only_raises():
-    # Text-only empty with no <img> raises a validation error.
+    # Whitespace-only content with no image is rejected.
     s = _S()
     with pytest.raises(ValidationError):
         s.CommentIn(body="<p>   </p>")
 
 
 def test_cov_commentin_image_only_allowed():
-    # The `"<img" in cleaned` branch keeps an image-only comment.
+    # A comment whose only content is an image is accepted (no readable text required).
     s = _S()
     c = s.CommentIn(body='<img src="data:image/png;base64,AAAA" alt="s">')
     assert "<img" in c.body
 
 
 def test_cov_commentin_empty_string_rejected_by_field():
-    # Field(min_length=1) rejects the empty string before the validator.
+    # Field(min_length=1) rejects an empty string before the validator runs.
     s = _S()
     with pytest.raises(ValidationError):
         s.CommentIn(body="")
 
 
 def test_cov_commentin_non_string_body_raises():
-    # The validator's `if not isinstance(v, str)` branch (called directly,
-    # since the model field would coerce/reject first).
+    # The model field coerces/rejects non-str, so we call the validator
+    # directly to hit the isinstance guard.
     s = _S()
     with pytest.raises(ValueError):
         s.CommentIn._strip(123)
@@ -717,7 +700,7 @@ def test_cov_commentin_non_string_body_raises():
 # EventCreate
 # ---------------------------------------------------------------------------
 def test_cov_eventcreate_valid_trims_desc():
-    # The description strip path.
+    # Name and description are stripped; manager_ids are deduplicated.
     s = _S()
     e = s.EventCreate(name="  Standup ", description="  notes  ",
                       scheduled_for="2026-03-03", manager_ids=[1, 1, 2])
@@ -734,7 +717,7 @@ def test_cov_eventcreate_short_name_raises():
 
 
 def test_cov_eventcreate_scheduled_empty_is_none():
-    # An empty value returns None.
+    # An empty string or missing value is coerced to None.
     s = _S()
     assert s.EventCreate(name="Standup", scheduled_for="").scheduled_for is None
     assert s.EventCreate(name="Standup").scheduled_for is None
@@ -747,7 +730,7 @@ def test_cov_eventcreate_scheduled_bad_raises():
 
 
 def test_cov_eventcreate_strip_desc_non_string_passthrough():
-    # A non-str returns v unchanged (called directly).
+    # Call the validator directly to hit the non-str passthrough.
     s = _S()
     assert s.EventCreate._strip_desc(None) is None
 
@@ -756,8 +739,7 @@ def test_cov_eventcreate_strip_desc_non_string_passthrough():
 # EventUpdate  (Optional: None early-returns + dedup)
 # ---------------------------------------------------------------------------
 def test_cov_eventupdate_all_none_passes():
-    # Explicit None so the name/scheduled_for/manager_ids validators run their
-    # None-return branches.
+    # Explicit None exercises the None-return branch in each optional validator.
     s = _S()
     u = s.EventUpdate(name=None, description=None, scheduled_for=None,
                       manager_ids=None)
@@ -767,7 +749,7 @@ def test_cov_eventupdate_all_none_passes():
 
 
 def test_cov_eventupdate_values_validated():
-    # The desc strip path and manager_ids dedup with a list.
+    # Values are stripped, date validated, and manager_ids deduplicated.
     s = _S()
     u = s.EventUpdate(name="  Sprint ", description="  d  ",
                       scheduled_for="2026-04-04", manager_ids=[3, 3, 4])
@@ -778,27 +760,27 @@ def test_cov_eventupdate_values_validated():
 
 
 def test_cov_eventupdate_short_name_raises():
-    # A short name hits the raise (the None case is the pass branch).
+    # A short name raises; None takes the early-return branch.
     s = _S()
     with pytest.raises(ValidationError):
         s.EventUpdate(name="a")
 
 
 def test_cov_eventupdate_scheduled_bad_raises():
-    # An invalid date raises a validation error.
+    # A wrongly formatted date raises a validation error.
     s = _S()
     with pytest.raises(ValidationError):
         s.EventUpdate(scheduled_for="04/04/2026")
 
 
 def test_cov_eventupdate_scheduled_empty_is_none():
-    # An empty string returns None.
+    # An empty string is coerced to None.
     s = _S()
     assert s.EventUpdate(scheduled_for="").scheduled_for is None
 
 
 def test_cov_eventupdate_strip_desc_non_string_passthrough():
-    # A non-str returns v unchanged.
+    # Call the validator directly to hit the non-str passthrough.
     s = _S()
     assert s.EventUpdate._strip_desc(123) == 123
 
@@ -811,7 +793,7 @@ def test_cov_push_subscribe_valid_and_invalid():
     ok = s.PushSubscribeIn(token="abc")
     assert ok.platform == "web"
     with pytest.raises(ValidationError):
-        s.PushSubscribeIn(token="")  # min_length=1
+        s.PushSubscribeIn(token="")  # Field(min_length=1)
 
 
 def test_cov_push_unsubscribe_valid_and_invalid():
@@ -827,6 +809,6 @@ def test_cov_push_unsubscribe_valid_and_invalid():
 def test_cov_statuses_for_type_known_and_unknown():
     s = _S()
     assert s.statuses_for_type("Task") == s.STATUSES_BY_TYPE["Task"]
-    # unknown type falls back to the Bug list.
+    # An unrecognised type falls back to the Bug status list.
     assert s.statuses_for_type("Mystery") == s.STATUSES_BY_TYPE["Bug"]
     assert s.statuses_for_type("") == s.STATUSES_BY_TYPE["Bug"]

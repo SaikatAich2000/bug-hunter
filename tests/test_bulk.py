@@ -27,9 +27,8 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
     body = {"name": name, "email": email, "role": role, "password": _PW}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping tests keep exercising the flat "see everything" model (a user
-    # must be able to SEE an item before the per-type rules can skip/allow it).
+    # Tag the new user to every existing project so they can see all items.
+    # Per-type permission rules only kick in after visibility is established.
     pids = [p["id"] for p in admin.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -99,7 +98,7 @@ def test_bulk_set_status_skips_invalid_for_type(admin_client):
     proj = _mk_project(admin_client, "SetStatus")
     bug = _mk_bug(admin_client, proj["id"], "a bug")           # Bug
     task = _mk_bug(admin_client, proj["id"], "a task", item_type="Task")  # Task
-    # "Resolved" is valid for Bug, not for Task → 1 updated, 1 skipped.
+    # "Resolved" is valid for Bug but not Task, so one item is skipped.
     r = admin_client.post(_BULK, json={"action": "set_status", "ids": [bug["id"], task["id"]], "value": "Resolved"})
     body = r.json()
     assert body["updated"] == 1
@@ -115,8 +114,8 @@ def test_bulk_set_status_noop_is_skipped(admin_client):
 
 
 def test_bulk_set_field_noop_is_skipped(admin_client):
-    # set_priority to the value it already has → skipped (exercises the
-    # generic field no-op path, distinct from the status one above).
+    # Setting a field to its current value hits the generic no-op path,
+    # which is separate from the status-specific one above.
     proj = _mk_project(admin_client, "FieldNoop")
     bug = _mk_bug(admin_client, proj["id"], "already high", priority="High")
     r = admin_client.post(_BULK, json={"action": "set_priority", "ids": [bug["id"]], "value": "High"})
@@ -144,7 +143,7 @@ def test_bulk_skips_items_the_user_cannot_edit(admin_client):
     task = _mk_bug(admin_client, proj["id"], "locked task", item_type="Task")
     userc = _new_client()
     _login(userc, "reg.bulk@test.local")
-    # User can edit the Bug but not the Task → 1 updated, 1 skipped.
+    # The user can edit Bugs but not Tasks, so the Task is skipped.
     r = userc.post(_BULK, json={"action": "set_priority", "ids": [bug["id"], task["id"]], "value": "High"})
     body = r.json()
     assert body["updated"] == 1
@@ -157,11 +156,11 @@ def test_bulk_delete_is_admin_only(admin_client):
     ids = [_mk_bug(admin_client, proj["id"], f"del {i} item")["id"] for i in range(2)]
     userc = _new_client()
     _login(userc, "reg.del@test.local")
-    # Non-admin: all skipped, nothing deleted.
+    # Regular user: all skipped, items survive.
     r = userc.post(_BULK, json={"action": "delete", "ids": ids})
     assert r.json()["skipped"] == 2
     assert admin_client.get(f"/api/bugs/{ids[0]}").status_code == 200
-    # Admin: deleted.
+    # Admin can delete.
     r = admin_client.post(_BULK, json={"action": "delete", "ids": ids})
     assert r.json()["updated"] == 2
     assert admin_client.get(f"/api/bugs/{ids[0]}").status_code == 404

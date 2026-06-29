@@ -1,19 +1,16 @@
-"""Sleuth API router.
+"""Sleuth chatbot router.
 
-Two endpoints:
+Endpoints:
+  POST /api/chat/ask               — answer a natural-language question.
+  POST /api/chat/ingest            — admin-only document import (preview stage).
+  GET  /api/chat/download/{token}  — stream a staged Excel workbook.
 
-  POST /api/chat/ask                — accepts {"message": "..."} and returns
-                                      the structured Sleuth response.
-  GET  /api/chat/download/{token}   — streams a staged Excel workbook.
+All three require an authenticated user, so session revocation and
+forced-logout apply here the same way they do everywhere else in the app.
 
-Both require an authenticated user (same cookie as the rest of the SPA),
-so the chatbot honors session revocation and forced-logout like the rest
-of the app — a revoked admin can't keep using the chatbot.
-
-Kept as a separate router from routes/bugs.py: it's a different surface
-(natural language vs structured CRUD), keeping the read-only chat path
-behind a clear boundary, and the download endpoint has its own caching /
-streaming behavior distinct from the bug attachment downloads.
+Lives in its own router rather than routes/bugs.py because the surface is
+different (NL query vs. structured CRUD), and the download endpoint has
+its own staging/streaming behavior separate from bug attachment downloads.
 """
 from __future__ import annotations
 
@@ -38,22 +35,21 @@ from . import excel, executor
 
 logger = logging.getLogger("bug_hunter.chatbot")
 
-# FastAPI dependency aliases. The Annotated form is the documented idiom —
-# it keeps the injection out of the parameter default.
+# Annotated dependency aliases keep injection out of parameter defaults.
 DbDep = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
-# The document-ingest endpoint is the one admin-only write surface in Sleuth.
 AdminUser = Annotated[User, Depends(require_admin)]
 
 
 def _persist_turn(db: Session, actor: User, user_msg: str,
                   resp: "executor.Response") -> None:
-    """Append the user message + assistant reply to the durable chat_*
-    transcript. Additive, gated, and best-effort — any failure is swallowed
-    so persistence problems never affect the chat response.
+    """Append the user message and assistant reply to the durable chat transcript.
 
-    One rolling conversation per user: we reuse the most recent conversation
-    if it was touched in the last 30 minutes, otherwise start a fresh one.
+    Additive only, gated by a setting. Failures are swallowed so transcript
+    problems never affect the chat response.
+
+    Reuses the most recent conversation if it was active in the last 30 minutes;
+    otherwise starts a new one.
     """
     if not get_settings().SLEUTH_CHAT_MEMORY_ENABLED:
         return
@@ -70,15 +66,14 @@ def _persist_turn(db: Session, actor: User, user_msg: str,
             conv = ChatConversation(user_id=actor.id)
             db.add(conv)
             db.flush()
-        # Engine label from the intent prefix for lightweight observability.
+        # Derive engine label from intent prefix for observability.
         engine = "rules"
         if resp.intent.startswith("cloud_"):
             engine = "cloud"
         elif resp.intent in {"unknown", "error"}:
             engine = ""
-        # Store what the assistant actually said (first text block) so the
-        # cloud layer's rolling history is meaningful; fall back to the
-        # one-line summary for table/file-only replies.
+        # Prefer the first text block so the cloud layer's rolling history
+        # has real prose; fall back to the summary for table/file-only replies.
         said = next(
             (b.payload.get("text", "") for b in resp.blocks if b.kind == "text"),
             "",
@@ -96,15 +91,13 @@ def _persist_turn(db: Session, actor: User, user_msg: str,
 router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
 
-# ---------------------------------------------------------------------------
 # Per-user soft rate limit. The rule engine is cheap, but Excel exports do
-# real CPU work, so this bounds how often a client can trigger them.
-# ---------------------------------------------------------------------------
+# real CPU work, so this bounds burst usage.
 _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_REQUESTS = 30   # 30 chat asks / minute / user
 _rate_state: dict[int, list[float]] = {}
-# Sync endpoints run in a threadpool, so concurrent same-user asks race the
-# read-modify-write on a bucket; guard it like the other shared caches.
+# Sync endpoints run in a thread pool, so concurrent same-user requests race
+# the read-modify-write on each bucket. Guard it with a lock.
 _rate_lock = threading.Lock()
 
 
@@ -113,7 +106,7 @@ def _check_rate(user_id: int) -> None:
     cutoff = now - _RATE_WINDOW_SECONDS
     with _rate_lock:
         bucket = _rate_state.setdefault(user_id, [])
-        # Drop timestamps older than the window (O(window), window is tiny).
+        # Evict timestamps older than the window.
         while bucket and bucket[0] < cutoff:
             bucket.pop(0)
         if len(bucket) >= _RATE_MAX_REQUESTS:
@@ -124,13 +117,9 @@ def _check_rate(user_id: int) -> None:
         bucket.append(now)
 
 
-# ---------------------------------------------------------------------------
-# I/O models
-# ---------------------------------------------------------------------------
 class ChatIn(BaseModel):
-    """Inbound chat message. Capped to a sensible length so a runaway
-    paste doesn't get parsed (and so we never feed an unbounded string
-    into the optional LLM passthrough either)."""
+    """Inbound chat message. Length-capped to avoid feeding huge pastes
+    into the rule engine or the optional LLM passthrough."""
     message: str = Field(min_length=1, max_length=2000)
 
 
@@ -145,9 +134,6 @@ class ChatOut(BaseModel):
     intent: str
 
 
-# ---------------------------------------------------------------------------
-# /api/chat/ask
-# ---------------------------------------------------------------------------
 @router.post(
     "/ask",
     responses={
@@ -161,19 +147,17 @@ def ask(
 ) -> ChatOut:
     """Answer a natural-language question.
 
-    Always returns 200 unless something genuinely unexpected blew up — a
-    "no results" or "I didn't understand" reply is part of the contract,
-    not an error condition.
+    Always returns 200 unless something truly unexpected happened. "No results"
+    and "I didn't understand" are normal responses, not errors.
     """
     _check_rate(actor.id)
 
     try:
         resp = executor.execute(payload.message, db, actor)
     except HTTPException:
-        # Auth / role exceptions from underlying calls — pass through.
+        # Auth/role exceptions from underlying calls — pass through unchanged.
         raise
     except Exception as exc:   # noqa: BLE001 — we deliberately never crash the chat
-        # Log with a stack trace, but reply gracefully so the chat stays usable.
         logger.exception("Sleuth executor failed: %s", exc)
         return ChatOut(
             blocks=[_BlockOut(kind="text", payload={
@@ -185,7 +169,6 @@ def ask(
             intent="error",
         )
 
-    # Durable transcript (additive chat_* tables). Best-effort.
     _persist_turn(db, actor, payload.message, resp)
 
     return ChatOut(
@@ -195,14 +178,9 @@ def ask(
     )
 
 
-# ---------------------------------------------------------------------------
-# /api/chat/ingest  — admin uploads a document; Sleuth turns it into bugs.
-#
-# Sleuth's single write surface, admin-only (the AdminUser dependency 403s
-# everyone else). The extraction and item creation live in
-# app/chatbot/ingest.py; this endpoint is upload plumbing plus a chat-shaped
-# reply the panel renders inline.
-# ---------------------------------------------------------------------------
+# Admin uploads a document; Sleuth parses it and stages candidates for review.
+# Extraction and creation live in app/chatbot/ingest.py; this endpoint handles
+# the upload, then returns a chat-shaped preview the panel renders inline.
 _INGEST_CHUNK = 256 * 1024
 
 
@@ -230,9 +208,9 @@ def _ingest_text_reply(text: str, intent: str) -> ChatOut:
 
 
 def _ingest_preview_reply(specs: list, method: str, filename: str, project_name: str) -> ChatOut:
-    """Conversational preview — Sleuth shows what it read and asks before
-    creating anything. Creation happens later, when the admin replies
-    'create them' (handled by the executor)."""
+    """Build a preview reply listing the extracted items and asking for
+    confirmation. Creation happens only when the admin replies 'create them'
+    (handled by the executor)."""
     n = len(specs)
     how = "read it with AI" if method == "ai" else "parsed it"
     head = (
@@ -271,10 +249,13 @@ async def ingest_document(
     file: Annotated[UploadFile, File()],
     project_id: Annotated[Optional[int], Form()] = None,
 ) -> ChatOut:
-    """Admin-only: read an uploaded document (xlsx / CSV / JSON / text) and tell
-    the admin what work items it contains. Nothing is created here — Sleuth
-    stages the candidates and only creates them when the admin replies
-    'create them' in the chat (see the executor's ingest-create handler)."""
+    """Admin-only document import (preview stage).
+
+    Reads the uploaded file, extracts work item candidates, stages them in
+    memory, and returns a preview. Nothing is created here; the admin must
+    reply 'create them' in the chat to trigger actual creation (handled by
+    the executor's ingest-create path).
+    """
     _check_rate(actor.id)
     from app.chatbot import ingest as _ingest
     from app.chatbot.memory import store as _mem
@@ -304,9 +285,6 @@ async def ingest_document(
     return _ingest_preview_reply(specs, method, file.filename or "document", project.name)
 
 
-# ---------------------------------------------------------------------------
-# /api/chat/download/{token}
-# ---------------------------------------------------------------------------
 @router.get(
     "/download/{token}",
     responses={
@@ -317,14 +295,14 @@ def download_staged(
     token: str,
     _user: CurrentUser,
 ):
-    """Stream a previously-staged Excel workbook.
+    """Stream a previously staged Excel workbook.
 
-    The token is opaque and cryptographically random (24 url-safe bytes). Each
-    staged file is also bound to the user who created it: fetch_staged only
-    returns it to that owner, so a leaked/shared token can't be redeemed by
-    another authenticated user (a staged report may contain data they aren't
-    authorized to see). Mismatch returns 404 (no existence enumeration).
-    Rate-limited like the other chat endpoints to bound repeated pulls."""
+    The token is a cryptographically random opaque value (24 url-safe bytes).
+    Each staged file is bound to the user who created it: fetch_staged only
+    returns it to that owner, so a leaked token can't be redeemed by another
+    user (a report may contain data they aren't authorized to see). A token
+    mismatch returns 404 to avoid confirming whether a token exists.
+    """
     _check_rate(_user.id)
     entry = excel.fetch_staged(token, _user.id)
     if entry is None:
@@ -334,8 +312,7 @@ def download_staged(
         )
     payload, filename = entry
 
-    # Force a download with the suggested filename rather than inlining the
-    # xlsx, so it's saved as a file as the user asked.
+    # Sanitize the filename for the Content-Disposition header before use.
     safe_filename = filename.replace('"', "_").replace("\r", "").replace("\n", "")
     return StreamingResponse(
         iter([payload]),
@@ -343,12 +320,10 @@ def download_staged(
         headers={
             "Content-Disposition": f'attachment; filename="{safe_filename}"',
             "Content-Length": str(len(payload)),
-            # Private, never cached — the link is short-lived anyway.
+            # Tokens are short-lived; never cache the response.
             "Cache-Control": "private, no-store, max-age=0",
         },
     )
 
 
-# Re-export for `from app.chatbot import router` style imports if anyone
-# elsewhere wants them.
 __all__ = ["router"]

@@ -1,6 +1,5 @@
 /**
- * MsFilter — the filter-bar multi-select dropdown. Class names must match
- * styles.css:
+ * Filter-bar multi-select dropdown. Class names must match styles.css:
  *
  *   <div class="ms-wrap" data-filter="{filterKey}">
  *     <button class="ms-btn [active]" data-ms-toggle aria-haspopup="menu" aria-expanded>
@@ -14,14 +13,13 @@
  *     </div>
  *   </div>
  *
- * The panel is plain absolute-positioned CSS (no placement JS). Only one panel
- * may be open across all instances: a module-level subscriber registry closes
- * the others when one opens.
+ * Panel placement is pure CSS (absolute). Only one panel can be open at a time;
+ * a module-level registry closes others when a new one opens.
  */
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-// One-open-panel-at-a-time registry. Every mounted instance subscribes its
-// close callback; opening one instance closes the others.
+// Every mounted instance registers its close callback here; opening any panel
+// calls closeOthers to shut the rest.
 const closers = new Set<() => void>();
 function closeOthers(except: () => void): void {
   closers.forEach((close) => {
@@ -29,10 +27,7 @@ function closeOthers(except: () => void): void {
   });
 }
 
-/**
- * "All {label}" when nothing is selected, the single option's label when
- * exactly one, "{noun} (n)" when several.
- */
+/** Returns the button label: "All {label}", a single name, or "{noun} (n)". */
 function msButtonLabel(
   label: string,
   noun: string,
@@ -49,13 +44,13 @@ function msButtonLabel(
 }
 
 interface Props {
-  /** Filter key, rendered as data-filter on the wrap (e.g. "project_id"). */
+  /** Rendered as data-filter on the wrap div (e.g. "project_id"). */
   filterKey: string;
   /** Plural label for the empty state, e.g. "Projects" → "All Projects". */
   label: string;
-  /** Plural noun for the n-selected state, e.g. "Projects" → "Projects (2)". */
+  /** Plural noun for the multi-selected state, e.g. "Projects" → "Projects (2)". */
   noun: string;
-  /** [value, label] pairs — value goes to the API, label to the user. */
+  /** [value, displayLabel] pairs — value is sent to the API. */
   options: [string, string][];
   selected: string[];
   onToggle: (value: string) => void;
@@ -65,7 +60,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
 
-  // Subscribe this instance's closer for the lifetime of the component.
+  // Register/deregister this instance's close callback.
   useEffect(() => {
     closers.add(close);
     return () => {
@@ -73,8 +68,8 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
     };
   }, [close]);
 
-  // Any document click closes the panel. Toggle and row clicks stopPropagation
-  // to survive, so no containment check is needed here.
+  // Click-outside to close. Toggle and row clicks call stopPropagation,
+  // so no containment check is needed.
   useEffect(() => {
     if (!open) return;
     const onDocClick = () => setOpen(false);
@@ -82,8 +77,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  // Escape closes the panel while it's open. Capture-phase + stopPropagation so
-  // it pre-empts any surrounding modal's Escape handler.
+  // Capture-phase Escape so it pre-empts any surrounding modal's handler.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -136,7 +130,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
                 tabIndex={0}
                 onClick={toggle}
                 onKeyDown={(e) => {
-                  // Keyboard parity with the mouse: Enter/Space toggle the row.
+                  // Enter/Space mirror a mouse click on the row.
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     toggle(e);
@@ -154,8 +148,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
   );
 }
 
-// Memoized so a parent re-render (e.g. a context poll) doesn't re-render every
-// filter when its own props are unchanged. FilterBar passes stable useCallback
-// handlers and useMemo'd option/selected arrays, so the shallow prop compare
-// holds.
+// Memo prevents parent re-renders (e.g. context polls) from cascading here.
+// FilterBar passes stable useCallback handlers and memoized arrays, so the
+// shallow prop compare reliably short-circuits.
 export default memo(MsFilter);

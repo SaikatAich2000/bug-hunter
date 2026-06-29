@@ -1,14 +1,13 @@
 """Firebase Cloud Messaging transport (optional external integration).
 
-Lazily initialises the Firebase Admin SDK from a service-account JSON and sends
-a single push to many device tokens. Excluded from the coverage gate (like the
-other optional external integrations) because it only runs against a live
-Firebase project the test suite never provisions; ``app.push_service`` mocks
-``send()`` in its tests.
+Lazily initialises the Firebase Admin SDK from a service-account JSON and
+sends a notification to many device tokens. Excluded from the coverage gate
+because it requires a live Firebase project; ``app.push_service`` mocks
+``send()`` in tests.
 
-Nothing here breaks startup: ``firebase_admin`` is imported lazily inside the
-functions, every failure is caught and logged, and a failed init disables push
-for the process rather than raising.
+``firebase_admin`` is imported lazily inside each function, every failure is
+caught and logged, and a failed init disables push for the process lifetime
+rather than raising.
 """
 from __future__ import annotations
 
@@ -19,18 +18,20 @@ from app.config import get_settings
 
 logger = logging.getLogger("bug_hunter.push")
 
-# Module state without the `global` keyword: the Firebase app is created once
-# and cached; a hard init failure latches so we don't retry every send.
+# Firebase app created once and cached. A hard init failure latches the flag
+# so we skip retrying on every subsequent send call.
 _state: dict = {"app": None, "init_failed": False}
 _init_lock = threading.Lock()
 
-# FCM error class names that mean "this token is dead — stop sending to it".
+# FCM error class names that indicate a permanently invalid token.
 _DEAD_TOKEN_ERRORS = frozenset({"UnregisteredError", "SenderIdMismatchError"})
 
 
 def _ensure_app():
-    """Return the cached firebase_admin app, initialising it once. None (never
-    raises) if web push isn't configured or the SDK can't start."""
+    """Return the cached Firebase app, initialising it on first call.
+
+    Returns None (never raises) if push is not configured or the SDK fails to start.
+    """
     if _state["app"] is not None:
         return _state["app"]
     if _state["init_failed"]:
@@ -67,10 +68,12 @@ def _is_dead_token(exc) -> bool:
 
 
 def _webpush_config(messaging, url: str):
-    """A WebpushConfig carrying the click-through link, but only for an
-    absolute https URL. FCM rejects any other link value and an encode-time
-    error would abort the whole multicast; the link is also carried in
-    data["url"], so omitting it here just drops a browser convenience."""
+    """Build a WebpushConfig with a click-through link, but only for https URLs.
+
+    FCM rejects non-https link values and an encode-time error would abort the
+    entire multicast. The URL is also in data["url"], so skipping the link here
+    only drops a browser convenience.
+    """
     if url.startswith("https://"):
         return messaging.WebpushConfig(
             fcm_options=messaging.WebpushFCMOptions(link=url),
@@ -87,10 +90,8 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
     tokens = list(tokens or [])
     if not tokens:
         return []
-    # Normalize url up front: a None slipping through would make the
-    # url.startswith("https://") check below raise AttributeError, and that line
-    # sits outside the try/except — breaking this function's documented
-    # never-raises contract in a background push path.
+    # Normalize url before use: a None would cause url.startswith("https://") to
+    # raise AttributeError outside the try/except, breaking the never-raises contract.
     url = url or ""
     app = _ensure_app()
     if app is None:
@@ -104,9 +105,9 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
     payload = {"url": url or "/"}
     if data:
         payload.update({k: str(v) for k, v in data.items()})
-    # The deep link is carried in data["url"] (read by the Android app and the
-    # web service worker); the webpush link below is a browser click-through
-    # convenience, attached only for an https URL — see _webpush_config.
+    # data["url"] carries the deep link for the Android app and the web service
+    # worker. The webpush link is a browser click-through convenience only — see
+    # _webpush_config for why it is conditional on https.
     message = messaging.MulticastMessage(
         tokens=tokens,
         notification=messaging.Notification(title=title, body=body),
@@ -120,8 +121,8 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
         return []
 
     if len(resp.responses) != len(tokens):  # pragma: no cover - FCM returns 1:1
-        # Defensive: a partial/misaligned multicast response would silently drop
-        # the unmatched tail under zip(). Surface it rather than swallow it.
+        # A misaligned response would silently drop unmatched tokens under zip().
+        # Log the mismatch so it surfaces rather than being swallowed.
         logger.warning(
             "FCM returned %d responses for %d tokens — response/token mismatch",
             len(resp.responses), len(tokens),

@@ -56,8 +56,11 @@ def unread_count(
 
 
 def _owned_or_404(db: Session, notif_id: int, user: User) -> Notification:
-    """Fetch a notification, 404-ing if it doesn't exist OR isn't the caller's.
-    Returning 404 (not 403) for someone else's row avoids leaking existence."""
+    """Fetch a notification that belongs to the caller, or raise 404.
+
+    404 is returned even when the row exists but belongs to another user,
+    so we don't leak whether a given notification ID exists.
+    """
     notif = db.get(Notification, notif_id)
     if notif is None or notif.user_id != user.id:
         raise HTTPException(status_code=404, detail=_DETAIL_NOT_FOUND)

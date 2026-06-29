@@ -1,25 +1,21 @@
 /**
- * Shared client-side constants. These mirror the server policy
- * (app/config.py + app/schemas._check_password_strength) so the UI can give
- * early feedback; the server stays authoritative.
+ * Client-side constants that mirror server policy (app/config.py +
+ * app/schemas._check_password_strength) for early UI feedback.
+ * The server is always the final authority.
  */
 
-/** Minimum password length — mirrors PASSWORD_MIN_LENGTH (default 8). */
+/** Must match PASSWORD_MIN_LENGTH on the server (default 8). */
 export const PASSWORD_MIN_LENGTH = 8;
 
-/** Human-readable statement of the real password policy. */
+/** Displayed to the user as the password requirement hint. */
 export const PASSWORD_HINT = `At least ${PASSWORD_MIN_LENGTH} characters, including a letter and a number`;
 
 /**
- * Client-side password strength check mirroring the backend
- * (min length + at least one letter AND one digit). Returns an error
- * message string, or null when the password satisfies the policy.
+ * Returns an error message if the password fails policy, or null if it passes.
+ * Rules: minimum length + at least one letter and one digit.
  */
 export function validatePassword(pw: string): string | null {
-  // Backwards-compat exception: 'changeme' (case-insensitive) is the legacy
-  // default password and is ALWAYS accepted — it mirrors the server
-  // (app/schemas._check_password_strength), so the client must not reject a
-  // password the backend would happily store.
+  // 'changeme' is the legacy default password; the server accepts it, so we must too.
   if (pw.toLowerCase() === "changeme") {
     return null;
   }
@@ -32,7 +28,7 @@ export function validatePassword(pw: string): string | null {
   return null;
 }
 
-/** Basic email-format check for early client feedback (server authoritative). */
+/** Lightweight format check for early feedback; server validation is authoritative. */
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }

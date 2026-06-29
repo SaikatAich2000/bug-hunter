@@ -1,7 +1,6 @@
-// Bug Hunter SPA domain types.
-// Hand-mirrored from the FastAPI backend (app/schemas.py, app/routes/*,
-// app/reports/*, app/chatbot/router.py). Dates are ISO-8601 strings as
-// serialized by FastAPI. When a backend schema changes, update here.
+// Frontend domain types, mirrored from the FastAPI backend
+// (app/schemas.py, app/routes/*, app/reports/*, app/chatbot/router.py).
+// Dates are ISO-8601 strings. Keep in sync when backend schemas change.
 
 // ---------------------------------------------------------------------------
 // Core string unions
@@ -16,11 +15,10 @@ export type Role = "admin" | "manager" | "user";
 /** SPA-side main-view selector (frontend-only, no backend schema). */
 export type ViewName = "list" | "events" | "analytics" | "audit" | "sessions" | "reports";
 
-/** Minimum role required to open a view. Single source of truth shared by the
- *  Sidebar (which hides the nav button) and the Shell (which refuses to mount
- *  the view + fire its fetch) so the two can't drift. Views not listed are
- *  open to every authenticated user. The backend remains the real authority —
- *  these routes are independently role-gated server-side. */
+// Minimum role to open each view. Shared by Sidebar (hides nav button) and
+// Shell (blocks mount + fetch) so the two stay in sync. Views not listed are
+// open to all authenticated users. The backend is the real authority — these
+// routes are also role-gated server-side.
 export const VIEW_MIN_ROLE: Partial<Record<ViewName, Role>> = {
   reports: "manager",
   audit: "manager",
@@ -49,8 +47,8 @@ export interface UserOut {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /** Projects this user may access (ascending ids). Empty = untagged: a
-   *  non-admin sees nothing until tagged; tags don't restrict an admin. */
+  /** Projects this user can access. Empty means untagged: non-admins see
+   *  nothing until tagged; project tags have no effect on admins. */
   project_ids: number[];
 }
 
@@ -193,8 +191,8 @@ export interface EventOut {
   name: string;
   description: string;
   scheduled_for: string | null;
-  /** Owning project. Scopes who can see the event. project_name is resolved
-   *  server-side for display; project_id is null only for legacy events. */
+  /** Owning project; scopes visibility. project_name is resolved server-side;
+   *  project_id is null only on legacy events. */
   project_id: number | null;
   project_name: string | null;
   created_by_user_id: number | null;
@@ -333,7 +331,7 @@ export interface ReportColumn {
   kind: "text" | "number" | "date" | "datetime";
 }
 
-/** Mirrors app/reports/engine.py ReportResult.to_api() plus the truncated/truncated_cap keys added by app/routes/reports.py run() (POST /api/reports/run). */
+/** Mirrors app/reports/engine.py ReportResult.to_api(), with truncated/truncated_cap added by app/routes/reports.py run(). */
 export interface ReportRunResult {
   report_key: string;
   report_label: string;
@@ -352,10 +350,10 @@ export interface ReportRunResult {
 // Notifications (per-user)
 // ---------------------------------------------------------------------------
 
-/** Notification kind — mirrors the `kind` strings written by app/notification_service.py callers. */
+/** Mirrors the `kind` strings written by app/notification_service.py. */
 export type NotificationKind = "assigned" | "reported" | "updated" | "comment" | "event";
 
-/** Mirrors app/schemas.py NotificationOut (GET /api/notifications rows). read_at null = unread. */
+/** Mirrors app/schemas.py NotificationOut. read_at null means unread. */
 export interface NotificationOut {
   id: number;
   kind: NotificationKind;
@@ -394,7 +392,7 @@ export interface ChatOut {
 // SPA client-side state
 // ---------------------------------------------------------------------------
 
-/** Client-side list-filter state mapped onto GET /api/bugs query params (frontend-only). */
+/** Client-side filter state; maps onto GET /api/bugs query params. */
 export interface Filters {
   project_id: number[];
   status: string[];

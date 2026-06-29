@@ -7,7 +7,7 @@ design; write-action behavior is covered separately.
 from __future__ import annotations
 
 import os as _os, sys as _sys
-# Make the bug-hunter root importable when run directly.
+# Ensure the repo root is on the path when running this file directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
@@ -23,13 +23,11 @@ os.environ["SESSION_SECRET"] = "test-secret-key-please-ignore-this"
 os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
-# Cloud assistant stays off in tests (avoid a real network call from a
-# developer's local .env that enables it).
+# Disable cloud LLM so a developer's local .env cannot trigger real network calls.
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
-# Force a fresh app import bound to this file's dedicated DB. Avoids a
-# full-suite "no such table" from a shared engine bound to an earlier-collected
-# module's torn-down DB.
+# Purge any cached app.* modules so the import below binds to this file's DB,
+# not a shared engine whose backing DB may have already been torn down.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -49,11 +47,13 @@ FAILED: list[tuple[str, str]] = []
 
 @pytest.fixture(autouse=True)
 def _rebind_and_seed():
-    """Re-bind this file's module-level app.* references to the current import
-    generation each test, then seed its dedicated DB. conftest's `client`
-    fixture purges `app.*` to rebind the engine per test; without re-binding and
-    re-seeding here, reads would hit a stale or empty engine. (Under pytest the
-    ``__main__`` block that seeds in standalone mode never runs.)"""
+    """Re-bind module-level app.* references and re-seed the DB before each test.
+
+    conftest's ``client`` fixture purges ``app.*`` to rebind the engine per
+    test, so the references captured at import time go stale. Without
+    re-importing here, reads hit an empty or torn-down engine. The ``__main__``
+    seed block never runs under pytest, so seeding must happen here too.
+    """
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -247,7 +247,7 @@ def test_executor() -> None:
         admin = db.query(models.User).filter_by(email="admin@example.com").one()
         bob = db.query(models.User).filter_by(email="bob@example.com").one()
 
-        # 1. open bugs vs bob → IDs 1, 2, 6
+        # 1. open bugs assigned to bob — expect IDs 1, 2, 6
         resp = executor.execute("show open bugs assigned to bob", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         check("open bugs vs bob — table present", tbl is not None)
@@ -256,13 +256,13 @@ def test_executor() -> None:
             check("open bugs vs bob — IDs == [1,2,6]",
                   ids == [1, 2, 6], f"got {ids}")
 
-        # 2. critical PROD count = 2
+        # 2. critical PROD bug count should be 2
         resp = executor.execute("how many critical bugs in prod?", db, admin)
         text = " ".join(b.payload.get("text", "")
                         for b in resp.blocks if b.kind == "text")
         check("critical-PROD count text contains '2'", "2" in text, text)
 
-        # 3. Excel export
+        # 3. Excel export for Apollo
         resp = executor.execute("export all bugs in apollo to excel", db, admin)
         fb = next((b for b in resp.blocks if b.kind == "file"), None)
         check("export apollo — file block present", fb is not None)
@@ -282,12 +282,12 @@ def test_executor() -> None:
         opens = [b.payload.get("open_bug_id") for b in text_blocks]
         check("bug #4 — open_bug_id == 4", 4 in opens, f"opens={opens}")
 
-        # 5. Greeting
+        # 5. Greeting response
         resp = executor.execute("hi", db, admin)
         check("greeting returns text",
               any(b.kind == "text" for b in resp.blocks))
 
-        # 6. List users
+        # 6. Full user list
         resp = executor.execute("list all users", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         check("list users — table present", tbl is not None)
@@ -298,7 +298,7 @@ def test_executor() -> None:
                                  "Bob Builder", "Carol Singer"},
                   f"got {names}")
 
-        # 7. Managers only
+        # 7. Role filter: managers only
         resp = executor.execute("list managers", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         if tbl:
@@ -306,46 +306,46 @@ def test_executor() -> None:
             check("list managers — only Alice",
                   names == ["Alice Wonderland"], f"got {names}")
 
-        # 8. Stats
+        # 8. Dashboard stats
         resp = executor.execute("summary", db, admin)
         text = " ".join(b.payload.get("text", "")
                         for b in resp.blocks if b.kind == "text")
         check("stats — has open/Open",
               "Open" in text or "open" in text, text[:200])
 
-        # 9-10. Recent activity
+        # 9-10. Recent activity (admin and non-admin)
         resp = executor.execute("recent activity", db, admin)
         check("recent activity (admin) — has blocks", len(resp.blocks) > 0)
         resp = executor.execute("recent activity", db, bob)
         check("recent activity (non-admin) — has blocks", len(resp.blocks) > 0)
 
-        # 11. Unknown
+        # 11. Unrecognised input falls back gracefully
         resp = executor.execute("xyzzy frobnicate qux", db, admin)
         check("unknown — has fallback text",
               any(b.kind == "text" for b in resp.blocks))
 
-        # 12. Closed bugs only
+        # 12. Status filter: closed only
         resp = executor.execute("show closed bugs", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         if tbl:
             ids = sorted(tbl.payload.get("row_bug_ids", []))
             check("closed bugs — only Bug #5", ids == [5], f"got {ids}")
 
-        # 13. About / statuses
+        # 13. Meta question about available statuses
         resp = executor.execute("what statuses are there", db, admin)
         text = " ".join(b.payload.get("text", "")
                         for b in resp.blocks if b.kind == "text")
         check("about-statuses — mentions New",
               "New" in text or "new" in text, text[:200])
 
-        # 14. Priority synonym 'blockers'
+        # 14. "blockers" is a synonym for Critical priority
         resp = executor.execute("show me the blockers", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         if tbl:
             ids = sorted(tbl.payload.get("row_bug_ids", []))
             check("blockers — IDs == [2,6]", ids == [2, 6], f"got {ids}")
 
-        # 15. Env synonym 'production'
+        # 15. "production" resolves to the PROD environment tag
         resp = executor.execute("bugs in production", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         if tbl:
@@ -353,14 +353,14 @@ def test_executor() -> None:
             check("PROD bugs — IDs == [1,2,5,6]",
                   ids == [1, 2, 5, 6], f"got {ids}")
 
-        # 16. Text search
+        # 16. Free-text keyword search
         resp = executor.execute("find bugs about login", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         if tbl:
             ids = sorted(tbl.payload.get("row_bug_ids", []))
             check("text search 'login' — finds Bug #1", 1 in ids, f"got {ids}")
 
-        # 17. SQL injection attempt
+        # 17. SQL injection — must not crash and must not alter the table
         before = db.query(models.Bug).count()
         resp = executor.execute("'; DROP TABLE bugs; --", db, admin)
         check("injection — no crash", len(resp.blocks) > 0)
@@ -368,16 +368,16 @@ def test_executor() -> None:
         check("bugs table unchanged", before == after,
               f"before={before} after={after}")
 
-        # 18. Long input
+        # 18. Very long input must not crash
         long_msg = "show me " + ("really " * 200) + "long bugs"
         resp = executor.execute(long_msg, db, admin)
         check("long input — no crash", len(resp.blocks) > 0)
 
-        # 19. Unicode
+        # 19. Non-ASCII / Cyrillic input must not crash
         resp = executor.execute("показать все баги", db, admin)
         check("unicode — no crash", len(resp.blocks) > 0)
 
-        # 20. All bugs
+        # 20. No filters — should return all seeded bugs
         resp = executor.execute("show me all bugs", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         check("all bugs — table present", tbl is not None)
@@ -412,7 +412,7 @@ def test_excel() -> None:
         check("excel — len matches size", len(b) == size)
     bad = excel.fetch_staged("nope-xyz", 1)
     check("excel — unknown token None", bad is None)
-    # A DIFFERENT user must NOT be able to fetch another user's staged file.
+    # A different user must not be able to fetch another user's staged file.
     check("excel — cross-user fetch denied", excel.fetch_staged(token, 999) is None)
     if fetched:
         import io

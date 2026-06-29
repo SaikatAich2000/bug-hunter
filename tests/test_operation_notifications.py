@@ -1,27 +1,19 @@
-"""Every mutating operation on a work item notifies its stakeholders.
+"""Notification coverage for the remaining mutating bug operations.
 
-The product rule is that all operations must trigger a notification (and feed
-the email digest) to the assignees. The create / update / assign / comment-add
-paths are covered in test_notifications.py; this file covers the remaining
-operations:
+create/update/assign/comment-add are in test_notifications.py. This file covers:
+  - link add/remove (both endpoints notified)
+  - attachment add/delete
+  - comment edit/delete
+  - bug delete, single and bulk (notification survives the deleted row via NULL bug_id)
 
-  - link add / remove (both endpoints' assignees, not just the source's)
-  - attachment add / delete
-  - comment edit / delete
-  - bug delete, single and bulk (notification survives the row via a NULL
-    bug_id deep-link)
-
-Plus one end-to-end digest check: with EMAIL_DIGEST_ENABLED, one of these
-operations is batched into the daily digest email for the assignee.
-
-All assertions read the Notification table directly (the notify layer commits
-synchronously on the request session), so no second login is needed;
-recipients are isolated per-test by a unique assignee email.
+Assertions query the Notification table directly; the notify layer commits
+synchronously, so no second login is needed. Each test uses a unique assignee
+email to avoid cross-test pollution.
 """
 from __future__ import annotations
 
 BOOTSTRAP_EMAIL = "admin@test.local"
-_PW = "User12345"  # non-secret test credential reused by the helper below
+_PW = "User12345"  # shared test credential
 
 
 # ---------------------------------------------------------------------------
@@ -51,9 +43,11 @@ def _titles_containing(db, user_id: int, needle: str):
 
 
 def _setup(admin_client, suffix: str):
-    """A project + a fresh assignee (Bob) + a bug reported by admin, assigned to
-    Bob. Returns (project, bob, bug). Admin is the actor/reporter throughout, so
-    every stakeholder notification should land on Bob and never on admin."""
+    """Create a project, a fresh assignee (Bob), and a bug assigned to Bob.
+
+    Admin acts as reporter/actor throughout, so notifications go to Bob, not admin.
+    Returns (project, bob, bug).
+    """
     proj = admin_client.post("/api/projects", json={"name": f"Op Proj {suffix}"}).json()
     bob = admin_client.post("/api/users", json={
         "name": "Bob", "email": f"bob_{suffix}@op.test",
@@ -160,7 +154,7 @@ def test_comment_delete_notifies_assignee(admin_client):
 
 
 # ---------------------------------------------------------------------------
-# Bug delete — notification must outlive the row (NULL bug_id, no FK cascade)
+# Bug delete — notification must outlive the deleted row
 # ---------------------------------------------------------------------------
 def test_bug_delete_notifies_assignee_and_survives(admin_client):
     _proj, bob, bug = _setup(admin_client, "bugdel")
@@ -171,16 +165,16 @@ def test_bug_delete_notifies_assignee_and_survives(admin_client):
     db = _session()
     deleted = [n for n in _notifs_for(db, bob["id"]) if "deleted" in n.title.lower()]
     assert deleted, "assignee not notified of bug delete"
-    # The deep-link is dropped so the CASCADE FK can't erase the notification.
+    # bug_id is set to NULL so the FK cascade doesn't erase the notification.
     assert deleted[0].bug_id is None
 
 
 # ---------------------------------------------------------------------------
-# Digest inclusion — a new operation gets batched into the daily email
+# Digest — operations must be batched into the daily email
 # ---------------------------------------------------------------------------
 def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
     from app.config import get_settings
-    # Digest ON → notify() leaves emailed_at NULL so the job owns the email.
+    # With digest mode on, notify() leaves emailed_at NULL and the job sends the email.
     monkeypatch.setattr(get_settings(), "EMAIL_DIGEST_ENABLED", True)
 
     sent: list[tuple[str, list[str], str]] = []
@@ -210,7 +204,7 @@ def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Bulk delete — must notify exactly like a single delete (was previously silent)
+# Bulk delete — was previously silent; must behave the same as single delete
 # ---------------------------------------------------------------------------
 def test_bulk_delete_notifies_assignee_and_survives(admin_client):
     _proj, bob, bug = _setup(admin_client, "bulkdel")
@@ -224,14 +218,13 @@ def test_bulk_delete_notifies_assignee_and_survives(admin_client):
     db = _session()
     deleted = [n for n in _notifs_for(db, bob["id"]) if "deleted" in n.title.lower()]
     assert deleted, "assignee not notified of bulk delete"
-    # Deep-link dropped (link_bug=False) so the CASCADE FK can't erase the row.
+    # bug_id is NULL (link_bug=False) so the FK cascade doesn't erase the row.
     assert deleted[0].bug_id is None
 
 
 # ---------------------------------------------------------------------------
-# Link notifies both endpoints: the target item's assignees are notified too,
-# since a link (a "blocks" edge especially) changes the target item as much as
-# the source.
+# Both endpoints notified: a "blocks" link affects the target item too, so its
+# assignees need to know about it just as much as the source's assignees.
 # ---------------------------------------------------------------------------
 def test_link_add_notifies_both_endpoint_assignees(admin_client):
     proj, bob, bug = _setup(admin_client, "linkboth")

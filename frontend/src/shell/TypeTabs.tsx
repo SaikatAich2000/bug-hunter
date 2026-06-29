@@ -1,6 +1,6 @@
 /**
- * Type tabs — tab switching plus the badge counts from stats.by_type. Shown on
- * the list and analytics views only.
+ * Type filter tabs with badge counts sourced from stats.by_type.
+ * Visible only on the list and analytics views.
  */
 import { useApp, type TabName } from "../state/AppContext";
 
@@ -16,7 +16,7 @@ export default function TypeTabs() {
 
   const show = view === "list" || view === "analytics";
 
-  // Badge counts always come from by_type (global).
+  // Counts are always global (by_type), not filtered by the active tab.
   const byType = stats?.by_type ?? {};
   const counts: Record<TabName, number> = {
     Bug: byType["Bug"] ?? 0,

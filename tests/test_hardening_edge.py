@@ -28,8 +28,7 @@ def _login(c, email, pw):
 
 def _mk_user(admin_c, email, role="user"):
     body = {"name": email.split("@")[0], "email": email, "role": role, "password": _PW}
-    # Project-scoped access: tag the new user to every existing project so these
-    # pre-scoping tests keep exercising the flat "see everything" model.
+    # Assign to all existing projects so tests that don't care about scoping can see everything.
     pids = [p["id"] for p in admin_c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -51,9 +50,8 @@ def test_regular_user_cannot_create_task(client):
     _mk_user(client, "u1@test.local")
     client.post("/api/auth/logout")
     _login(client, "u1@test.local", _PW)
-    # A Bug is fine for a regular user…
+    # Bugs are open to regular users; Tasks and Requirements are restricted to admin/manager.
     assert client.post("/api/bugs", json={"project_id": proj["id"], "title": "a bug"}).status_code == 201
-    # …a Task / Requirement is admin/manager-only.
     for t in ("Task", "Requirement"):
         r = client.post("/api/bugs", json={"project_id": proj["id"], "title": f"a {t}", "item_type": t})
         assert r.status_code == 403, r.text
@@ -86,12 +84,11 @@ def test_user_cannot_comment_or_attach_on_task(client):
     _mk_user(client, "u2@test.local")
     client.post("/api/auth/logout")
     _login(client, "u2@test.local", _PW)
-    # Blocked on the Task…
+    # Regular users are blocked from Tasks but can comment/attach on Bugs.
     assert client.post(f"/api/bugs/{task['id']}/comments", json={"body": "hi"}).status_code == 403
     att = client.post(f"/api/bugs/{task['id']}/attachments",
                       files={"file": ("n.txt", b"x", "text/plain")})
     assert att.status_code == 403
-    # …allowed on the collaborative Bug.
     assert client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "hi"}).status_code == 201
 
 
@@ -127,7 +124,7 @@ def test_unassign_notifies_removed_user(admin_client):
 def test_bulk_version_conflict_is_skipped(admin_client):
     proj = _mk_project(admin_client, "PBulkVer")
     bug = admin_client.post("/api/bugs", json={"project_id": proj["id"], "title": "ver bug"}).json()
-    # Stale version → conflict, no change.
+    # Stale version should conflict with no update applied.
     r = admin_client.post("/api/bugs/bulk", json={
         "action": "set_priority", "ids": [bug["id"]], "value": "High",
         "expected_versions": {str(bug["id"]): bug["version"] + 5},
@@ -135,7 +132,7 @@ def test_bulk_version_conflict_is_skipped(admin_client):
     body = r.json()
     assert body["conflicts"] == 1 and body["updated"] == 0, body
     assert admin_client.get(f"/api/bugs/{bug['id']}").json()["priority"] != "High"
-    # Correct version → applies.
+    # Correct version: update should succeed.
     fresh = admin_client.get(f"/api/bugs/{bug['id']}").json()
     r2 = admin_client.post("/api/bugs/bulk", json={
         "action": "set_priority", "ids": [bug["id"]], "value": "High",
@@ -274,7 +271,7 @@ def test_push_register_insert_race(admin_client, monkeypatch):
     from app.models import PushSubscription, User
     db0 = _session()
     admin_id = db0.scalar(select(User.id).where(User.email == BOOTSTRAP_EMAIL))
-    # The row a concurrent request committed while we were mid-insert.
+    # Pre-insert the row to simulate a concurrent request winning the race.
     db0.add(PushSubscription(user_id=admin_id, token="race-tok", platform="web"))
     db0.commit()
 
@@ -284,7 +281,7 @@ def test_push_register_insert_race(admin_client, monkeypatch):
 
     def fake_scalar(*a, **k):
         n["scalar"] += 1
-        # Initial existence check MISSES (the race window); recovery FINDS it.
+        # Miss on first call to simulate the race window; fall through to real DB after that.
         return None if n["scalar"] == 1 else real_scalar(*a, **k)
 
     def fake_flush(*a, **k):
@@ -300,7 +297,7 @@ def test_push_register_insert_race(admin_client, monkeypatch):
 
 
 def test_push_register_race_reraises_when_row_gone(monkeypatch):
-    # IntegrityError but the recovery lookup also finds nothing → re-raise.
+    # If recovery after IntegrityError still finds no row, re-raise (something else is wrong).
     from sqlalchemy.exc import IntegrityError
     from app import push_service
     db = _session()
@@ -343,7 +340,7 @@ def test_login_not_csrf_exempt(client):
 
 
 def test_sessions_list_sweeps_without_error(admin_client):
-    # Exercises the set-based expired-sweep DELETE path.
+    # Exercises the expired-session sweep path.
     assert admin_client.get("/api/sessions").status_code == 200
 
 
@@ -368,7 +365,7 @@ def test_add_column_safely_skips_on_error(tmp_path):
     import app.database as database
     eng = create_engine(f"sqlite:///{tmp_path / 'leg.db'}")
     with eng.begin() as conn:
-        # ALTER on a missing table raises inside the SAVEPOINT; it must be
-        # swallowed (logged) so one bad column can't abort the whole pass.
+        # An ALTER on a missing table raises inside the savepoint; it should be
+        # swallowed so a single bad column doesn't abort the whole migration pass.
         database._add_column_safely(conn, "ALTER TABLE nope ADD COLUMN x INTEGER")
     eng.dispose()  # no exception propagated == pass

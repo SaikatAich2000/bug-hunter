@@ -1,7 +1,7 @@
 {
   "name": "bug-hunter-frontend",
   "private": true,
-  "version": "3.0.0",
+  "version": "3.1.0",
   "type": "module",
   "description": "Bug Hunter SPA — React + TypeScript frontend, built with Vite into app/static.",
   "scripts": {

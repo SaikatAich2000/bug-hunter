@@ -1,13 +1,13 @@
 /**
- * Main SPA entry — the auth gate.
+ * SPA entry point and auth gate.
  *
- * Theme is applied before first paint (no inline script allowed by CSP, so it
- * happens here at module top — the bundle loads with <script type="module">,
- * which executes before first render anyway).
+ * Theme is read from localStorage here at module top because CSP blocks inline
+ * scripts; a <script type="module"> runs before first render, so there is no
+ * flash of the wrong theme.
  *
- * The server already redirects unauthenticated requests for "/" to
- * /login.html; the client-side check below is a redundant guard that also
- * covers cached pages and revoked sessions.
+ * The server redirects unauthenticated "/" requests to /login.html. The
+ * client-side check below adds a second layer for cached pages and revoked
+ * sessions.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -20,9 +20,8 @@ import "./styles/chatbot.css";
 document.documentElement.dataset.theme =
   localStorage.getItem("theme") || "dark";
 
-// Apply the persisted sidebar-collapsed state before first paint so a reload
-// renders the collapsed rail directly rather than animating from the expanded
-// state. AppContext keeps the class in sync thereafter.
+// Restore the collapsed sidebar before first paint to avoid an expand-then-collapse
+// animation on reload. AppContext keeps the class in sync from here on.
 if (localStorage.getItem("sidebarCollapsed") === "1") {
   document.body.classList.add("sidebar-collapsed");
 }

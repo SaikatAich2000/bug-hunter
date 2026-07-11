@@ -1,8 +1,5 @@
-"""Sleuth read-path coverage.
-
-Spins up a fresh SQLite DB, seeds users, projects, and bugs, then exercises the
-NLU parser, executor, Excel generator, classifier, and HTTP route. Read-only by
-design; write-action behavior is covered separately.
+"""Sleuth read-path coverage: NLU parser, executor, Excel generator, and HTTP route over a
+freshly-seeded SQLite DB. Read-only by design; write actions are covered separately.
 """
 from __future__ import annotations
 
@@ -26,8 +23,7 @@ os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 # Disable cloud LLM so a developer's local .env cannot trigger real network calls.
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
-# Purge any cached app.* modules so the import below binds to this file's DB,
-# not a shared engine whose backing DB may have already been torn down.
+# Purge cached app.* so the import below binds to this file's DB, not a torn-down shared engine.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -47,13 +43,7 @@ FAILED: list[tuple[str, str]] = []
 
 @pytest.fixture(autouse=True)
 def _rebind_and_seed():
-    """Re-bind module-level app.* references and re-seed the DB before each test.
-
-    conftest's ``client`` fixture purges ``app.*`` to rebind the engine per
-    test, so the references captured at import time go stale. Without
-    re-importing here, reads hit an empty or torn-down engine. The ``__main__``
-    seed block never runs under pytest, so seeding must happen here too.
-    """
+    """Re-bind app.* refs and re-seed before each test (conftest purges app.*; __main__ seed never runs under pytest)."""
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")

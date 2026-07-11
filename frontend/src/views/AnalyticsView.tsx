@@ -1,9 +1,4 @@
-/**
- * Analytics view. Charts scope to the active type-tab (Bug / Requirement /
- * Task / all). The Environment card is hidden for Requirement and Task tabs.
- * Stats come from AppContext; this view re-fetches on mount and on status
- * filter changes.
- */
+/** Analytics view. Charts scope to the active type-tab; stats come from AppContext. */
 import { Fragment, useEffect } from "react";
 import { useApp } from "../state/AppContext";
 import { initials } from "../lib/format";
@@ -172,8 +167,7 @@ function AssigneeBars({ rows }: Readonly<{ rows: StatsAssigneeSlice[] }>) {
 export default function AnalyticsView() {
   const { stats, activeTab, refreshStats, filters } = useApp();
 
-  // Re-fetch when the status filter changes so charts react to KPI tile clicks.
-  // refreshStats reads the live filter at call time.
+  // Re-fetch on status-filter change so charts react to KPI tile clicks.
   const statusKey = filters.status.join(",");
   useEffect(() => {
     void refreshStats();

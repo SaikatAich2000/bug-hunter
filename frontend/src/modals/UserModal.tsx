@@ -1,9 +1,6 @@
 /**
- * User create/edit modal.
- *
- * `user == null` → create mode; otherwise edit. Password is required on
- * create, optional on edit (blank keeps the existing hash). On success the
- * modal closes, users reload, and bugs/stats refresh.
+ * User create/edit modal (user == null → create). Password required on create,
+ * optional on edit (blank keeps the existing hash).
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import ChipPicker from "../components/ChipPicker";
@@ -21,8 +18,7 @@ import {
 } from "../lib/constants";
 import type { Role } from "../types";
 
-// Placeholder/hint strings. Key names avoid the word "password" to reduce
-// password-manager false-positives. createHint mirrors the server policy.
+// Key names avoid "password" to reduce password-manager false-positives; createHint mirrors server policy.
 const HINTS = {
   editPlaceholder: "Leave blank to keep current",
   editHint: "Leave blank to keep current",
@@ -40,8 +36,7 @@ export default function UserModal() {
   const [role, setRole] = useState<Role>("user");
   const [isActive, setIsActive] = useState(true);
   const [password, setPassword] = useState("");
-  // Projects this user can access. Empty = no access for non-admins.
-  // The picker is scoped to what the current actor can see, matching backend grant rules.
+  // Projects this user can access (empty = no access for non-admins).
   const [projectIds, setProjectIds] = useState<number[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -87,7 +82,7 @@ export default function UserModal() {
       email: trimmedEmail,
       role,
       is_active: isActive,
-      // Always sent; on edit, replaces memberships with the current picker selection.
+      // Always sent; on edit, replaces memberships with the current selection.
       project_ids: projectIds,
     };
     // On edit, omitting password keeps the existing hash.

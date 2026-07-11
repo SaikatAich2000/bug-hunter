@@ -1,14 +1,7 @@
-"""Sessions admin API (Keycloak-style).
+"""Sessions admin API: list active sessions and revoke one device at a time.
 
-Lets admins:
-  - List every active server-side session row (with user, IP, UA, when
-    it started, when it was last seen, when it expires).
-  - Revoke an individual session. This boots that one device without
-    affecting any other session for the same user.
-
-All endpoints require admin. Managers cannot see or revoke sessions. This
-is intentionally narrower than user and project management because the
-ability to silently log other people out is a sensitive operation.
+Admin-only (narrower than user/project management) — silently logging
+people out is sensitive.
 """
 from __future__ import annotations
 
@@ -39,8 +32,7 @@ def _audit(db: Session, actor: User, action: str, detail: str, entity_id: int | 
 
 
 def _is_current(request: Request, sess: SessionRow) -> bool:
-    """Return True if this session row matches the cookie on the current request.
-    Used to label the caller's own session and block self-revocation."""
+    """True when the row matches the caller's cookie — labels it and blocks self-revoke."""
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
     if not parsed:
@@ -55,17 +47,11 @@ def list_sessions(
     db: Session = Depends(get_db),
     actor: User = Depends(require_admin),
 ) -> list[dict]:
-    """Return every non-expired session row, joined with the user's name
-    and email for display. Sweeps expired rows on read so the admin's
-    list stays accurate without a separate cron."""
+    """List non-expired sessions with user info, sweeping expired rows on read."""
     now = datetime.now(timezone.utc)
 
-    # Sweep expired rows on every listing call so the admin view stays accurate
-    # without a separate cron. A set-based DELETE is safe under concurrent access:
-    # two admins racing this won't produce a StaleDataError the way
-    # load-then-ORM-delete would when the other runner already removed the rows.
-    # Errors are swallowed because the SELECT below filters expired rows anyway;
-    # a failed sweep just means those rows linger until the next successful one.
+    # set-based DELETE avoids the concurrent-admin StaleDataError; a failed
+    # sweep is harmless since the SELECT below filters expired rows anyway
     try:
         db.execute(delete(SessionRow).where(SessionRow.expires_at < now))
         db.commit()
@@ -79,7 +65,7 @@ def list_sessions(
         .order_by(SessionRow.last_seen_at.desc(), SessionRow.id.desc())
     ).all()
 
-    # Batch-load users to avoid N+1 queries.
+    # batch-load users — avoids N+1
     user_ids = sorted({r.user_id for r in rows})
     user_map: dict[int, User] = {}
     if user_ids:
@@ -112,15 +98,12 @@ def revoke_session(
     db: Session = Depends(get_db),
     actor: User = Depends(require_admin),
 ) -> dict[str, str]:
-    """Revoke (delete) a single session row. The next request from that
-    cookie will fail validation and the user will be bounced to login.
-    Other sessions for the same user are not touched."""
+    """Revoke one session row; other sessions for the same user are untouched."""
     sess = db.get(SessionRow, session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Prevent admins from revoking their own current session by mistake; there
-    # is no undo. Use /api/auth/logout to end your own session cleanly.
+    # no undo — admins must use logout, not self-revocation
     if _is_current(request, sess):
         raise HTTPException(
             status_code=400,

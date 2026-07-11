@@ -1,25 +1,10 @@
 /**
- * Filter-bar multi-select dropdown. Class names must match styles.css:
- *
- *   <div class="ms-wrap" data-filter="{filterKey}">
- *     <button class="ms-btn [active]" data-ms-toggle aria-haspopup="menu" aria-expanded>
- *       <span class="ms-btn-label">All Projects | Alice | Projects (2)</span>
- *       <span class="ms-caret">▾</span>
- *     </button>
- *     <div class="ms-panel" [hidden] role="menu">
- *       <div class="ms-row [on]" data-ms-value role="menuitemcheckbox" aria-checked>
- *         <span class="ms-check">✓</span><span class="ms-text">…</span>
- *       </div> × n   (or <div class="ms-empty">No options</div>)
- *     </div>
- *   </div>
- *
- * Panel placement is pure CSS (absolute). Only one panel can be open at a time;
- * a module-level registry closes others when a new one opens.
+ * Filter-bar multi-select dropdown; class names must match styles.css.
+ * Only one panel open at a time via a module-level registry.
  */
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-// Every mounted instance registers its close callback here; opening any panel
-// calls closeOthers to shut the rest.
+// Each instance registers its close callback; opening a panel closes the rest.
 const closers = new Set<() => void>();
 function closeOthers(except: () => void): void {
   closers.forEach((close) => {
@@ -27,7 +12,7 @@ function closeOthers(except: () => void): void {
   });
 }
 
-/** Returns the button label: "All {label}", a single name, or "{noun} (n)". */
+/** Button label: "All {label}", a single name, or "{noun} (n)". */
 function msButtonLabel(
   label: string,
   noun: string,
@@ -60,7 +45,6 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
 
-  // Register/deregister this instance's close callback.
   useEffect(() => {
     closers.add(close);
     return () => {
@@ -68,8 +52,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
     };
   }, [close]);
 
-  // Click-outside to close. Toggle and row clicks call stopPropagation,
-  // so no containment check is needed.
+  // Click-outside to close; row/toggle clicks stopPropagation so no containment check needed.
   useEffect(() => {
     if (!open) return;
     const onDocClick = () => setOpen(false);
@@ -77,7 +60,7 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  // Capture-phase Escape so it pre-empts any surrounding modal's handler.
+  // Capture-phase Escape to pre-empt any surrounding modal's handler.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -148,7 +131,5 @@ function MsFilter({ filterKey, label, noun, options, selected, onToggle }: Props
   );
 }
 
-// Memo prevents parent re-renders (e.g. context polls) from cascading here.
-// FilterBar passes stable useCallback handlers and memoized arrays, so the
-// shallow prop compare reliably short-circuits.
+// Memo: FilterBar passes stable handlers/arrays, so parent re-renders don't cascade here.
 export default memo(MsFilter);

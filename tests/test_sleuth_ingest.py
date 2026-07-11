@@ -1,12 +1,5 @@
-"""Tests for the Sleuth admin document-ingest feature.
-
-The ingest flow is two-step: POST /api/chat/ingest stages a preview but
-creates nothing. A follow-up "create them" / "yes" commits the items; "cancel"
-throws them away.
-
-Covers both the endpoint/executor flow and the parser (app/chatbot/ingest.py)
-directly, including fuzzy column-name matching for real-world spreadsheets.
-"""
+"""Sleuth admin document-ingest: two-step preview/confirm flow plus the
+parser in app/chatbot/ingest.py (formats, fuzzy column mapping)."""
 from __future__ import annotations
 
 import io
@@ -68,9 +61,7 @@ def _bug_titles(client: TestClient, project_id: int) -> set[str]:
     return {b["title"] for b in client.get(f"/api/bugs?project_id={project_id}").json()["items"]}
 
 
-# ---------------------------------------------------------------------------
 # Permissions
-# ---------------------------------------------------------------------------
 def test_ingest_requires_auth(client):
     assert client.post(_INGEST, files={"file": ("x.txt", "A bug here", "text/plain")}).status_code == 401
 
@@ -83,9 +74,7 @@ def test_ingest_is_admin_only(admin_client):
     assert r.status_code == 403
 
 
-# ---------------------------------------------------------------------------
 # Conversational flow: preview → create / cancel (nothing auto-created)
-# ---------------------------------------------------------------------------
 def test_upload_previews_without_creating(admin_client):
     proj = _mk_project(admin_client, "PreviewProj")
     doc = "Login button broken [High]\nSearch is stale | index not refreshed\nCheckout crash (Critical)"
@@ -149,9 +138,7 @@ def test_unrelated_message_leaves_the_staged_doc_parked(admin_client):
     assert admin_client.get(f"/api/bugs?project_id={proj['id']}").json()["total"] == 2
 
 
-# ---------------------------------------------------------------------------
 # Formats — all preview correctly
-# ---------------------------------------------------------------------------
 def test_csv_with_header_previews(admin_client):
     proj = _mk_project(admin_client, "CsvProj")
     doc = "Title,Description,Priority,Type\nAPI 500,trace attached,Critical,Bug\nDark mode,requested,Low,Requirement"
@@ -176,8 +163,7 @@ def test_json_array_previews(admin_client):
 
 
 def test_xlsx_nonstandard_header_not_treated_as_item(admin_client):
-    # Non-standard header words ("Bug Summary", "Sev") must not become an item,
-    # and fuzzy mapping still resolves the columns correctly.
+    # Non-standard headers must be skipped, with columns fuzzy-mapped.
     proj = _mk_project(admin_client, "XlsxProj")
     data = _xlsx_bytes([["Bug Summary", "Sev"], ["Login fails on Safari", "Critical"],
                         ["Checkout total wrong", "High"]])
@@ -195,9 +181,7 @@ def test_upload_defaults_to_first_project(admin_client):
     assert j["intent"] == "ingest_preview"
 
 
-# ---------------------------------------------------------------------------
 # Edge cases
-# ---------------------------------------------------------------------------
 def test_empty_file_reads_nothing(admin_client):
     j = _upload(admin_client, "empty.txt", "   \n\n---\n", "text/plain")
     assert j["intent"] == "ingest_empty"
@@ -230,9 +214,7 @@ def test_large_preview_truncates(admin_client):
     assert any("more" in b["payload"].get("text", "") for b in j["blocks"])
 
 
-# ---------------------------------------------------------------------------
-# AI extraction path (stubbed, no network), including reading an xlsx as text
-# ---------------------------------------------------------------------------
+# AI extraction path (stubbed, no network)
 def test_ingest_uses_ai_when_available(admin_client, monkeypatch):
     import app.chatbot.cloud_llm as cloud
     monkeypatch.setattr(cloud, "is_available", lambda: True)
@@ -272,9 +254,7 @@ def test_ai_falls_back_to_parser_when_empty(admin_client, monkeypatch):
     assert "parsed" in j["blocks"][0]["payload"]["text"]
 
 
-# ---------------------------------------------------------------------------
-# Parser unit tests (direct, for full branch coverage)
-# ---------------------------------------------------------------------------
+# Parser unit tests (direct)
 def test_parser_json_object_with_bugs_key(admin_client):
     from app.chatbot import ingest
     specs = ingest.parse_document("x.json", json.dumps({"bugs": [{"title": "keyed bug"}]}).encode())
@@ -326,8 +306,7 @@ def test_parser_fuzzy_column_mapping(admin_client):
 
 def test_parser_fuzzy_column_skips_empty_cells(admin_client):
     from app.chatbot import ingest
-    # A leading non-matching column with a blank cell must not shadow the
-    # "Bug Summary" column that appears later in the row.
+    # A leading blank cell must not shadow the later "Bug Summary" column.
     specs = ingest._rows_to_specs([["Notes", "Bug Summary"], ["", "My real title here"]])
     assert specs[0]["title"] == "My real title here"
 
@@ -387,8 +366,7 @@ def test_parser_xlsx_empty_sheet(admin_client):
 
 def test_document_text_empty_xlsx_returns_blank(admin_client):
     from app.chatbot import ingest
-    # Empty xlsx should produce no text so the AI layer is never called with a
-    # blank document.
+    # Empty xlsx yields no text so the AI layer is never called with a blank doc.
     assert ingest._document_text("x.xlsx", _xlsx_bytes([])) == ""
 
 
@@ -409,9 +387,7 @@ def test_document_text_for_text_file(admin_client):
     assert ingest._document_text("x.txt", b"hello world") == "hello world"
 
 
-# ---------------------------------------------------------------------------
 # create_bugs_from_specs (direct): cap and project resolution
-# ---------------------------------------------------------------------------
 def test_create_from_specs_caps_and_resolves_default_project(admin_client, monkeypatch):
     from app.chatbot import ingest
     from app.database import SessionLocal

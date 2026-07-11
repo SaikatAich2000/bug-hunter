@@ -1,10 +1,5 @@
 """Tests for the item-linking feature.
-
-Covers directed link creation with correct inverse labels, all three link
-types, idempotent re-linking, self-link/unknown-target/missing-source guards,
-edit-permission gating (regular users can link Bugs but not Tasks), removal
-from either endpoint, the list endpoint, links in the detail payload, cascade
-on bug delete, and additive schema migration.
+Directed links + inverse labels, idempotency, guards, per-type permission gating, removal, cascade, migration.
 """
 from __future__ import annotations
 
@@ -29,9 +24,7 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
     body = {"name": name, "email": email, "role": role, "password": _PW}
-    # Tag the new user to every existing project so these permission tests
-    # exercise the flat model correctly — a user must be able to see both
-    # endpoints before the per-type link rules apply.
+    # Tag the user to every project: both endpoints must be visible before per-type link rules apply.
     pids = [p["id"] for p in admin.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -54,9 +47,7 @@ def _mk_bug(admin: TestClient, project_id: int, title: str, **extra) -> dict:
     return r.json()
 
 
-# ---------------------------------------------------------------------------
 # Create
-# ---------------------------------------------------------------------------
 def test_link_requires_auth(client):
     assert client.get("/api/bugs/1/links").status_code == 401
     assert client.post("/api/bugs/1/links", json={"target_bug_id": 2}).status_code == 401
@@ -136,9 +127,7 @@ def test_invalid_link_type_422(admin_client):
                              json={"target_bug_id": b["id"], "link_type": "wormhole"}).status_code == 422
 
 
-# ---------------------------------------------------------------------------
 # Permissions
-# ---------------------------------------------------------------------------
 def test_regular_user_cannot_link_a_task(admin_client):
     proj = _mk_project(admin_client, "TaskLink")
     _mk_user(admin_client, "Reg", "reg.link@test.local")
@@ -161,9 +150,7 @@ def test_regular_user_can_link_a_bug(admin_client):
     assert userc.post(f"/api/bugs/{a['id']}/links", json={"target_bug_id": b["id"]}).status_code == 201
 
 
-# ---------------------------------------------------------------------------
 # Remove + detail integration + cascade
-# ---------------------------------------------------------------------------
 def test_remove_link_from_either_end(admin_client):
     proj = _mk_project(admin_client, "Remove")
     a = _mk_bug(admin_client, proj["id"], "Item A")
@@ -221,9 +208,7 @@ def test_list_links_missing_bug_404(admin_client):
     assert admin_client.get("/api/bugs/99999/links").status_code == 404
 
 
-# ---------------------------------------------------------------------------
 # Additive schema
-# ---------------------------------------------------------------------------
 def test_bug_links_table_is_additive_and_idempotent(tmp_path, monkeypatch):
     db_file = tmp_path / "links_schema.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")

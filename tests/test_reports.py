@@ -1,10 +1,4 @@
-"""Tests for the Reports feature.
-
-Covers auth gates (anon→401, user→403, manager/admin→200), the /types
-catalog, every filter type, throughput counts from activity_log, the
-per-type "solved" status map, XLSX export structure, Sleuth report
-intent, and the removed legacy CSV endpoint.
-"""
+"""Reports feature: auth gates, /types catalog, filters, throughput, XLSX export, Sleuth report intent, removed legacy CSV."""
 from __future__ import annotations
 
 import io
@@ -215,8 +209,7 @@ def test_item_detail_text_search(admin_client):
 
 
 def test_item_detail_attribute_and_entity_filters(admin_client):
-    """Exercise priority, environment, assignee, reporter, event, and date
-    filters in one pass; each independently narrows the result set."""
+    """Priority, environment, assignee, reporter, event, and date filters each narrow the result set."""
     me = admin_client.get("/api/auth/me").json()
     p = _make_project(admin_client, name="FilterProj")
     ev = admin_client.post("/api/events", json={"name": "FilterEvent"}).json()
@@ -300,8 +293,7 @@ def test_throughput_respects_per_type_solved_map(admin_client):
 
 
 def test_throughput_filters_date_window(admin_client):
-    """date_from/date_to filters on the activity_log timestamp, not created_at,
-    so "who resolved last week" works regardless of when the bug was filed."""
+    """date_from/date_to filter on the activity_log timestamp, not created_at."""
     p = _make_project(admin_client)
     b = _make_item(admin_client, p["id"], title="will-be-resolved")
     _change_status(admin_client, b["id"], "Resolved")
@@ -580,10 +572,7 @@ def test_sleuth_report_intent_forbidden_for_regular_user(user_client):
 # Legacy CSV endpoint must be gone
 # ---------------------------------------------------------------------------
 def test_legacy_csv_endpoint_removed(admin_client):
-    """The old /api/bugs/export.csv handler was removed in favour of the
-    Reports view + Sleuth report intent. The path now 404s (no handler)
-    or 422s (the /api/bugs/{bug_id} catchall can't parse "export.csv" as
-    an integer) — either proves the legacy export is gone."""
+    """Removed /api/bugs/export.csv now 404s (no handler) or 422s (catchall can't parse "export.csv" as int)."""
     r = admin_client.get("/api/bugs/export.csv")
     assert r.status_code in (404, 422), r.text
     r = admin_client.post("/api/reports/export.xlsx", json={

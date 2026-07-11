@@ -57,8 +57,9 @@ python -m pytest -m ui
 ## Code style
 
 - Match the surrounding code.
-- Only add comments when the *why* is not obvious — a hidden constraint, a
-  subtle rule, or a workaround for a specific bug.
+- Keep comments concise: one short line stating a non-obvious *why* — a hidden
+  constraint, a subtle rule, or a workaround for a specific bug. No essay
+  blocks; docstrings are one line (two for genuinely complex APIs).
 - New routes need tests; new schemas need validators.
 - Database changes must only *add* — see *Live-data safety* in
   [README.md](README.md). No destructive migrations.

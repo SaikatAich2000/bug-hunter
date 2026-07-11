@@ -117,6 +117,21 @@ def test_start_noop_on_invalid_cron(monkeypatch):
     assert scheduler._task is None
 
 
+def test_start_warns_when_enabled_but_cron_empty(monkeypatch, caplog):
+    # Digest mode suppresses immediate emails, so "enabled but no cron" means
+    # nothing is ever delivered. start() must stay a no-op but log a loud warning
+    # rather than failing silently.
+    monkeypatch.setattr(scheduler, "get_settings", lambda: type(
+        "S", (), {"EMAIL_DIGEST_CRON": "",
+                  "EMAIL_DIGEST_ENABLED": True,
+                  "EMAIL_DIGEST_TIMEZONE": ""})())
+    scheduler._task = None
+    with caplog.at_level("WARNING", logger="bug_hunter.scheduler"):
+        scheduler.start()
+    assert scheduler._task is None
+    assert any("EMAIL_DIGEST_CRON is empty" in r.message for r in caplog.records)
+
+
 def test_stop_noop_when_never_started():
     scheduler._task = None
     asyncio.run(scheduler.stop())  # must not raise

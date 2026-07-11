@@ -1,12 +1,5 @@
-"""Source guards for the password-field UX.
-
-Covers two things: the reveal ("eye") toggle on every password input, and the
-permanent 'changeme' exception in the client-side password validator.
-
-Guards against refactors that silently drop the toggle or reintroduce a
-client-side check that rejects 'changeme' — a password the server accepts
-(see app/schemas._check_password_strength and
-app/password_breach._ALWAYS_ALLOWED, covered behaviourally elsewhere).
+"""Source guards for password-field UX: the reveal toggle and the permanent 'changeme' exception.
+Guards refactors that drop the toggle or reject 'changeme' client-side when the server accepts it.
 """
 from __future__ import annotations
 
@@ -34,9 +27,7 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
 # The reusable PasswordInput component
-# ---------------------------------------------------------------------------
 def test_password_input_component_exists():
     assert PASSWORD_INPUT.exists(), "PasswordInput.tsx must exist"
 
@@ -56,9 +47,7 @@ def test_password_input_toggles_type_and_renders_eye():
     assert "forwardRef" in src
 
 
-# ---------------------------------------------------------------------------
 # Every password form uses PasswordInput (no bare type="password" left)
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("path", PASSWORD_FORMS, ids=lambda p: p.name)
 def test_password_forms_use_password_input(path):
     src = _read(path)
@@ -66,8 +55,7 @@ def test_password_forms_use_password_input(path):
         f"{path.name} must import PasswordInput"
     )
     assert "<PasswordInput" in src, f"{path.name} must render PasswordInput"
-    # No bare <input type="password"> should remain; everything routes through
-    # PasswordInput so the toggle is guaranteed.
+    # No bare password input may remain; everything routes through PasswordInput.
     assert 'type="password"' not in src, (
         f'{path.name} still has a bare type="password" input'
     )
@@ -79,19 +67,13 @@ def test_password_input_count_matches_fields():
     assert _read(RESET).count("<PasswordInput") == 2  # new/confirm
 
 
-# ---------------------------------------------------------------------------
 # CSS hooks for the toggle
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("cls", [".pw-wrap", ".pw-toggle"])
 def test_password_toggle_css_present(cls):
     assert cls in _read(STYLES), f"styles.css missing {cls!r}"
 
 
-# ---------------------------------------------------------------------------
 # The permanent 'changeme' client-side exception
-# ---------------------------------------------------------------------------
 def test_client_validator_allows_changeme():
-    # 'changeme' must be whitelisted case-insensitively before the
-    # length/complexity rules, so the UI never rejects a password the backend
-    # accepts.
+    # 'changeme' is whitelisted case-insensitively before length/complexity so UI matches backend.
     assert 'toLowerCase() === "changeme"' in _read(CONSTANTS)

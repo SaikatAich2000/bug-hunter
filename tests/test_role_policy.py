@@ -1,15 +1,5 @@
-"""Role-policy and session-admin tests.
-
-Covers:
-  - Bug deletion is admin-only (managers blocked)
-  - Regular users can edit any bug and reassign it, but cannot change
-    the reporter (admin/manager only) or delete
-  - Project deletion is admin-only
-  - User create/update is admin or manager; delete is admin-only
-  - Manager cannot grant the admin role or touch admin accounts
-  - Audit trail is hidden from regular users
-  - Sessions: list and revoke are admin-only; revoking kills the cookie;
-    cannot revoke your own active session
+"""Role-policy and session-admin gates: admin-only delete (bugs/projects/users), manager
+limits (no admin role, no delete), audit hidden from users, and session list/revoke rules.
 """
 from __future__ import annotations
 
@@ -18,9 +8,7 @@ from __future__ import annotations
 def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X"):
     email = email or f"{name.lower()}@example.com"
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Tag the new user to every existing project so role/permission tests
-    # keep exercising the flat "see everything" model; an untagged
-    # non-admin would otherwise see nothing.
+    # Tag to every project so non-admins see everything (untagged sees nothing).
     pids = [p["id"] for p in client.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -285,10 +273,7 @@ class TestAuditVisibility:
 # 6. Sessions — admin-only list + revoke
 # ===========================================================================
 def _new_client():
-    """Return a fresh TestClient with its own cookie jar, simulating a separate device.
-
-    Conftest fixtures share one TestClient, so session tests that need
-    multiple independent cookies must spin up their own clients."""
+    """Fresh TestClient with its own cookie jar — session tests needing independent cookies spin up their own."""
     from fastapi.testclient import TestClient
     from app.main import app
     return TestClient(app)
@@ -337,8 +322,7 @@ class TestSessionsAdmin:
         assert r.status_code == 403
 
     def test_admin_can_revoke_user_session(self, admin_client):
-        """Revoking the user's session row should make their cookie stop
-        authenticating on the very next request."""
+        """Revoking a user's session row invalidates their cookie on the next request."""
         _make_user(admin_client, name="UV", email="uv@x.com",
                    role="user", password="UV_abc1234")
         user_dev = _new_client()
@@ -417,9 +401,7 @@ class TestSessionsAdmin:
 # ===========================================================================
 class TestPasswordChangeKeepsCurrentDevice:
     def test_change_password_keeps_current_session_works(self, admin_client):
-        """After change-password, the current cookie must still authenticate
-        (we re-issue with new jti). Other devices for the same user are
-        invalidated by the session_version bump."""
+        """After change-password the current cookie still authenticates (re-issued jti); other devices die on the session_version bump."""
         r = admin_client.post("/api/auth/change-password", json={
             "current_password": "Admin1234",
             "new_password": "NewAdmin1234",

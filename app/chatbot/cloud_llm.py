@@ -1,24 +1,8 @@
 """Sleuth Layer 4 — optional cloud LLM (Groq primary, OpenRouter fallback).
 
-Natural-language fallback for questions the rule-based layers can't handle.
-Off unless the operator sets SLEUTH_CLOUD_ENABLED and supplies a key.
-
-Two safety rules enforced in code, not just the prompt:
-
-  1. No invented data. Questions that need tracker facts are turned into a
-     canonical query phrase and re-parsed by the deterministic NLU, so the
-     numbers come from real SQL SELECTs. The model picks the filter; the
-     database produces the answer.
-
-  2. No writes. If the model's canonical query parses to an action_* intent
-     (close/delete/assign/comment/...) it is dropped and the call falls
-     through. Writes happen only when the user types the command and confirms
-     via the rule-based Yes/Cancel flow.
-
-Everything sent outbound goes through redaction.redact() first. Any failure
-(no key, timeout, bad JSON, both providers down) returns None so the chat
-falls back to the "I didn't understand" reply — a cloud fault cannot take
-the chat path down.
+Safety in code, not just the prompt: data questions are re-parsed by the
+deterministic NLU (no invented numbers), action_* intents are dropped (no
+writes), outbound text is redacted, and any failure returns None (rules answer).
 """
 from __future__ import annotations
 
@@ -32,15 +16,12 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-# Validate operator-supplied model names before interpolating them into the
-# request body, so a stray value can't smuggle whitespace, a scheme, @host, or
-# query chars into the call. Groq and OpenRouter ids can carry a
-# "vendor/model:tag" shape (e.g. "openai/gpt-oss-120b"), so '/' and ':' are allowed.
+# Validate operator-supplied model ids before use in the request body;
+# '/' and ':' allowed for "vendor/model:tag" shapes.
 _GROQ_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\-]+$")
 _OPENROUTER_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\-]+$")
 
-# Ceiling on the canonical_query we re-parse. Comfortably above any legitimate
-# multi-filter phrase while still bounding the re-parse input.
+# Ceiling on the canonical_query we re-parse.
 _MAX_CANONICAL_QUERY_CHARS = 500
 
 from app.config import get_settings
@@ -69,11 +50,9 @@ def is_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# System prompt
+# System prompt — one JSON object: mode="data" routes to SQL handlers,
+# mode="answer" is free-form. The model never produces counts or writes.
 # ---------------------------------------------------------------------------
-# The model returns a single JSON object: mode="data" to route a tracker
-# question back to the SQL handlers, or mode="answer" for free-form replies.
-# It never produces counts itself and cannot trigger writes.
 SYSTEM_PROMPT = (
     "You are Sleuth, the assistant built into the Bug Hunter issue tracker. "
     "Talk like a helpful teammate: natural and varied. Keep chat replies "
@@ -161,11 +140,7 @@ def _call_groq(system: str, user: str, *, temperature: float = 0.0,
         return None
     import httpx
     try:
-        # Key goes in the Authorization header (never the URL) to keep it out
-        # of logged exception messages. Sampling knobs are caller-chosen:
-        # conversational paths use a small temperature + mild penalties for
-        # natural prose; routing/judge/agent/ingest sub-calls use 0 for
-        # determinism.
+        # Key in the Authorization header (never the URL) so it can't leak into logs.
         r = httpx.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {s.GROQ_API_KEY}"},
@@ -226,10 +201,8 @@ def _call_openrouter(system: str, user: str, *, temperature: float = 0.0,
 
 
 # ---------------------------------------------------------------------------
-# Lightweight in-process counters for observability. No new dependency: a plain
-# dict that the reliability eval and operators can read via metrics_snapshot().
-# Increments are intentionally unlocked — an off-by-one under a race is fine
-# for diagnostic counters.
+# In-process observability counters. Unlocked on purpose — an off-by-one under
+# a race is fine for diagnostics.
 # ---------------------------------------------------------------------------
 _metrics: dict[str, int] = {}
 
@@ -239,12 +212,8 @@ def _bump(key: str) -> None:
 
 
 def metrics_snapshot() -> dict[str, int]:
-    """Return a copy of the in-process counters.
-
-    Keys: provider:groq, provider:openrouter, route:data, route:answer,
-    cooldown_trips, judge:passed, judge:caveated, judge:unavailable.
-    Never resets on its own; read by diagnostics and the reliability eval.
-    """
+    """Return a copy of the in-process counters (provider:*, route:*,
+    cooldown_trips, judge:*). Never resets on its own."""
     return dict(_metrics)
 
 

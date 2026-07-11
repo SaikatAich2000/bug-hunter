@@ -1,17 +1,5 @@
-"""Tests for the NLU parser (app.chatbot.nlu) and command executor
-(app.chatbot.executor).
-
-Cloud LLM is disabled in the test suite (SLEUTH_CLOUD_ENABLED=0 in conftest),
-so every message runs the local chain: parse() -> rule dispatch ->
-classifier -> (LLM unavailable) -> unknown.
-
-All app.* imports live inside individual tests because the `client` fixture
-re-imports them per test and module-level references go stale. Most branches
-are exercised by calling executor.execute() and nlu.parse() directly; a
-handful go end-to-end through POST /api/chat/ask.
-
-No network, no real LLM, and no openpyxl required — the export path degrades
-gracefully and the tests assert whichever branch fires.
+"""NLU parser (app.chatbot.nlu) and executor (app.chatbot.executor) tests; cloud LLM off, so the local chain runs.
+Imports live inside tests (client fixture re-imports app.*); no network, real LLM, or openpyxl needed.
 """
 from __future__ import annotations
 
@@ -20,15 +8,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
-# ---------------------------------------------------------------------------
 # Seeding helpers — build users, projects, events, and bugs via the ORM.
-# ---------------------------------------------------------------------------
 def _seed(client):
-    """Populate the per-test DB with a small representative dataset.
-
-    Returns a dict of ids. Call this inside a test after the `client` fixture
-    has re-imported app.* and wired up the SQLite engine.
-    """
+    """Populate the per-test DB with a representative dataset; returns a dict of ids."""
     from app.database import SessionLocal
     from app import models
     from app.auth import hash_password
@@ -133,9 +115,7 @@ def _table(resp):
     return next((b for b in resp.blocks if b.kind == "table"), None)
 
 
-# ===========================================================================
 # nlu.py — time windows
-# ===========================================================================
 def test_cov_time_named_windows():
     from app.chatbot import nlu
     ctx = nlu.Context(users=[], projects=[])
@@ -201,9 +181,7 @@ def test_cov_time_no_window():
     assert nlu._parse_time_window("just a plain message") is None
 
 
-# ===========================================================================
 # nlu.py — enum extraction: statuses, priorities, environments, typos
-# ===========================================================================
 def test_cov_status_synonyms_all():
     from app.chatbot import nlu
     ctx = nlu.Context(users=[], projects=[])
@@ -268,13 +246,10 @@ def test_cov_typo_match_short_token_returns_none():
     assert nlu._typo_match("zzzzzzzz", nlu._PRIORITY_SYNONYMS) is None
 
 
-# ===========================================================================
 # nlu.py — name resolution
-# ===========================================================================
 def test_cov_name_resolution_strategies():
     from app.chatbot import nlu
-    # Email locals differ from first names so each strategy
-    # (exact / email / prefix / last / first) is exercised independently.
+    # Email locals differ from first names so each strategy is exercised independently.
     ctx = nlu.Context(
         users=[
             (1, "alice wonderland", "awonder", "Alice Wonderland"),
@@ -329,9 +304,7 @@ def test_cov_possessive_assignee():
     assert nlu._try_possessive_assignee("Zelda's bugs", nlu.ParsedQuery(), ctx) is False
 
 
-# ===========================================================================
 # nlu.py — projects, roles, bug ids, text search
-# ===========================================================================
 def test_cov_project_resolution_paths():
     from app.chatbot import nlu
     ctx = nlu.Context(
@@ -384,9 +357,7 @@ def test_cov_text_search_paths():
     assert nlu._extract_text_search("list open bugs") is None
 
 
-# ===========================================================================
 # nlu.py — action detection
-# ===========================================================================
 def test_cov_action_detection_variants():
     from app.chatbot import nlu
     ctx = nlu.Context(
@@ -503,9 +474,7 @@ def test_cov_describe_filters_branches():
         assert frag in out, (frag, out)
 
 
-# ===========================================================================
 # executor.py — build_context
-# ===========================================================================
 def test_cov_build_context_email_without_at(client):
     _seed(client)
     from app.database import SessionLocal
@@ -514,8 +483,7 @@ def test_cov_build_context_email_without_at(client):
 
     db = SessionLocal()
     try:
-        # A user with no "@" in their email hits the false branch of the
-        # local-part guard, producing an empty string.
+        # A user with no '@' in their email hits the false branch of the local-part guard.
         u = models.User(name="Weird Name", email="noatsign",
                         role="user", password_hash="x", is_active=True)
         db.add(u)
@@ -527,9 +495,7 @@ def test_cov_build_context_email_without_at(client):
         db.close()
 
 
-# ===========================================================================
 # executor.py — read handlers
-# ===========================================================================
 def test_cov_exec_greeting_thanks_help_empty(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -623,8 +589,7 @@ def test_cov_exec_bug_detail_found_event_and_not_found(client):
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
-        # Bug 1 has an event and a long description, covering both the event
-        # line and the truncated-description block.
+        # Bug 1 has an event and a long description: covers event line + truncated-description.
         r = executor.execute("bug 1", db, admin)
         assert r.intent == "bug_detail"
         body = _texts(r)
@@ -686,9 +651,7 @@ def test_cov_exec_stats(client):
         db.close()
 
 
-# ===========================================================================
 # executor.py — list_bugs
-# ===========================================================================
 def test_cov_exec_list_count_and_filters(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -715,8 +678,7 @@ def test_cov_exec_list_count_and_filters(client):
 
 
 def test_cov_exec_count_response_singular_plural():
-    # Call the builder directly: status words like "closed" in execute() would
-    # be parsed as a write action rather than a count query.
+    # Call the builder directly: 'closed' in execute() would parse as a write action.
     from app.chatbot import executor
     assert "is **1** bug " in executor._build_count_response(1, "(no filters)").blocks[0].payload["text"]
     assert "are **0** bugs" in executor._build_count_response(0, "in PROD").blocks[0].payload["text"]
@@ -781,9 +743,7 @@ def test_cov_clarify_helpers_none_paths():
     assert executor._clarify_unresolved_user(nlu.ParsedQuery(), None) is None
 
 
-# ===========================================================================
 # executor.py — user-suggestion helpers
-# ===========================================================================
 def test_cov_suggest_user_helpers():
     from app.chatbot import executor, nlu
     ctx = nlu.Context(
@@ -824,18 +784,14 @@ def test_cov_dedupe_display_names():
     assert executor._dedupe_display_names(["a", "a2", "b", "zzz"], pool) == ["Alice", "Bob"]
 
 
-# ===========================================================================
 # executor.py — export path
-# ===========================================================================
 def test_cov_exec_export_to_excel(client):
     ids = _seed(client)
     from app.chatbot import executor
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
-        # "open" is a status synonym, not a verb, so it survives as a filter
-        # and exercises the assignee + status segments of the file-label builder.
-        # A verb like "closed" would be parsed as a write action instead.
+        # 'open' is a status synonym (not a verb), so it survives as a filter for the label builder.
         r = executor.execute(
             "export open bugs assigned to alice to excel", db, admin)
         kinds = {b.kind for b in r.blocks}
@@ -873,9 +829,7 @@ def test_cov_exec_export_capped(client):
         db.close()
 
 
-# ===========================================================================
 # executor.py — reports
-# ===========================================================================
 def test_cov_exec_report_forbidden_for_user(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -1015,17 +969,14 @@ def test_cov_report_forbidden_and_empty_helpers():
 def test_cov_try_stage_file_block_failure():
     from app.chatbot import executor
 
-    # When the XLSX builder raises (missing attributes), the exception is
-    # swallowed and None is returned.
+    # When the XLSX builder raises, the exception is swallowed and None returned.
     class _Bad:
         total = 3
     out = executor._try_stage_file_block(_Bad(), "item_detail", 1)
     assert out is None
 
 
-# ===========================================================================
 # executor.py — action planning and confirmation flow
-# ===========================================================================
 def test_cov_exec_action_missing_slots(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -1191,8 +1142,7 @@ def test_cov_exec_me_pronoun_resolution(client):
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
-        # "my bugs" → assignee splice. This phrasing doesn't produce an
-        # unresolved "me" name (unlike "assigned to me"), so it lists.
+        # 'my bugs' -> assignee splice (doesn't produce an unresolved 'me' name), so it lists.
         r = executor.execute("my bugs", db, admin)
         assert r.intent == "list_bugs"
         # "bugs I reported" → reporter splice (admin reported all seeded bugs).
@@ -1247,9 +1197,7 @@ def test_cov_resolve_pronouns_bug_memory(client):
         db.close()
 
 
-# ===========================================================================
 # executor.py — classifier fallback and unknown handler
-# ===========================================================================
 def test_cov_exec_unknown_hint_branches(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -1327,9 +1275,7 @@ def test_cov_dispatch_read_intent_unknown_returns_none(client):
         db.close()
 
 
-# ===========================================================================
 # End-to-end through the HTTP router.
-# ===========================================================================
 def test_cov_http_ask_basic(admin_client):
     r = admin_client.post("/api/chat/ask", json={"message": "hi"})
     assert r.status_code == 200
@@ -1354,12 +1300,9 @@ def test_cov_changeme_password_still_valid():
     assert _check_password_strength("changeme") == "changeme"
 
 
-# ===========================================================================
 # Focused coverage — partial branches, error paths, monkeypatched modules.
-# ===========================================================================
 def test_cov_bug_detail_no_event_branch(client):
-    # Bug #2 has no event, so the event-name branch is skipped; the long
-    # description still exercises the short_descr truncation block.
+    # Bug #2 has no event (branch skipped); long description still hits truncation.
     ids = _seed(client)
     from app.chatbot import executor
     db = _new_db()
@@ -1433,8 +1376,7 @@ def test_cov_inline_list_truncation_note(client):
 
 
 def test_cov_export_import_error_and_excel_error(client, monkeypatch):
-    # (a) openpyxl import fails → "exporter isn't available" text.
-    # (b) stage_workbook raises ExcelGenerationError → "couldn't build" text.
+    # (a) openpyxl import fails; (b) stage_workbook raises ExcelGenerationError.
     ids = _seed(client)
     import sys
     from app.chatbot import executor, nlu
@@ -1450,8 +1392,7 @@ def test_cov_export_import_error_and_excel_error(client, monkeypatch):
             _eager_bug_query(), select(func.count(models.Bug.id)), pq)
         rows = list(db.scalars(stmt.limit(10)).all())
 
-        # (a) Remove the submodule attribute and poison sys.modules so the
-        # re-import raises ImportError. monkeypatch restores both afterwards.
+        # (a) Poison sys.modules so re-import raises ImportError; monkeypatch restores.
         import app.chatbot as chatbot_pkg
         monkeypatch.setitem(sys.modules, "app.chatbot.excel", None)
         monkeypatch.delattr(chatbot_pkg, "excel", raising=False)
@@ -1559,17 +1500,14 @@ def test_cov_plan_set_environment_and_create_bug_fields(client):
         admin = _user(db, ids["admin"])
         ctx = executor.build_context(db)
 
-        # set_environment: the text→action map doesn't flag this, so drive the
-        # planner directly with a query that carries an environment value.
+        # The text->action map doesn't flag set_environment; drive the planner directly.
         from app.chatbot.actions import ActionPlan
         pq_env = nlu.ParsedQuery(bug_id=1, environments=["PROD"])
         plan, err = executor._plan_set_environment(
             ActionPlan(kind="set_environment", actor_user_id=admin.id), pq_env)
         assert err is None and plan.new_value == "PROD"
 
-        # create_bug: "create a critical bug" doesn't match the regex (priority
-        # word sits between article and "bug"), so drive the planner directly
-        # with priority, project, and assignee all populated.
+        # 'create a critical bug' misses the regex; drive the planner directly with slots filled.
         pq_cb = nlu.ParsedQuery(
             bug_id=None,
             action_kind="create_bug",
@@ -1645,8 +1583,7 @@ def test_cov_dispatch_bug_detail_remembers(client):
 
 
 def test_cov_try_classifier_action_branch(client, monkeypatch):
-    # Classifier predicts an action_* intent the rule parser couldn't fill →
-    # _classifier_action_invalid response.
+    # Classifier predicts an action_* intent the rules couldn't fill -> _classifier_action_invalid.
     ids = _seed(client)
     from app.chatbot import executor, nlu
     from app.chatbot import classifier as clf
@@ -1845,8 +1782,7 @@ def test_cov_plan_create_bug_assignee_without_project(client):
 
 
 def test_cov_execute_reaches_llm_return(client, monkeypatch):
-    # Cloud off, read dispatch and classifier decline, but _try_llm returns a
-    # Response → execute() returns it.
+    # Read dispatch and classifier decline but _try_llm returns a Response -> returned.
     ids = _seed(client)
     from app.chatbot import executor
     from app.chatbot import classifier as _clf
@@ -1976,8 +1912,7 @@ def test_cov_nlu_action_helpers_absent_body_branches():
     kind = nlu._action_create_project("set up a project", pq)
     assert kind == "create_project"
 
-    # Comment with a bug target but no colon → body is None.
-    # (Without a bug_id/pronoun it's treated as a read, not a write.)
+    # Comment with a bug target but no colon -> body None (treated as a read).
     pq2 = nlu.ParsedQuery(bug_id=5)
     kind2 = nlu._action_add_comment("comment on #5", pq2)
     assert kind2 == "add_comment" and pq2.action_comment is None
@@ -2029,8 +1964,7 @@ def test_cov_nlu_candidate_phrase_empty_continue():
 
 
 def test_cov_nlu_classify_final_intent_report_branch():
-    # Call _classify_final_intent directly because parse() has an earlier
-    # _REPORT_RE short-circuit that prevents reaching this branch otherwise.
+    # Call directly: parse() short-circuits via _REPORT_RE before this branch.
     from app.chatbot import nlu
     ctx = nlu.Context(users=[], projects=[])
     pq = nlu.ParsedQuery(raw_message="breakdown by project")
@@ -2090,8 +2024,7 @@ def test_cov_confirm_yes_no_bug_id_skips_remember(client):
 
 
 def test_cov_dispatch_bug_detail_without_id(client):
-    # bug_detail with no bug_id skips the remember step but still calls the
-    # handler, which reports not-found.
+    # bug_detail with no bug_id skips the remember step but still calls the handler.
     _seed(client)
     from app.chatbot import executor, nlu
     from app.chatbot.memory import store as mem

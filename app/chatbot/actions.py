@@ -1,18 +1,7 @@
-"""Sleuth actions — the write-side of the assistant.
+"""Sleuth actions — the write-side of the assistant (executor.py is read-only).
 
-executor.py is read-only; this module performs the mutations the user
-requested in natural language. Every action re-validates the actor's
-permissions (the chat path is not a back door), applies the change in
-a single short transaction, writes an Activity row, and returns a
-Response the router serializes back to the user.
-
-Destructive operations (delete bug, delete user, password reset, role
-change) are not exposed via chat and stay UI-only.
-
-Confirmation flow: risky writes are staged, not executed, on the first
-turn. The handler returns a Response with a "confirm" block; on Yes the
-router calls memory.take_pending() and dispatches to apply_pending().
-All writes go through this flow — a misparse is worse than one extra click.
+Every action re-validates permissions, runs one short transaction, and audits.
+All writes are staged behind a Yes/Cancel confirm; destructive ops stay UI-only.
 """
 from __future__ import annotations
 
@@ -42,12 +31,10 @@ from app.chatbot.executor import Block, Response
 # Fallback label when an assign/unassign plan carries ids but no display names.
 _UNKNOWN_USERS = "user(s)"
 
-# Distinct from "action_done" so _apply_bulk counts it as "skipped" and the
-# single path can surface the right message.
+# Distinct from "action_done" so _apply_bulk counts it as "skipped".
 _INTENT_NOOP = "action_noop"
 
-# Only these kinds can be fanned across bug_ids. A plan with any other kind
-# (e.g. add_comment/create_bug) must not be multiplied across items.
+# Only these kinds may fan across bug_ids.
 _BULK_KINDS = frozenset({
     "assign", "unassign", "set_status", "set_priority", "set_environment",
 })
@@ -58,10 +45,8 @@ _BULK_KINDS = frozenset({
 # ---------------------------------------------------------------------------
 @dataclass
 class ActionPlan:
-    """A concrete change to make, built during parse and executed on confirm.
-
-    Stores IDs rather than ORM objects so the plan can be serialized into
-    memory.store between turns without holding a live session open."""
+    """A concrete change built at parse time and executed on confirm.
+    Stores IDs, not ORM objects, so it serializes into memory.store between turns."""
     kind: Literal[
         "assign", "unassign", "set_status", "set_priority",
         "set_environment", "set_due_date", "add_comment",
@@ -124,12 +109,7 @@ class ActionPlan:
 # ---------------------------------------------------------------------------
 def _check_can_edit_bug(actor: User, bug: Bug) -> Optional[str]:
     """Return None if the actor may edit this item, otherwise an error string.
-
-    Uses the item's real type so per-type rules match PUT /api/bugs/{id}:
-    regular users can edit Bugs but not Tasks or Requirements. Without the
-    explicit item_type, can_edit_bug defaults to 'Bug' and would silently
-    bypass the REST 403.
-    """
+    Passes the item's real type so per-type rules match PUT /api/bugs/{id}."""
     itype = getattr(bug, "item_type", None) or "Bug"
     if not can_edit_bug(actor,
                         bug.reporter_id,
@@ -174,8 +154,7 @@ def _audit(db: Session, bug_id: Optional[int], actor: User,
 # Block helpers
 # ---------------------------------------------------------------------------
 def _confirm_response(plan: ActionPlan, prompt: str) -> Response:
-    """Build a confirm response. The frontend renders the prompt with Yes/No
-    buttons; on Yes the user sends 'yes' and the router calls apply_pending()."""
+    """Confirm response: frontend renders Yes/No buttons; Yes dispatches the plan."""
     return Response(
         blocks=[
             Block("text", {"text": prompt}),
@@ -234,15 +213,8 @@ def _itype_of(bug: Bug) -> str:
 
 def _notify_chat_op(db: Session, bug: Bug, actor: User, *, kind: str,
                     title: str, body: str, extra_user_ids: Iterable[int] = ()) -> None:
-    """Write an in-app notification for a Sleuth write.
-
-    Recipients are the item's stakeholders (reporter + assignees) plus the
-    actor and any extras (e.g. just-removed assignees). The actor is always
-    included so the person driving Sleuth sees confirmation in the bell.
-
-    Sleuth raises in-app notifications only — no background thread is wired
-    through the chat path, so no immediate email or push fires. With the daily
-    digest enabled the change is still emailed on the next run."""
+    """In-app notification to stakeholders (reporter + assignees + actor + extras).
+    In-app only — no immediate email/push is wired through the chat path."""
     recipients: set[int] = {actor.id}
     if bug.reporter_id is not None:
         recipients.add(bug.reporter_id)
@@ -256,9 +228,7 @@ def _notify_chat_op(db: Session, bug: Bug, actor: User, *, kind: str,
 
 def _resolve_targets(db: Session, ids: list[int]) -> tuple[list[User], Optional[str]]:
     """Resolve user ids to active User objects, or return an error string.
-
-    Unknown ids are a hard error (not silently dropped) and deactivated users
-    cannot be new assignees, matching the REST API behavior."""
+    Unknown ids are a hard error; deactivated users can't be assignees (as in REST)."""
     if not ids:
         return [], "Couldn't find the user(s) to assign"
     users = list(db.scalars(select(User).where(User.id.in_(ids))).all())
@@ -288,15 +258,13 @@ def _apply_assign(db: Session, plan: ActionPlan, actor: User,
     already = {a.id for a in bug.assignees}
     added = [t for t in targets if t.id not in already]
     if not added:
-        # Genuine no-op — signal "skipped" to the bulk caller without touching
-        # the audit log or version counter.
+        # No-op — signal "skipped" to the bulk caller; no audit/version bump.
         return _success_response(
             f"No change — those user(s) are already assigned to bug #{bug.id}",
             intent=_INTENT_NOOP, bug_id=bug.id,
         )
     bug.assignees = list(bug.assignees) + added
-    # An assignee-only change doesn't touch a column on Bug, so bump the
-    # version explicitly to let optimistic-concurrency clients see the change.
+    # Assignee change touches no Bug column — bump version for optimistic concurrency.
     bug.version = (bug.version or 1) + 1
     after = sorted(a.name for a in bug.assignees)
     _audit(db, bug.id, actor, "assignees_changed",
@@ -356,10 +324,8 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
 
 
 def _validate_field_value(bug: Bug, field_name: str, value: Any) -> Optional[str]:
-    """Return an error string if value is not valid for this field, else None.
-
-    Mirrors REST enum/date validation so chat can't persist a value that
-    PUT /api/bugs/{id} would reject."""
+    """Return an error string if value is invalid for this field, else None.
+    Mirrors REST enum/date validation."""
     if field_name == "status":
         if value not in statuses_for_type(_itype_of(bug)):
             return f"“{value}” isn't a valid status for a {_itype_of(bug).lower()}."
@@ -398,8 +364,7 @@ def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
         )
     setattr(bug, field_name, new)
     bug.version = (bug.version or 1) + 1
-    # Use the REST per-field audit verb and detail format so resolution/TTR
-    # reports (which match action=='status_changed') pick up chat-driven changes.
+    # REST audit verb/format so resolution reports pick up chat-driven changes.
     _audit(db, bug.id, actor, f"{field_name}_changed",
            f"#{bug.id} '{bug.title}' — {field_name}: {old!r} -> {new!r}")
     if notify:
@@ -474,8 +439,7 @@ def _apply_create_bug(db: Session, plan: ActionPlan, actor: User) -> Response:
         project_id = first.id
     elif db.get(Project, project_id) is None:
         return _error_response("That project doesn't exist anymore")
-    # normalize_choice is the same validator the REST create payload uses, so
-    # chat accepts the same casings and never persists an out-of-enum priority.
+    # Same validator as the REST create payload — no out-of-enum priority.
     try:
         priority = normalize_choice(plan.new_value or "Medium", ALLOWED_PRIORITIES, "priority")
     except ValueError:
@@ -537,8 +501,7 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
     _audit(db, None, actor, "project_created",
            f"Created project '{name}'",
            entity_type="project", entity_id=proj.id)
-    # Projects have no reporter/assignees, so notify the actor so it surfaces
-    # in the bell.
+    # Projects have no stakeholders — notify the actor so it surfaces in the bell.
     notification_service.notify(
         db, [actor.id], kind="updated",
         title="Project created",
@@ -557,12 +520,8 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
 # Public dispatch
 # ---------------------------------------------------------------------------
 def sleuth_write_denied(actor: User) -> Optional[str]:
-    """Return a refusal string if the actor may not perform write actions
-    through Sleuth, or None if allowed.
-
-    Only admins can mutate data via chat. Managers and regular users get
-    read-only access through Sleuth and must use the app for edits.
-    """
+    """Return a refusal string if the actor may not write via Sleuth, else None.
+    Chat writes are admin-only; everyone else is read-only here."""
     if actor.role == ROLE_ADMIN:
         return None
     return (
@@ -575,9 +534,7 @@ def sleuth_write_denied(actor: User) -> Optional[str]:
 def _dispatch_single(plan: ActionPlan, db: Session, actor: User,
                      notify: bool = True, commit: bool = True) -> Response:
     """Apply one single-bug (or no-bug) action and return its Response.
-
-    notify=False lets the bulk caller suppress per-item notifications.
-    commit=False lets the bulk caller defer commit for a single atomic batch."""
+    notify/commit=False let the bulk caller aggregate notifications and commit once."""
     if plan.kind == "assign":
         return _apply_assign(db, plan, actor, notify=notify, commit=commit)
     if plan.kind == "unassign":
@@ -600,7 +557,7 @@ def _dispatch_single(plan: ActionPlan, db: Session, actor: User,
 
 
 def _notify_bulk(db: Session, plan: ActionPlan, actor: User, updated: int) -> None:
-    """Send one aggregate notification for a bulk operation instead of N per item."""
+    """One aggregate notification for a bulk operation instead of N per item."""
     if plan.kind in ("assign", "unassign"):
         names = ", ".join(plan.target_user_names) or _UNKNOWN_USERS
         verb = "assigned" if plan.kind == "assign" else "unassigned"
@@ -621,15 +578,10 @@ def _notify_bulk(db: Session, plan: ActionPlan, actor: User, updated: int) -> No
 
 def _apply_bulk(plan: ActionPlan, db: Session, actor: User) -> Response:
     """Apply a plan's action to every id in plan.bug_ids in one transaction.
-
-    Each item runs with commit=False; the batch commits once at the end so a
-    mid-batch failure rolls everything back rather than leaving a partial change.
-    Items that were already in the target state count as 'skipped'."""
+    Single commit at the end so a mid-batch failure rolls everything back."""
     updated = skipped = 0
     for bid in plan.bug_ids:
-        # Copy all plan fields, not a subset, so any new _BULK_KIND that uses
-        # extra fields doesn't silently drop them. bug_ids is cleared so the
-        # per-item plan is unambiguously single-target.
+        # Copy all plan fields (bug_ids cleared) so the per-item plan is single-target.
         one = ActionPlan(
             kind=plan.kind, actor_user_id=actor.id, bug_id=bid,
             target_user_ids=list(plan.target_user_ids),
@@ -658,26 +610,21 @@ def _apply_bulk(plan: ActionPlan, db: Session, actor: User) -> Response:
 
 
 def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
-    """Run a confirmed plan. The caller is responsible for ensuring the plan
-    belongs to this user; actor.id is still checked here as a safety net."""
+    """Run a confirmed plan. Caller ensures ownership; actor.id is re-checked
+    here as a safety net."""
     if plan.actor_user_id != actor.id:
         return _error_response("That action was staged for a different user")
-    # Re-check the admin-only policy at execute time, not just at staging. A
-    # plan can sit in memory for several minutes; if the actor was demoted in
-    # that window they must not be able to execute it (TOCTOU). Per-action
-    # _check_can_edit_bug still enforces the REST per-type permission below.
+    # Re-check write policy at execute time (TOCTOU) — actor may have been demoted.
     denied = sleuth_write_denied(actor)
     if denied is not None:
         return _error_response(denied)
     try:
-        # Fan across bug_ids only for supported bulk kinds. A plan with a
-        # non-bulk kind (e.g. add_comment/create_bug) must not be multiplied.
+        # Fan across bug_ids only for supported bulk kinds.
         if plan.bug_ids and plan.kind in _BULK_KINDS:
             return _apply_bulk(plan, db, actor)
         return _dispatch_single(plan, db, actor)
     except (SQLAlchemyError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        # Roll back so a partial change never sticks; best-effort since the
-        # session may already be broken.
+        # Best-effort rollback so a partial change never sticks.
         try:
             db.rollback()
         except SQLAlchemyError:
@@ -689,10 +636,7 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
 # Confirmation-prompt builder
 # ---------------------------------------------------------------------------
 def stage_with_confirm(plan: ActionPlan) -> Response:
-    """Return a confirm Response for the staged plan.
-
-    The caller must have already saved the plan into memory.store so a
-    'yes' follow-up can pop it back out."""
+    """Return a confirm Response for a plan the caller already staged in memory.store."""
     prompt = (
         f"Just to confirm: **{plan.summary_human}**\n\n"
         f"Reply **yes** (or click below) to proceed, **no** to cancel"

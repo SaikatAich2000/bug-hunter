@@ -1,9 +1,4 @@
-/**
- * Visibility rules:
- *  - Renders only on the list view.
- *  - Type filter hidden unless the "all" tab is active.
- *  - Env filter hidden on Requirement and Task tabs.
- */
+// Filter bar (list view only). Type filter shows on "all" tab; env hidden on Requirement/Task.
 import { useCallback, useMemo } from "react";
 import { useApp } from "../state/AppContext";
 import MsFilter from "../components/MsFilter";
@@ -22,7 +17,6 @@ function toggled<T>(list: T[], v: T): T[] {
 export default function FilterBar() {
   const { view, activeTab, meta, projects, users, filters, setFilters, clearFilters } = useApp();
 
-  // Memoized so option arrays aren't rebuilt on every context re-render.
   const projectOptions = useMemo<[string, string][]>(
     () => projects.map((p) => [String(p.id), p.name]),
     [projects],
@@ -48,11 +42,10 @@ export default function FilterBar() {
     [users],
   );
 
-  // Numeric IDs coerced to strings; memoized for stable MsFilter refs.
+  // Numeric IDs coerced to strings for MsFilter.
   const projectSelected = useMemo(() => filters.project_id.map(String), [filters.project_id]);
   const assigneeSelected = useMemo(() => filters.assignee_id.map(String), [filters.assignee_id]);
 
-  // Stable toggle handlers — one per filter to avoid inline-function churn.
   const onToggleProject = useCallback(
     (v: string) =>
       setFilters((prev) => ({ ...prev, project_id: toggled(prev.project_id, Number(v)) })),
@@ -81,7 +74,6 @@ export default function FilterBar() {
     [setFilters],
   );
 
-  // Which filters are relevant depends on the active tab.
   const showTypeFilter = activeTab === "all";
   const showEnvFilter = activeTab !== "Requirement" && activeTab !== "Task";
 

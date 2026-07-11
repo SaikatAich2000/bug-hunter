@@ -1,11 +1,4 @@
-/**
- * Global app state.
- *
- * Everything cross-view lives here: current user, meta enums, users, projects,
- * stats, the bug list + filters + pagination, the active view, and the shared
- * modals. View-local state (events list, audit rows, report results, sessions)
- * stays inside the view components.
- */
+/** Global app state: user, meta, directory, bug list + filters, view, shared modals. */
 import {
   createContext,
   useCallback,
@@ -34,10 +27,6 @@ import type {
   UserOut,
   ViewName,
 } from "../types";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 export type TabName = "all" | ItemType;
 
@@ -73,10 +62,6 @@ const FALLBACK_META: MetaOut = {
   item_types: ["Bug", "Requirement", "Task"],
 };
 
-// ---------------------------------------------------------------------------
-// Modal state shapes
-// ---------------------------------------------------------------------------
-
 export interface BugModalState {
   open: boolean;
   /** Loaded detail when viewing/editing; null = create mode. */
@@ -95,10 +80,6 @@ export interface UserModalState {
   open: boolean;
   user: UserOut | null;
 }
-
-// ---------------------------------------------------------------------------
-// Context value
-// ---------------------------------------------------------------------------
 
 export interface AppState {
   currentUser: MeOut;
@@ -179,10 +160,6 @@ export function useApp(): AppState {
   return v;
 }
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
 const PAGE_SIZE = 20;
 const SESSION_POLL_MS = 15_000;
 /** Shared poll interval for list, stats, directory, open modal, and per-view pollers. */
@@ -197,11 +174,7 @@ function readLs(key: string, fallback: string): string {
   }
 }
 
-/**
- * Shallow-compare the fields that the session poll can change.
- * Keeps the same object identity on unchanged ticks so React skips re-rendering
- * every useApp() consumer. Keep in sync with MeOut in types.ts.
- */
+/** Shallow MeOut compare — unchanged session polls keep object identity (no re-render). */
 function sameMe(a: MeOut, b: MeOut): boolean {
   return (
     a.id === b.id &&
@@ -258,9 +231,7 @@ export function AppProvider({
   const [notifications, setNotifications] = useState<NotificationOut[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Refs give stable callbacks and pollers access to the latest values without
-  // stale closures. notificationsRef is read outside setState updaters to avoid
-  // StrictMode's double-invoke of side effects.
+  // Refs let stable callbacks/pollers read latest values without stale closures.
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
   const notificationsRef = useRef(notifications);
@@ -270,15 +241,12 @@ export function AppProvider({
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
 
-  // JSON signatures for each poll: skip the state commit when data hasn't
-  // changed, avoiding a full re-render (and the ~40 Intl.DateTimeFormat calls
-  // it triggers) on every quiet tick.
+  // Poll signatures: skip state commits (and re-renders) on unchanged data.
   const lastBugsSig = useRef("");
   const lastStatsSig = useRef("");
   const lastUsersSig = useRef("");
   const lastProjectsSig = useRef("");
 
-  // ----- query-param builders ----------------------------------------------
   const buildBugParams = useCallback((): URLSearchParams => {
     const f = filtersRef.current;
     const params = new URLSearchParams();
@@ -300,7 +268,6 @@ export function AppProvider({
     return params;
   }, []);
 
-  // ----- data loaders ------------------------------------------------------
   const refreshBugs = useCallback(async () => {
     try {
       const res = await api<BugListResponse>(`/bugs?${buildBugParams()}`);
@@ -320,8 +287,7 @@ export function AppProvider({
       const tab = tabRef.current;
       const params = new URLSearchParams();
       if (tab !== "all") params.set("item_type", tab);
-      // Include the active status filter so Analytics charts respond to KPI
-      // tile clicks (headline counts are always global on the server side).
+      // Status filter included so Analytics charts react to KPI tile clicks.
       for (const s of filtersRef.current.status) params.append("status", s);
       const qs = params.toString();
       const res = await api<StatsOut>(`/stats${qs ? `?${qs}` : ""}`);
@@ -334,8 +300,6 @@ export function AppProvider({
     }
   }, []);
 
-  // Single SQL COUNT; safe to call frequently since React skips re-renders
-  // when the unread count hasn't changed.
   const refreshUnread = useCallback(async () => {
     try {
       const c = await api<UnreadCountOut>("/notifications/unread_count");
@@ -346,8 +310,7 @@ export function AppProvider({
   }, []);
 
   const refreshAll = useCallback(async () => {
-    // Piggyback the unread badge here so every mutation site gets a fresh count
-    // without waiting for the session poll.
+    // Unread badge rides along so mutation sites get a fresh count immediately.
     await Promise.all([refreshBugs(), refreshStats(), refreshUnread()]);
   }, [refreshBugs, refreshStats, refreshUnread]);
 
@@ -375,8 +338,7 @@ export function AppProvider({
     }
   }, []);
 
-  // Monotonic token to discard out-of-order poll responses. Also bumped by
-  // optimistic mutations so an in-flight poll can't resurrect an unread dot.
+  // Monotonic token: discards out-of-order poll responses; bumped by optimistic mutations.
   const notifSeqRef = useRef(0);
   const loadNotifications = useCallback(async () => {
     const seq = ++notifSeqRef.current;
@@ -385,7 +347,7 @@ export function AppProvider({
         api<NotificationOut[]>("/notifications?limit=50"),
         api<UnreadCountOut>("/notifications/unread_count"),
       ]);
-      if (seq !== notifSeqRef.current) return;  // superseded by a newer load/mutation
+      if (seq !== notifSeqRef.current) return; // superseded
       setNotifications(list);
       setUnreadCount(count.unread);
     } catch (err) {
@@ -393,7 +355,7 @@ export function AppProvider({
     }
   }, []);
 
-  // ----- boot (the auth gate itself is done in main.tsx) -------------------
+  // Boot (auth gate lives in main.tsx).
   const bootedRef = useRef(false);
   useEffect(() => {
     if (bootedRef.current) return;
@@ -416,8 +378,7 @@ export function AppProvider({
     })();
   }, [loadUsers, loadProjects, refreshAll, loadNotifications]);
 
-  // Re-fetch the list on page / filter / tab change so mutation sites don't
-  // each need to call refreshBugs themselves.
+  // Re-fetch the list on page / filter / tab change.
   const firstListEffect = useRef(true);
   useEffect(() => {
     if (firstListEffect.current) {
@@ -438,11 +399,8 @@ export function AppProvider({
     void refreshStats();
   }, [activeTab, refreshStats]);
 
-  // ----- pollers -----------------------------------------------------------
   useEffect(() => {
-    // Session poll: /auth/me every 15s and on tab focus. 401 inside api()
-    // handles redirect. Unread count rides the same tick to keep the bell
-    // badge live without a separate timer.
+    // Session poll every 15s + on tab focus; unread count rides the same tick.
     const tick = async () => {
       try {
         const m = await api<MeOut>("/auth/me", { cache: "no-store" });
@@ -468,15 +426,12 @@ export function AppProvider({
     };
   }, []);
 
-  // Live ref so the interval always calls the latest refreshAll without
-  // being re-registered on every render.
+  // Live ref so the interval calls the latest refreshAll without re-registering.
   const refreshAllRef = useRef(refreshAll);
   refreshAllRef.current = refreshAll;
 
   useEffect(() => {
-    // Poll the bug list and KPI stats so changes from other users appear
-    // without a manual reload. Paused while the tab is hidden; fires on
-    // refocus for an immediate update.
+    // Poll list + stats; paused while hidden, fires on refocus.
     const refresh = () => {
       if (!document.hidden) void refreshAllRef.current();
     };
@@ -488,9 +443,7 @@ export function AppProvider({
     };
   }, []);
 
-  // Poll users and projects separately from refreshAll so bug saves and view
-  // switches don't double-fetch the directory. Kept on the shared cadence so
-  // changes on another device appear without a reload.
+  // Directory polls separately so bug saves don't double-fetch users/projects.
   const loadDirRef = useRef({ loadUsers, loadProjects });
   loadDirRef.current = { loadUsers, loadProjects };
   useEffect(() => {
@@ -526,7 +479,6 @@ export function AppProvider({
     return () => clearInterval(id);
   }, [health?.asset_version]);
 
-  // ----- setters with persistence -----------------------------------------
   const setActiveTab = useCallback((t: TabName) => {
     setActiveTabState(t);
     setPage(1);
@@ -583,7 +535,6 @@ export function AppProvider({
     setViewState(v);
   }, []);
 
-  // ----- shared modals -----------------------------------------------------
   const openBugForm = useCallback(
     (opts?: { defaultType?: ItemType; defaultEventId?: number | null }) => {
       setBugModal({
@@ -620,9 +571,7 @@ export function AppProvider({
     setBugModal({ open: false, bug: null });
   }, []);
 
-  // Poll the open bug modal so concurrent edits (comments, status changes)
-  // appear without a reload. Keyed on the bug id so the interval is only
-  // re-registered when a different bug is opened or the modal closes.
+  // Poll the open bug modal so concurrent edits appear; keyed on bug id.
   const reloadBugModalRef = useRef(reloadBugModal);
   reloadBugModalRef.current = reloadBugModal;
   const bugModalOpenId = bugModal.open && bugModal.bug ? bugModal.bug.id : null;
@@ -653,10 +602,9 @@ export function AppProvider({
     setUserModal({ open: false, user: null });
   }, []);
 
-  // ----- notification mutations --------------------------------------------
   const markNotificationRead = useCallback(async (id: number) => {
-    // Optimistic update: stamp read locally, then persist to the server.
-    notifSeqRef.current++;  // discard any poll in flight so it can't un-read this
+    // Optimistic: stamp read locally, then persist.
+    notifSeqRef.current++; // in-flight poll can't un-read this
     setNotifications((prev) =>
       prev.map((n) =>
         n.id === id && !n.read_at ? { ...n, read_at: new Date().toISOString() } : n,
@@ -686,8 +634,7 @@ export function AppProvider({
 
   const deleteNotification = useCallback(async (id: number) => {
     notifSeqRef.current++;
-    // Read unread status before the updater runs so the count adjustment
-    // happens exactly once and the updater itself stays pure.
+    // Read unread status outside the updater so the count adjusts exactly once.
     const gone = notificationsRef.current.find((n) => n.id === id);
     const wasUnread = !!gone && !gone.read_at;
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -722,7 +669,6 @@ export function AppProvider({
     return () => document.removeEventListener("sleuth:open-bug", onOpen);
   }, [openBugDetail]);
 
-  // ----- role helpers ------------------------------------------------------
   const roleRank = useCallback((role: string): number => {
     if (role === "admin") return 3;
     if (role === "manager") return 2;

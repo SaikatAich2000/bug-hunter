@@ -1,11 +1,7 @@
-"""Deterministic verification of Sleuth's free-text cloud answers.
+"""Deterministic citation checks for cloud answers.
 
-Data questions run real SQL, so the model never invents numbers. The remaining
-risk is fabricated bug references in "answer" mode. These checks are cheap and
-require no extra model call: extract the bug numbers an answer cites, partition
-them into grounded (present in the retrieved records) and ungrounded, and
-append a short caveat for ungrounded citations. The answer text is never
-rewritten — a correct answer passes through unchanged.
+Partitions cited bug numbers into grounded/ungrounded and appends a caveat
+for ungrounded ones; answer text is never rewritten.
 """
 from __future__ import annotations
 
@@ -13,9 +9,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
-# Matches "#42", "bug 42", "bug #42", "issue 42", "issue #42" (case-insensitive).
-# The trailing (?!\d) prevents a long numeric run (e.g. a Unix-ms timestamp)
-# from being truncated to its first digits and mistaken for a bug citation.
+# "#42" / "bug 42" / "issue #42"; (?!\d) keeps long numeric runs from matching.
 _CITE_RE = re.compile(r"(?:#|\bbug\s*#?|\bissue\s*#?)(\d{1,9})(?!\d)", re.IGNORECASE)
 
 _CAVEAT = (
@@ -23,9 +17,7 @@ _CAVEAT = (
     "please verify {pron} directly._"
 )
 
-# Strong "I did X to the tracker" forms only — "create/update" are too common
-# in normal prose and would produce too many false positives. The pattern has
-# no overlapping quantifiers, so there is no catastrophic-backtracking risk.
+# Strong "I did X" forms only; "create/update" would false-positive in prose.
 _WRITE_CLAIM_RE = re.compile(
     r"\bI(?:'ve| have| just| already| then| also| went ahead and)?\s+"
     r"(?:closed|reopened|assigned|unassigned|deleted|removed|resolved|"
@@ -46,7 +38,7 @@ def cited_bug_ids(text: str) -> set[int]:
 
 @dataclass
 class Verdict:
-    """The result of checking an answer's citations against the grounding set."""
+    """Citations checked against the grounding set."""
     grounded: set[int] = field(default_factory=set)
     ungrounded: set[int] = field(default_factory=set)
 
@@ -63,10 +55,7 @@ def verify(text: str, grounded_ids: Iterable[int]) -> Verdict:
 
 
 def annotate(text: str, grounded_ids: Iterable[int]) -> str:
-    """Return the answer unchanged if all citations are grounded; otherwise
-    append a short caveat naming the ungrounded references so the reader
-    knows to verify them directly.
-    """
+    """Append a caveat naming ungrounded citations; grounded answers pass unchanged."""
     verdict = verify(text, grounded_ids)
     if verdict.ok:
         return text
@@ -77,13 +66,7 @@ def annotate(text: str, grounded_ids: Iterable[int]) -> str:
 
 
 def flag_write_claims(text: str) -> str:
-    """Append a correction when an answer claims it performed a tracker write.
-
-    Sleuth never writes from an answer (the executor's firewall blocks it), but
-    a confused model can still say it closed or assigned something, misleading
-    the user. Like annotate(), this only appends a clearly-marked note; the
-    original text is never changed.
-    """
+    """Append a correction when an answer falsely claims it performed a write."""
     if _WRITE_CLAIM_RE.search(text or ""):
         return text + _WRITE_CLAIM_CAVEAT
     return text

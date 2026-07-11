@@ -1,10 +1,6 @@
 /**
- * Full-screen overlay for video attachments. Uses the custom player rather than
- * opening the raw file in a new tab, which would fall back to the browser's
- * native controls and can't be themed.
- *
+ * Full-screen overlay for video attachments using the custom player.
  * Portaled to <body> to escape any parent modal's stacking/transform context.
- * Closes on backdrop click, the close button, or Escape.
  */
 import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -21,7 +17,7 @@ export default function VideoLightbox({ src, type, label, onClose }: Readonly<Pr
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Save current focus, move into the dialog, restore on unmount.
+  // Move focus into the dialog, restore it on unmount.
   useEffect(() => {
     const prevActive = document.activeElement as HTMLElement | null;
     closeBtnRef.current?.focus();
@@ -30,7 +26,7 @@ export default function VideoLightbox({ src, type, label, onClose }: Readonly<Pr
     };
   }, []);
 
-  // Esc closes, background scroll is locked, Tab/Shift+Tab stay within the dialog.
+  // Esc closes, background scroll locks, Tab/Shift+Tab trap within the dialog.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {

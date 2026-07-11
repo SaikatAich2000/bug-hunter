@@ -1,8 +1,5 @@
-"""Tests for hardening edge cases across permissions, reports, config,
-scheduler, push registration, downloads, and CSRF.
-
-App modules are imported inside test bodies (the `client` fixture purges
-sys.modules per test), and DB assertions open their own SessionLocal.
+"""Hardening edge cases across permissions, reports, config, scheduler, push, downloads, CSRF.
+App modules import inside test bodies; DB assertions open their own SessionLocal.
 """
 from __future__ import annotations
 
@@ -13,9 +10,7 @@ BOOTSTRAP_PASSWORD = "Admin1234"
 _PW = "User12345"
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _session():
     from app.database import SessionLocal
     return SessionLocal()
@@ -41,9 +36,7 @@ def _mk_project(admin_c, name):
     return admin_c.post("/api/projects", json={"name": name}).json()
 
 
-# ---------------------------------------------------------------------------
 # create_bug item_type role gate
-# ---------------------------------------------------------------------------
 def test_regular_user_cannot_create_task(client):
     _login(client, BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD)
     proj = _mk_project(client, "Proj A")
@@ -57,9 +50,7 @@ def test_regular_user_cannot_create_task(client):
         assert r.status_code == 403, r.text
 
 
-# ---------------------------------------------------------------------------
 # Inactive users can't be newly assigned / set as reporter
-# ---------------------------------------------------------------------------
 def test_create_bug_rejects_inactive_assignee(admin_client):
     proj = _mk_project(admin_client, "PInactive")
     bob = _mk_user(admin_client, "bob.inactive@test.local")
@@ -71,9 +62,7 @@ def test_create_bug_rejects_inactive_assignee(admin_client):
     assert "deactivated" in r.json()["detail"].lower()
 
 
-# ---------------------------------------------------------------------------
 # Comment/attachment writes honour the per-type edit policy
-# ---------------------------------------------------------------------------
 def test_user_cannot_comment_or_attach_on_task(client):
     _login(client, BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD)
     proj = _mk_project(client, "PTask")
@@ -92,17 +81,13 @@ def test_user_cannot_comment_or_attach_on_task(client):
     assert client.post(f"/api/bugs/{bug['id']}/comments", json={"body": "hi"}).status_code == 201
 
 
-# ---------------------------------------------------------------------------
 # Audit numeric search over int4 range must not 500
-# ---------------------------------------------------------------------------
 def test_audit_search_overrange_number_no_500(admin_client):
     r = admin_client.get("/api/audit", params={"q": "9" * 25})
     assert r.status_code == 200, r.text
 
 
-# ---------------------------------------------------------------------------
 # Removing an assignee notifies them
-# ---------------------------------------------------------------------------
 def test_unassign_notifies_removed_user(admin_client):
     proj = _mk_project(admin_client, "PUnassign")
     bob = _mk_user(admin_client, "bob.unassign@test.local")
@@ -118,9 +103,7 @@ def test_unassign_notifies_removed_user(admin_client):
     assert any("Unassigned" in n.title for n in notes), [n.title for n in notes]
 
 
-# ---------------------------------------------------------------------------
 # Bulk optimistic concurrency
-# ---------------------------------------------------------------------------
 def test_bulk_version_conflict_is_skipped(admin_client):
     proj = _mk_project(admin_client, "PBulkVer")
     bug = admin_client.post("/api/bugs", json={"project_id": proj["id"], "title": "ver bug"}).json()
@@ -141,9 +124,7 @@ def test_bulk_version_conflict_is_skipped(admin_client):
     assert r2.json()["updated"] == 1, r2.json()
 
 
-# ---------------------------------------------------------------------------
 # XLSX Filters Applied sheet defangs free-text filters
-# ---------------------------------------------------------------------------
 def test_xlsx_filters_sheet_defangs_formula():
     from app.reports.engine import ReportResult
     from app.reports import xlsx
@@ -161,9 +142,7 @@ def test_xlsx_filters_sheet_defangs_formula():
     assert any(v.startswith("'+evil") for v in cells), cells
 
 
-# ---------------------------------------------------------------------------
 # Aging report with a non-open status filter returns empty
-# ---------------------------------------------------------------------------
 def test_aging_empty_status_intersection(admin_client):
     from app.reports.engine import run_report, Filters
     proj = _mk_project(admin_client, "PAge")
@@ -173,18 +152,14 @@ def test_aging_empty_status_intersection(admin_client):
     assert res.rows == []
 
 
-# ---------------------------------------------------------------------------
 # Resolution parse takes the rightmost status clause
-# ---------------------------------------------------------------------------
 def test_resolution_regex_last_match():
     from app.reports.engine import _parse_resolution_status
     detail = "#5 'weird status: 'x' → 'y'' — status: 'New' → 'Resolved'"
     assert _parse_resolution_status(detail) == "Resolved"
 
 
-# ---------------------------------------------------------------------------
 # A reopened (now-open) bug shows no stale resolved info
-# ---------------------------------------------------------------------------
 def test_reopened_bug_has_no_resolved_info(admin_client):
     from app.reports.engine import _fetch_resolution_info
     proj = _mk_project(admin_client, "PReopen")
@@ -196,9 +171,7 @@ def test_reopened_bug_has_no_resolved_info(admin_client):
     assert bug["id"] not in info, info
 
 
-# ---------------------------------------------------------------------------
 # Throughput marks itself truncated when the scan hits the cap
-# ---------------------------------------------------------------------------
 def test_throughput_truncated_flag(admin_client, monkeypatch):
     import app.reports.engine as engine
     from app.reports.engine import run_report, Filters
@@ -212,9 +185,7 @@ def test_throughput_truncated_flag(admin_client, monkeypatch):
     assert res.truncated is True
 
 
-# ---------------------------------------------------------------------------
 # config — _env_int / _env_float are crash-safe and clamped
-# ---------------------------------------------------------------------------
 def test_env_int_garbage_and_clamp(monkeypatch):
     from app import config
     monkeypatch.setenv("BH_TEST_INT", "not-a-number")
@@ -227,26 +198,20 @@ def test_env_int_garbage_and_clamp(monkeypatch):
     assert config._env_float("BH_TEST_FLOAT", 0.5, minimum=0.0) == pytest.approx(0.0)
 
 
-# ---------------------------------------------------------------------------
 # scheduler — "N/step" expands to a series, not a single value
-# ---------------------------------------------------------------------------
 def test_cron_value_step_expands_series():
     from app.scheduler import CronSchedule
     sch = CronSchedule("5/15 * * * *")
     assert sch.minute == {5, 20, 35, 50}
 
 
-# ---------------------------------------------------------------------------
 # cloud_llm — _extract_json scans past a non-dict brace
-# ---------------------------------------------------------------------------
 def test_extract_json_skips_non_dict():
     from app.chatbot.cloud_llm import _extract_json
     assert _extract_json('[]  {"mode": "answer"}') == {"mode": "answer"}
 
 
-# ---------------------------------------------------------------------------
 # memory — staged ingest expires after the confirm window
-# ---------------------------------------------------------------------------
 def test_ingest_confirm_ttl(monkeypatch):
     import types
     from app.chatbot import memory
@@ -261,9 +226,7 @@ def test_ingest_confirm_ttl(monkeypatch):
     assert store.take_ingest(1) is None
 
 
-# ---------------------------------------------------------------------------
 # push_service — register survives a unique-token insert race
-# ---------------------------------------------------------------------------
 def test_push_register_insert_race(admin_client, monkeypatch):
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy import select
@@ -311,9 +274,7 @@ def test_push_register_race_reraises_when_row_gone(monkeypatch):
         push_service.register(db, user_id=1, token="gone-tok", platform="web")
 
 
-# ---------------------------------------------------------------------------
 # download — a Range request returns the exact sliced bytes
-# ---------------------------------------------------------------------------
 def test_download_range_slice(admin_client):
     proj = _mk_project(admin_client, "PDl")
     bug = admin_client.post("/api/bugs", json={"project_id": proj["id"], "title": "download bug"}).json()
@@ -328,9 +289,7 @@ def test_download_range_slice(admin_client):
     assert full.content == body
 
 
-# ---------------------------------------------------------------------------
 # main — login is no longer CSRF-exempt; error responses carry no-store
-# ---------------------------------------------------------------------------
 def test_login_not_csrf_exempt(client):
     r = client.post("/api/auth/login",
                     headers={"Origin": "https://evil.example"},
@@ -344,9 +303,7 @@ def test_sessions_list_sweeps_without_error(admin_client):
     assert admin_client.get("/api/sessions").status_code == 200
 
 
-# ---------------------------------------------------------------------------
 # Setting an inactive user as reporter is rejected
-# ---------------------------------------------------------------------------
 def test_update_reporter_to_inactive_rejected(admin_client):
     proj = _mk_project(admin_client, "PRep")
     carol = _mk_user(admin_client, "carol.rep@test.local")
@@ -357,15 +314,12 @@ def test_update_reporter_to_inactive_rejected(admin_client):
     assert "deactivated" in r.json()["detail"].lower()
 
 
-# ---------------------------------------------------------------------------
 # database — _add_column_safely logs-and-skips a failing ALTER (savepoint)
-# ---------------------------------------------------------------------------
 def test_add_column_safely_skips_on_error(tmp_path):
     from sqlalchemy import create_engine
     import app.database as database
     eng = create_engine(f"sqlite:///{tmp_path / 'leg.db'}")
     with eng.begin() as conn:
-        # An ALTER on a missing table raises inside the savepoint; it should be
-        # swallowed so a single bad column doesn't abort the whole migration pass.
+        # The ALTER raises inside the savepoint and is swallowed; one bad column can't abort the pass.
         database._add_column_safely(conn, "ALTER TABLE nope ADD COLUMN x INTEGER")
     eng.dispose()  # no exception propagated == pass

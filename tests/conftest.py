@@ -1,13 +1,4 @@
-"""Pytest fixtures.
-
-Tests run against a temporary SQLite file — no Postgres needed. The same
-SQLAlchemy models work on both backends.
-
-Three client fixtures are provided:
-  - client          : unauthenticated, for testing 401 behaviour.
-  - admin_client    : logged in as the bootstrap admin.
-  - user_client     : logged in as a regular (non-admin) user.
-"""
+"""Pytest fixtures: hermetic temp-SQLite app; client (anon), admin_client, user_client."""
 from __future__ import annotations
 
 import os
@@ -20,10 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Disable Sleuth's optional/cloud layers for the whole suite. config.py
-# auto-loads .env, so we hard-set (not setdefault) to prevent a local .env
-# from enabling them in CI. Tests that exercise these paths opt in by
-# monkeypatching the settings object directly.
+# Hard-set (not setdefault): config.py auto-loads .env, and cloud layers must stay off in CI.
 for _flag in (
     "SLEUTH_CLOUD_ENABLED",
     "SLEUTH_RETRIEVAL_ENABLED",
@@ -34,10 +22,7 @@ for _flag in (
 ):
     os.environ[_flag] = "0"
 
-# Disable the email digest. When it's on, immediate notify_* calls defer to
-# the batch job instead of sending, which breaks tests that assert on those
-# immediate emails (test_item_types / test_events). Digest-specific tests opt
-# back in per-test via monkeypatch.setattr(get_settings(), ...).
+# Digest off: when on, immediate notify_* emails defer to the batch job.
 os.environ["EMAIL_DIGEST_ENABLED"] = "false"
 
 
@@ -55,12 +40,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", BOOTSTRAP_EMAIL)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
     monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "Test Admin")
-    # Keep the suite hermetic — no real HaveIBeenPwned call. Tests that cover
-    # the breach path monkeypatch app.password_breach directly.
+    # No real HaveIBeenPwned calls; breach tests monkeypatch app.password_breach.
     monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
-    # Web push off by default — a deployment .env may have WEB_PUSH_ENABLED=true,
-    # but we never want real FCM calls in tests. Tests that need push enabled
-    # turn it on via monkeypatch.
+    # Push off by default so no real FCM calls; push tests opt in via monkeypatch.
     monkeypatch.setenv("WEB_PUSH_ENABLED", "false")
 
     # Re-import so the SQLAlchemy engine picks up the overridden DATABASE_URL.
@@ -91,12 +73,7 @@ def admin_client(client):
 
 @pytest.fixture()
 def user_client(client):
-    """A TestClient logged in as a freshly-created regular user.
-
-    Uses a *separate* TestClient instance so the admin's session cookie
-    doesn't bleed into the user's session.
-    """
-    # Log in as admin and create the regular user.
+    """TestClient logged in as a fresh regular user; separate instance so the admin cookie doesn't bleed over."""
     res = client.post("/api/auth/login", json={
         "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD,
     })
@@ -108,8 +85,7 @@ def user_client(client):
         "password": "User12345",
     })
     assert res.status_code == 201, res.text
-    # Log out, then log in as the regular user (same TestClient is fine;
-    # the cookie is simply replaced).
+    # Same TestClient is fine; the cookie is simply replaced.
     client.post("/api/auth/logout")
     res = client.post("/api/auth/login", json={
         "email": "user@test.local", "password": "User12345",

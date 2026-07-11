@@ -1,27 +1,7 @@
-# =============================================================================
-#  scripts/sonar-export.ps1
-# -----------------------------------------------------------------------------
-#  Pull every Issue and every Security Hotspot from the locally-running
-#  SonarQube into local files so they can be reviewed / triaged / fed to
-#  an LLM / diffed across scans.
-#
-#  Usage:
-#      $env:SONAR_TOKEN = "sqp_xxxxxxxxxxxx"
-#      .\scripts\sonar-export.ps1
-#
-#  Outputs (gitignored):
-#      sonar-issues.json     - raw paginated /api/issues/search dump
-#      sonar-hotspots.json   - raw paginated /api/hotspots/search dump
-#      sonar-issues.csv      - flat CSV: severity, type, file, line, message, rule
-#      sonar-hotspots.csv    - flat CSV: vulnerabilityProbability, status, file, line, message
-#
-#  Database safety: read-only API calls. Writes only to the four files
-#  listed above (all gitignored). No DB access of any kind.
-#
-#  ASCII-only on purpose. Windows PowerShell 5.1 reads .ps1 files as the
-#  console code page (Windows-1252) when no BOM is present, so any UTF-8
-#  multi-byte character (em-dash, ellipsis, arrow) corrupts string parsing.
-# =============================================================================
+# Export every issue and security hotspot from the local SonarQube (read-only API).
+# Usage: $env:SONAR_TOKEN = "sqp_xxxx"; .\scripts\sonar-export.ps1
+# Outputs (gitignored): sonar-issues.{json,csv}, sonar-hotspots.{json,csv}
+# ASCII-only: PS 5.1 reads BOM-less .ps1 as Windows-1252, so UTF-8 multi-byte chars corrupt parsing.
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -31,7 +11,6 @@ function Info  { param([string]$msg) Write-Host "[EXPORT] $msg" -ForegroundColor
 function Warn  { param([string]$msg) Write-Host "[WARN]   $msg" -ForegroundColor Yellow }
 function Abort { param([string]$msg) Write-Host "[ERROR]  $msg" -ForegroundColor Red; exit 1 }
 
-# --- Config ----------------------------------------------------------------
 if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9000" }
 if (-not $env:SONAR_TOKEN) {
     Abort "SONAR_TOKEN is not set. Run: `$env:SONAR_TOKEN = 'sqp_xxxx' first."
@@ -45,7 +24,6 @@ $pair = "$($env:SONAR_TOKEN):"
 $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
 $AuthHeader = @{ Authorization = "Basic " + [Convert]::ToBase64String($bytes) }
 
-# --- Pre-flight ------------------------------------------------------------
 try {
     $status = Invoke-RestMethod -Uri "$Base/api/system/status" -TimeoutSec 5 -Headers $AuthHeader
     if ($status.status -ne "UP") { Abort "SonarQube isn't UP (status: $($status.status))" }
@@ -54,7 +32,6 @@ try {
 }
 Info "SonarQube reachable at $Base"
 
-# --- Paginated fetch helper -----------------------------------------------
 function Get-AllPages {
     param(
         [string]$Path,
@@ -85,7 +62,6 @@ function Get-AllPages {
     return $all
 }
 
-# --- Issues ----------------------------------------------------------------
 Info "Fetching issues..."
 $issues = Get-AllPages -Path "/api/issues/search" -Query @{
     componentKeys = $ProjectKey
@@ -114,15 +90,8 @@ $issues | ForEach-Object {
 } | Export-Csv -NoTypeInformation -Path sonar-issues.csv -Encoding UTF8
 Info "Wrote sonar-issues.csv"
 
-# --- Hotspots --------------------------------------------------------------
-# Hotspots live on a separate API endpoint. They are NOT "issues" in
-# Sonar's data model; they are a review-required category.
-#
-# Permission gotcha: Project Analysis Tokens (sqp_*) can UPLOAD scans
-# but they CANNOT read hotspots back. To export hotspots too, generate
-# a USER token (sqa_*) at $SONAR_HOST_URL/account/security/ (type
-# "User Token"). We catch the 403 so a project-analysis token still
-# produces sonar-issues.* successfully.
+# Hotspots use a separate endpoint. Project-analysis tokens (sqp_*) can upload scans but
+# cannot read hotspots back - that 403 is caught so sonar-issues.* still gets written.
 Info "Fetching security hotspots..."
 $hotspots = @()
 try {
@@ -165,7 +134,6 @@ if ($hotspots.Count -gt 0) {
     Info "Wrote sonar-hotspots.csv"
 }
 
-# --- Summary --------------------------------------------------------------
 Write-Host ""
 Info "==========================  Summary  =========================="
 Write-Host ("  Open issues by type:") -ForegroundColor Cyan

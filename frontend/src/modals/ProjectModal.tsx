@@ -1,9 +1,5 @@
 /**
- * Create/edit modal for a project.
- *
- * Driven by `projectModal` in AppContext. `project == null` → create mode
- * (color defaults to #c9764f); otherwise edit mode. On success: close, reload
- * projects, refresh bugs/stats, and show a toast.
+ * Create/edit modal for a project (project == null → create, color defaults to #c9764f).
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -24,21 +20,18 @@ export default function ProjectModal() {
   const [description, setDescription] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Prefill fields on open, then focus the name input once the modal is visible.
+  // Prefill fields on open, then focus the name input.
   useEffect(() => {
     if (!open) return;
     setName(project ? project.name : "");
-    // <input type="color"> coerces any non-#rrggbb string to #000000, so a
-    // legacy color would silently become black on save. Fall back to the
-    // default instead.
+    // <input type="color"> coerces non-#rrggbb to #000000, so fall back to the default for legacy colors.
     setColor(project && /^#[0-9a-fA-F]{6}$/.test(project.color) ? project.color : DEFAULT_COLOR);
     setDescription(project ? project.description : "");
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, project]);
 
-  // Fail-closed: gate here in addition to the backend (require_manager_or_admin)
-  // so non-managers can never see the form regardless of who set open.
+  // Fail-closed: gate here too (backend also enforces) so non-managers never see the form.
   if (!open || !canManage) return null;
 
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {

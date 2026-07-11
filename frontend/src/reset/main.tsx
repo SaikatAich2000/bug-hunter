@@ -1,6 +1,4 @@
-// Entry point for /reset.html.
-// Theme must be set before the React tree mounts to avoid a flash; inline
-// scripts are blocked by CSP so this module is the earliest safe place.
+// Entry point for /reset.html. CSP blocks inline scripts, so theme bootstrap happens here.
 import { createRoot } from "react-dom/client";
 import ResetPage from "./ResetPage";
 import "../styles/styles.css";
@@ -12,8 +10,7 @@ const container = document.getElementById("root");
 if (!container) {
   throw new Error("reset: #root container not found");
 }
-// "contents" makes the mount node layout-transparent so .auth-body flexbox
-// keeps centering .auth-shell. CSSOM assignment avoids the style-src CSP.
+// display:contents keeps .auth-body flex centering; CSSOM avoids the style-src CSP.
 container.style.display = "contents";
 
 createRoot(container).render(<ResetPage />);

@@ -1,19 +1,10 @@
 """Security hardening and performance tests.
-
-Covers:
-  1. Chatbot Excel export: formula triggers defanged (same policy as CSV/reports).
-  2. Attachment downloads: inline rendering is safelist-based; unknown MIME types
-     get Content-Disposition: attachment.
-  3. Security headers: X-Permitted-Cross-Domain-Policies present alongside COOP/CORP.
-  4. Cached HTML serving still replaces all placeholders.
-  5. Events list: batched aggregate counts match what per-event queries produce.
+Excel formula defang, inline-disposition safelist, security headers, cached HTML, batched event counts.
 """
 from __future__ import annotations
 
 
-# ---------------------------------------------------------------------------
 # 1. Chatbot Excel formula defang
-# ---------------------------------------------------------------------------
 class TestChatbotExcelDefang:
     def test_defang_helper(self, client):
         from app.chatbot.excel import _defang_formula_text
@@ -43,9 +34,7 @@ class TestChatbotExcelDefang:
         assert ws.cell(row=3, column=8).value.startswith("'+")
 
 
-# ---------------------------------------------------------------------------
 # 2. Attachment inline-disposition safelist
-# ---------------------------------------------------------------------------
 class TestAttachmentDispositionSafelist:
     def _make_bug_with_attachment(self, client, filename, content, ctype):
         r = client.post("/api/projects", json={"name": "AttProj", "color": "#000000"})
@@ -78,8 +67,7 @@ class TestAttachmentDispositionSafelist:
         assert r.headers["content-disposition"].startswith("inline;")
 
     def test_unknown_type_forced_to_attachment(self, admin_client):
-        # application/x-anything is not on the safelist, so the browser must
-        # download it rather than render it inline.
+        # application/x-anything isn't safelisted, so it must download, not render inline.
         bug_id, att_id = self._make_bug_with_attachment(
             admin_client, "blob.bin", b"\x00\x01", "application/x-custom")
         r = admin_client.get(f"/api/bugs/{bug_id}/attachments/{att_id}/download")
@@ -93,9 +81,7 @@ class TestAttachmentDispositionSafelist:
         assert r.headers["content-type"].startswith("application/octet-stream")
 
 
-# ---------------------------------------------------------------------------
 # 3. Security headers
-# ---------------------------------------------------------------------------
 class TestSecurityHeaders:
     def test_full_header_set_on_api(self, client):
         r = client.get("/api/health")
@@ -107,13 +93,10 @@ class TestSecurityHeaders:
         assert "content-security-policy" in r.headers
 
 
-# ---------------------------------------------------------------------------
 # 4. Cached HTML serving
-# ---------------------------------------------------------------------------
 class TestCachedHtml:
     def test_login_page_renders_placeholders_repeatedly(self, client):
-        # Second request is served from the render cache; both responses must
-        # be identical with no unreplaced placeholders.
+        # Second request comes from the render cache; must match with no unreplaced placeholders.
         r1 = client.get("/login.html")
         r2 = client.get("/login.html")
         assert r1.status_code == r2.status_code == 200
@@ -122,13 +105,10 @@ class TestCachedHtml:
         assert "__ASSET_VERSION__" not in r1.text
 
 
-# ---------------------------------------------------------------------------
 # 5. Events list batched aggregates
-# ---------------------------------------------------------------------------
 class TestEventListAggregates:
     def test_counts_match_after_batching(self, admin_client):
-        # One event gets two items, the other gets none. The list endpoint
-        # (which uses batched aggregates) must report the same counts.
+        # Two items on one event, none on the other; batched aggregates must match.
         r = admin_client.post("/api/projects", json={"name": "EvProj", "color": "#000000"})
         project = r.json()
         r = admin_client.post("/api/events", json={"name": "Ev One"})

@@ -1,9 +1,5 @@
-"""Tests for the Sleuth reasoning agent (app/chatbot/agent.py).
-
-The loop is pure -- model call and tools are injected -- so most tests are fast
-unit tests with fakes. The DB-backed tests at the bottom pin the safety contract
-through the real cloud path: the agent must ground its answer and its query tool
-must never write.
+"""Sleuth reasoning agent (app/chatbot/agent.py): fast unit tests with injected fakes, plus
+DB-backed cloud-path tests pinning the safety contract (answers grounded, query tool never writes).
 """
 from __future__ import annotations
 

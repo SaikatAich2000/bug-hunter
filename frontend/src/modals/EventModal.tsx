@@ -1,10 +1,6 @@
 /**
- * EventModal — create / edit form for an Event.
- *
- * Create mode defaults scheduled_for to today. The manager picker is limited
- * to active admin/manager users because the backend rejects regular users in
- * that role. #modalEventTitle is a span inside the h2 so test selectors keep
- * working across Modal wrapper changes.
+ * EventModal — create/edit form for an Event (create defaults scheduled_for to today).
+ * Manager picker is limited to active admin/manager users (backend rejects others).
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Modal from "../components/Modal";
@@ -47,22 +43,20 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
     } else {
       setName("");
       setDescription("");
-      // Default to today — covers the common same-day scheduling case.
-      setScheduledFor(new Date().toISOString().slice(0, 10));
+      setScheduledFor(new Date().toISOString().slice(0, 10)); // default to today
       setManagerIds([]);
-      // Projects are loaded at app boot, so this is already populated.
-      setProjectId(projects[0]?.id ?? "");
+      setProjectId(projects[0]?.id ?? ""); // projects loaded at app boot
+
     }
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
   }, [open, event]);
 
-  // Backend rejects non-admin/manager users as event managers, so exclude them here.
+  // Backend rejects non-admin/manager users as event managers, so exclude them.
   const eligibleManagers = users.filter(
     (u) => u.is_active && (u.role === "admin" || u.role === "manager"),
   );
-  // Include previously assigned managers who are now ineligible (e.g. deactivated)
-  // so they can be deselected; without a chip they'd be silently re-submitted.
+  // Keep already-assigned-but-now-ineligible managers so they can be deselected (else silently re-submitted).
   const managerPickerItems = eligibleManagers.map((u) => ({ id: u.id, label: u.name, title: u.role }));
   const eligibleManagerIds = new Set(managerPickerItems.map((i) => i.id));
   for (const m of event?.managers ?? []) {

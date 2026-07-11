@@ -1,10 +1,4 @@
-"""Tests for app/chatbot/rag.py, the optional RAG layer.
-
-RAG requires a live Gemini embedding API and a chromadb store, neither of which
-the test suite provisions. These tests inject fakes for both so every branch runs
-offline: embed success/failure, the redact-before-egress gate, collection
-availability, DB/file gathering, batched upsert, and fenced retrieval output.
-"""
+"""Tests for app/chatbot/rag.py with fake Gemini/chromadb so every branch runs offline."""
 from __future__ import annotations
 
 import sys
@@ -29,9 +23,6 @@ def _settings(**over):
     return types.SimpleNamespace(**base)
 
 
-# ---------------------------------------------------------------------------
-# _embed
-# ---------------------------------------------------------------------------
 def _install_httpx(monkeypatch, *, payload=None, raise_status=False, post_raises=False):
     hx = types.ModuleType("httpx")
     captured = {}
@@ -69,8 +60,7 @@ def test_embed_empty_texts_returns_none(monkeypatch):
 def test_embed_success_redacts_and_truncates(monkeypatch):
     monkeypatch.setattr(rag, "get_settings", lambda: _settings())
     hx = _install_httpx(monkeypatch, payload={"embeddings": [{"values": [0.1, 0.2]}]})
-    # Spaced words keep redaction from collapsing the text so we can observe
-    # the 8000-char truncation separately.
+    # Spaced words survive redaction, so the 8000-char truncation is observable.
     out = rag._embed(["word " * 2000])  # 10000 chars
     assert out == [[0.1, 0.2]]
     # API key goes in a header, not the URL.
@@ -101,9 +91,6 @@ def test_embed_post_raises_returns_none(monkeypatch):
     assert rag._embed(["x"]) is None
 
 
-# ---------------------------------------------------------------------------
-# _collection
-# ---------------------------------------------------------------------------
 def test_collection_disabled_returns_none(monkeypatch):
     monkeypatch.setattr(rag, "get_settings", lambda: _settings(SLEUTH_RAG_ENABLED=False))
     assert rag._collection() is None
@@ -138,9 +125,6 @@ def test_collection_unavailable_returns_none(monkeypatch):
     assert rag._collection() is None
 
 
-# ---------------------------------------------------------------------------
-# _doc_text
-# ---------------------------------------------------------------------------
 def test_doc_text_with_and_without_description():
     bug = types.SimpleNamespace(
         id=1, item_type="Bug", title="Crash", status="New",
@@ -153,9 +137,7 @@ def test_doc_text_with_and_without_description():
     assert "stack trace" not in rag._doc_text(bug)
 
 
-# ---------------------------------------------------------------------------
-# _gather_db_docs (fake db, call-order: bugs then comments)
-# ---------------------------------------------------------------------------
+# Fake db for _gather_db_docs; scalars() is called for bugs, then comments.
 class _Scalars:
     def __init__(self, items):
         self._items = items
@@ -184,9 +166,6 @@ def test_gather_db_docs():
     assert metas[0]["kind"] == "bug" and metas[1]["kind"] == "comment"
 
 
-# ---------------------------------------------------------------------------
-# _read_doc / _gather_file_docs
-# ---------------------------------------------------------------------------
 def test_read_doc_ok_and_missing(tmp_path):
     p = tmp_path / "a.md"
     p.write_text("x" * 9000, encoding="utf-8")
@@ -215,9 +194,6 @@ def test_gather_file_docs_unreadable_skipped(tmp_path, monkeypatch):
     assert ids == []
 
 
-# ---------------------------------------------------------------------------
-# _embed_upsert
-# ---------------------------------------------------------------------------
 class _Col:
     def __init__(self):
         self.upserts = []
@@ -251,9 +227,6 @@ def test_embed_upsert_writes_then_stops_on_failure(monkeypatch):
     assert len(col.upserts) == 1
 
 
-# ---------------------------------------------------------------------------
-# index_all
-# ---------------------------------------------------------------------------
 def test_index_all_no_collection(monkeypatch):
     monkeypatch.setattr(rag, "_collection", lambda: None)
     assert rag.index_all(_FakeDB([], [])) == 0
@@ -277,9 +250,6 @@ def test_index_all_indexes(monkeypatch):
     assert rag.index_all(_FakeDB([bug], [])) == 1
 
 
-# ---------------------------------------------------------------------------
-# upsert_bug
-# ---------------------------------------------------------------------------
 def test_upsert_bug_no_collection(monkeypatch):
     monkeypatch.setattr(rag, "_collection", lambda: None)
     rag.upsert_bug(_FakeDB([], []), 1)  # no raise
@@ -320,9 +290,6 @@ def test_upsert_bug_swallows_errors(monkeypatch):
     rag.upsert_bug(_FakeDB([], []), 1)  # swallowed, no raise
 
 
-# ---------------------------------------------------------------------------
-# retrieve_text
-# ---------------------------------------------------------------------------
 def test_retrieve_text_no_collection(monkeypatch):
     monkeypatch.setattr(rag, "_collection", lambda: None)
     assert rag.retrieve_text("q") == ""

@@ -3,6 +3,31 @@
 All notable changes to Bug Hunter. The format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Email digest fired at the wrong local time.** The slim Docker image ships no
+  IANA timezone data, so `EMAIL_DIGEST_TIMEZONE` silently fell back to UTC and a
+  `0 8 * * *` schedule ran at 08:00 UTC instead of 08:00 local. The `tzdata`
+  package is now a pinned dependency; rebuild the image (`./deploy.sh`) to pick
+  it up.
+- **A failed digest send lost that day's emails.** Rows were stamped as emailed
+  before the SMTP send; a delivery failure was ignored. Failed sends are now
+  released and retried on the next scheduled run, with an error in the log.
+  At-most-once delivery is preserved.
+
+### Changed
+
+- `EMAIL_DIGEST_LOOKBACK_HOURS` default raised from 26 to 50 (twice the daily
+  gap), so one missed or failed run is fully caught up by the next. A wider
+  window can never double-send.
+- The startup log now warns loudly when digest mode is enabled without a
+  schedule (`EMAIL_DIGEST_CRON` empty means no work-item email is ever sent),
+  and when the configured timezone cannot be loaded.
+- Comments across the codebase trimmed to a concise one-line style; no
+  behavioral changes.
+
 ## [3.1] — 2026-06-29
 
 Hardening release for the **Sleuth** AI assistant, following an independent

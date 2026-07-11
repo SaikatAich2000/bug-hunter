@@ -1,8 +1,5 @@
 """Security and correctness tests for known behavioural gaps.
-
-Covers: session lifecycle on password change/reset, stale reset tokens,
-update_bug partial-write risk, activity ordering consistency, frontend
-API contract, input validation, CSRF posture, and transactional semantics.
+Session lifecycle, stale reset tokens, partial writes, activity ordering, validation, CSRF posture.
 """
 from __future__ import annotations
 
@@ -33,8 +30,7 @@ def _make_project(c, name="P"):
 
 def _make_user(c, name="Someone", email="some@x.com", role="user", password="TestUserPwd9X"):
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Tag the new user to every existing project so these tests keep working
-    # under project-scoped access without needing per-test wiring.
+    # Tag the user to every project so project-scoped access doesn't need per-test wiring.
     pids = [p["id"] for p in c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -43,13 +39,10 @@ def _make_user(c, name="Someone", email="some@x.com", role="user", password="Tes
     return r.json()
 
 
-# Sessions survive a password change/reset. If an account is compromised,
-# the owner changing the password won't evict an attacker's active session.
+# Gap: sessions survive password change/reset, so an attacker session isn't evicted.
 class TestSessionLifecycle:
     def test_existing_session_still_works_after_password_change(self, admin_client):
-        """Changing the password does not invalidate existing sessions, so a
-        compromised account stays compromised even after the owner resets."""
-        # Confirm session works before the change.
+        """Password change does not invalidate existing sessions (documents the current gap)."""
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200
 
@@ -65,14 +58,8 @@ class TestSessionLifecycle:
             "BUG: old session is invalidated after password change (good!) — update test"
 
     def test_outstanding_reset_tokens_remain_after_password_change(self, admin_client):
-        """A reset link issued before a regular password change stays valid
-        and can override the new password. Anyone who intercepts the link
-        can take over the account.
-
-        We can't retrieve the token (it's email-only), so this just confirms
-        the system allows multiple concurrent outstanding tokens to exist."""
-        # Three consecutive reset requests; all should succeed and each
-        # should produce an audit row.
+        """Reset links issued before a password change stay valid; confirms multiple outstanding tokens coexist."""
+        # Three consecutive reset requests; each should succeed and audit.
         for _ in range(3):
             r = admin_client.post("/api/auth/forgot-password", json={
                 "email": "admin@test.local",
@@ -85,13 +72,10 @@ class TestSessionLifecycle:
             f"BUG: forgot-password doesn't dedupe — {n} concurrent tokens issued"
 
 
-# update_bug mutates the ORM object before the role check runs, risking a
-# partial write if the session is committed in the wrong order.
+# update_bug mutates the ORM object before the role check, risking a partial write.
 class TestUpdateBugOrdering:
     def test_failed_reporter_change_does_not_persist_other_changes(self, admin_client):
-        """A non-admin PUT that mixes a legitimate field change with an
-        unauthorized reporter_id change must be rejected atomically. The
-        title change must not persist."""
+        """A mixed legit+unauthorized PUT is rejected atomically; the title change must not persist."""
         p = _make_project(admin_client, "U1")
         owner = _make_user(admin_client, name="Owner", email="owner@x.com",
                            password="TestUserPwd9X")
@@ -101,14 +85,12 @@ class TestUpdateBugOrdering:
         bug = _make_bug(admin_client, p["id"], title="Original title here")
         admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": owner["id"]})
 
-        # Switch to the owner session.
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
             "email": "owner@x.com", "password": "TestUserPwd9X",
         })
 
-        # Combine a valid title change with an unauthorized reporter change.
-        # The whole request must be rejected (403) with no partial write.
+        # Valid title change + unauthorized reporter change: whole request must 403, no partial write.
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={
             "title": "Hacked title here",
             "reporter_id": other["id"],
@@ -120,12 +102,10 @@ class TestUpdateBugOrdering:
             "BUG: title was persisted despite the 403 from the role check"
 
 
-# Bug.activities has no secondary sort key, so same-second events can appear
-# in different orders depending on which endpoint fetches them.
+# Bug.activities has no secondary sort key; same-second events can reorder per endpoint.
 class TestActivityOrdering:
     def test_activity_order_consistent_between_get_bug_and_list_activity(self, admin_client):
-        """Activities with the same timestamp must appear in the same order
-        from both the bug detail and the activity list endpoints."""
+        """Same-timestamp activities appear in the same order from bug detail and activity list."""
         p = _make_project(admin_client, "AO1")
         bug = _make_bug(admin_client, p["id"], title="Activity ordering test")
         # Rapid updates to increase the chance of timestamp collisions.
@@ -145,9 +125,7 @@ class TestActivityOrdering:
 # Frontend contract tests — exercised through the API responses the SPA consumes.
 class TestFrontendContract:
     def test_bug_detail_attachments_only_includes_bug_level(self, admin_client):
-        """Top-level 'attachments' in a BugDetail must only contain
-        bug-level files (comment_id NULL). Comment attachments live under
-        their comment, and attachment_count reflects both."""
+        """BugDetail 'attachments' holds only bug-level files; comment files live under their comment."""
         p = _make_project(admin_client, "FE1")
         bug = _make_bug(admin_client, p["id"])
         admin_client.post(f"/api/bugs/{bug['id']}/attachments",
@@ -166,9 +144,7 @@ class TestFrontendContract:
         assert d["attachment_count"] == 2
 
     def test_xlsx_export_preserves_commas_and_newlines_in_description(self, admin_client):
-        """Commas and newlines in a description must survive the openpyxl
-        round-trip as a single cell. This is the XLSX equivalent of what
-        the old CSV export test checked."""
+        """Commas and newlines in a description survive the openpyxl round-trip as one cell."""
         import io
         from openpyxl import load_workbook
         p = _make_project(admin_client, "FE2")
@@ -202,8 +178,7 @@ class TestInputValidation:
         assert r.status_code == 422
 
     def test_bug_create_with_oversized_description(self, admin_client):
-        # Cap is 1 MB to allow rich HTML with multiple base64 screenshots.
-        # Anything over the cap should be 422.
+        # 1 MB cap allows rich HTML with base64 screenshots; over-cap is 422.
         p = _make_project(admin_client, "IV1")
         r = admin_client.post("/api/bugs", json={
             "project_id": p["id"], "title": "x" * 10,
@@ -237,12 +212,10 @@ class TestInputValidation:
         assert r.json()["role"] == "admin"
 
 
-# CSRF posture. True cross-site simulation isn't possible in a unit test,
-# so these verify cookie attributes and that no token mechanism is expected.
+# True cross-site simulation isn't possible in a unit test; verify posture only.
 class TestCSRFPosture:
     def test_no_csrf_token_on_state_changing_routes(self, admin_client):
-        """Bug Hunter relies on SameSite=Lax rather than CSRF tokens.
-        A normal authenticated POST with no extra header must succeed."""
+        """SameSite=Lax (no CSRF tokens): a normal authenticated POST with no extra header succeeds."""
         p = _make_project(admin_client, "CSRF1")
         r = admin_client.post("/api/bugs", json={
             "project_id": p["id"], "title": "no csrf token here",
@@ -251,13 +224,7 @@ class TestCSRFPosture:
         assert r.status_code == 201
 
     def test_options_preflight_handled(self, admin_client):
-        """Preflight OPTIONS must return a deterministic response.
-
-        CORS middleware is only registered when CORS_ORIGINS is explicitly
-        configured. With no configured origins (the default), preflight hits
-        the route directly — any non-5xx response is accepted, just no
-        surprises like 500s.
-        """
+        """Preflight OPTIONS returns deterministically; with no CORS_ORIGINS configured any non-5xx is fine."""
         r = admin_client.options("/api/bugs", headers={
             "Origin": "https://example.com",
             "Access-Control-Request-Method": "POST",

@@ -1,18 +1,13 @@
 /**
- * Shared helpers for the bug list and bug modal: item-type emoji,
- * permission/meta lookups, activity row, attachment card, and attachment
- * staging (useStagedFiles + StagedTile).
- *
- * Class names and data-attributes match styles.css selectors.
+ * Shared helpers for the bug list and bug modal: item-type emoji, permission/meta
+ * lookups, activity row, attachment card, and staging (useStagedFiles + StagedTile).
  */
 import { useCallback, useState, type ReactNode } from "react";
 import { activityIcon, fileIcon, formatBytes, formatDate } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { partitionBySize } from "../../lib/upload";
 
-// Blocked client-side for immediate UX feedback; the server also rejects these.
-// Mirrors backend _DANGEROUS_UPLOAD_EXTS. Trailing dots/spaces are stripped
-// first to prevent tricks like "evil.exe.".
+// Client-side block mirroring backend _DANGEROUS_UPLOAD_EXTS; trailing dots/spaces stripped first ("evil.exe.").
 const _DANGEROUS_EXTS = new Set([
   // .js is intentionally allowed (legitimate source files; neutralized on download).
   "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "hta", "jar",
@@ -33,10 +28,6 @@ export { activityIcon };
 import VideoLightbox from "../../components/VideoLightbox";
 import type { ActivityOut, AttachmentOut, MetaOut } from "../../types";
 
-// ---------------------------------------------------------------------------
-// Item-type emoji
-// ---------------------------------------------------------------------------
-
 export const ITEM_TYPE_EMOJI: Record<string, string> = {
   Bug: "🐞",
   Requirement: "📐",
@@ -46,10 +37,6 @@ export const ITEM_TYPE_EMOJI: Record<string, string> = {
 export function itemTypeEmoji(t: string): string {
   return ITEM_TYPE_EMOJI[t] ?? "📝";
 }
-
-// ---------------------------------------------------------------------------
-// Permissions / meta lookups
-// ---------------------------------------------------------------------------
 
 /** Mirrors the backend can_edit_bug rule. Tasks and Requirements require manager/admin. */
 export function canEditItemType(role: string, itemType: string | null | undefined): boolean {
@@ -81,10 +68,6 @@ export function stagedLabel(count: number, idle: string): string {
   return `${count} file${count > 1 ? "s" : ""}`;
 }
 
-// ---------------------------------------------------------------------------
-// Activity icon + row
-// ---------------------------------------------------------------------------
-
 export function ActivityRow({ activity }: Readonly<{ activity: ActivityOut }>) {
   return (
     <div className="activity-row">
@@ -101,10 +84,6 @@ export function ActivityRow({ activity }: Readonly<{ activity: ActivityOut }>) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Attachment card
-// ---------------------------------------------------------------------------
-
 interface AttachmentCardProps {
   att: AttachmentOut;
   /** Used to build the download URL — /api/bugs/{bug_id}/attachments/{id}/download. */
@@ -117,11 +96,10 @@ interface AttachmentCardProps {
 export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<AttachmentCardProps>) {
   const url = `/api/bugs/${bugId}/attachments/${att.id}/download`;
   const ct = (att.content_type || "").toLowerCase();
-  // SVG can carry inline JS (server downgrades it on download), so it gets the
-  // file icon instead of inline rendering.
+  // SVG can carry inline JS, so it gets the file icon, not inline rendering.
   const isRasterImg = ct.startsWith("image/") && ct !== "image/svg+xml";
   const isVideo = ct.startsWith("video/");
-  // Video opens in the themed lightbox rather than the browser's native player.
+  // Video opens in the themed lightbox, not the native player.
   const [videoOpen, setVideoOpen] = useState(false);
   const openVideo = useCallback(() => setVideoOpen(true), []);
 
@@ -133,7 +111,7 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<Att
       </a>
     );
   } else if (isVideo) {
-    // #t=0.1 forces the browser to paint the first frame as a poster.
+    // #t=0.1 makes the browser paint the first frame as a poster.
     preview = (
       <button
         type="button"
@@ -203,14 +181,8 @@ export function AttachmentCard({ att, bugId, deletable, onDelete }: Readonly<Att
   );
 }
 
-// ---------------------------------------------------------------------------
-// Attachment staging
-//
-// FileList is read-only, so selections are copied into a plain array with a
-// blob URL per file for preview. Buckets are React state owned by the modal
-// (createBug / comment / bugAttach).
-// ---------------------------------------------------------------------------
-
+// Attachment staging: FileList is read-only, so selections copy into an array
+// with a blob URL per file for preview. Buckets are modal-owned React state.
 export interface StagedFile {
   file: File;
   /** Blob URL for the preview tile — revoked on remove/clear. */
@@ -233,7 +205,7 @@ export function useStagedFiles(): StagedBucket {
     if (!list.length) return;
     const { allowed: sized, tooLargeMessage } = partitionBySize(list);
     if (tooLargeMessage) toast(tooLargeMessage, "error");
-    // Drop dangerous extensions and name the blocked files in the toast.
+    // Drop dangerous extensions, naming the blocked files in the toast.
     const blocked = sized.filter((f) => isDangerousFile(f.name));
     const allowed = sized.filter((f) => !isDangerousFile(f.name));
     if (blocked.length) {

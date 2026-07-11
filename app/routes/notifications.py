@@ -1,8 +1,7 @@
 """Per-user in-app notifications API.
 
-Every endpoint is scoped to the authenticated user: a caller can only list,
-read, or delete their own notifications. There is no admin path to read another
-user's notifications; they are private, like the emails they mirror.
+Every endpoint is scoped to the authenticated user; there is no admin path
+to another user's notifications.
 """
 from __future__ import annotations
 
@@ -56,11 +55,7 @@ def unread_count(
 
 
 def _owned_or_404(db: Session, notif_id: int, user: User) -> Notification:
-    """Fetch a notification that belongs to the caller, or raise 404.
-
-    404 is returned even when the row exists but belongs to another user,
-    so we don't leak whether a given notification ID exists.
-    """
+    """Fetch a caller-owned notification; 404 even for others' rows so IDs don't leak."""
     notif = db.get(Notification, notif_id)
     if notif is None or notif.user_id != user.id:
         raise HTTPException(status_code=404, detail=_DETAIL_NOT_FOUND)

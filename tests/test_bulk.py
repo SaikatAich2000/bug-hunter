@@ -1,9 +1,5 @@
-"""Tests for the bulk-actions endpoint (POST /api/bugs/bulk).
-
-Covers: every action (set_status / set_priority / set_environment / delete),
-the updated/skipped/not-found tally, per-type status
-validity, no-op skips, permission skips on a mixed selection, admin-only delete,
-value validation (400 / 422), and notification fan-out on a bulk status change.
+"""Tests for POST /api/bugs/bulk.
+Covers each action, tallies, per-type status validity, permission skips, validation, notifications.
 """
 from __future__ import annotations
 
@@ -27,8 +23,7 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
     body = {"name": name, "email": email, "role": role, "password": _PW}
-    # Tag the new user to every existing project so they can see all items.
-    # Per-type permission rules only kick in after visibility is established.
+    # Tag the user to every project; per-type rules only apply after visibility.
     pids = [p["id"] for p in admin.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -51,9 +46,7 @@ def _mk_bug(admin: TestClient, project_id: int, title: str, **extra) -> dict:
     return r.json()
 
 
-# ---------------------------------------------------------------------------
 # Auth + validation
-# ---------------------------------------------------------------------------
 def test_bulk_requires_auth(client):
     assert client.post(_BULK, json={"action": "set_status", "ids": [1], "value": "Closed"}).status_code == 401
 
@@ -74,9 +67,7 @@ def test_bulk_invalid_value_400(admin_client):
     assert admin_client.post(_BULK, json={"action": "set_priority", "ids": [bug["id"]], "value": "Wat"}).status_code == 400
 
 
-# ---------------------------------------------------------------------------
 # set_* actions
-# ---------------------------------------------------------------------------
 def test_bulk_set_priority(admin_client):
     proj = _mk_project(admin_client, "SetPrio")
     ids = [_mk_bug(admin_client, proj["id"], f"bug {i} here")["id"] for i in range(3)]
@@ -114,8 +105,7 @@ def test_bulk_set_status_noop_is_skipped(admin_client):
 
 
 def test_bulk_set_field_noop_is_skipped(admin_client):
-    # Setting a field to its current value hits the generic no-op path,
-    # which is separate from the status-specific one above.
+    # Same-value set hits the generic no-op path (distinct from the status one).
     proj = _mk_project(admin_client, "FieldNoop")
     bug = _mk_bug(admin_client, proj["id"], "already high", priority="High")
     r = admin_client.post(_BULK, json={"action": "set_priority", "ids": [bug["id"]], "value": "High"})
@@ -133,9 +123,7 @@ def test_bulk_not_found_counts_as_failed(admin_client):
     assert "not found" in body["message"]
 
 
-# ---------------------------------------------------------------------------
 # Permissions
-# ---------------------------------------------------------------------------
 def test_bulk_skips_items_the_user_cannot_edit(admin_client):
     proj = _mk_project(admin_client, "PermSkip")
     _mk_user(admin_client, "Reg", "reg.bulk@test.local")
@@ -160,15 +148,12 @@ def test_bulk_delete_is_admin_only(admin_client):
     r = userc.post(_BULK, json={"action": "delete", "ids": ids})
     assert r.json()["skipped"] == 2
     assert admin_client.get(f"/api/bugs/{ids[0]}").status_code == 200
-    # Admin can delete.
     r = admin_client.post(_BULK, json={"action": "delete", "ids": ids})
     assert r.json()["updated"] == 2
     assert admin_client.get(f"/api/bugs/{ids[0]}").status_code == 404
 
 
-# ---------------------------------------------------------------------------
 # Notifications
-# ---------------------------------------------------------------------------
 def test_bulk_status_change_notifies_assignee(admin_client):
     proj = _mk_project(admin_client, "BulkNotify")
     bob = _mk_user(admin_client, "Bob", "bob.bulk@test.local")

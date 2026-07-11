@@ -1,8 +1,5 @@
 """Tests for per-user in-app notifications.
-
-Covers trigger creation (assignment, comment, status update), per-user
-isolation, unread count, mark-read / read-all, delete, unauthenticated
-rejection, and additive schema safety (init_db twice leaves the table intact).
+Triggers, per-user isolation, unread count, read/delete lifecycle, auth, additive schema safety.
 """
 from __future__ import annotations
 
@@ -16,9 +13,7 @@ _BOOTSTRAP_EMAIL = "admin@test.local"
 _BOOTSTRAP_PW = "Admin1234"
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _admin(c: TestClient) -> None:
     c.post("/api/auth/logout")
     r = c.post("/api/auth/login", json={"email": _BOOTSTRAP_EMAIL, "password": _BOOTSTRAP_PW})
@@ -39,8 +34,7 @@ def _login(c: TestClient, email: str, password: str = _PW) -> None:
 
 def _mk_user(admin: TestClient, name: str, email: str, role: str = "user") -> dict:
     body = {"name": name, "email": email, "role": role, "password": _PW}
-    # Grant access to all existing projects so the user can comment/edit the
-    # bugs used in these tests.
+    # Grant all projects so the user can comment/edit the bugs used here.
     pids = [p["id"] for p in admin.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -63,18 +57,14 @@ def _mk_bug(admin: TestClient, project_id: int, **extra) -> dict:
     return r.json()
 
 
-# ---------------------------------------------------------------------------
 # Auth
-# ---------------------------------------------------------------------------
 def test_notifications_require_auth(client):
     assert client.get(_NOTIFS).status_code == 401
     assert client.get(f"{_NOTIFS}/unread_count").status_code == 401
     assert client.post(f"{_NOTIFS}/read-all").status_code == 401
 
 
-# ---------------------------------------------------------------------------
 # Triggers
-# ---------------------------------------------------------------------------
 def test_assignment_creates_notification_for_assignee(client):
     _admin(client)
     proj = _mk_project(client)
@@ -100,8 +90,7 @@ def test_self_assignment_notifies_actor(client):
 
 
 def test_actor_is_not_notified_of_own_update(client):
-    """A non-assignment change (e.g. a status edit) does not notify the actor
-    who made it. Only the initial assignment notifies you."""
+    """Non-assignment changes don't notify the actor; only the initial assignment does."""
     _admin(client)
     proj = _mk_project(client, "Own Update Proj")
     me = client.get("/api/auth/me").json()
@@ -177,8 +166,7 @@ def test_event_create_notifies_managers_not_actor(client):
 
 
 def test_event_create_notifies_self_when_self_managed(client):
-    """Making yourself a manager on a new event still produces a notification,
-    mirroring the bug self-assignment behaviour."""
+    """Self-managed event still notifies, mirroring bug self-assignment."""
     _admin(client)
     me = client.get("/api/auth/me").json()
     ev = _mk_event(client, "My Own Standup", [me["id"]])
@@ -202,8 +190,7 @@ def test_event_update_notifies_managers(client):
 
 
 def test_event_delete_notifies_managers_without_dangling_fk(client):
-    """Deleting an event notifies its managers. The notification row survives
-    with event_id set to None so the cascade FK cannot erase it."""
+    """Event delete notifies managers; the row survives with event_id NULL (no cascade erase)."""
     _admin(client)
     meg = _mk_manager(client, "Meg", "meg3@notif.test")
     ev = _mk_event(client, "Retro", [meg["id"]])
@@ -219,9 +206,7 @@ def test_event_delete_notifies_managers_without_dangling_fk(client):
     assert deleted[0]["event_id"] is None  # nulled out after the event is removed
 
 
-# ---------------------------------------------------------------------------
 # Per-user isolation
-# ---------------------------------------------------------------------------
 def test_user_cannot_see_or_mutate_another_users_notifications(client):
     _admin(client)
     proj = _mk_project(client, "Isolation Proj")
@@ -248,9 +233,7 @@ def test_user_cannot_see_or_mutate_another_users_notifications(client):
     _ = bug  # silence "unused" — keeps the assignment intent explicit
 
 
-# ---------------------------------------------------------------------------
 # Read / unread / delete lifecycle
-# ---------------------------------------------------------------------------
 def test_mark_read_and_unread_count(client):
     _admin(client)
     proj = _mk_project(client, "Read Proj")
@@ -302,9 +285,7 @@ def test_delete_notification(client):
     assert bobc.delete(f"{_NOTIFS}/{nid}").status_code == 404
 
 
-# ---------------------------------------------------------------------------
 # Additive schema safety
-# ---------------------------------------------------------------------------
 def test_notifications_table_is_additive_and_idempotent(tmp_path, monkeypatch):
     """Running init_db twice must leave the notifications table intact."""
     db_file = tmp_path / "notif_schema.db"

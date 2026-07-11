@@ -1,14 +1,7 @@
-"""Keyword retrieval over bugs, used to ground Sleuth's cloud answers.
+"""Keyword (LIKE-based) bug retrieval to ground cloud answers.
 
-Uses LIKE-based search rather than a vector store, so grounding works on
-low-memory, low-CPU targets without pulling in chromadb or an embedding model.
-
-Searches are project-scoped via scope_bug_query, so a restricted manager or
-user only ever retrieves bugs from projects they belong to (admins pass
-accessible=None and stay unrestricted). This prevents grounding from becoming
-a side door around the per-project access boundary. Retrieved text is treated
-as data, not instructions; format_context wraps it to guard against prompt
-injection through bug contents.
+Searches are project-scoped via scope_bug_query so grounding can't bypass
+access control; retrieved text is fenced as data, not instructions.
 """
 from __future__ import annotations
 
@@ -22,7 +15,6 @@ from sqlalchemy.orm import Session
 from app.access import scope_bug_query
 from app.models import Bug
 
-# High-frequency words that add noise to a keyword search.
 _STOPWORDS = frozenset({
     "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are",
     "was", "were", "be", "with", "that", "this", "it", "as", "at", "by",
@@ -47,11 +39,7 @@ class RetrievedBug:
 
 
 def keywords(message: str, *, max_terms: int = _MAX_TERMS) -> list[str]:
-    """Distinct, meaningful lowercase search terms drawn from a message.
-
-    Drops stop-words and very short tokens, de-duplicates, and caps the count
-    so a long paste can't explode the query.
-    """
+    """Distinct lowercase search terms; capped so a long paste can't explode the query."""
     out: list[str] = []
     for tok in _WORD_RE.findall((message or "").lower()):
         if len(tok) < _MIN_TERM_LEN or tok in _STOPWORDS or tok in out:
@@ -88,16 +76,10 @@ def _snippet(text: str, terms: list[str]) -> str:
 def retrieve_bugs(db: Session, message: str, *,
                   accessible: Optional[set[int]] = None,
                   limit: int = 5) -> list[RetrievedBug]:
-    """Return the top bugs whose title or description match the message's keywords.
+    """Top bugs matching the message's keywords, ranked by distinct hits.
 
-    Ranked by the number of distinct keyword hits (more specific matches first,
-    newest as tiebreak). Returns an empty list when the message yields no
-    usable keywords or nothing matches.
-
-    ``accessible`` is the caller's project scope (None = unrestricted admin),
-    applied via scope_bug_query to keep out-of-scope bug text out of the
-    grounding context. The None default exists so DB-backed unit tests can call
-    this without specifying it; production callers always pass it explicitly.
+    ``accessible`` (None = admin) is applied via scope_bug_query so out-of-scope
+    bug text never enters the grounding context.
     """
     terms = keywords(message)
     if not terms:
@@ -107,14 +89,11 @@ def retrieve_bugs(db: Session, message: str, *,
         like = f"%{_like_escape(t)}%"
         clauses.append(func.lower(Bug.title).like(like, escape="\\"))
         clauses.append(func.lower(Bug.description).like(like, escape="\\"))
-    # Scope before order_by/limit so the candidate window is computed within
-    # the actor's reach, not narrowed to a global top-N and then filtered.
+    # Scope before order_by/limit so the candidate window is within the actor's reach.
     stmt = scope_bug_query(
         select(Bug.id, Bug.title, Bug.description).where(or_(*clauses)),
         accessible,
     ).order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(_MAX_CANDIDATES)
-    # Every candidate matched at least one term in SQL (score >= 1); count
-    # just ranks how many distinct terms hit.
     scored: list[RetrievedBug] = []
     for bid, title, desc in db.execute(stmt).all():
         hay = f"{title or ''} {desc or ''}".lower()
@@ -128,28 +107,18 @@ def retrieve_bugs(db: Session, message: str, *,
     return scored[: max(1, limit)]
 
 
-# Fence markers mirror app/chatbot/agent.py. Wrapping records in a delimited
-# data block (and neutralising any literal marker they contain) gives both the
-# single-shot grounding path and the agent's retrieve tool the same structural
-# injection defense. Keep in sync with agent.py's _FENCE_OPEN / _FENCE_CLOSE /
-# _fence_safe.
+# Fence retrieved records as data, not instructions. Keep in sync with agent.py.
 _FENCE_OPEN = "<<DATA>>"
 _FENCE_CLOSE = "<<END DATA>>"
 
 
 def _defang_markers(text: str) -> str:
-    """Neutralise fence markers in record text so a record can't close the DATA
-    block early and slip instructions to the model."""
+    """Neutralise fence markers so a record can't close the DATA block early."""
     return text.replace("<<", "< <")
 
 
 def format_context(records: list[RetrievedBug]) -> str:
-    """Render retrieved bugs as a fenced context block.
-
-    Records sit inside a data fence with their marker characters neutralised,
-    so a bug whose text contains instructions (or tries to forge the fence)
-    can't influence the model's answer. Bug numbers are included for citation.
-    """
+    """Render retrieved bugs as a fenced context block (records are data, not instructions)."""
     if not records:
         return ""
     lines = [

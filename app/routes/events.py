@@ -1,25 +1,7 @@
-"""Events API: containers for work items (standups, sprint meetings).
+"""Events API: containers for work items, linked via nullable Bug.event_id.
 
-An event groups any number of items (Bug / Requirement / Task), linked via
-`Bug.event_id` (nullable). The link is editable:
-
-  - Create an item directly under an event:  POST /api/bugs with event_id
-  - Move an existing item into an event:     PUT  /api/bugs/{id} {event_id: N}
-  - Take an item back out:                   PUT  /api/bugs/{id} {event_id: null}
-
-Deleting an event preserves its items (FK declared ondelete='SET NULL'). The
-audit trail covers create/update/delete on the event itself; item-side event_id
-changes are tracked by routes/bugs.py as normal field edits.
-
-Permissions:
-  - create / edit: admin or manager
-  - delete:        admin only
-  - regular user:  read-only
-
-Managers (event_managers M2M) must be admin or manager role and receive
-event-level notification emails. Per-task assignment emails go only to the
-task's assignees, so being an event manager doesn't subscribe you to every
-item inside.
+Deleting an event preserves its items. Create/edit: admin or manager;
+delete: admin only. Event managers must be admin/manager and get event emails.
 """
 from __future__ import annotations
 
@@ -77,8 +59,7 @@ def _user_brief(u: User) -> dict:
 def _event_list_aggregates(
     db: Session, event_ids: list[int],
 ) -> tuple[dict[int, int], dict[int, int]]:
-    """Return (item_count, assignee_count) maps for a batch of events.
-    Two queries regardless of page size, rather than two per event."""
+    """Return (item_count, assignee_count) maps in two queries per batch."""
     if not event_ids:
         return {}, {}
     item_counts = {
@@ -161,8 +142,7 @@ def _bug_to_brief(bug: Bug, actor: User, attachment_count: int = 0) -> dict:
         "created_at": bug.created_at,
         "updated_at": bug.updated_at,
         "attachment_count": attachment_count,
-        # Per-item, not blanket: a regular user can't edit a Task/Requirement,
-        # so the SPA should hide the edit affordance. Mirrors bugs endpoint logic.
+        # per-item so the SPA can hide edit where the actor lacks rights
         "can_edit": can_edit_bug(
             actor, bug.reporter_id, [a.id for a in bug.assignees],
             item_type=item_type,
@@ -171,8 +151,7 @@ def _bug_to_brief(bug: Bug, actor: User, attachment_count: int = 0) -> dict:
 
 
 def _resolve_managers(db: Session, ids: list[int]) -> list[User]:
-    """Return the User rows for the given ids, validating that each exists and
-    holds an admin or manager role (regular users can't act on events)."""
+    """Resolve ids to Users; each must exist and be admin or manager."""
     if not ids:
         return []
     rows = db.scalars(select(User).where(User.id.in_(ids))).all()
@@ -212,9 +191,7 @@ def _require_edit(actor: User) -> None:
 
 
 def _validate_event_project(db: Session, accessible, project_id: int) -> None:
-    """Verify the project exists and is within the actor's scope.
-    An inaccessible project is reported as non-existent to avoid leaking its
-    presence to restricted managers."""
+    """400 for missing or out-of-scope project — must not leak existence."""
     if db.get(Project, project_id) is None or not can_access_project(accessible, project_id):
         raise HTTPException(status_code=400, detail="Project does not exist")
 
@@ -234,19 +211,14 @@ def list_events(
         selectinload(Event.managers),
         selectinload(Event.project),
     ).order_by(
-        # Unscheduled events sink to the bottom; id desc is the tiebreaker.
-        # nullslast() is available on SQLAlchemy 2.x and emulated on SQLite.
+        # unscheduled events sink to the bottom
         Event.scheduled_for.desc().nullslast(),
         Event.id.desc(),
     )
-    # Restricted users only see events for their projects; admins see all.
-    # Project-less (legacy) events have no accessible project, so they stay
-    # admin-only.
+    # restricted users see only their projects' events; project-less stay admin-only
     stmt = scope_event_query(stmt, accessible_project_ids(db, user))
     if scheduled_for:
         stmt = stmt.where(Event.scheduled_for == scheduled_for)
-    # Paginate so the list stays bounded as standups/sprints accumulate.
-    # Default page_size (500) covers any realistic board.
     stmt = stmt.limit(page_size).offset((page - 1) * page_size)
     rows = list(db.scalars(stmt).all())
     item_counts, assignee_counts = _event_list_aggregates(
@@ -271,9 +243,7 @@ def list_events(
 # ---------------------------------------------------------------------------
 # Detail (event + its items)
 # ---------------------------------------------------------------------------
-# Cap on items in a single detail response. Without this, a large event would
-# serialize its entire item set in one payload. The true count is still
-# returned so the client can show "N of M" when truncated.
+# Caps a detail payload; the true count is still returned for "N of M".
 _EVENT_ITEMS_MAX = 1000
 
 
@@ -288,7 +258,7 @@ def get_event(
         select(Event).options(selectinload(Event.managers), selectinload(Event.project))
         .where(Event.id == event_id)
     )
-    # Out-of-scope events surface as 404, not 403, to avoid leaking existence.
+    # 404 not 403 — scoping must not leak existence
     if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
     items_stmt = select(Bug).options(
@@ -296,12 +266,10 @@ def get_event(
         selectinload(Bug.reporter),
         selectinload(Bug.assignees),
         selectinload(Bug.event),
-    # Most recently updated first.
     ).where(Bug.event_id == event_id).order_by(
         Bug.updated_at.desc(), Bug.id.desc(),
     ).limit(_EVENT_ITEMS_MAX)
-    # An event can hold items from multiple projects, so scope the items to the
-    # actor's accessible projects as a secondary guard (no-op for admins).
+    # items can span projects, so scope them too (no-op for admins)
     items_stmt = scope_bug_query(items_stmt, accessible)
     items = list(db.scalars(items_stmt).all())
     total_items = db.scalar(
@@ -309,8 +277,7 @@ def get_event(
             select(func.count(Bug.id)).where(Bug.event_id == event_id), accessible,
         )
     ) or 0
-    # Single aggregate query for attachment counts; avoids N+1 when the event
-    # has many items.
+    # one aggregate query for attachment counts — avoids N+1
     bug_ids = [b.id for b in items]
     if bug_ids:
         att_counts = dict(db.execute(
@@ -320,10 +287,8 @@ def get_event(
         ).all())
     else:
         att_counts = {}
-    # Pass the pre-computed count so _event_brief skips its own COUNT(*).
     payload = _event_brief(db, ev, item_count=total_items)
     payload["items"] = [_bug_to_brief(b, user, int(att_counts.get(b.id, 0))) for b in items]
-    # Let the client know when the list was capped so it can show "X of Y".
     payload["items_truncated"] = total_items > len(items)
     return payload
 
@@ -339,8 +304,7 @@ def create_event(
     actor: User = Depends(get_current_user),
 ) -> dict:
     _require_edit(actor)
-    # The project must exist and be in scope. Project-less events are allowed
-    # (they become admin-only); the SPA always sends a project_id in practice.
+    # project-less events are allowed and become admin-only
     if payload.project_id is not None:
         _validate_event_project(db, accessible_project_ids(db, actor), payload.project_id)
     managers = _resolve_managers(db, payload.manager_ids or [])
@@ -358,8 +322,7 @@ def create_event(
     _log(db, ev.id, actor, "event_created",
          f"Event created: {ev.name}"
          + (f" (scheduled for {ev.scheduled_for})" if ev.scheduled_for else ""))
-    # Notify all managers, including the creator if they added themselves — being
-    # made a manager is meaningful regardless of who created the event.
+    # notify all managers, including a self-added creator
     if managers:
         notification_service.notify(
             db, [m.id for m in managers], kind="event", background=background,
@@ -435,19 +398,18 @@ def update_event(
         select(Event).options(selectinload(Event.managers), selectinload(Event.project))
         .where(Event.id == event_id)
     )
-    # Out-of-scope events surface as 404, same as the detail endpoint.
+    # 404 not 403 — scoping must not leak existence
     if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
 
     fields = payload.model_dump(exclude_unset=True)
-    # project_id needs its own validation, so pop it before the generic setattr loop.
+    # project_id has its own validation; pop before the generic setattr loop
     new_project_id = fields.pop("project_id", None)
     if new_project_id is not None:
         _validate_event_project(db, accessible, new_project_id)
     changes = _compute_event_changes(ev, fields)
     new_manager_ids = fields.pop("manager_ids", None)
-    # Snapshot before the diff so a removed manager still receives the update
-    # notification about their own removal.
+    # snapshot first so a removed manager is still notified of their removal
     old_manager_ids = [m.id for m in ev.managers]
     for k, v in fields.items():
         setattr(ev, k, v)
@@ -501,18 +463,15 @@ def delete_event(
     name = ev.name
     manager_ids = [m.id for m in (ev.managers or [])]
     snap = _event_snapshot(ev) if ev.managers else None
-    # Explicitly null out event_id rather than relying on the FK cascade, since
-    # SQLite doesn't always honour ondelete='SET NULL' for in-session objects.
+    # explicit NULL — SQLite can skip ondelete='SET NULL' for in-session objects
     db.query(Bug).filter(Bug.event_id == event_id).update(
         {Bug.event_id: None}, synchronize_session=False,
     )
     db.delete(ev)
-    # Log with the real event_id so the audit screen can find it by entity id,
-    # even though the row is gone (entity_id is just metadata here).
+    # keep the real event_id so the audit screen can find it after deletion
     _log(db, event_id, actor, "event_deleted",
          f"Deleted event #{event_id}: {name}")
-    # Omit event_id from notifications: the FK cascade would delete any
-    # notification row that still referenced the now-gone event.
+    # omit event_id — the FK cascade would delete the notification rows
     if manager_ids:
         notification_service.notify(
             db, manager_ids, kind="event", background=background,

@@ -1,9 +1,4 @@
-/**
- * Single source of truth for top-level navigation entries.
- * Both the desktop TopChrome and the mobile Sidebar draw from this list
- * so the two can never drift. Role gating is handled separately via
- * VIEW_MIN_ROLE in types.ts.
- */
+// Single source of truth for nav entries (TopChrome + mobile Sidebar); role gating is VIEW_MIN_ROLE.
 import type { ViewName } from "../types";
 
 export interface NavItem {

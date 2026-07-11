@@ -1,35 +1,8 @@
-"""Authentication primitives.
+"""Authentication primitives: bcrypt hashing, signed session cookies
+(HttpOnly + SameSite=Lax), reset tokens, and role-check dependencies.
 
-Responsibilities:
-  - Hash + verify passwords (bcrypt).
-  - Sign + verify session cookies (itsdangerous).
-  - Generate + verify password-reset tokens.
-  - Provide FastAPI dependencies that resolve the current user from
-    the session cookie, with role-based access checks.
-  - Track every active session in the DB (jti) so admins can list and
-    revoke individual sessions.
-
-Cookies are used rather than bearer tokens: HTTP-only cookies can't be read
-by JS, so an XSS payload can't exfiltrate the session. The cookie is
-`SameSite=Lax`, which blocks cross-site POST/PUT/DELETE from third-party
-origins.
-
-Token payload format:
-  `user_id:session_version[:jti]`
-  - `jti` is the server-side session ID. Tokens issued before this existed
-    don't have one; they are accepted but don't appear in the admin session
-    list until the user logs in again.
-
-Session-version invalidation (global):
-  Each session token carries the user's `session_version`. Changing or
-  resetting a password bumps that integer in the DB, so every previously
-  issued cookie fails validation on the next request, logging out every
-  device for that user.
-
-Per-session revocation:
-  When an admin revokes a session row from the `sessions` table, the matching
-  jti no longer resolves, so just that one device is logged out. Other
-  sessions for the same user are untouched.
+Token payload is `user_id:session_version[:jti]` — bumping session_version
+logs out every device; revoking a jti row logs out one device.
 """
 from __future__ import annotations
 
@@ -63,16 +36,8 @@ COOKIE_NAME = "bh_session"
 
 
 def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
-    """Pick the trustworthy client address from an X-Forwarded-For chain.
-
-    A reverse proxy appends the peer it saw to the right of any client-supplied
-    list, so with N trusted proxies the trustworthy entry is the Nth from the
-    right. The left-most entry is fully client-controlled and must not be used
-    for a security/rate-limit/audit decision. Returns a validated IP string, or
-    None when the chosen entry is missing or not a real IP (caller falls back to
-    the transport peer). Shared by the rate limiter (app/main.py) and the
-    session/audit IP resolver (app/routes/auth.py) so the two can't diverge.
-    """
+    """Pick the client IP from X-Forwarded-For: with N trusted proxies, only the
+    Nth-from-the-right entry is trustworthy (left-most is client-controlled)."""
     parts = [p.strip() for p in (xff or "").split(",") if p.strip()]
     if not parts:
         return None
@@ -83,9 +48,7 @@ def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
         return None
     return candidate
 
-# Process-local fallback so dev works without setting SESSION_SECRET.
-# In production, set SESSION_SECRET in .env so it survives restarts AND
-# is shared across multi-worker uvicorn deployments.
+# Dev-only fallback; production must set SESSION_SECRET (survives restarts, shared across workers).
 _FALLBACK_SECRET = secrets.token_hex(32)
 
 
@@ -93,14 +56,10 @@ _FALLBACK_SECRET = secrets.token_hex(32)
 # Password hashing
 # ---------------------------------------------------------------------------
 def hash_password(plain: str) -> str:
-    """Hash a plaintext password with bcrypt. Returns a string suitable for DB."""
+    """Hash a plaintext password with bcrypt."""
     if not plain:
         raise ValueError("Password cannot be empty")
-    # bcrypt caps input at 72 bytes. Pre-hashing with sha256 handles long
-    # passwords: the 32-byte digest is safely under the cap and passed as raw
-    # bytes (pyca/bcrypt uses the buffer length, not NUL termination).
-    # This must stay identical to verify_password; changing it would invalidate
-    # every stored hash.
+    # bcrypt caps input at 72 bytes -> sha256 pre-hash; must match verify_password forever.
     pre = hashlib.sha256(plain.encode("utf-8")).digest()
     return bcrypt.hashpw(pre, bcrypt.gensalt(rounds=12)).decode("utf-8")
 
@@ -125,9 +84,7 @@ def _signer() -> TimestampSigner:
 
 
 def make_session_token(user_id: int, session_version: int = 0, jti: str | None = None) -> str:
-    """Return a signed token containing the user id, session version, and
-    optional per-session jti. The jti lets admins revoke an individual session
-    without bumping session_version (which logs out every device)."""
+    """Signed token of user id, session version, and optional per-session jti."""
     if jti:
         payload = f"{user_id}:{session_version}:{jti}"
     else:
@@ -136,13 +93,8 @@ def make_session_token(user_id: int, session_version: int = 0, jti: str | None =
 
 
 def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
-    """Verify a session cookie and return (user_id, session_version, jti),
-    or None if invalid/expired/malformed.
-
-    `jti` is None for 2-part tokens issued before the sessions table existed;
-    those cookies still authenticate but aren't visible in the admin
-    session-list screen.
-    """
+    """Verify a session cookie; return (user_id, session_version, jti) or None.
+    jti is None for legacy pre-sessions-table tokens."""
     if not token:
         return None
     try:
@@ -159,8 +111,7 @@ def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
             return int(parts[0]), int(parts[1]), parts[2] or None
         if len(parts) == 2:
             return int(parts[0]), int(parts[1]), None
-        # Single-int cookies issued before the version was added: accept so a
-        # deploy doesn't log everyone out.
+        # Accept legacy single-int cookies so a deploy doesn't log everyone out.
         if len(parts) == 1:
             return int(parts[0]), 0, None
         return None
@@ -169,19 +120,12 @@ def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
 
 
 def new_jti() -> str:
-    """Random opaque session ID. 192 bits is plenty for collision resistance
-    even at billions of concurrent sessions."""
+    """Random opaque session ID (192 bits)."""
     return secrets.token_urlsafe(24)
 
 
 def _cookie_secure(settings) -> bool:
-    """Whether to set the Secure flag on the session cookie.
-
-    Honours COOKIE_SECURE, and also derives Secure from an https APP_BASE_URL
-    so a deploy that serves over TLS but didn't set COOKIE_SECURE=true still
-    gets a Secure cookie. Stays False for the http localhost default so local
-    runs and the test client keep working.
-    """
+    """Secure flag: COOKIE_SECURE, or derived from an https APP_BASE_URL."""
     return bool(settings.COOKIE_SECURE) or settings.APP_BASE_URL.lower().startswith("https://")
 
 
@@ -199,8 +143,7 @@ def set_session_cookie(response: Response, user: User, jti: str | None = None) -
 
 
 def clear_session_cookie(response: Response) -> None:
-    # Mirror the attributes the cookie was set with so every browser reliably
-    # matches and clears it (some browsers key the delete on samesite/secure).
+    # Mirror the set attributes; some browsers key the delete on samesite/secure.
     settings = get_settings()
     response.delete_cookie(
         key=COOKIE_NAME,
@@ -218,7 +161,7 @@ PASSWORD_RESET_TTL = timedelta(hours=2)
 
 
 def generate_reset_token() -> tuple[str, str]:
-    """Return (plaintext_token, sha256_hex_hash). Email the plaintext, store the hash."""
+    """Return (plaintext_token, sha256_hex). Email the plaintext, store the hash."""
     raw = secrets.token_urlsafe(32)
     h = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return raw, h
@@ -229,12 +172,8 @@ def hash_reset_token(raw: str) -> str:
 
 
 def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
-    """Mark every still-unused reset token for this user as used. Called on
-    successful password change/reset so old email links can't be replayed.
-    Returns the number of tokens invalidated (for audit logging).
-
-    Uses a single guarded UPDATE (set used_at WHERE used_at IS NULL) rather
-    than load-then-set in Python, so it's atomic under concurrency."""
+    """Mark the user's unused reset tokens as used (atomic guarded UPDATE) so
+    old email links can't be replayed. Returns the count for audit logging."""
     now = datetime.now(timezone.utc)
     return (
         db.query(PasswordResetToken)
@@ -247,9 +186,7 @@ def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
 
 
 def purge_consumed_reset_tokens(db: Session) -> int:
-    """Delete reset tokens that are expired or already used. The table is never
-    otherwise pruned; called opportunistically when a new reset is requested so
-    it can't grow without bound. Returns the number of rows removed."""
+    """Delete expired/used reset tokens (only pruning path for this table)."""
     now = datetime.now(timezone.utc)
     return (
         db.query(PasswordResetToken)
@@ -264,15 +201,12 @@ def purge_consumed_reset_tokens(db: Session) -> int:
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
-# How often we touch `last_seen_at` on each authenticated request. Updating
-# it on every request would be a hot write; throttling to once per minute
-# is precise enough for the admin "active sessions" view.
+# Throttle last_seen_at writes; per-request updates would be a hot write.
 _LAST_SEEN_THROTTLE_SECONDS = 60
 
 
 def _delete_expired_session(db: Session, sess: SessionRow, jti: str) -> None:
-    """Drop an expired session row on a request-path read; errors are logged,
-    not raised."""
+    """Drop an expired session row; errors are logged, not raised."""
     try:
         db.delete(sess)
         db.commit()
@@ -297,12 +231,8 @@ def _maybe_bump_last_seen(db: Session, sess: SessionRow, now: datetime, jti: str
 
 
 def _validate_session_row(db: Session, jti: str, user: User) -> bool:
-    """Return True iff the session row for jti is valid for this user.
-
-    Also: deletes expired rows in-line and refreshes last_seen_at when
-    enough time has passed. Returns False to signal the caller to reject
-    the request.
-    """
+    """True iff the jti's session row is valid for this user; also prunes
+    expired rows and refreshes last_seen_at."""
     sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
     if sess is None or sess.user_id != user.id:
         return False
@@ -326,16 +256,13 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         return None
-    # session_version is bumped on password change/reset/forced logout, which
-    # invalidates every previously issued cookie for this user.
+    # session_version bump (password change/forced logout) invalidates old cookies.
     if (user.session_version or 0) != session_version:
         return None
-    # If the cookie has a jti, validate the session row. Tokens without a jti
-    # pre-date the sessions table.
+    # jti-less tokens pre-date the sessions table.
     if jti is None:
         if get_settings().SESSION_REQUIRE_JTI:
             # Refuse cookies that can't be revoked per-device.
-            # Operators flip this on after a migration window.
             logger.info("Rejected jti-less session for user_id=%s", user_id)
             return None
         logger.debug("Accepting jti-less session for user_id=%s", user_id)
@@ -385,13 +312,7 @@ def can_edit_bug(
     assignee_ids: list[int],
     item_type: str = "Bug",
 ) -> bool:
-    """Whether `user` may edit a work item.
-
-    Per-type rules:
-      - Bug:         every authenticated user can edit.
-      - Requirement: only admin or manager. Users are read-only here.
-      - Task:        only admin or manager. Users are read-only here.
-    """
+    """Anyone may edit Bugs; Tasks/Requirements are admin/manager only."""
     del bug_reporter_id, assignee_ids
     if item_type in ("Task", "Requirement"):
         return user.role in (ROLE_ADMIN, ROLE_MANAGER)
@@ -399,17 +320,13 @@ def can_edit_bug(
 
 
 def can_delete_bug(user: User, item_type: str = "Bug") -> bool:
-    """Deletion is admin-only across every work-item type. Managers can edit,
-    never delete. The item_type parameter exists for symmetry with
-    can_edit_bug.
-    """
+    """Work-item deletion is admin-only for every type."""
     del item_type
     return user.role == ROLE_ADMIN
 
 
 def can_edit_comment(user: User) -> bool:
-    """Editing a comment is admin-only: comments are evidence and only admins
-    curate them (uploaders/managers cannot rewrite them)."""
+    """Admin-only: comments are evidence; only admins curate them."""
     return user.role == ROLE_ADMIN
 
 
@@ -419,8 +336,7 @@ def can_delete_comment(user: User) -> bool:
 
 
 def can_delete_attachment(user: User) -> bool:
-    """Deleting an attachment (bug- or comment-level) is admin-only: admins
-    curate the evidence; uploaders and managers cannot remove their own files."""
+    """Attachment deletion is admin-only; uploaders can't remove their own files."""
     return user.role == ROLE_ADMIN
 
 
@@ -435,8 +351,7 @@ def can_delete_event(user: User) -> bool:
 
 
 def can_manage_projects(user: User) -> bool:
-    """Create / edit projects: admin or manager. Delete is admin-only
-    (see can_delete_project)."""
+    """Create/edit projects: admin or manager (delete is admin-only)."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 
@@ -445,8 +360,7 @@ def can_delete_project(user: User) -> bool:
 
 
 def can_manage_users(user: User) -> bool:
-    """Create / edit users: admin or manager. Delete is admin-only (see
-    can_delete_user)."""
+    """Create/edit users: admin or manager (delete is admin-only)."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 
@@ -455,8 +369,7 @@ def can_delete_user(user: User) -> bool:
 
 
 def can_view_audit(user: User) -> bool:
-    """Audit trail is hidden from regular users; they don't need to see who
-    did what across the system."""
+    """Audit trail is admin/manager only."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 

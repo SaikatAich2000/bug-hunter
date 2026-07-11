@@ -1,12 +1,4 @@
-/**
- * Web push via Firebase Cloud Messaging, foreground side only.
- *
- * The Firebase compat SDK is self-hosted under /static/vendor so the CSP can
- * stay at script-src 'self' with no gstatic CDN. The background service worker
- * at /firebase-messaging-sw.js is served by the backend with config injected.
- *
- * Push failures degrade gracefully — the in-app bell and email digest still work.
- */
+/** Web push via FCM (foreground side). SDK self-hosted under /static/vendor to keep CSP script-src 'self'. */
 import { api } from "./api";
 import { toast } from "./toast";
 
@@ -20,7 +12,7 @@ interface PushConfig {
   vapid_key: string;
 }
 
-// Minimal shape of the firebase compat globals we use (compat ships no types).
+// minimal compat-global shapes (compat SDK ships no types)
 interface FirebaseMessaging {
   getToken(opts: {
     vapidKey: string;
@@ -73,8 +65,7 @@ function loadScript(src: string): Promise<void> {
     el.async = true;
     el.onload = () => resolve();
     el.onerror = () => {
-      // Remove the failed node so a later attempt can re-add and retry it;
-      // otherwise the querySelector guard above would see it and resolve early.
+      // remove failed node so a retry isn't short-circuited by the querySelector guard
       el.remove();
       reject(new Error(`failed to load ${src}`));
     };
@@ -102,7 +93,7 @@ async function ensureMessaging(
   const messaging = fb.messaging();
   if (!messagingCache) {
     messagingCache = messaging;
-    // Foreground messages don't pop a system notification, so surface a toast.
+    // foreground messages don't pop system notifications; show a toast
     messaging.onMessage((payload) => {
       const n = payload.notification;
       if (n?.title) toast(`${n.title}${n.body ? ": " + n.body : ""}`, "info");
@@ -111,8 +102,7 @@ async function ensureMessaging(
   return { messaging, reg };
 }
 
-// Persists the last subscribed token so logout can deregister it even if the
-// messaging SDK was never initialised in this tab. Cleared on unsubscribe.
+// last token persisted so logout can deregister even if SDK never initialised this tab
 const _PUSH_TOKEN_KEY = "bh_push_token";
 
 async function subscribeToken(cfg: PushConfig): Promise<boolean> {
@@ -126,7 +116,7 @@ async function subscribeToken(cfg: PushConfig): Promise<boolean> {
   try {
     localStorage.setItem(_PUSH_TOKEN_KEY, token);
   } catch {
-    /* storage may be unavailable (private mode); non-fatal */
+    /* storage unavailable; non-fatal */
   }
   await api("/push/subscribe", {
     method: "POST",
@@ -135,11 +125,7 @@ async function subscribeToken(cfg: PushConfig): Promise<boolean> {
   return true;
 }
 
-/**
- * Deregister this device's FCM token on logout so a shared browser doesn't
- * deliver another user's notifications. Must be called before /auth/logout
- * because the unsubscribe endpoint requires an active session. Never throws.
- */
+/** Deregister FCM token on logout; must run before /auth/logout (needs the session). Never throws. */
 export async function unsubscribeOnLogout(): Promise<void> {
   let token = "";
   try {
@@ -147,19 +133,19 @@ export async function unsubscribeOnLogout(): Promise<void> {
   } catch {
     /* ignore */
   }
-  // Drop the FCM token client-side so the SDK stops auto-refreshing it.
+  // drop token client-side so the SDK stops auto-refreshing it
   try {
     if (supported() && messagingCache) {
       await messagingCache.deleteToken();
     }
   } catch {
-    /* ignore; still tell the server to forget it below */
+    /* ignore; server unsubscribe below still runs */
   }
   if (token) {
     try {
       await api("/push/unsubscribe", { method: "POST", json: { token } });
     } catch {
-      /* ignore; logout proceeds regardless */
+      /* logout proceeds regardless */
     }
   }
   try {
@@ -169,14 +155,7 @@ export async function unsubscribeOnLogout(): Promise<void> {
   }
 }
 
-/**
- * Subscribe (or refresh) this browser's FCM token on every boot. FCM tokens
- * rotate so we re-register each time rather than assuming the stored one is
- * still valid. Prompts for permission if the browser is still at "default";
- * silently bails if denied (nothing we can do via the web API). No-op when
- * push is disabled server-side or the browser can't support it (push requires
- * HTTPS or localhost). Never throws and never blocks boot.
- */
+/** Re-register FCM token on every boot (tokens rotate). Never throws or blocks boot. */
 export async function initPushOnBoot(): Promise<void> {
   try {
     if (!supported()) return;

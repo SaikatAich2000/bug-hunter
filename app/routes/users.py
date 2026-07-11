@@ -1,14 +1,7 @@
-"""Users API.
+"""Users API. Read: any user; create/update: admin or manager; delete: admin only.
 
-Permissions:
-  - List/Read: any authenticated user (needed for assignee/reporter pickers).
-  - Create/Update: admin or manager.
-  - Delete: admin only.
-
-Role and deactivation guardrails:
-  - Only admins can grant or revoke the admin role.
-  - You cannot demote, deactivate, or delete yourself.
-  - You cannot demote, deactivate, or delete the last remaining admin.
+Guardrails: only admins grant/revoke admin; no self-demote/deactivate/delete;
+the last remaining admin is protected.
 """
 from __future__ import annotations
 
@@ -33,10 +26,7 @@ from app.schemas import UserIn, UserOut, UserUpdate
 
 
 def _reject_if_breached(plain: str) -> None:
-    """Reject passwords found in the HIBP breach corpus.
-
-    Copied here rather than imported from routes/auth.py to avoid a circular
-    import between the two route modules."""
+    """Reject HIBP-breached passwords. Duplicated from routes/auth.py to avoid a circular import."""
     if is_password_breached(plain):
         raise HTTPException(
             status_code=400,
@@ -60,8 +50,7 @@ def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail:
 
 
 def _like_escape(needle: str) -> str:
-    """Escape LIKE wildcards so % and _ in user input match literally.
-    Pair with escape='\\\\' on the LIKE clause."""
+    """Escape LIKE wildcards; pair with escape='\\\\' on the LIKE clause."""
     return (
         needle.replace("\\", "\\\\")
               .replace("%", "\\%")
@@ -70,9 +59,7 @@ def _like_escape(needle: str) -> str:
 
 
 def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> bool:
-    """Case-insensitive email uniqueness check. The API lowercases on insert,
-    but this also catches collisions with any mixed-case rows the DB unique
-    constraint would miss."""
+    """Case-insensitive uniqueness check — catches mixed-case rows the DB constraint misses."""
     stmt = select(User.id).where(func.lower(User.email) == email.lower())
     if exclude_id is not None:
         stmt = stmt.where(User.id != exclude_id)
@@ -80,11 +67,7 @@ def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> 
 
 
 def _validate_assignable_projects(db: Session, actor: User, project_ids: list[int]) -> None:
-    """Validate project ids an actor wants to assign to a user.
-
-    All ids must exist. Managers are further restricted to projects they can
-    already access — otherwise a project-scoped manager could grant (or probe
-    the existence of) projects outside their scope. Admins may assign any."""
+    """All ids must exist; managers may only assign projects in their own scope."""
     if not project_ids:
         return
     existing = set(db.scalars(
@@ -104,7 +87,7 @@ def _validate_assignable_projects(db: Session, actor: User, project_ids: list[in
 
 
 def _user_out(db: Session, user: User) -> dict:
-    """Serialize a user for the API including their project tags."""
+    """Serialize a user including project tags."""
     return {
         "id": user.id, "name": user.name, "email": user.email,
         "role": user.role, "is_active": user.is_active,
@@ -114,7 +97,7 @@ def _user_out(db: Session, user: User) -> dict:
 
 
 def _projects_by_user(db: Session, user_ids: list[int]) -> dict[int, list[int]]:
-    """Return {user_id: [project_id, ...]} for a set of users in a single query."""
+    """{user_id: [project_id, ...]} for a batch of users in one query."""
     if not user_ids:
         return {}
     rows = db.execute(
@@ -139,19 +122,15 @@ def list_users(
     if not include_inactive:
         stmt = stmt.where(User.is_active.is_(True))
     if q:
-        # Search name and email only. Including role would let any authenticated
-        # user enumerate admins via q="admin". Role filtering, if needed later,
-        # should be a separate param gated on manager/admin.
+        # name/email only — searching role would let anyone enumerate admins
         like = f"%{_like_escape(q.lower())}%"
         stmt = stmt.where(or_(
             func.lower(User.name).like(like, escape="\\"),
             func.lower(User.email).like(like, escape="\\"),
         ))
-    # 500 is a generous ceiling for any realistic team size.
     stmt = stmt.order_by(func.lower(User.name)).limit(500)
     rows = list(db.scalars(stmt).all())
-    # Fetch project tags in one batch query. The list is not project-scoped:
-    # managers need to see everyone for assignee/reporter pickers.
+    # not project-scoped: pickers need to show everyone
     proj_map = _projects_by_user(db, [u.id for u in rows])
     return [
         {
@@ -169,15 +148,14 @@ def create_user(
     db: Session = Depends(get_db),
     actor: User = Depends(require_manager_or_admin),
 ) -> dict:
-    # Managers can create users but cannot grant the admin role.
+    # managers can create users but cannot grant admin
     if payload.role == "admin" and actor.role != "admin":
         raise HTTPException(
             status_code=403,
             detail="Only admins can create admin users.",
         )
     _reject_if_breached(payload.password)
-    # Validate project tags before touching the DB so invalid/forbidden ids
-    # surface as a clean 400/403 rather than a constraint error.
+    # validate first so bad ids surface as 400/403, not a constraint error
     _validate_assignable_projects(db, actor, payload.project_ids)
     if _email_in_use(db, payload.email):
         raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
@@ -243,13 +221,8 @@ def _check_self_edit_guardrails(actor: User, target_id: int, fields: dict) -> No
 
 
 def _count_other_active_admins(db: Session, exclude_id: int) -> int:
-    """Count active admins other than `exclude_id`, using SELECT FOR UPDATE.
-
-    Without the lock, two admins concurrently demoting each other could both
-    see "1 other admin" and both commit, leaving zero admins. FOR UPDATE makes
-    the second transaction block until the first commits and re-reads the
-    updated set. (It's a no-op on SQLite but works correctly on Postgres.)
-    """
+    """Count active admins other than exclude_id.
+    FOR UPDATE closes the concurrent double-demote race (no-op on SQLite)."""
     admin_ids = db.scalars(
         select(User.id)
         .where(User.role == "admin", User.is_active.is_(True))
@@ -259,7 +232,7 @@ def _count_other_active_admins(db: Session, exclude_id: int) -> int:
 
 
 def _check_last_admin_guardrail(db: Session, target: User, target_id: int, fields: dict) -> None:
-    """Don't allow demoting/disabling the last admin."""
+    """Block demoting/disabling the last admin."""
     will_be_role = fields.get("role", target.role)
     will_be_active = fields.get("is_active", target.is_active)
     if target.role != "admin" or (will_be_role == "admin" and will_be_active):
@@ -272,7 +245,7 @@ def _check_last_admin_guardrail(db: Session, target: User, target_id: int, field
 
 
 def _apply_user_field_changes(user: User, fields: dict, changes: list[str]) -> None:
-    """Set every changed field on the user, recording the diff."""
+    """Apply changed fields, recording the diff."""
     for key, value in fields.items():
         old = getattr(user, key)
         if old != value:
@@ -283,11 +256,7 @@ def _apply_user_field_changes(user: User, fields: dict, changes: list[str]) -> N
 def _apply_project_tag_changes(db: Session, user_id: int,
                                new_project_ids: Optional[list[int]],
                                changes: list[str]) -> None:
-    """Replace a user's project memberships if the update supplied a new set.
-
-    None means the field was omitted; memberships are left as-is. An explicit
-    list (even empty) replaces them. Records the diff for the audit entry and
-    short-circuits when the set is unchanged."""
+    """Replace project memberships. None = omitted (keep); an explicit list (even empty) replaces."""
     if new_project_ids is None:
         return
     old = set(project_ids_for_user(db, user_id))
@@ -301,8 +270,7 @@ def _apply_project_tag_changes(db: Session, user_id: int,
 def _apply_admin_password_reset(user: User, db: Session, new_password: str,
                                 changes: list[str]) -> None:
     """Admin password reset: invalidate existing sessions and outstanding reset tokens."""
-    # Admin-driven resets still go through HIBP because the user may keep
-    # the assigned password unchanged.
+    # still HIBP-checked — the user may keep the assigned password
     _reject_if_breached(new_password)
     user.password_hash = hash_password(new_password)
     user.session_version = (user.session_version or 0) + 1
@@ -323,8 +291,7 @@ def update_user(
 
     fields = payload.model_dump(exclude_unset=True)
     new_password = fields.pop("password", None)
-    # project_ids is not a User column; pop it before the generic applier
-    # calls setattr() on every remaining key.
+    # project_ids is not a User column; pop before the generic setattr loop
     new_project_ids = fields.pop("project_ids", None)
     changes: list[str] = []
 
@@ -338,7 +305,7 @@ def update_user(
     if new_email and _email_in_use(db, new_email, exclude_id=user_id):
         raise HTTPException(status_code=409, detail=_DETAIL_EMAIL_EXISTS)
 
-    # Deactivating a user invalidates their existing sessions immediately.
+    # deactivation invalidates existing sessions immediately
     if fields.get("is_active") is False and user.is_active:
         user.session_version = (user.session_version or 0) + 1
 

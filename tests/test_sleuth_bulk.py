@@ -1,13 +1,5 @@
-"""Tests for Sleuth bulk actions and the admin-only write policy.
-
-Bulk writes (assign all, close all, etc.) are staged as a single confirmable
-plan covering every matching item; one "yes" applies them all.
-
-Role policy: admins get read/write/edit access (no delete). Managers and plain
-users are read-only via Sleuth — any write attempt, single or bulk, returns
-``action_denied`` while reads keep working.
-
-Uses a self-contained temp-SQLite database.
+"""Sleuth bulk actions + admin-only write policy: one confirmable plan per bulk write;
+non-admin writes (single or bulk) get action_denied while reads keep working (temp-SQLite).
 """
 from __future__ import annotations
 
@@ -23,9 +15,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
 os.environ["SESSION_SECRET"] = "test-secret-bulk-only"
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
-# Purge any previously imported app modules so this file gets a fresh import
-# bound to its own DB, avoiding "no such table" errors when pytest collects
-# modules in a shared process and an earlier module's DB is already torn down.
+# Purge app.* so this file gets a fresh import bound to its own DB (avoids "no such table").
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -96,8 +86,7 @@ def test_bulk_assign_all_admin():
         assigned = sum(1 for b in db.query(models.Bug).all()
                        if any(a.id == ids["admin"] for a in b.assignees))
         assert assigned == 3, assigned
-        # Bulk ops emit one aggregate notification rather than one per item;
-        # the actor (the assignee in this case) receives it.
+        # Bulk ops emit one aggregate notification (to the actor), not one per item.
         notifs = db.query(models.Notification).filter_by(user_id=ids["admin"]).all()
         assert len(notifs) == 1, len(notifs)
         assert notifs[0].kind == "assigned"
@@ -263,8 +252,7 @@ def _add_mixed_types(db, proj_id, admin_id):
 
 
 def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
-    """"assign all the bugs" must touch only Bugs, never the Requirements and
-    Tasks that share the same table."""
+    """"assign all the bugs" touches only Bugs, not the Requirements/Tasks sharing the table."""
     ids = seed()
     db = SessionLocal()
     try:
@@ -274,7 +262,7 @@ def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
         admin = _user(db, ids["admin"])
         staged = executor.execute("assign all the bugs to Saikat Aich", db, admin)
         assert staged.intent == "confirm_action", staged.intent
-        # The confirmation must name the typed scope so the user sees exactly what will be touched.
+        # Confirmation names the typed scope so the user sees exactly what's touched.
         text = staged.blocks[0].payload["text"]
         assert "3 Bug" in text, text
 
@@ -296,8 +284,7 @@ def test_bulk_assign_all_bugs_excludes_requirements_and_tasks():
 
 
 def test_bulk_assign_all_items_covers_every_type_with_breakdown():
-    """"assign all items" sweeps every type, and the confirmation spells out
-    the Bug/Requirement/Task breakdown so nothing is hidden."""
+    """"assign all items" sweeps every type; the confirmation spells out the Bug/Requirement/Task breakdown."""
     ids = seed()
     db = SessionLocal()
     try:
@@ -321,8 +308,7 @@ def test_bulk_assign_all_items_covers_every_type_with_breakdown():
 
 
 def test_bulk_close_all_tasks_only_targets_tasks():
-    """Type scoping also applies to status changes: "close all tasks" leaves
-    Bugs and Requirements alone."""
+    """Type scoping applies to status changes: "close all tasks" leaves Bugs and Requirements alone."""
     ids = seed()
     db = SessionLocal()
     try:
@@ -389,8 +375,7 @@ def test_bulk_skips_missing_ids():
 
 
 def test_every_sleuth_op_notifies():
-    """Each Sleuth write surfaces in the bell — status, comment, create bug,
-    create project — not just assignment."""
+    """Every Sleuth write (status, comment, create bug, create project) surfaces in the bell, not just assignment."""
     ids = seed()
     db = SessionLocal()
     try:
@@ -463,8 +448,7 @@ def test_user_bulk_write_denied():
 
 
 def test_manager_write_never_stages_then_confirm_is_idle():
-    """A blocked non-admin write stages nothing, so a follow-up 'yes' has
-    nothing to execute — there is no way to smuggle a change through."""
+    """A blocked non-admin write stages nothing, so a follow-up 'yes' can't smuggle the change through."""
     ids = seed()
     db = SessionLocal()
     try:

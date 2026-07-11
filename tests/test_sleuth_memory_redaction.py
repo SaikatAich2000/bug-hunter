@@ -1,6 +1,4 @@
-"""Unit tests for two pure Sleuth helpers: secret redaction and the
-per-user conversation memory store. Both are in-process and need no DB.
-"""
+"""Unit tests for two pure Sleuth helpers (no DB): secret redaction and the per-user memory store."""
 from __future__ import annotations
 
 from app.chatbot import memory as mem
@@ -30,8 +28,7 @@ def test_redact_scrubs_common_secret_shapes():
     for text, marker in samples.items():
         assert marker in redact(text), text
 
-    # Also confirm the raw secret is absent, not just that [REDACTED] appears.
-    # A naive regex could scrub "Bearer" and leave the token itself in the clear.
+    # Confirm the raw secret is gone, not just that [REDACTED] appears (a naive regex could scrub the label only).
     leak_checks = {
         "Authorization: Bearer abcdef.ghijkl": "abcdef.ghijkl",
         "api_key = sk-abcdefghijklmnop1234": "sk-abcdefghijklmnop1234",
@@ -87,8 +84,7 @@ def test_remember_bug_user_and_filter():
     s.remember_filter(5, src)
     src["priority"] = ["High"]       # mutate after storing
     sess = s.get(5)
-    # remember_filter should take a shallow copy, so this later mutation
-    # must not bleed into the stored filter.
+    # remember_filter copies, so the later mutation must not bleed into the stored filter.
     assert sess.last_bug_id == 99
     assert sess.last_user_id == 7 and sess.last_user_name == "Carol"
     assert sess.last_filter == {"status": ["New"]}

@@ -22,11 +22,7 @@ router = APIRouter(prefix="/api/push", tags=["push"])
 
 @router.get("/config", response_model=PushConfigOut)
 def push_config() -> PushConfigOut:
-    """Return the public Firebase web config for the browser.
-
-    ``enabled`` is False when push isn't fully configured, letting the
-    frontend hide the toggle without a separate feature-flag endpoint.
-    """
+    """Public Firebase web config; enabled=False lets the frontend hide the toggle."""
     s = get_settings()
     configured = bool(
         s.WEB_PUSH_ENABLED and s.FIREBASE_API_KEY and s.FIREBASE_VAPID_KEY
@@ -60,8 +56,7 @@ def subscribe(
             user_agent=payload.user_agent,
         )
     except PushTokenConflict as exc:
-        # Refuse rather than let a replayed token silently redirect another
-        # account's push notifications to this user's session.
+        # a replayed token must not redirect another account's pushes here
         raise HTTPException(
             status_code=409,
             detail="This device token is already registered to another account.",

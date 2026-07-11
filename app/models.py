@@ -1,21 +1,5 @@
-"""ORM models for Bug Hunter.
-
-Tables:
-  - users            : team members
-  - projects         : workspaces
-  - bugs             : core work-item entity
-  - bug_assignees    : many-to-many between bugs and users
-  - comments         : threaded discussion on a bug
-  - attachments      : file blobs (PDF / image / video) attached to a bug
-                       or to a comment. Stored inside the database so they
-                       persist across restarts and survive backups.
-  - activity_log     : audit trail
-  - password_reset_tokens : single-use email-based password reset tokens
-  - sessions         : server-side record of every active login. Lets admins
-                       see who's currently signed in and revoke individual
-                       sessions to log a specific device out without
-                       affecting any others.
-"""
+"""ORM models for Bug Hunter (users, projects, bugs, comments, attachments,
+audit log, reset tokens, sessions, notifications, push, chat, links)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -41,15 +25,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
-# FK target strings as constants to avoid scattering the same literal
-# across every ForeignKey() call.
+# FK target strings as constants to avoid repeating the literal.
 _FK_BUGS_ID = "bugs.id"
 _FK_USERS_ID = "users.id"
 _FK_PROJECTS_ID = "projects.id"
 _FK_COMMENTS_ID = "comments.id"
 _FK_EVENTS_ID = "events.id"
 
-# Shared cascade/ondelete strings for the same reason.
+# Shared cascade/ondelete strings.
 _CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
 _ONDELETE_SET_NULL = "SET NULL"
 
@@ -63,58 +46,35 @@ bug_assignees = Table(
     Column("bug_id", Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
-# user_id is the trailing PK column, so Postgres can't seek on it alone.
-# This index backs "all bugs assigned to user X" queries (assignee stats,
-# event counts). Added additively by init_db's _add_missing_indexes.
+# user_id is the trailing PK column; standalone index for "bugs assigned to X".
 Index("idx_bug_assignees_user_id", bug_assignees.c.user_id)
 
-# event_managers: many-to-many between events and the users who own them.
-# Event-level notifications (create/edit/delete) go to this list. Tasks inside
-# the event notify their own assignees separately, so being an event manager
-# doesn't mean receiving every task notification.
+# event_managers: events <-> owning users. Event-level notifications go here;
+# tasks inside an event notify their own assignees separately.
 event_managers = Table(
     "event_managers",
     Base.metadata,
     Column("event_id", Integer, ForeignKey(_FK_EVENTS_ID, ondelete="CASCADE"), primary_key=True),
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
 )
-# Same situation as bug_assignees: user_id is the trailing PK column, so a
-# standalone index is needed for "events managed by user X" lookups and for
-# the ON DELETE CASCADE triggered on user deletion. Added additively.
+# user_id is the trailing PK column; standalone index for "events managed by X".
 Index("idx_event_managers_user_id", event_managers.c.user_id)
 
-# user_projects: many-to-many controlling project-scoped access.
-# Managers and regular users see only items, events, stats, reports, and audit
-# entries for projects they belong to. Admins always see everything regardless.
-# A user with no rows here sees nothing until an admin assigns them to a project.
-# Existing accounts get zero rows after the additive migration, which is correct:
-# a fresh install with no memberships is also locked down for non-admins.
-# Both FKs are ON DELETE CASCADE so rows can't outlive their user or project.
-# Created by init_db()'s create_all() on next boot — no existing column or row
-# is touched.
+# user_projects: project-scoped access. Non-admins see only items/events/stats/
+# reports/audit for projects they belong to; a user with no rows sees nothing.
+# Admins see everything regardless. Both FKs CASCADE.
 user_projects = Table(
     "user_projects",
     Base.metadata,
     Column("user_id", Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True),
     Column("project_id", Integer, ForeignKey(_FK_PROJECTS_ID, ondelete="CASCADE"), primary_key=True),
 )
-# project_id is the trailing PK column, so a standalone index is needed for
-# "members of project X" lookups and the ON DELETE CASCADE on project deletion.
-# Added additively by init_db's _add_missing_indexes.
+# project_id is the trailing PK column; standalone index for "members of X".
 Index("idx_user_projects_project_id", user_projects.c.project_id)
 
 
-# ---------------------------------------------------------------------------
-# User
-#
-# Roles are enforced in app code (not DB constraints) for flexibility:
-#   admin    - full access; only admins manage users and delete anything
-#   manager  - can edit any work item or project, but not users
-#   user     - default. Editing is collaborative: any user can edit any Bug
-#              (not only their own), matching the flat read model. Requirements
-#              and Tasks stay manager/admin-only; all deletes are admin-only.
-#              Authoritative rules: app/auth.py (can_edit_bug / can_delete_bug).
-# ---------------------------------------------------------------------------
+# Roles are enforced in app code, not DB constraints. Authoritative rules:
+# app/auth.py (can_edit_bug / can_delete_bug).
 ROLE_ADMIN = "admin"
 ROLE_MANAGER = "manager"
 ROLE_USER = "user"
@@ -130,12 +90,11 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default=ROLE_USER)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    # bcrypt hash. Nullable to leave room for SSO integration, but normally
-    # always set.
+    # bcrypt hash. Nullable to leave room for SSO, but normally always set.
     password_hash: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
-    # Bumped on password change/reset/forced logout. A session cookie carrying
-    # an older version is rejected, which logs out other devices automatically.
+    # Bumped on password change/reset/forced logout; a cookie with an older
+    # version is rejected, logging out other devices.
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -145,20 +104,13 @@ class User(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
-    # Case-insensitive uniqueness is enforced in app code (app/routes/users.py
-    # `_email_in_use`): emails are lowercased before insert and a func.lower()
-    # lookup catches any legacy mixed-case collision. A DB-level expression index
-    # was skipped because SQLite can't reflect one, which would break the
-    # additive-index idempotency check.
+    # Case-insensitive uniqueness enforced in app code (routes/users.py
+    # `_email_in_use`); a DB expression index is skipped since SQLite can't
+    # reflect one (breaks the additive-index idempotency check).
     __table_args__ = (Index("idx_users_email", "email"),)
 
 
-# ---------------------------------------------------------------------------
-# PasswordResetToken
-#
-# Single-use tokens for email-based password reset. Stored as a sha256 hash,
-# never plaintext.
-# ---------------------------------------------------------------------------
+# Single-use email password-reset tokens, stored as a sha256 hash never plaintext.
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
 
@@ -173,16 +125,11 @@ class PasswordResetToken(Base):
 
     __table_args__ = (
         Index("idx_prt_token_hash", "token_hash"),
-        # Covers the (user_id, used_at) filter in
-        # invalidate_outstanding_reset_tokens (called on every password change)
-        # and the ON DELETE CASCADE on user delete. Additive.
+        # Covers the (user_id, used_at) filter in invalidate_outstanding_reset_tokens.
         Index("idx_prt_user_id_used_at", "user_id", "used_at"),
     )
 
 
-# ---------------------------------------------------------------------------
-# Project
-# ---------------------------------------------------------------------------
 class Project(Base):
     __tablename__ = "projects"
 
@@ -200,16 +147,8 @@ class Project(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Event
-#
-# Groups work items together, typically for a standup or sprint meeting.
-# Items (Bug/Requirement/Task) reference an event via the optional event_id FK
-# on the bugs table and can be added to an event at any time.
-#
-# Deleting an event NULLs the FK on all linked items rather than deleting them,
-# so the audit trail and assignee history are preserved.
-# ---------------------------------------------------------------------------
+# Groups work items (standup/sprint). Items link via bugs.event_id; deleting an
+# event NULLs the FK rather than deleting items, preserving history.
 class Event(Base):
     __tablename__ = "events"
 
@@ -218,9 +157,7 @@ class Event(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # YYYY-MM-DD, consistent with Bug.due_date.
     scheduled_for: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    # Owning project. Project-restricted managers/users only see events for
-    # their projects. Nullable so the additive migration requires no backfill
-    # (existing events are visible to admins only until one is assigned).
+    # Owning project; scopes visibility. Nullable (no backfill needed).
     # SET NULL so deleting a project doesn't cascade-delete its events.
     project_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_PROJECTS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
@@ -235,13 +172,13 @@ class Event(Base):
 
     items: Mapped[list["Bug"]] = relationship(
         "Bug", back_populates="event",
-        # Items are not deleted with the event; app code nulls the FK instead.
+        # App code nulls the FK; items aren't deleted with the event.
         passive_deletes=True,
     )
     managers: Mapped[list["User"]] = relationship(
         "User", secondary=event_managers, lazy="selectin",
     )
-    # Eager-loaded so serialized responses can include project_name without N+1.
+    # Eager-loaded so responses include project_name without N+1.
     project: Mapped["Project | None"] = relationship("Project")
 
     __table_args__ = (
@@ -251,9 +188,7 @@ class Event(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Bug (= work item — Bug / Requirement / Task)
-# ---------------------------------------------------------------------------
+# Bug = work item (Bug / Requirement / Task).
 class Bug(Base):
     __tablename__ = "bugs"
 
@@ -264,16 +199,13 @@ class Bug(Base):
     reporter_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
-    # Optional event link. SET NULL so deleting an event doesn't cascade
-    # to the work items inside it.
+    # Optional event link; SET NULL so deleting an event doesn't cascade to items.
     event_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_EVENTS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # The table is called "bugs" for historical compatibility, but each row
-    # can be a Bug, a Requirement (story/spec), or a Task (standup item).
-    # Default "Bug" so pre-existing rows without this column read correctly.
+    # Bug / Requirement / Task; default "Bug" so pre-column rows read correctly.
     item_type: Mapped[str] = mapped_column(String(20), nullable=False, default="Bug")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="New")
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="Medium")
@@ -284,9 +216,8 @@ class Bug(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
-    # Optimistic-concurrency counter, bumped on every update. updated_at alone
-    # has whole-second resolution and misses same-second collisions; version
-    # catches those. Starts at 1 for new and migrated rows.
+    # Optimistic-concurrency counter, bumped on every update; catches same-second
+    # collisions that updated_at's whole-second resolution misses.
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -299,13 +230,11 @@ class Bug(Base):
     )
     comments: Mapped[list["Comment"]] = relationship(
         "Comment", back_populates="bug", cascade=_CASCADE_ALL_DELETE_ORPHAN,
-        # Newest first; id DESC breaks ties within the same second.
+        # Newest first; id DESC breaks same-second ties.
         order_by="(Comment.created_at.desc(), Comment.id.desc())",
     )
-    # Activity rows are not cascade-deleted with the bug. The audit trail must
-    # outlive the items it describes: on bug delete the route nulls bug_id while
-    # entity_id and the detail string keep the original bug id and title, so the
-    # global audit screen still shows the full history.
+    # Audit rows outlive deleted bugs: on delete the route nulls bug_id while
+    # entity_id/detail keep the original id and title (not cascade-deleted).
     activities: Mapped[list["Activity"]] = relationship(
         "Activity", back_populates="bug",
         order_by="(Activity.created_at.desc(), Activity.id.desc())",
@@ -325,23 +254,17 @@ class Bug(Base):
         Index("idx_bugs_item_type", "item_type"),
         Index("idx_bugs_item_type_status", "item_type", "status"),
         Index("idx_bugs_event_id", "event_id"),
-        # Composite indexes for common dashboard queries; single-column indexes
-        # above still handle single-field filters. create_all() is idempotent.
+        # Composites for common dashboard queries.
         Index("idx_bugs_project_status", "project_id", "status"),
         Index("idx_bugs_status_priority", "status", "priority"),
         Index("idx_bugs_updated_at", "updated_at"),
-        # The default list page orders by (updated_at DESC, id DESC); the
-        # composite lets the DB satisfy that ordering from the index directly.
+        # Backs the default list ordering (updated_at DESC, id DESC).
         Index("idx_bugs_updated_id", "updated_at", "id"),
-        # The stats timeline (GROUP BY date(created_at)) and oldest-first report
-        # orderings scan on created_at. Additive; added by init_db on next boot.
+        # Backs the stats timeline and oldest-first report scans.
         Index("idx_bugs_created_at", "created_at"),
     )
 
 
-# ---------------------------------------------------------------------------
-# Comment
-# ---------------------------------------------------------------------------
 class Comment(Base):
     __tablename__ = "comments"
 
@@ -359,17 +282,9 @@ class Comment(Base):
     __table_args__ = (Index("idx_comments_bug_id", "bug_id"),)
 
 
-# ---------------------------------------------------------------------------
-# Attachment
-#
-# Files are stored as BLOBs inside the database, so no external object store
-# is needed and a single DB backup covers all attachments. The trade-off is
-# that large videos can bloat the DB; uploads are capped at 50 MB per file
-# (config-driven). Moving to S3 later would only change the storage layer.
-#
-# An attachment belongs to a bug directly (bug_id set, comment_id NULL) or to
-# a comment (both set; the bug FK lets bug-level queries still find it).
-# ---------------------------------------------------------------------------
+# Files stored as BLOBs in the DB (uploads capped at 50 MB, config-driven).
+# Belongs to a bug directly (comment_id NULL) or to a comment (both set; the
+# bug FK keeps it findable by bug-level queries).
 class Attachment(Base):
     __tablename__ = "attachments"
 
@@ -387,9 +302,8 @@ class Attachment(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Deferred so listing attachments doesn't load the full BLOB. The download
-    # endpoint accesses .data lazily, which issues a single SELECT for the bytes.
-    # Python-side loading strategy only; the schema is unchanged.
+    # Deferred so listing doesn't load the BLOB; the download endpoint reads
+    # .data lazily. Loading strategy only; schema unchanged.
     data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
@@ -398,30 +312,22 @@ class Attachment(Base):
     __table_args__ = (
         Index("idx_attachments_bug_id", "bug_id"),
         Index("idx_attachments_comment_id", "comment_id"),
-        # Composite for the per-bug "split attachments into bug-level vs
-        # per-comment" query in routes/bugs.py.
+        # Backs the bug-level vs per-comment split query in routes/bugs.py.
         Index("idx_attachments_bug_comment", "bug_id", "comment_id"),
     )
 
 
-# ---------------------------------------------------------------------------
-# Activity (audit trail)
-#
-# bug_id is nullable so non-bug events (user created, project deleted, etc.)
-# can be logged to the same table and appear on the global audit screen.
-# ---------------------------------------------------------------------------
+# Audit trail. bug_id nullable so non-bug events (user/project/etc.) log here too.
 class Activity(Base):
     __tablename__ = "activity_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # SET NULL (not CASCADE) so audit rows survive when a bug is deleted.
-    # entity_id and the detail string still reference the original bug, so
-    # the audit screen can show the full history of a deleted item.
+    # SET NULL so audit rows survive bug deletion; entity_id/detail keep the
+    # original reference.
     bug_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_BUGS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
-    # entity_type + entity_id reference any object type (user, project, bug,
-    # comment, attachment) without a FK — just metadata.
+    # entity_type + entity_id reference any object type without a FK; metadata only.
     entity_type: Mapped[str] = mapped_column(String(40), nullable=False, default="bug")
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor_user_id: Mapped[int | None] = mapped_column(
@@ -438,37 +344,21 @@ class Activity(Base):
         Index("idx_activity_bug_id", "bug_id"),
         Index("idx_activity_entity", "entity_type", "entity_id"),
         Index("idx_activity_created", "created_at"),
-        # Reports filter action == "status_changed" joined to bugs (throughput,
-        # time-to-resolution, timeline). Without this they scan the full audit
-        # table. The audit "filter by actor" screen uses actor_user_id. Both
-        # added additively by init_db().
+        # Reports filter action == "status_changed" joined to bugs.
         Index("idx_activity_action_bug", "action", "bug_id"),
-        # The resolution/throughput/timeline reports order by (bug_id, created_at);
-        # this index extension lets them avoid a sort over the audit table.
+        # Lets resolution/throughput/timeline reports avoid a sort over the audit table.
         Index("idx_activity_action_bug_created", "action", "bug_id", "created_at"),
-        # The same reports also filter by action + created_at range without
-        # constraining bug_id. The (action, bug_id, created_at) index above can't
-        # seek that range (bug_id sits between the two predicates), so this
-        # (action, created_at) index keeps the date-windowed scan sargable.
+        # Keeps the action + created_at range scan sargable (bug_id sits between
+        # the predicates in the index above).
         Index("idx_activity_action_created", "action", "created_at"),
         Index("idx_activity_actor_user_id", "actor_user_id"),
     )
 
 
-# ---------------------------------------------------------------------------
-# Session
-#
-# Server-side record of every active login, required for the admin
-# "list / revoke sessions" feature. Stateless signed cookies alone can't be
-# selectively revoked because the server has no record of what it issued.
-#
-# Each row is keyed by a unique jti also embedded in the signed cookie.
-# Every authenticated request looks up the row by jti; a missing or expired
-# row rejects the cookie. The admin "revoke" action just deletes the row.
-#
-# Cookies issued before this table existed don't carry a jti. The auth layer
-# accepts them, but they won't appear in the session list until next login.
-# ---------------------------------------------------------------------------
+# Server-side login records for admin list/revoke. Keyed by a jti also embedded
+# in the signed cookie; every request looks it up, a missing/expired row rejects
+# the cookie, and revoke deletes the row. Pre-table cookies carry no jti and are
+# accepted but absent from the list until next login.
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -478,7 +368,7 @@ class Session(Base):
     )
     # Random opaque ID baked into the signed cookie; looked up on every request.
     jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    # Metadata for the admin session-list screen; not used for auth decisions.
+    # Display metadata for the admin session list; not used for auth.
     user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
     ip_address: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
@@ -494,17 +384,9 @@ class Session(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Notification
-#
-# Per-user in-app notifications, parallel to the emails already sent by
-# email_service. Recipients are determined the same way (reporter + assignees
-# minus the actor, event managers, etc.), so a notification is only ever
-# written for someone who is entitled to know. No endpoint ever returns another
-# user's notifications.
-#
-# Scoped to user_id and cascade-deletes with the user.
-# ---------------------------------------------------------------------------
+# Per-user in-app notifications, parallel to email_service. Same recipients
+# (reporter + assignees minus actor, event managers). Scoped to user_id,
+# cascade-deletes with the user; no endpoint returns another user's rows.
 class Notification(Base):
     __tablename__ = "notifications"
 
@@ -512,13 +394,12 @@ class Notification(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), nullable=False
     )
-    # Drives the icon/label on the frontend:
+    # Drives the frontend icon/label:
     # "assigned" | "reported" | "updated" | "comment" | "event".
     kind: Mapped[str] = mapped_column(String(30), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # Deep-links for clicking through to the related item. CASCADE so a
-    # notification is removed when its bug or event is deleted.
+    # Deep-link targets; CASCADE so the row is removed with its bug or event.
     bug_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=True
     )
@@ -529,9 +410,8 @@ class Notification(Base):
     actor_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     # NULL means unread.
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # NULL until the daily digest job sends this notification; then stamped with
-    # the send time so the job is idempotent. Independent of read_at: a row can
-    # be read in-app but not yet digested, or vice-versa.
+    # NULL until the daily digest sends it, then stamped (idempotent). Independent
+    # of read_at.
     emailed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -541,25 +421,19 @@ class Notification(Base):
 
     __table_args__ = (
         Index("idx_notifications_user_id", "user_id"),
-        # The unread badge and unread list both filter on (user_id, read_at).
+        # Unread badge/list filter on (user_id, read_at).
         Index("idx_notifications_user_read", "user_id", "read_at"),
-        # The panel lists a user's notifications newest-first.
+        # Panel lists newest-first per user.
         Index("idx_notifications_user_created", "user_id", "created_at"),
-        # The digest job scans for rows where emailed_at IS NULL.
+        # Digest job scans emailed_at IS NULL.
         Index("idx_notifications_emailed_at", "emailed_at"),
-        # It also applies a created_at cutoff; the composite lets the job seek
-        # into the window instead of scanning all un-emailed rows. Additive.
+        # Composite lets the digest seek into the created_at window.
         Index("idx_notifications_emailed_created", "emailed_at", "created_at"),
     )
 
 
-# ---------------------------------------------------------------------------
-# Push subscriptions (web push via Firebase Cloud Messaging).
-#
-# One row per device/browser that has granted push permission, keyed by the
-# FCM registration token. The same table serves native Android clients
-# (platform="android"). Push is sent immediately, not batched in the digest.
-# ---------------------------------------------------------------------------
+# Web push (FCM): one row per device that granted permission, keyed by the FCM
+# token. Also serves native clients (platform). Sent immediately, not digested.
 class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
 
@@ -569,15 +443,14 @@ class PushSubscription(Base):
     )
     # FCM registration token; unique per device/browser install.
     token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
-    # "web" by default; "android"/"ios" when native clients register here.
+    # "web" default; "android"/"ios" for native clients.
     platform: Mapped[str] = mapped_column(String(20), nullable=False, default="web")
-    # Coarse device hint for the user's device list and debugging.
+    # Coarse device hint for the device list and debugging.
     user_agent: Mapped[str] = mapped_column(String(400), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
-    # Refreshed whenever the client re-subscribes (tokens rotate). A cleanup
-    # job can use this to drop stale tokens.
+    # Refreshed on re-subscribe (tokens rotate); a cleanup job can drop stale ones.
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
@@ -588,15 +461,8 @@ class PushSubscription(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Sleuth chat memory
-#
-# Persists the assistant conversation so context survives process restarts and
-# the cloud LLM can be given a rolling history. The in-process memory store
-# still handles fast per-turn referents; these tables are the durable transcript.
-#
-# Both tables are scoped to user_id and cascade-delete with the user.
-# ---------------------------------------------------------------------------
+# Sleuth chat memory: durable transcript surviving restarts, giving the LLM a
+# rolling history. Both tables scoped to user_id, cascade-delete with the user.
 class ChatConversation(Base):
     __tablename__ = "chat_conversations"
 
@@ -612,9 +478,8 @@ class ChatConversation(Base):
     messages: Mapped[list["ChatMessage"]] = relationship(
         "ChatMessage", back_populates="conversation",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
-        # id is the tiebreaker because _utcnow() truncates to whole seconds;
-        # without it a user+assistant turn in the same second could replay in
-        # an unstable order. Consistent with Bug.comments/activities ordering.
+        # id tiebreaker: _utcnow() truncates to whole seconds, so a same-second
+        # turn would otherwise replay in an unstable order.
         order_by="ChatMessage.created_at, ChatMessage.id",
     )
 
@@ -631,7 +496,7 @@ class ChatMessage(Base):
     # "user" | "assistant"
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # Which engine produced the response: "rules" | "classifier" | "llm" | "cloud" | "".
+    # Engine that produced the response: "rules" | "classifier" | "llm" | "cloud" | "".
     # Observability only; never used for auth.
     engine: Mapped[str] = mapped_column(String(20), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
@@ -643,15 +508,9 @@ class ChatMessage(Base):
     __table_args__ = (Index("idx_chat_msg_conversation_id", "conversation_id"),)
 
 
-# ---------------------------------------------------------------------------
-# BugLink
-#
-# Directed relationship between two work items: "#12 blocks #34", "#5
-# duplicates #2", etc. Stored as a single directed edge (source -> target)
-# with a link_type; the route layer derives the inverse label ("is blocked by")
-# so no redundant reverse rows are needed. Both FKs CASCADE so the link row
-# is removed when either connected item is deleted.
-# ---------------------------------------------------------------------------
+# Directed relationship between two items (e.g. "#12 blocks #34"). One edge
+# (source -> target) with a link_type; the route derives the inverse label, so
+# no reverse rows. Both FKs CASCADE.
 class BugLink(Base):
     __tablename__ = "bug_links"
 
@@ -675,7 +534,7 @@ class BugLink(Base):
     target: Mapped["Bug"] = relationship("Bug", foreign_keys=[target_bug_id])
 
     __table_args__ = (
-        # One edge per (source, target, type); re-linking the same pair is a no-op.
+        # One edge per (source, target, type); re-linking is a no-op.
         Index("idx_bug_links_unique", "source_bug_id", "target_bug_id", "link_type", unique=True),
         Index("idx_bug_links_source", "source_bug_id"),
         Index("idx_bug_links_target", "target_bug_id"),

@@ -1,11 +1,6 @@
 /**
- * Dependency-free player on the native <video> element so decoding stays
- * hardware-accelerated. The control bar is always visible — windowed and
- * fullscreen — so the seek bar stays reachable.
- *
- * Keyboard shortcuts: Space/k play, ←/→ seek 5s, ↑/↓ volume, m mute,
- * f fullscreen, 0-9 jump to that tenth of the video.
- *
+ * Dependency-free player over the native <video> element (hardware decode).
+ * Keyboard: Space/k play, ←/→ seek 5s, ↑/↓ volume, m mute, f fullscreen, 0-9 jump to tenths.
  * Used inline and inside <VideoLightbox/>.
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -42,8 +37,7 @@ function volumeIcon(muted: boolean, volume: number): string {
 const PIP_SUPPORTED =
   typeof document !== "undefined" && Boolean(document.pictureInPictureEnabled);
 
-// Safari exposes only the webkit-prefixed Fullscreen API; iOS Safari further
-// restricts element fullscreen to <video> via webkitEnterFullscreen().
+// Safari only exposes webkit-prefixed Fullscreen; iOS restricts it to <video> via webkitEnterFullscreen().
 interface FsElement extends HTMLElement {
   webkitRequestFullscreen?: () => void;
 }
@@ -134,8 +128,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
     };
   }, []);
 
-  // Track fullscreen state for both the standard and webkit-prefixed events
-  // so Esc-exit is also caught.
+  // Track fullscreen via standard + webkit events so Esc-exit is caught too.
   useEffect(() => {
     const onFs = () => setIsFs(fsElement() === wrapRef.current);
     document.addEventListener("fullscreenchange", onFs);
@@ -146,7 +139,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
     };
   }, []);
 
-  // Autoplay for the lightbox; if the browser blocks it, the play button stays visible.
+  // Autoplay for the lightbox; if blocked, the play button stays visible.
   useEffect(() => {
     if (!autoPlay) return;
     const v = videoRef.current;
@@ -212,8 +205,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
       exitFs();
       return;
     }
-    // On iOS Safari neither method exists on the wrapper, so fall back to
-    // the video element's own webkitEnterFullscreen.
+    // On iOS Safari the wrapper has neither method; fall back to the video's webkitEnterFullscreen.
     const el = wrap as FsElement;
     if (typeof el.requestFullscreen === "function" || typeof el.webkitRequestFullscreen === "function") {
       requestFs(el);
@@ -259,7 +251,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }: Read
         toggleFs();
         break;
       default:
-        // Use the live element duration — React state lags briefly after load.
+        // Use live element duration — React state lags briefly after load.
         if (/^\d$/.test(e.key) && Number.isFinite(v.duration)) {
           e.preventDefault();
           seekTo((Number(e.key) / 10) * v.duration);

@@ -163,7 +163,7 @@ services:
       # Email digest + optional in-app scheduler (no host cron needed when
       # EMAIL_DIGEST_CRON is a cron expression). All pulled from the host .env.
       EMAIL_DIGEST_ENABLED: ${EMAIL_DIGEST_ENABLED:-false}
-      EMAIL_DIGEST_LOOKBACK_HOURS: ${EMAIL_DIGEST_LOOKBACK_HOURS:-26}
+      EMAIL_DIGEST_LOOKBACK_HOURS: ${EMAIL_DIGEST_LOOKBACK_HOURS:-50}
       EMAIL_DIGEST_CRON: ${EMAIL_DIGEST_CRON:-}
       EMAIL_DIGEST_TIMEZONE: ${EMAIL_DIGEST_TIMEZONE:-}
 

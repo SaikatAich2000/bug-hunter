@@ -1,13 +1,5 @@
-"""Chat write-path authorization parity tests.
-
-Verifies that app/chatbot/actions._check_can_edit_bug enforces per-type edit
-rules matching the REST API. Without the item_type argument to can_edit_bug,
-the check defaults to 'Bug' and passes for everyone, letting regular users
-edit Tasks/Requirements via chat while PUT /api/bugs/{id} returns 403.
-
-Imports are deferred into each test because the client fixture re-imports all
-app.* modules between tests; importing at call time binds the right generation
-of the helper.
+"""Chat write-path authz parity: _check_can_edit_bug must enforce per-type edit rules matching REST.
+Without item_type the check defaulted to 'Bug', letting users edit Tasks via chat while PUT returned 403.
 """
 from __future__ import annotations
 
@@ -15,8 +7,7 @@ from types import SimpleNamespace
 
 
 def _bug(item_type, reporter_id=999, assignees=()):
-    # _check_can_edit_bug reads .item_type, .reporter_id, and .assignees
-    # (each assignee needs .id); can_edit_bug deletes those attrs internally.
+    # _check_can_edit_bug reads .item_type/.reporter_id/.assignees (each with .id).
     return SimpleNamespace(
         item_type=item_type,
         reporter_id=reporter_id,

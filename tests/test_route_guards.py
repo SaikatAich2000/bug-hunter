@@ -1,10 +1,5 @@
-"""Direct unit tests for defensive route-helper guards.
-
-These guards are unreachable over HTTP because the HTTP layer pre-empts them
-with an earlier guard, but each protects a real invariant ("this is your own
-session", "don't strand the system with no admin"). Calling the helper
-directly keeps the safety net tested.
-"""
+"""Direct unit tests for defensive route-helper guards that earlier HTTP-layer
+checks pre-empt; calling the helpers directly keeps the safety net tested."""
 from __future__ import annotations
 
 import pytest
@@ -13,9 +8,7 @@ from sqlalchemy import select
 
 
 def test_cov_is_current_false_on_unparseable_cookie(client):
-    """`_is_current` returns False for a missing or malformed session cookie.
-    Over HTTP auth validates the cookie first, so this branch is only reachable
-    by calling the helper directly."""
+    """`_is_current` returns False for a missing or malformed session cookie."""
     import app.routes.sessions as sessions
 
     class _Req:

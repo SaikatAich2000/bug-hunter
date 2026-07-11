@@ -1,17 +1,5 @@
-"""Sleuth chatbot router.
-
-Endpoints:
-  POST /api/chat/ask               — answer a natural-language question.
-  POST /api/chat/ingest            — admin-only document import (preview stage).
-  GET  /api/chat/download/{token}  — stream a staged Excel workbook.
-
-All three require an authenticated user, so session revocation and
-forced-logout apply here the same way they do everywhere else in the app.
-
-Lives in its own router rather than routes/bugs.py because the surface is
-different (NL query vs. structured CRUD), and the download endpoint has
-its own staging/streaming behavior separate from bug attachment downloads.
-"""
+"""Sleuth chatbot router: POST /ask, POST /ingest (admin), GET /download/{token}.
+All three require an authenticated user (session revocation applies as usual)."""
 from __future__ import annotations
 
 import logging
@@ -43,14 +31,8 @@ AdminUser = Annotated[User, Depends(require_admin)]
 
 def _persist_turn(db: Session, actor: User, user_msg: str,
                   resp: "executor.Response") -> None:
-    """Append the user message and assistant reply to the durable chat transcript.
-
-    Additive only, gated by a setting. Failures are swallowed so transcript
-    problems never affect the chat response.
-
-    Reuses the most recent conversation if it was active in the last 30 minutes;
-    otherwise starts a new one.
-    """
+    """Append the turn to the chat transcript (reuses a conversation active in
+    the last 30 min, else starts one). Gated by a setting; failures swallowed."""
     if not get_settings().SLEUTH_CHAT_MEMORY_ENABLED:
         return
     try:
@@ -66,14 +48,13 @@ def _persist_turn(db: Session, actor: User, user_msg: str,
             conv = ChatConversation(user_id=actor.id)
             db.add(conv)
             db.flush()
-        # Derive engine label from intent prefix for observability.
+        # Engine label for observability, derived from the intent prefix.
         engine = "rules"
         if resp.intent.startswith("cloud_"):
             engine = "cloud"
         elif resp.intent in {"unknown", "error"}:
             engine = ""
-        # Prefer the first text block so the cloud layer's rolling history
-        # has real prose; fall back to the summary for table/file-only replies.
+        # Prefer text block (real prose) over summary (table/file-only replies).
         said = next(
             (b.payload.get("text", "") for b in resp.blocks if b.kind == "text"),
             "",
@@ -91,14 +72,11 @@ def _persist_turn(db: Session, actor: User, user_msg: str,
 router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
 
-# Per-user soft rate limit. The rule engine is cheap, but Excel exports do
-# real CPU work, so this bounds burst usage.
+# Per-user rate limit (Excel export does real CPU work, unlike the rule engine).
 _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_REQUESTS = 30   # 30 chat asks / minute / user
 _rate_state: dict[int, list[float]] = {}
-# Sync endpoints run in a thread pool, so concurrent same-user requests race
-# the read-modify-write on each bucket. Guard it with a lock.
-_rate_lock = threading.Lock()
+_rate_lock = threading.Lock()  # sync endpoints run in a thread pool
 
 
 def _check_rate(user_id: int) -> None:
@@ -118,8 +96,7 @@ def _check_rate(user_id: int) -> None:
 
 
 class ChatIn(BaseModel):
-    """Inbound chat message. Length-capped to avoid feeding huge pastes
-    into the rule engine or the optional LLM passthrough."""
+    """Inbound chat message, length-capped."""
     message: str = Field(min_length=1, max_length=2000)
 
 
@@ -155,8 +132,7 @@ def ask(
     try:
         resp = executor.execute(payload.message, db, actor)
     except HTTPException:
-        # Auth/role exceptions from underlying calls — pass through unchanged.
-        raise
+        raise  # auth/role exceptions pass through unchanged
     except Exception as exc:   # noqa: BLE001 — we deliberately never crash the chat
         logger.exception("Sleuth executor failed: %s", exc)
         return ChatOut(
@@ -178,9 +154,7 @@ def ask(
     )
 
 
-# Admin uploads a document; Sleuth parses it and stages candidates for review.
-# Extraction and creation live in app/chatbot/ingest.py; this endpoint handles
-# the upload, then returns a chat-shaped preview the panel renders inline.
+# Admin uploads a doc; ingest.py extracts candidates, this returns a preview.
 _INGEST_CHUNK = 256 * 1024
 
 
@@ -208,9 +182,7 @@ def _ingest_text_reply(text: str, intent: str) -> ChatOut:
 
 
 def _ingest_preview_reply(specs: list, method: str, filename: str, project_name: str) -> ChatOut:
-    """Build a preview reply listing the extracted items and asking for
-    confirmation. Creation happens only when the admin replies 'create them'
-    (handled by the executor)."""
+    """Preview reply listing extracted items; creation waits for 'create them'."""
     n = len(specs)
     how = "read it with AI" if method == "ai" else "parsed it"
     head = (
@@ -249,13 +221,8 @@ async def ingest_document(
     file: Annotated[UploadFile, File()],
     project_id: Annotated[Optional[int], Form()] = None,
 ) -> ChatOut:
-    """Admin-only document import (preview stage).
-
-    Reads the uploaded file, extracts work item candidates, stages them in
-    memory, and returns a preview. Nothing is created here; the admin must
-    reply 'create them' in the chat to trigger actual creation (handled by
-    the executor's ingest-create path).
-    """
+    """Admin-only document import: extract candidates, stage them, return a
+    preview. Nothing is created until the admin replies 'create them'."""
     _check_rate(actor.id)
     from app.chatbot import ingest as _ingest
     from app.chatbot.memory import store as _mem
@@ -295,14 +262,9 @@ def download_staged(
     token: str,
     _user: CurrentUser,
 ):
-    """Stream a previously staged Excel workbook.
-
-    The token is a cryptographically random opaque value (24 url-safe bytes).
-    Each staged file is bound to the user who created it: fetch_staged only
-    returns it to that owner, so a leaked token can't be redeemed by another
-    user (a report may contain data they aren't authorized to see). A token
-    mismatch returns 404 to avoid confirming whether a token exists.
-    """
+    """Stream a staged Excel workbook. Token is bound to its creating user
+    (fetch_staged enforces it) so a leaked token can't be redeemed by anyone
+    else; a mismatch returns 404 rather than confirming the token exists."""
     _check_rate(_user.id)
     entry = excel.fetch_staged(token, _user.id)
     if entry is None:

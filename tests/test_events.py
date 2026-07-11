@@ -1,7 +1,5 @@
 """Tests for the Events feature (containers for groups of work items).
-
-Covers event CRUD, item linking/unlinking, email metadata, audit log,
-delete-preserves-items behavior, and migration safety.
+CRUD, item linking, email metadata, audit, delete-preserves-items, migration safety.
 """
 from __future__ import annotations
 
@@ -255,8 +253,7 @@ def test_init_db_with_events_idempotent(admin_client):
 
 
 def test_legacy_db_gets_event_id_column(tmp_path, monkeypatch):
-    """A legacy DB missing event_id on bugs: init_db should ALTER TABLE ADD
-    COLUMN (nullable) without disturbing existing rows."""
+    """A legacy DB missing bugs.event_id: init_db ALTERs it in (nullable) without disturbing rows."""
     import sqlite3
     db_file = tmp_path / "legacy.db"
     con = sqlite3.connect(db_file)
@@ -329,9 +326,7 @@ def test_legacy_db_gets_event_id_column(tmp_path, monkeypatch):
 
 
 def test_legacy_events_table_gets_project_id_column(tmp_path, monkeypatch):
-    """A legacy `events` table without project_id: init_db should add the
-    column without disturbing existing rows. Legacy events end up project-less
-    (project_id NULL); new events can carry a project normally."""
+    """A legacy events table without project_id: init_db adds it; legacy events stay project-less."""
     import sqlite3
     db_file = tmp_path / "legacy_events.db"
     con = sqlite3.connect(db_file)

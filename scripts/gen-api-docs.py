@@ -1,16 +1,6 @@
-"""Regenerate every API artifact from the live FastAPI app.
+"""Regenerate API artifacts (openapi.json/yaml, Postman collection, curl.md) under docs/api/.
 
-Outputs (under docs/api/):
-    openapi.json                          - authoritative spec
-    openapi.yaml                          - same spec, YAML form
-    Bug-Hunter.postman_collection.json    - Postman v2.1 importable collection
-    curl.md                               - copy-paste curl reference
-
-Importing app.main is safe - it does not open DB connections (those only
-fire inside the lifespan handler, which uvicorn invokes at startup).
-
-Re-run after any route or schema change:
-    python scripts/gen-api-docs.py
+Importing app.main is safe — DB connections only open in the lifespan handler.
 """
 from __future__ import annotations
 
@@ -28,26 +18,16 @@ OUT_DIR = ROOT / "docs" / "api"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Constants. Content-type strings are factored out so the body-dispatch logic
-# below reads as one switch instead of repeating string literals.
-# ---------------------------------------------------------------------------
 CT_JSON = "application/json"
 CT_MULTIPART = "multipart/form-data"
 CT_FORM = "application/x-www-form-urlencoded"
 
-# Placeholder values used only when emitting docs/Postman/curl examples.
-# They are not real secrets: `_BOOT_DEFAULT` is the bootstrap admin's seed
-# value (also published in README.md and .env.example so an operator can log
-# in on first boot), the others are invented strings used as form
-# placeholders. Constant names avoid credential-keyword tokens so they aren't
-# flagged as hard-coded secrets in this developer-tool script.
-_BOOT_DEFAULT = "ChangeMe123!"  # real bootstrap admin seed (config.BOOTSTRAP_ADMIN_PASSWORD)
+# Doc-example placeholders, not real secrets; names avoid credential keywords to dodge scanners.
+_BOOT_DEFAULT = "ChangeMe123!"  # bootstrap admin seed (also in README.md / .env.example)
 _RESET_DEFAULT = "BetterPass1"
 _USER_DEFAULT = "SecurePass1"
 
-# Per-schema example overrides — keeps the generated examples realistic for
-# the Bug Hunter domain instead of "string" / "user@example.com" stubs.
+# Per-schema example overrides — keeps generated examples domain-realistic.
 FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "LoginIn":          {"email": "admin@example.com", "password": _BOOT_DEFAULT},
     "UserIn":           {"name": "Jane Tester", "email": "jane@example.com",
@@ -77,10 +57,6 @@ TAG_ORDER = ["meta", "auth", "users", "projects", "bugs", "events", "stats",
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 
 
-# ---------------------------------------------------------------------------
-# Example generation — broken into single-purpose helpers so the dispatcher
-# itself stays under the cognitive-complexity threshold.
-# ---------------------------------------------------------------------------
 def _example_for_primitive(t: str, fmt: str) -> Any:
     if t == "string":
         return {
@@ -152,9 +128,6 @@ def example_from_schema(schema: dict, components: dict[str, dict],
     return _example_for_primitive(t or "", schema.get("format", ""))
 
 
-# ---------------------------------------------------------------------------
-# OpenAPI spec dump
-# ---------------------------------------------------------------------------
 def dump_spec() -> dict:
     spec = app.openapi()
     (OUT_DIR / "openapi.json").write_text(

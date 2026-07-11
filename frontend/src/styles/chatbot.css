@@ -1,16 +1,8 @@
-/* =====================================================================
- * Sleuth chatbot — bottom-right floating widget
- *
- * - 56px FAB collapsed; 380×560 panel anchored bottom-right when open.
- * - Mobile: full-width capped at 80vh.
- * - Uses the global :root[data-theme] tokens for dark/light theming.
- * - z-index below the bug modal so detail modals cover the chat.
- * - Selector, id, and class names are referenced by chatbot.js.
- * ================================================================== */
+/* Sleuth chatbot widget; z-index kept below the bug modal; selectors are referenced by chatbot.js. */
 
 .sleuth-host { font-family: inherit; }
 
-/* ---------- Floating Action Button ---------- */
+
 .sleuth-fab {
   position: fixed;
   right: 22px;
@@ -100,14 +92,12 @@
   box-shadow: 0 2px 6px rgba(0,0,0,0.3);
 }
 
-/* On phones the FAB is replaced by the "Ask Sleuth" button in the top chrome.
-   It remains in the DOM (the chrome button forwards its click) but is hidden.
-   Declared after the .sleuth-fab base rule so it overrides the base display. */
+/* Phones use the "Ask Sleuth" chrome button instead; hide FAB (kept in DOM, still forwards clicks). */
 @media (max-width: 900px) {
   .sleuth-fab { display: none; }
 }
 
-/* ---------- Panel ---------- */
+
 .sleuth-panel {
   position: fixed;
   right: 22px;
@@ -133,8 +123,7 @@
 }
 .sleuth-panel[hidden] { display: none; }
 
-/* Drag-to-resize grip — sits in the top-left corner. The panel is anchored
-   bottom-right, so dragging this corner up-and-left enlarges the window. */
+/* Top-left grip; panel is anchored bottom-right so dragging up-left enlarges it. */
 .sleuth-resize {
   position: absolute;
   top: 0;
@@ -163,7 +152,7 @@
   border-color: var(--accent, #3aa6d6);
 }
 
-/* ---------- Panel header ---------- */
+
 .sleuth-header {
   display: flex;
   align-items: center;
@@ -260,7 +249,7 @@
 .sleuth-icon-btn:hover { background: rgba(255,255,255,0.22); }
 .sleuth-icon-btn:active { transform: scale(0.92); }
 
-/* ---------- Tabs ---------- */
+
 .sleuth-tabs {
   display: flex;
   gap: 0;
@@ -289,7 +278,7 @@
   border-bottom-color: var(--accent, #3aa6d6);
 }
 
-/* ---------- Body / messages ---------- */
+
 .sleuth-body {
   flex: 1;
   overflow-y: auto;
@@ -373,7 +362,7 @@
 }
 .sleuth-msg.user a { color: inherit; text-decoration: underline; }
 
-/* Typing indicator */
+
 .sleuth-typing {
   align-self: flex-start;
   display: inline-flex;
@@ -398,7 +387,7 @@
   40%           { transform: translateY(-4px); opacity: 1; }
 }
 
-/* Chips & quick-reply buttons */
+
 .sleuth-chips {
   display: flex;
   flex-wrap: wrap;
@@ -556,14 +545,7 @@
   color: var(--text-muted, #94a3b8);
   margin-top: 2px;
 }
-/* The Download button is rendered as an <a> so the browser handles the
-   file download href cleanly. But `.sleuth-msg a` above (specificity
-   1 class + 1 element = 11) was beating `.sleuth-file-btn` (1 class
-   = 10), forcing the link colour back to var(--accent) — the SAME
-   purple-blue as the gradient background, which made the "Download"
-   label vanish in both themes. We bump the selector to `a.sleuth-file-btn`
-   so its specificity matches `.sleuth-msg a` and the rule order
-   decides — and rule order favours us. */
+/* a.sleuth-file-btn bumps specificity to match `.sleuth-msg a`, which otherwise won and made the Download label invisible (same color as background). */
 a.sleuth-file-btn,
 .sleuth-file-btn {
   background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
@@ -619,7 +601,7 @@ a.sleuth-file-btn:active,
 }
 .sleuth-suggestions button:active { transform: translateY(0); }
 
-/* ---------- Input row ---------- */
+
 .sleuth-input-row {
   display: flex;
   gap: 8px;
@@ -710,7 +692,7 @@ a.sleuth-file-btn:active,
   transform: none;
 }
 
-/* ---------- History tab ---------- */
+
 .sleuth-history-list {
   display: flex;
   flex-direction: column;
@@ -742,7 +724,7 @@ a.sleuth-file-btn:active,
   font-style: italic;
 }
 
-/* ---------- Settings tab ---------- */
+
 .sleuth-settings {
   padding: 14px;
   display: flex;
@@ -790,7 +772,7 @@ a.sleuth-file-btn:active,
   border-color: var(--accent, #3aa6d6);
 }
 
-/* Toggle switch */
+
 .sleuth-toggle {
   position: relative;
   display: inline-block;
@@ -881,7 +863,7 @@ a.sleuth-file-btn:active,
   box-shadow: 0 4px 10px var(--accent-glow, rgba(129,140,248,0.40));
 }
 
-/* ---------- Mobile ---------- */
+
 @media (max-width: 540px) {
   .sleuth-fab {
     right: 14px;
@@ -904,7 +886,7 @@ a.sleuth-file-btn:active,
   .sleuth-resize { display: none; }
 }
 
-/* ---------- High-contrast / forced-colors ---------- */
+
 @media (forced-colors: active) {
   .sleuth-fab,
   .sleuth-msg.user,

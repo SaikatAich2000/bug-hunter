@@ -9,10 +9,7 @@ from pathlib import Path
 
 logger = logging.getLogger("bug_hunter.config")
 
-# Load a local .env before any setting is read. `override=False` (the default)
-# means real environment variables (e.g. those set by docker-compose or the
-# hosting platform) win over the file, so production config is never shadowed
-# by a stray .env. No-op if python-dotenv isn't installed or no .env exists.
+# Load .env before any setting is read; real env vars win over the file.
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - dotenv is an optional dependency
@@ -20,13 +17,7 @@ except ImportError:  # pragma: no cover - dotenv is an optional dependency
 
 
 def _load_dotenv() -> None:
-    """Load a local .env if python-dotenv is installed and a file exists.
-
-    A missing .env is fine (load_dotenv just no-ops). A malformed or unreadable
-    file is logged rather than raised so a bad .env doesn't crash the whole app,
-    but it's still surfaced: a security-relevant override silently failing is
-    worse than a noisy log line.
-    """
+    """Load a local .env if available; a bad file is logged, never fatal."""
     if load_dotenv is None:  # pragma: no cover - dotenv is an optional dependency
         return
     try:
@@ -38,19 +29,14 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
-# Recognized boolean spellings. Anything outside these sets is rejected in
-# _env_bool rather than silently flipping a hardening switch.
+# Recognized boolean spellings; anything else falls back to the default.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _FALSY = frozenset({"0", "false", "no", "off", ""})
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
-    """Parse a boolean env var against the explicit truthy/falsy vocabulary above.
-
-    An unrecognized value (e.g. SMTP_USE_TLS=enabled) falls back to the declared
-    default rather than False, so a typo can't silently disable a security
-    control whose default is True.
-    """
+    """Parse a boolean env var; unrecognized values fall back to the default
+    (not False) so a typo can't silently disable a security control."""
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -68,11 +54,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
-    """Parse an int env var, falling back to the default on blank/garbage and
-    clamping to the minimum if given. A malformed value must not crash the app at
-    import time, and zero/negative for a knob like SESSION_TTL_SECONDS would be
-    silently wrong, so we clamp rather than trust. Float-formatted values such as
-    "3600.0" (common in Helm-templated envs) are accepted via float()."""
+    """Parse an int env var: default on garbage, clamp to minimum, accept
+    float-formatted values like "3600.0"."""
     raw = os.getenv(name)
     if raw in (None, ""):
         value = default
@@ -94,14 +77,8 @@ def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
 
 
 def _env_float(name: str, default: float, *, minimum: float | None = None) -> float:
-    """Float counterpart of _env_int: crash-safe and optionally clamped.
-
-    Non-finite values are explicitly rejected. float() happily parses
-    'inf'/'-inf'/'nan', and the `< minimum` clamp never catches them (NaN
-    comparisons are always False; inf is never below a finite minimum), so
-    without this guard an inf/nan could slip into a cloud-call budget or an
-    httpx timeout. Coerce those back to the default before clamping.
-    """
+    """Float counterpart of _env_int; inf/nan are rejected explicitly since the
+    minimum clamp never catches them."""
     raw = os.getenv(name)
     if raw in (None, ""):
         value = default
@@ -133,16 +110,11 @@ class Settings:
         f"sqlite:///{BASE_DIR / 'bug_hunter.db'}",
     )
 
-    # Postgres connection-pool sizing (ignored for SQLite). Defaults suit a
-    # normal box; lower them on a very small VM so a traffic spike can't open
-    # pool_size + max_overflow connections at once.
+    # Postgres pool sizing (ignored for SQLite); lower on small VMs.
     DB_POOL_SIZE: int = _env_int("DB_POOL_SIZE", 5, minimum=1)
     DB_MAX_OVERFLOW: int = _env_int("DB_MAX_OVERFLOW", 10, minimum=0)
 
-    # Default empty = same-origin only. Cross-origin clients must be explicitly
-    # allow-listed here; this avoids both a permissive CORS policy and the
-    # wildcard+credentials combo that browsers reject. Same-origin SPA requests
-    # are unaffected (the CORS middleware short-circuits for them).
+    # Empty default = same-origin only; cross-origin clients must be allow-listed.
     CORS_ORIGINS: list[str] = [
         o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()
     ]
@@ -151,21 +123,12 @@ class Settings:
     APP_VERSION: str = os.getenv("APP_VERSION", "3.1")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
-    # Explicit deployment-environment signal. Set APP_ENV=production (also
-    # accepts prod/staging) on any real deploy, including HTTP/intranet ones
-    # behind a TLS-terminating proxy where COOKIE_SECURE might be false. This
-    # enables fail-closed production hardening: refuse the default admin password,
-    # require a strong SESSION_SECRET, refuse console email, hide API docs. When
-    # APP_ENV is unset the app falls back to the COOKIE_SECURE signal so existing
-    # HTTPS deploys keep hardening with no config change. See is_production below
-    # and the startup checks in app/main.py.
+    # Deployment-environment signal; production/prod/staging enables the
+    # fail-closed hardening checks (see is_production and app/main.py).
     APP_ENV: str = os.getenv("APP_ENV", "").strip().lower()
 
-    # Hard ceiling on request body size in bytes. The 50 MB attachment cap plus
-    # multipart overhead and headers fits under 60 MB; raise via env if you need
-    # larger uploads. Requests over this limit are rejected with 413 before any
-    # body is read into memory, so a hostile client can't exhaust RAM by
-    # claiming a huge Content-Length.
+    # Request-body ceiling; over-limit requests get 413 before the body is read,
+    # so a huge Content-Length can't exhaust RAM.
     MAX_REQUEST_BODY_BYTES: int = _env_int(
         "MAX_REQUEST_BODY_BYTES", 60 * 1024 * 1024, minimum=1024
     )
@@ -175,33 +138,23 @@ class Settings:
     API_KEY: str = os.getenv("API_KEY", "")
 
     # --- Authentication ---
-    # Signs session cookies. Set to a long random string in production
-    # (e.g. `openssl rand -hex 32`). If blank, a process-local random secret is
-    # generated at startup, which invalidates all sessions on restart: fine for
-    # dev, not for production.
+    # Signs session cookies; if blank a per-process random secret is used
+    # (sessions die on restart — dev only).
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", "")
-    # Session lifetime in seconds. Default is 1 day.
+    # Session lifetime in seconds (default 1 day).
     SESSION_TTL_SECONDS: int = _env_int("SESSION_TTL_SECONDS", 86400, minimum=60)
-    # Set to true behind HTTPS so the cookie is only sent on TLS connections.
+    # Set true behind HTTPS so the cookie is TLS-only.
     COOKIE_SECURE: bool = _env_bool("COOKIE_SECURE", False)
-    # When true, jti-less session cookies (issued before the per-session sessions
-    # table existed) are rejected. Those cookies can't be revoked per-device.
-    # Default False keeps them valid through a migration window; flip to True once
-    # all clients have re-logged-in to close the revocation gap.
+    # Reject legacy jti-less cookies (not revocable per-device); flip on after
+    # a migration window.
     SESSION_REQUIRE_JTI: bool = _env_bool("SESSION_REQUIRE_JTI", False)
-    # Interactive API docs (/docs, /redoc, /openapi.json). Auto-enabled in dev,
-    # disabled in production (they publish the full endpoint surface for recon).
-    # Set true to force them on.
+    # /docs, /redoc, /openapi.json — off in production (endpoint recon surface).
     ENABLE_API_DOCS: bool = _env_bool("ENABLE_API_DOCS", False)
-    # Set to true when the app sits behind a trusted reverse proxy that sets
-    # X-Forwarded-For, so rate limiting buckets per real client IP rather than
-    # per proxy IP. Leave false in dev or direct-uvicorn deploys: a spoofed XFF
-    # header would otherwise let an attacker bypass the rate limiter.
+    # Only trust X-Forwarded-For behind a trusted proxy; otherwise a spoofed
+    # header bypasses the rate limiter.
     TRUST_PROXY_FORWARDED_FOR: bool = _env_bool("TRUST_PROXY_FORWARDED_FOR", False)
-    # Number of trusted proxy hops in front of the app. A proxy appends the peer
-    # it saw to the right of X-Forwarded-For, so the trustworthy client address
-    # is the Nth entry from the right, where N is this value. The left-most entry
-    # is fully client-controlled and must not be used for security decisions.
+    # Trusted proxy hops: the client IP is the Nth XFF entry from the right;
+    # the left-most entry is client-controlled.
     TRUST_PROXY_HOP_COUNT: int = _env_int("TRUST_PROXY_HOP_COUNT", 1, minimum=1)
     # Bootstrap admin credentials, used only when the users table is empty.
     BOOTSTRAP_ADMIN_EMAIL: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@bughunter.local")
@@ -209,28 +162,19 @@ class Settings:
     BOOTSTRAP_ADMIN_NAME: str = os.getenv("BOOTSTRAP_ADMIN_NAME", "Admin")
 
     # --- Password policy ----------------------------------------------------
-    # Strength rules enforced in app/schemas._check_password_strength.
-    # The legacy "changeme" password is accepted regardless of these settings
-    # so existing accounts keep working; that exception is intentional.
+    # Enforced in app/schemas._check_password_strength; legacy "changeme" is
+    # intentionally exempt.
     PASSWORD_MIN_LENGTH: int = _env_int("PASSWORD_MIN_LENGTH", 8, minimum=1)
     # Require at least one letter and one digit.
     PASSWORD_REQUIRE_COMPLEXITY: bool = _env_bool("PASSWORD_REQUIRE_COMPLEXITY", True)
-    # Account-enumeration guard on POST /api/auth/forgot-password. When true
-    # (default), the endpoint always returns 204 and never reveals whether an
-    # email address maps to an account. Set false for the friendlier UX that
-    # 404s on an unknown address (a lower-security trade-off). Either way a
-    # reset email is only ever sent to a real, active account, and the
-    # server-side "no account" branch is audited.
+    # When true, forgot-password always returns 204 so account existence never leaks.
     FORGOT_PASSWORD_ENUMERATION_SAFE: bool = _env_bool(
         "FORGOT_PASSWORD_ENUMERATION_SAFE", True
     )
 
     # --- Reports ------------------------------------------------------------
-    # Hard ceiling on rows a single XLSX export may materialize. The export
-    # buffers the entire workbook in memory, so an unbounded export over the
-    # full work-item table could OOM a small worker. Above this limit the
-    # endpoint returns 413 and asks the caller to narrow filters. The default
-    # is generous enough for real audit/compliance exports.
+    # XLSX export row ceiling; the workbook is buffered in memory, so unbounded
+    # exports could OOM a small worker (over-limit returns 413).
     MAX_REPORT_ROWS: int = _env_int("MAX_REPORT_ROWS", 50000, minimum=1)
 
     # --- Sleuth cloud LLM (optional, natural-language fallback) -------------
@@ -349,11 +293,14 @@ class Settings:
     # email per user. Security/transactional emails (password reset) are never
     # batched and always send immediately.
     EMAIL_DIGEST_ENABLED: bool = _env_bool("EMAIL_DIGEST_ENABLED", False)
-    # How far back the digest job looks for un-emailed operations. Slightly more
-    # than 24h so a cron that drifts or runs late never silently drops a day,
-    # while still bounding the very first run so it can't replay months of history.
+    # How far back the digest job looks for un-emailed operations. Two days-ish
+    # (twice the daily gap) so one missed or failed run — a restart at fire
+    # time, an SMTP outage whose rows were released for retry — is fully caught
+    # up by the next run, while still bounding the very first run so it can't
+    # replay months of history. A wider window can never double-send: rows are
+    # claimed on emailed_at IS NULL.
     EMAIL_DIGEST_LOOKBACK_HOURS: int = _env_int(
-        "EMAIL_DIGEST_LOOKBACK_HOURS", 26, minimum=1
+        "EMAIL_DIGEST_LOOKBACK_HOURS", 50, minimum=1
     )
     # Optional in-app scheduler. Set to a standard 5-field cron expression
     # (e.g. "0 7 * * *") and the app runs the digest itself on that schedule,

@@ -85,6 +85,7 @@ models/*.safetensors
 .aider*
 .cursor/
 .continue/
+.playwright-mcp/
 
 # --- OS noise ---
 .DS_Store

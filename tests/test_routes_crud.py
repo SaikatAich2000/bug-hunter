@@ -1,8 +1,6 @@
-"""Coverage tests for the CRUD routes: projects, users, sessions, audit, notifications.
+"""Coverage tests for CRUD routes (projects, users, sessions, audit, notifications).
 
-Relies entirely on the ``client`` / ``admin_client`` / ``user_client`` fixtures
-from conftest.py (temp SQLite, email/push/HIBP disabled). Tests that need to
-manipulate persisted rows directly use the app's own SQLAlchemy ``SessionLocal``.
+Uses the conftest fixtures; row-level setups go through the app's SessionLocal.
 """
 from __future__ import annotations
 
@@ -48,8 +46,7 @@ def _mk_bug(c: TestClient, project_id: int, **extra) -> dict:
 
 
 def _new_client() -> TestClient:
-    """Return a second TestClient sharing the same app/db, so two users can hold
-    independent session cookies simultaneously."""
+    """Second TestClient on the same app/db so two users can hold independent session cookies."""
     from app.main import app
     return TestClient(app)
 
@@ -157,8 +154,7 @@ def test_cov_update_user_cannot_deactivate_self(admin_client):
 
 
 def test_cov_update_user_last_admin_demote_self_blocked(admin_client):
-    """The sole admin demoting themselves is blocked with 400 (self-edit guard fires
-    before the last-admin guardrail; the guardrail raise is unreachable — see note below)."""
+    """Sole admin self-demote is blocked 400 (self-edit guard fires before the unreachable last-admin raise)."""
     me = admin_client.get("/api/auth/me").json()
     r = admin_client.put(f"/api/users/{me['id']}", json={"role": "user"})
     assert r.status_code == 400
@@ -166,10 +162,7 @@ def test_cov_update_user_last_admin_demote_self_blocked(admin_client):
 
 
 def test_cov_update_user_demote_other_admin_runs_last_admin_check(admin_client):
-    """Demoting a different admin (actor != target) skips the self-edit guard and
-    runs the last-admin count. The bootstrap actor is still an active admin, so
-    the count is >= 1 and the demotion succeeds. Covers the count branch; the
-    unreachable raise is documented below."""
+    """Demoting another admin skips the self-edit guard and runs the last-admin count (>=1, so it succeeds)."""
     other = _mk_user(admin_client, "Cov Admin3", "cov.admin3@example.com",
                      role="admin", password="Admin3Pass9")
     r = admin_client.put(f"/api/users/{other['id']}", json={"role": "user"})
@@ -195,8 +188,7 @@ def test_cov_update_user_duplicate_email_409(admin_client):
 
 
 def test_cov_update_user_role_change_and_password_reset(admin_client):
-    """Promote a user to manager and reset their password in one PUT. 'changeme'
-    must still be accepted (legacy exception), so we use it to prove the path works."""
+    """Promote to manager + reset password in one PUT; 'changeme' stays accepted (legacy exception)."""
     u = _mk_user(admin_client, "Cov Promote", "cov.promote@example.com")
     r = admin_client.put(f"/api/users/{u['id']}",
                          json={"role": "manager", "password": "changeme"})
@@ -217,9 +209,7 @@ def test_cov_delete_user_404(admin_client):
 
 
 def test_cov_delete_user_admin_runs_last_admin_count(admin_client):
-    """Deleting an admin (actor != target) runs the last-admin count. The
-    bootstrap actor is still active, so count >= 1 and the delete succeeds.
-    Covers the count query; the unreachable raise is documented below."""
+    """Deleting another admin runs the last-admin count (bootstrap still active, so >=1 and delete succeeds)."""
     target = _mk_user(admin_client, "Cov DelAdmin", "cov.deladmin@example.com",
                       role="admin", password="DelAdmin99")
     r = admin_client.delete(f"/api/users/{target['id']}")
@@ -241,8 +231,7 @@ def test_cov_delete_user_success(admin_client):
 # sessions.py
 # ===========================================================================
 def test_cov_sessions_list_and_is_current(admin_client):
-    """Session list returns multiple rows and marks exactly the admin's own row
-    as is_current."""
+    """Session list returns multiple rows and marks exactly the admin's own as is_current."""
     _mk_user(admin_client, "Cov SessU", "cov.sessu@example.com")
     other_c = _new_client()
     _login(other_c, "cov.sessu@example.com", "User12345")
@@ -255,9 +244,7 @@ def test_cov_sessions_list_and_is_current(admin_client):
 
 
 def test_cov_sessions_sweep_expired_rows(admin_client):
-    """Listing sessions deletes rows whose expires_at is in the past. We
-    back-date a session row via SessionLocal directly, then confirm the
-    GET sweeps it."""
+    """Listing sessions sweeps rows whose expires_at is past (back-dated directly, then confirmed gone)."""
     from datetime import datetime, timezone, timedelta
     from app.database import SessionLocal
     from app.models import Session as SessionRow
@@ -324,10 +311,7 @@ def test_cov_revoke_session_404(admin_client):
 # audit.py
 # ===========================================================================
 def test_cov_audit_filter_by_entity_actor_and_numeric_query(admin_client):
-    """Exercises the audit filter/pagination branch: entity_type, actor_user_id,
-    numeric free-text (triggers the OR-clause builder for entity_id/bug_id/cast),
-    and limit/offset. Only checks that the response is 200 + list; exact rows
-    vary by id."""
+    """Audit filter/pagination: entity_type, actor_user_id, numeric free-text (OR-clause builder), limit/offset."""
     me = admin_client.get("/api/auth/me").json()
     p = _mk_project(admin_client, "Cov Audit Proj")
     bug = _mk_bug(admin_client, p["id"], title="Cov Audit Bug")
@@ -351,8 +335,7 @@ def test_cov_audit_filter_by_entity_actor_and_numeric_query(admin_client):
 
 
 def test_cov_audit_query_with_hash_and_offset(admin_client):
-    """'#'-prefixed numeric query with a non-zero offset hits the entity_id
-    substring cast clause. Just checks 200 + list."""
+    """'#'-prefixed numeric query with non-zero offset hits the entity_id substring cast clause."""
     p = _mk_project(admin_client, "Cov Audit Proj 2")
     _mk_bug(admin_client, p["id"], title="Cov Audit Bug 2")
     r = admin_client.get("/api/audit", params={"q": "#1", "limit": 10, "offset": 1})
@@ -364,9 +347,7 @@ def test_cov_audit_query_with_hash_and_offset(admin_client):
 # notifications.py
 # ===========================================================================
 def test_cov_mark_read_already_read_skips_commit(admin_client):
-    """Mark-read on an already-read notification must short-circuit (read_at is not None)
-    and still return {'ok': True}. We generate a real notification, read it once, then
-    call read again to hit the skip branch."""
+    """Mark-read on an already-read notification short-circuits (read_at set) and still returns {'ok': True}."""
     p = _mk_project(admin_client, "Cov Notif Proj")
     bob = _mk_user(admin_client, "Cov Notif Bob", "cov.notif.bob@example.com")
     _mk_bug(admin_client, p["id"], title="Cov Notif Bug", assignee_ids=[bob["id"]])
@@ -389,24 +370,9 @@ def test_cov_mark_read_already_read_skips_commit(admin_client):
     assert row["read_at"] is not None
 
 
-# Intentionally-uncovered lines
-#
-# A few defensive/dead-code paths can't be reached by any clean, non-brittle
-# API test and are left uncovered intentionally:
-#
-#   sessions.py _is_current — `if not parsed: return False`
-#     Unreachable. Every caller is admin-gated, and auth already rejects
-#     malformed cookies before the handler runs, so parse_session_token always
-#     returns a truthy tuple by the time _is_current is called.
-#
-#   audit.py — `except ValueError: pass` after int(digits_match...)
-#     Unreachable. The captured group comes from re.search(r"\d+", raw),
-#     so it is always pure ASCII digits and int() never raises here.
-#
-#   users.py — last-admin guardrail raise on update and on delete
-#     Both raises are pre-empted: actor == target hits the self-edit/self-delete
-#     guard first; actor != target means the actor is an active admin, so the
-#     other-admin count is always >= 1 and the == 0 branch is never taken.
-#     The count queries themselves are covered by
-#     test_cov_update_user_demote_other_admin_runs_last_admin_check and
-#     test_cov_delete_user_admin_runs_last_admin_count.
+# Intentionally-uncovered defensive/dead-code paths (unreachable by clean API tests):
+#   sessions.py _is_current `if not parsed` — auth rejects malformed cookies before the handler runs.
+#   audit.py `except ValueError` after int() — the group is re.search(r"\d+"), always ASCII digits.
+#   users.py last-admin guardrail raises (update/delete) — self-edit guard or count>=1 always pre-empts them
+#     (count queries covered by test_cov_update_user_demote_other_admin_runs_last_admin_check /
+#      test_cov_delete_user_admin_runs_last_admin_count).

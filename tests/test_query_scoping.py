@@ -1,8 +1,5 @@
-"""NLU scoping tests.
-
-Covers NLU over-match guards, the classifier degenerate-input check, and
-item-type scoping. DB-backed tests (end-to-end filtering, get_event truncation)
-use the client fixture.
+"""NLU scoping tests: over-match guards, classifier degenerate input, item-type scoping.
+DB-backed cases (end-to-end filtering, get_event truncation) use the client fixture.
 """
 from __future__ import annotations
 

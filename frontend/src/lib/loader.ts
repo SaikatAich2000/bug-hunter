@@ -1,7 +1,4 @@
-/**
- * Counter-based global loader — multiple concurrent callers each increment/decrement
- * so the overlay stays visible until all of them finish.
- */
+/** Counter-based global loader; overlay stays up until all callers finish. */
 let pending = 0;
 
 function apply(message?: string): void {

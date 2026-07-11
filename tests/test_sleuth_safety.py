@@ -1,13 +1,5 @@
-"""DB-safety tests for the Sleuth assistant.
-
-Covers:
-- Read intents (list / count / detail / stats / export / activity) must not
-  write anything, not even an audit row.
-- Write intents are atomic: a permission failure or missing target leaves the
-  DB exactly as it was, with no partial state.
-- Concurrent users don't interfere with each other's pending actions.
-- Memory expiry, or "yes" with nothing pending, must not crash or write to DB.
-- Sleuth never alters the schema: no DROP, no ALTER, no surprise tables.
+"""DB-safety tests for Sleuth: reads never write (not even an audit row), failed writes roll back atomically,
+pending actions are isolated per user, memory edge cases don't crash, and the schema is never altered.
 """
 from __future__ import annotations
 
@@ -35,9 +27,7 @@ os.environ["SLEUTH_CLOUD_ENABLED"] = "0"   # never call the cloud in tests
 
 from sqlalchemy import inspect, text
 
-# Force a fresh app import bound to this file's dedicated DB. Without this,
-# a shared engine from an earlier-collected module can point at a torn-down DB
-# and produce "no such table" errors mid-suite.
+# Force a fresh app import bound to this file's DB (a stale shared engine causes "no such table").
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -54,11 +44,7 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind module-level app.* references each test.
-
-    conftest's `client` fixture purges app.* and re-imports to rebind the
-    engine; stale module-level refs here would diverge from execute()'s engine.
-    """
+    """Re-bind module-level app.* refs each test (conftest purges app.* to rebind the engine)."""
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -198,9 +184,7 @@ def test_schema_unchanged() -> None:
             "bug_assignees", "comments", "activity_log",
             "attachments", "sessions",
         }
-        # The cloud assistant adds two durable conversation tables (additive,
-        # created by create_all, data untouched). Allow-listed here; the test
-        # still guards against drops, alters, and any other surprise tables.
+        # Two additive conversation tables are allow-listed; the test still guards drops/alters/surprises.
         approved_chat_tables = {"chat_conversations", "chat_messages"}
         leaked = [t for t in tables
                   if t not in approved_chat_tables
@@ -291,8 +275,7 @@ def test_permission_denial_no_writes() -> None:
         before_proj = db.query(models.Project).count()
         before_act = db.query(models.Activity).count()
 
-        # Bob is role=user; Sleuth writes are admin-only. The create is denied
-        # before staging, so the follow-up "yes" has nothing to execute.
+        # Bob (user): admin-only write denied before staging, so "yes" has nothing to execute.
         denied = executor.execute("create project Saturn", db, bob)
         check("perm: regular user's write denied up front",
               denied.intent == "action_denied", f"got {denied.intent}")
@@ -367,8 +350,7 @@ def test_memory_edge_cases() -> None:
     section("Memory: TTL eviction, max sessions, reset")
     memstore._clear_all_for_test()
 
-    # Fill past the cap using direct API calls (no DB needed) and verify the
-    # cap is enforced.
+    # Fill past the cap via direct API calls and verify it holds.
     for i in range(1, 250):
         memstore.remember_bug(i, i * 10)
     sessions = memstore._all_sessions_for_test()

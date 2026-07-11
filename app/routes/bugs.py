@@ -1,4 +1,4 @@
-﻿"""Bugs API + comments + attachments + activity (per-bug)."""
+"""Bugs API + comments + attachments + activity (per-bug)."""
 from __future__ import annotations
 
 import re
@@ -45,22 +45,19 @@ from app.schemas import (
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 
-# Centralised detail strings so error wording stays consistent.
 _DETAIL_BUG_NOT_FOUND = "Bug not found"
 _DETAIL_ATTACHMENT_NOT_FOUND = "Attachment not found"
 _DEFAULT_MIME = "application/octet-stream"
 
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per attachment
 
-# Numeric search tokens above Postgres int4 max overflow the column and raise
-# DataError; treat them as free text instead.
+# int4 max; larger numeric search tokens are treated as free text (avoids DataError).
 _MAX_PK_INT = 2**31 - 1
 
-# Stream uploads in 1 MB chunks so the request fails before consuming RAM.
+# Stream uploads in 1 MB chunks so oversize requests fail before consuming RAM.
 _UPLOAD_CHUNK = 1024 * 1024
 
-# Per-user upload rate limit (20/min). An authenticated session could otherwise
-# chain 50 MB POSTs and bloat the DB.
+# Per-user upload rate limit; stops chained 50 MB POSTs from bloating the DB.
 _UPLOAD_RATE_WINDOW_SECONDS = 60
 _UPLOAD_RATE_MAX = 20
 _upload_buckets: dict[int, deque] = {}
@@ -68,9 +65,7 @@ _upload_rate_lock = threading.Lock()
 # Bound the dict size to avoid unbounded growth under high user churn.
 _UPLOAD_BUCKETS_MAX = 5_000
 
-# Per-user comment rate limit (30/min). Each comment fans out notifications and
-# emails to the reporter and all assignees, so unbounded posting is an
-# amplification risk.
+# Per-user comment rate limit; each comment fans out notifications/emails (amplification risk).
 _COMMENT_RATE_WINDOW_SECONDS = 60
 _COMMENT_RATE_MAX = 30
 _comment_buckets: dict[int, deque] = {}
@@ -81,11 +76,8 @@ def _check_user_rate(
     buckets: dict[int, deque], lock: threading.Lock, user_id: int,
     *, max_req: int, window: int, detail: str, cap: int = _UPLOAD_BUCKETS_MAX,
 ) -> None:
-    """Per-user sliding-window rate guard; raises 429 on limit breach.
-
-    In-process only (no Redis). Multi-worker deployments get per-worker buckets;
-    put nginx limit_req in front if a global limit is needed.
-    """
+    """Per-user sliding-window rate guard; 429 on breach.
+    In-process only: multi-worker deployments get per-worker buckets."""
     now = time.monotonic()
     cutoff = now - window
     with lock:
@@ -121,8 +113,7 @@ def _check_comment_rate(user_id: int) -> None:
         detail="Too many comments, slow down a moment.",
     )
 
-# Types a browser renders inline and executes (same-origin risk). These are
-# downgraded to application/octet-stream and served as attachments.
+# Browser-executable types (same-origin risk); downgraded to octet-stream attachments.
 _ACTIVE_CONTENT_TYPES = {
     "text/html", "application/xhtml+xml", "application/xml", "text/xml",
     "image/svg+xml", "application/javascript", "text/javascript",

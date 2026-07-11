@@ -1,12 +1,6 @@
 /**
- * Pick a report type, set filters, Run, then Download XLSX.
- * Shares the same backend engine as Sleuth, so results are identical.
- *
- * - Catalog loads once on mount (GET /api/reports/types).
- * - Filters are collected fresh on each Run; the XLSX export reuses the
- *   filter blob from the last successful run, not the current UI state.
- * - The inline table is server-side capped; the banner reflects
- *   `truncated` / `truncated_cap` from POST /api/reports/run.
+ * Pick a report type, set filters, Run, then Download XLSX (same backend engine as Sleuth).
+ * Catalog loads once on mount; XLSX export reuses the last successful run's filters, not current UI state.
  */
 import { useEffect, useRef, useState } from "react";
 import { api, apiBlob } from "../lib/api";
@@ -22,17 +16,12 @@ import type {
   ReportTypesOut,
 } from "../types";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const REPORTS_DEFAULT_PRESETS: Record<string, number> = {
   last_7_days: 7,
   last_30_days: 30,
 };
 
-/** Local calendar date as "YYYY-MM-DD". Avoids toISOString() which shifts
- *  the date for users west of UTC late in the evening. */
+/** Local calendar date as "YYYY-MM-DD" (avoids toISOString()'s west-of-UTC evening shift). */
 function isoDay(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -45,8 +34,7 @@ function colAlign(col: ReportColumn): "left" | "right" {
   return col.align === "right" ? "right" : "left";
 }
 
-/** Render a cell value as readable text: Yes/No for booleans, JSON for
- *  objects (avoids "[object Object]"), truncated at 200 chars. */
+/** Cell value as readable text: Yes/No for booleans, JSON for objects, truncated at 200 chars. */
 function reportCellText(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -64,8 +52,7 @@ function reportCellText(value: unknown): string {
   return text;
 }
 
-/** Plain-object summary values (e.g. by_type: {"Bug": 252}) are rendered
- *  as labelled lists rather than raw JSON. */
+/** Plain-object summary values (e.g. by_type: {"Bug": 252}) render as labelled lists, not raw JSON. */
 function isBreakdown(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -74,10 +61,6 @@ function isBreakdown(value: unknown): value is Record<string, unknown> {
 function toggleVal<T>(list: readonly T[], v: T): T[] {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 }
-
-// ---------------------------------------------------------------------------
-// Filter state
-// ---------------------------------------------------------------------------
 
 /** Keys mirror the chip `data-name` attributes. */
 interface ChipState {
@@ -115,10 +98,6 @@ interface ReportFilters {
   text_search: string | null;
   label: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// ChipGroup
-// ---------------------------------------------------------------------------
 
 interface ChipItem<T extends string | number> {
   value: T;
@@ -160,15 +139,10 @@ function ChipGroup<T extends string | number>({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ReportsView
-// ---------------------------------------------------------------------------
-
 export default function ReportsView() {
   const { projects, users } = useApp();
 
-  // `lastRun` holds the key + filters from the most recent successful run.
-  // The download button is disabled until it is set.
+  // `lastRun` holds the key + filters from the most recent successful run (download disabled until set).
   const [catalog, setCatalog] = useState<ReportTypesOut | null>(null);
   const [reportKey, setReportKey] = useState("");
   const [result, setResult] = useState<ReportRunResult | null>(null);
@@ -200,7 +174,7 @@ export default function ReportsView() {
     }
   };
 
-  // Load catalog once; strict-mode double-invocation guard via initRef.
+  // Load catalog once; initRef guards strict-mode double-invocation.
   const initRef = useRef(false);
   useEffect(() => {
     if (initRef.current) return;

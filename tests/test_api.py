@@ -4,9 +4,7 @@ from __future__ import annotations
 import io
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _make_user(client, name="Alice", email=None, role="user", password="TestUserPwd9X",
                project_ids=None):
     email = email or f"{name.lower()}@example.com"
@@ -38,9 +36,7 @@ def _make_bug(client, project_id, **extra):
     return r.json()
 
 
-# ---------------------------------------------------------------------------
 # Public meta endpoints (no auth)
-# ---------------------------------------------------------------------------
 def test_health_and_meta_no_auth(client):
     """/api/health and /api/meta are intentionally unauthenticated."""
     r = client.get("/api/health")
@@ -51,9 +47,7 @@ def test_health_and_meta_no_auth(client):
     assert body["environments"] == ["DEV", "UAT", "PROD"]
 
 
-# ---------------------------------------------------------------------------
 # Auth endpoints
-# ---------------------------------------------------------------------------
 def test_unauthenticated_endpoints_return_401(client):
     for path in ("/api/bugs", "/api/projects", "/api/users", "/api/stats", "/api/audit"):
         r = client.get(path)
@@ -116,19 +110,14 @@ def test_change_password_requires_correct_current(admin_client):
 
 
 def test_forgot_password_does_not_leak_account_existence(client):
-    """The endpoint always returns 204 regardless of whether the email exists,
-    preventing account enumeration. A reset email is only queued for a real,
-    active account; unknown-address attempts are still audited.
-    """
+    """Always 204 whether or not the email exists, preventing account enumeration."""
     r = client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
     assert r.status_code == 204
     r = client.post("/api/auth/forgot-password", json={"email": "doesnotexist@nowhere.test"})
     assert r.status_code == 204
 
 
-# ---------------------------------------------------------------------------
 # User CRUD (admin only)
-# ---------------------------------------------------------------------------
 def test_user_crud_admin(admin_client):
     u = _make_user(admin_client, name="Alice", email="alice@example.com",
                    role="user", password="Alice1234")
@@ -165,8 +154,7 @@ def test_admin_cannot_demote_self_to_user(admin_client):
 
 def test_cannot_remove_last_admin(admin_client):
     """Demoting or deleting the last admin account is always blocked."""
-    # Only one admin exists (the bootstrap). Add a second so a demotion is allowed,
-    # then remove that second admin and confirm the last one can't be demoted.
+    # Add a second admin so demotion is allowed, then confirm the last one can't be demoted.
     other = _make_user(admin_client, name="Other", email="other@example.com",
                        role="admin", password="Other1234")
     r = admin_client.put(f"/api/users/{other['id']}", json={"role": "user"})
@@ -176,9 +164,7 @@ def test_cannot_remove_last_admin(admin_client):
     assert r.status_code == 400
 
 
-# ---------------------------------------------------------------------------
 # Projects (manager+ only for write)
-# ---------------------------------------------------------------------------
 def test_project_create_admin(admin_client):
     p = _make_project(admin_client, name="Mobile App")
     assert p["name"] == "Mobile App"
@@ -194,9 +180,7 @@ def test_regular_user_can_list_projects(user_client):
     assert r.status_code == 200
 
 
-# ---------------------------------------------------------------------------
 # Bugs + can_edit + permissions
-# ---------------------------------------------------------------------------
 def test_admin_creates_bug_can_edit_true(admin_client):
     p = _make_project(admin_client, name="P1")
     bug = _make_bug(admin_client, p["id"], title="Test bug")
@@ -277,9 +261,7 @@ def test_manager_can_edit_anyones_bug(admin_client):
     assert r.status_code == 200
 
 
-# ---------------------------------------------------------------------------
 # Comments + attachments use session
-# ---------------------------------------------------------------------------
 def test_comment_uses_session_user(admin_client):
     p = _make_project(admin_client, name="ProjD")
     bug = _make_bug(admin_client, p["id"], title="With comment")
@@ -297,9 +279,7 @@ def test_attachment_upload_uses_session_user(admin_client):
     assert r.json()["uploader_name"] == "Test Admin"
 
 
-# ---------------------------------------------------------------------------
 # Stats + audit
-# ---------------------------------------------------------------------------
 def test_stats(admin_client):
     r = admin_client.get("/api/stats")
     assert r.status_code == 200

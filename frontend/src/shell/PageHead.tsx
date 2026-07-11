@@ -12,7 +12,7 @@ const VIEW_TITLES: Record<ViewName, string> = {
   reports: "Reports",
 };
 
-/* Static subtitles for every view except "list", which builds its own live summary below. */
+// "list" builds its own live summary below.
 const VIEW_SUBTITLES: Partial<Record<ViewName, string>> = {
   events:
     "Group work items into an event — a standup, a sprint meeting, a release — and track them together",

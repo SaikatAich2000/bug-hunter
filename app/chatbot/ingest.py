@@ -1,22 +1,9 @@
 """Sleuth document ingest — the admin "upload a doc full of bugs" feature.
 
-Admin-only write surface (enforced by the route in router.py). An uploaded
-document is parsed into work items with the same validation and audit trail as
-the REST create endpoint.
-
-Two extraction paths, tried in order:
-
-  1. AI. When the cloud assistant is configured (SLEUTH_CLOUD_ENABLED + a key),
-     raw text goes to the model, which returns a structured list of bug specs.
-
-  2. Deterministic parser. Always available, no network required. Understands
-     xlsx, JSON, CSV, and free-form text/markdown (one bug per line, bullet or
-     numbered, with optional `[Priority]` tags and `Title | Description` splits).
-
-Both paths produce the same cleaned `spec` shape, so validation, creation, and
-audit are identical regardless of how the document was read. The parser works
-with no API key, so ingest works on air-gapped boxes and the test suite runs
-without a network call.
+Admin-only (enforced in router.py). Two extraction paths tried in order: the
+cloud AI when configured, else a deterministic parser (xlsx/JSON/CSV/free text)
+that needs no network. Both yield the same cleaned `spec` shape, so validation,
+creation, and audit are identical.
 """
 from __future__ import annotations
 
@@ -39,17 +26,13 @@ from app.schemas import (
 
 logger = logging.getLogger("bug_hunter.sleuth.ingest")
 
-# Hard cap on how many items one upload can create — protects the DB from a
-# runaway 100k-row spreadsheet and keeps the request bounded.
+# Hard cap on items per upload — bounds the DB against a runaway spreadsheet.
 MAX_SPECS = 500
-# Soft cap on the uploaded document size (bytes) — the route also enforces the
-# global body limit, but we bound the decode here too.
+# Soft cap on uploaded document size; the route also enforces the body limit.
 MAX_DOC_BYTES = 5 * 1024 * 1024  # 5 MB of text/spreadsheet is plenty
 
 
-# ---------------------------------------------------------------------------
-# Synonym maps — let the parser accept various spellings of priority/type/env.
-# ---------------------------------------------------------------------------
+# Synonym maps so the parser accepts various spellings of priority/type/env.
 _PRIORITY_SYNONYMS = {
     "critical": "Critical", "blocker": "Critical", "p0": "Critical", "urgent": "Critical",
     "high": "High", "p1": "High", "major": "High",
@@ -76,8 +59,8 @@ _ENV_KEYS = ("environment", "env")
 
 
 def _norm_from(value: Any, synonyms: dict[str, str], allowed: list[str], default: str) -> str:
-    """Resolve a free-text value to a canonical enum. Tries an exact
-    case-insensitive match first, then the synonym table, then returns default."""
+    """Resolve a free-text value to a canonical enum: exact match, then synonym
+    table, then default."""
     if value is None:
         return default
     s = str(value).strip().lower()
@@ -90,16 +73,14 @@ def _norm_from(value: Any, synonyms: dict[str, str], allowed: list[str], default
 
 
 def _first_key(row: dict, keys: tuple[str, ...]) -> Any:
-    """Return the first non-empty value among `keys` from a dict with
-    case-insensitive, multi-word column names ("Bug Summary", "Sev."). Tries
-    exact matches first, then falls back to a word-level contains check so
-    real-world column headers map to the right field."""
+    """Return the first non-empty value among `keys`, case-insensitively. Tries
+    exact matches first, then a word-level contains check so headers like
+    "Bug Summary" or "Sev." map to the right field."""
     low = {str(k).strip().lower(): v for k, v in row.items()}
     for k in keys:
         if k in low and low[k] not in (None, ""):
             return low[k]
-    # Fuzzy fallback, in priority order: a column whose name contains the key
-    # as a word (e.g. "bug summary" → summary → title; "sev" → priority).
+    # Fuzzy fallback: a column whose name contains the key as a word.
     for k in keys:
         for col, v in low.items():
             if v in (None, ""):
@@ -110,8 +91,7 @@ def _first_key(row: dict, keys: tuple[str, ...]) -> Any:
 
 
 def _clean_spec(raw: Any) -> Optional[dict]:
-    """Normalise one raw entry (dict or bare string) into a validated spec, or
-    None if it has no usable title."""
+    """Normalise one raw entry into a validated spec, or None if it has no title."""
     if isinstance(raw, str):
         raw = {"title": raw}
     if not isinstance(raw, dict):
@@ -215,17 +195,15 @@ def _looks_like_header(row: list[str]) -> bool:
     return any(c.strip().lower() in _HEADER_WORDS for c in row if c.strip())
 
 
-# Hard bounds on workbook scan size. A 5 MB xlsx is a zip and can declare an
-# enormous sheet (billions of cells — a decompression bomb); cap rows × cols so
-# the scan can't blow up memory before the downstream spec cap (MAX_SPECS) ever
-# applies. 5000 rows × 100 cols is far above any real bug-import sheet.
+# Bound the workbook scan so a decompression-bomb xlsx (billions of declared
+# cells) can't blow up memory before MAX_SPECS applies. Far above any real sheet.
 _MAX_XLSX_ROWS = 5000
 _MAX_XLSX_COLS = 100
 
 
 def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
     """Read the first sheet's non-empty rows as lists of strings, or None if the
-    bytes aren't a readable workbook (so the caller moves on to text)."""
+    bytes aren't a readable workbook."""
     try:
         from openpyxl import load_workbook
         wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
@@ -233,8 +211,7 @@ def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
         return None
     try:
         ws = wb.active
-        # read_only iter_rows doesn't honour max_row/max_col reliably,
-        # so bound the stream explicitly with islice and a per-row slice.
+        # read_only iter_rows ignores max_row/col, so bound explicitly.
         rows = [
             [("" if c is None else str(c)) for c in row[:_MAX_XLSX_COLS]]
             for row in islice(ws.iter_rows(values_only=True), _MAX_XLSX_ROWS)
@@ -245,10 +222,9 @@ def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
 
 
 def _rows_to_specs(rows: list[list[str]]) -> list[dict]:
-    """Convert table rows to specs. If the first row looks like a header, use
-    it to map columns by name; otherwise treat the first cell of each row as the
-    title. Multi-column sheets default to treating row 0 as a header, so it
-    doesn't accidentally become a spurious work item."""
+    """Convert table rows to specs. A header row maps columns by name; otherwise
+    the first cell is the title. Multi-column sheets treat row 0 as a header so
+    it doesn't become a spurious work item."""
     if not rows:
         return []
     multi_col = max((len(r) for r in rows), default=1) >= 2
@@ -259,9 +235,8 @@ def _rows_to_specs(rows: list[list[str]]) -> list[dict]:
 
 
 def _specs_from_xlsx(raw: bytes) -> Optional[list[dict]]:
-    """Parse the first sheet of an xlsx workbook into specs (deterministic
-    fallback when the AI layer is off). Returns None if the bytes aren't a
-    readable workbook."""
+    """Parse the first sheet of an xlsx into specs, or None if the bytes aren't
+    a readable workbook."""
     rows = _xlsx_rows(raw)
     if rows is None:
         return None
@@ -269,15 +244,13 @@ def _specs_from_xlsx(raw: bytes) -> Optional[list[dict]]:
 
 
 def _looks_like_xlsx(filename: str, raw: bytes) -> bool:
-    # xlsx is a zip — magic bytes "PK\x03\x04". Combine with the extension so a
-    # plain zip of something else doesn't get mis-parsed silently.
+    # xlsx is a zip (magic "PK\x03\x04"); check the extension too.
     return filename.lower().endswith(".xlsx") or raw[:4] == b"PK\x03\x04"
 
 
 def parse_document(filename: str, raw: bytes) -> list[dict]:
-    """Deterministic parse of an uploaded document into cleaned bug specs.
-    Tries the format the bytes/extension suggest, then falls back to line
-    parsing so a misnamed text file still yields items."""
+    """Deterministic parse of an upload into cleaned specs, trying the suggested
+    format then falling back to line parsing for misnamed text files."""
     filename = filename or ""
     if _looks_like_xlsx(filename, raw):
         specs = _specs_from_xlsx(raw)
@@ -318,9 +291,8 @@ _AI_SYSTEM = (
 
 
 def ai_extract_specs(text: str) -> Optional[list[dict]]:
-    """Use the cloud assistant to read the document, when it's configured.
-    Returns cleaned specs, or None when the layer is off / unavailable / it
-    produced nothing usable (so the caller falls back to the parser)."""
+    """Read the document with the cloud assistant when configured. Returns cleaned
+    specs, or None when the layer is off/unavailable/unhelpful (caller falls back)."""
     try:
         from app.chatbot import cloud_llm
         if not cloud_llm.is_available():
@@ -336,8 +308,8 @@ def ai_extract_specs(text: str) -> Optional[list[dict]]:
 
 
 def _document_text(filename: str, raw: bytes) -> str:
-    """Plain-text view of the upload for the AI reader. Spreadsheets become
-    pipe-delimited tables (headers included); everything else is decoded as UTF-8."""
+    """Plain-text view of the upload for the AI reader; spreadsheets become
+    pipe-delimited tables, everything else is decoded as UTF-8."""
     if _looks_like_xlsx(filename or "", raw):
         rows = _xlsx_rows(raw)
         if not rows:
@@ -347,10 +319,8 @@ def _document_text(filename: str, raw: bytes) -> str:
 
 
 def extract_specs(filename: str, raw: bytes) -> tuple[list[dict], str]:
-    """Top-level extraction: let the AI read the document first (it handles
-    headers, messy layouts and prose better than the parser), falling back to
-    the deterministic parser when the AI layer is off or unhelpful. Returns
-    (specs, method) where method is 'ai' or 'parser'."""
+    """Top-level extraction: AI first (better at headers/messy layouts/prose),
+    falling back to the deterministic parser. Returns (specs, 'ai'|'parser')."""
     text = _document_text(filename, raw)
     if text.strip():
         ai = ai_extract_specs(text)
@@ -360,8 +330,8 @@ def extract_specs(filename: str, raw: bytes) -> tuple[list[dict], str]:
 
 
 def resolve_project_for_preview(db: Session, project_id: Optional[int]) -> Optional[Project]:
-    """Resolve the project the ingested items would land in (for the preview),
-    without creating anything. None when there's no project at all."""
+    """Resolve the project ingested items would land in (for the preview),
+    without creating anything. None when there's no project."""
     return _resolve_project(db, project_id)
 
 
@@ -371,17 +341,15 @@ def resolve_project_for_preview(db: Session, project_id: Optional[int]) -> Optio
 def _resolve_project(db: Session, project_id: Optional[int]) -> Optional[Project]:
     if project_id is not None:
         return db.get(Project, project_id)
-    # Default to the lowest-id project (the bootstrap "General" project), so an
-    # admin can ingest without first picking a project.
+    # Default to the lowest-id (bootstrap "General") project so ingest needs no pick.
     return db.scalar(select(Project).order_by(Project.id))
 
 
 def create_bugs_from_specs(
     db: Session, specs: list[dict], actor: User, project_id: Optional[int] = None,
 ) -> dict:
-    """Create a Bug per spec under one project, reported by the admin, each
-    audited. Returns a summary dict {created, project_id, project_name, items}.
-    Raises ValueError if the target project can't be resolved."""
+    """Create one audited Bug per spec under a project, reported by the admin.
+    Returns a summary dict; raises ValueError if the project can't be resolved."""
     project = _resolve_project(db, project_id)
     if project is None:
         raise ValueError("No project to file these items under — create a project first")

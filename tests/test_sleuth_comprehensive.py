@@ -1,19 +1,5 @@
-"""Scenario tests covering the user-visible API of Sleuth across many input
-variants.
-
-Coverage axes:
-  - Status synonyms (open, fixed, in progress, WIP, blocker, etc)
-  - Priority synonyms (P0-P3, urgent, blocker, critical, low, etc)
-  - Environment synonyms (production, staging, qa, prod, dev, etc)
-  - Time windows (today, yesterday, this week, last N days/weeks/months/hours)
-  - Action verbs in many phrasings
-  - Permission denial across roles
-  - HTTP edge cases (auth, rate limit, oversize, empty)
-  - Multi-filter compound queries
-  - Casing, punctuation, whitespace, unicode robustness
-  - Pronoun resolution edge cases
-  - Confirmation flow edge cases (stale pending, double-yes, no-without-pending)
-"""
+"""Scenario tests for Sleuth's user-visible API across many input variants:
+synonyms, time windows, verbs, permissions, HTTP edges, robustness."""
 from __future__ import annotations
 
 import os as _os, sys as _sys
@@ -34,9 +20,7 @@ os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
 
-# Fresh app import for this file's private DB. Without the purge, a shared
-# engine from an earlier-collected module's torn-down DB causes "no such table"
-# errors later in the suite.
+# Purge cached app.* so imports bind to this file's private DB, not a torn-down one.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -54,12 +38,7 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind module-level app.* references each test.
-
-    conftest's ``client`` fixture purges ``app.*`` modules to rebind the engine
-    per test; without this, our module-level names would point at a stale
-    generation and diverge from what ``execute()`` uses.
-    """
+    """Re-bind module-level app.* refs each test (conftest purges app.* per test)."""
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -150,9 +129,6 @@ def seed():
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Status synonym matrix
-# ---------------------------------------------------------------------------
 def test_status_synonyms() -> None:
     section("Status synonyms")
     seed()
@@ -160,7 +136,6 @@ def test_status_synonyms() -> None:
     try:
         ctx = build_context(db)
         cases = [
-            # (phrase, must contain status)
             ("show open bugs",        "New"),
             ("show fixed bugs",       "Resolved"),
             ("show resolved bugs",    "Resolved"),
@@ -181,9 +156,6 @@ def test_status_synonyms() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Priority synonym matrix
-# ---------------------------------------------------------------------------
 def test_priority_synonyms() -> None:
     section("Priority synonyms")
     seed()
@@ -212,9 +184,6 @@ def test_priority_synonyms() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Environment synonym matrix
-# ---------------------------------------------------------------------------
 def test_environment_synonyms() -> None:
     section("Environment synonyms")
     seed()
@@ -241,9 +210,6 @@ def test_environment_synonyms() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Compound queries: multiple filters at once
-# ---------------------------------------------------------------------------
 def test_compound_filters() -> None:
     section("Compound filter queries")
     ids = seed()
@@ -275,7 +241,6 @@ def test_compound_filters() -> None:
             check("compound: apollo+alice == [7]",
                   got == [7], f"got {got}")
 
-        # Status + project + env
         resp = executor.execute(
             "in progress bugs in project Apollo in UAT", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
@@ -287,9 +252,6 @@ def test_compound_filters() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Time-window queries
-# ---------------------------------------------------------------------------
 def test_time_windows() -> None:
     section("Time windows")
     ids = seed()
@@ -321,9 +283,6 @@ def test_time_windows() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Casing, punctuation, unicode robustness
-# ---------------------------------------------------------------------------
 def test_robustness() -> None:
     section("Robustness: casing / punctuation / unicode")
     ids = seed()
@@ -341,7 +300,6 @@ def test_robustness() -> None:
             check(f"robust: {variant!r:35s} -> list_bugs",
                   resp.intent == "list_bugs", f"got {resp.intent}")
 
-        # Unicode message — must not crash
         for variant in [
             "показать все баги",
             "🐛🐛🐛",
@@ -358,9 +316,6 @@ def test_robustness() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Action verb variants
-# ---------------------------------------------------------------------------
 def test_action_verb_variants() -> None:
     section("Action verb variants")
     ids = seed()
@@ -368,7 +323,6 @@ def test_action_verb_variants() -> None:
     try:
         admin = db.get(models.User, ids["admin"])
 
-        # Status verbs
         for verb, expected_status in [
             ("close",   "Closed"),
             ("closed",  "Closed"),
@@ -391,7 +345,6 @@ def test_action_verb_variants() -> None:
             bug.status = "Resolved"
             db.commit()
 
-        # Mark-as form
         memstore.reset(admin.id)
         executor.execute("mark bug 5 as closed", db, admin)
         executor.execute("yes", db, admin)
@@ -399,7 +352,6 @@ def test_action_verb_variants() -> None:
         check("verb: 'mark as closed' -> Closed",
               db.get(models.Bug, 5).status == "Closed")
 
-        # Set-status form
         memstore.reset(admin.id)
         bug5 = db.get(models.Bug, 5)
         bug5.status = "New"

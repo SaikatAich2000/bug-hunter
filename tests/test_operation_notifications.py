@@ -1,14 +1,5 @@
-"""Notification coverage for the remaining mutating bug operations.
-
-create/update/assign/comment-add are in test_notifications.py. This file covers:
-  - link add/remove (both endpoints notified)
-  - attachment add/delete
-  - comment edit/delete
-  - bug delete, single and bulk (notification survives the deleted row via NULL bug_id)
-
-Assertions query the Notification table directly; the notify layer commits
-synchronously, so no second login is needed. Each test uses a unique assignee
-email to avoid cross-test pollution.
+"""Notification coverage for the remaining mutating bug operations (links, attachments, comment edit/delete, deletes).
+Assertions query the Notification table directly; each test uses a unique assignee email.
 """
 from __future__ import annotations
 
@@ -16,9 +7,7 @@ BOOTSTRAP_EMAIL = "admin@test.local"
 _PW = "User12345"  # shared test credential
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _session():
     from app.database import SessionLocal
     return SessionLocal()
@@ -43,11 +32,7 @@ def _titles_containing(db, user_id: int, needle: str):
 
 
 def _setup(admin_client, suffix: str):
-    """Create a project, a fresh assignee (Bob), and a bug assigned to Bob.
-
-    Admin acts as reporter/actor throughout, so notifications go to Bob, not admin.
-    Returns (project, bob, bug).
-    """
+    """Create a project, a fresh assignee (Bob), and a bug assigned to Bob; returns (project, bob, bug)."""
     proj = admin_client.post("/api/projects", json={"name": f"Op Proj {suffix}"}).json()
     bob = admin_client.post("/api/users", json={
         "name": "Bob", "email": f"bob_{suffix}@op.test",
@@ -60,9 +45,7 @@ def _setup(admin_client, suffix: str):
     return proj, bob, bug
 
 
-# ---------------------------------------------------------------------------
 # Links
-# ---------------------------------------------------------------------------
 def test_link_add_notifies_assignee_not_actor(admin_client):
     proj, bob, bug = _setup(admin_client, "linkadd")
     other = admin_client.post("/api/bugs", json={
@@ -96,9 +79,7 @@ def test_link_remove_notifies_assignee(admin_client):
     assert _titles_containing(db, bob["id"], "Link removed"), "assignee not notified of unlink"
 
 
-# ---------------------------------------------------------------------------
 # Attachments
-# ---------------------------------------------------------------------------
 def test_attachment_add_notifies_assignee(admin_client):
     _proj, bob, bug = _setup(admin_client, "attadd")
     r = admin_client.post(
@@ -125,9 +106,7 @@ def test_attachment_delete_notifies_assignee(admin_client):
     assert _titles_containing(db, bob["id"], "Attachment removed"), "assignee not notified of detach"
 
 
-# ---------------------------------------------------------------------------
 # Comment edit / delete (comment ADD is covered in test_notifications.py)
-# ---------------------------------------------------------------------------
 def test_comment_edit_notifies_assignee(admin_client):
     _proj, bob, bug = _setup(admin_client, "cedit")
     c = admin_client.post(f"/api/bugs/{bug['id']}/comments",
@@ -153,9 +132,7 @@ def test_comment_delete_notifies_assignee(admin_client):
     assert _titles_containing(db, bob["id"], "Comment deleted"), "assignee not notified of delete"
 
 
-# ---------------------------------------------------------------------------
 # Bug delete — notification must outlive the deleted row
-# ---------------------------------------------------------------------------
 def test_bug_delete_notifies_assignee_and_survives(admin_client):
     _proj, bob, bug = _setup(admin_client, "bugdel")
 
@@ -169,9 +146,7 @@ def test_bug_delete_notifies_assignee_and_survives(admin_client):
     assert deleted[0].bug_id is None
 
 
-# ---------------------------------------------------------------------------
 # Digest — operations must be batched into the daily email
-# ---------------------------------------------------------------------------
 def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
     from app.config import get_settings
     # With digest mode on, notify() leaves emailed_at NULL and the job sends the email.
@@ -203,9 +178,7 @@ def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
     assert any("Link added" in body for body in bob_emails), bob_emails
 
 
-# ---------------------------------------------------------------------------
 # Bulk delete — was previously silent; must behave the same as single delete
-# ---------------------------------------------------------------------------
 def test_bulk_delete_notifies_assignee_and_survives(admin_client):
     _proj, bob, bug = _setup(admin_client, "bulkdel")
 
@@ -222,10 +195,7 @@ def test_bulk_delete_notifies_assignee_and_survives(admin_client):
     assert deleted[0].bug_id is None
 
 
-# ---------------------------------------------------------------------------
-# Both endpoints notified: a "blocks" link affects the target item too, so its
-# assignees need to know about it just as much as the source's assignees.
-# ---------------------------------------------------------------------------
+# Both endpoints notified: a 'blocks' link affects the target's assignees too.
 def test_link_add_notifies_both_endpoint_assignees(admin_client):
     proj, bob, bug = _setup(admin_client, "linkboth")
     carol = admin_client.post("/api/users", json={

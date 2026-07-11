@@ -96,9 +96,7 @@ def test_retrieve_respects_limit(admin_client):
 
 
 def test_retrieve_bugs_scoped_to_accessible_projects(admin_client):
-    """Regression: retrieval must honour the actor's project scope so a
-    restricted user can't have out-of-scope bug text injected into the model
-    context (previously it queried every bug regardless of membership)."""
+    """Regression: retrieval honours the actor's project scope, so out-of-scope bug text can't reach the model context."""
     from app.database import SessionLocal
     from app.chatbot import retrieval
     pa = _project(admin_client, "Alpha")

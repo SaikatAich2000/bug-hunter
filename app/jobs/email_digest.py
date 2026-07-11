@@ -125,8 +125,11 @@ def run_digest(
 
     Selects ``emailed_at IS NULL`` rows created within the lookback window,
     groups them by user, emails each deliverable user once, and stamps the
-    sent rows. Returns ``{"users", "emails_sent", "operations"}`` for logging
-    and tests. Commits once at the end.
+    sent rows. When the backend reports a failed send, that user's rows are
+    released (emailed_at cleared) so the next scheduled run retries them.
+    Returns ``{"users", "emails_sent", "operations", "failed"}`` for logging
+    and tests; ``emails_sent`` counts emails handed to the backend and
+    ``failed`` counts those the backend reported as undelivered.
     """
     settings = get_settings()
     now = now or _utcnow()
@@ -140,7 +143,7 @@ def run_digest(
         .order_by(Notification.user_id, Notification.created_at)
     ).all())
     if not rows:
-        return {"users": 0, "emails_sent": 0, "operations": 0}
+        return {"users": 0, "emails_sent": 0, "operations": 0, "failed": 0}
 
     by_user = _group_by_user(rows)
     # Claim rows with a guarded UPDATE (emailed_at IS NULL) rather than SELECT
@@ -148,7 +151,7 @@ def run_digest(
     # can't both claim and send the same rows — the loser sees rowcount 0 and
     # skips. We commit the claims before the SMTP loop so a slow mail server
     # can't hold a DB connection for the entire batch.
-    outbox: list[tuple[str, str, str]] = []  # (email, subject, body)
+    outbox: list[tuple[str, str, str, list[int]]] = []  # (email, subject, body, row ids)
     operations = 0
     for user_id, user_rows in by_user.items():
         user = db.get(User, user_id)
@@ -166,21 +169,46 @@ def run_digest(
             # Another runner already claimed these rows.
             continue
         subject, body = render_digest(user, user_rows)
-        outbox.append((user.email, subject, body))
+        outbox.append((user.email, subject, body, ids))
         operations += claimed
 
     db.commit()  # claimed rows are now stamped (at-most-once)
 
-    # Deliver outside the transaction. A crash here drops this batch's emails
-    # (already stamped), which is better than double-sending or holding DB
-    # locks across network I/O.
-    for email, subject, body in outbox:
-        email_service.deliver(subject, [email], body)
+    # Deliver outside the transaction (no DB locks across network I/O). When
+    # the backend reports a failed send (deliver() returns False — e.g. SMTP
+    # down or rejecting at exactly this moment), release that user's rows by
+    # clearing emailed_at so the next scheduled run retries them instead of
+    # silently losing the day's digest. At-most-once still holds: rows are only
+    # released when nothing was sent. A disabled backend also returns False,
+    # but that is an operator choice, not a failure — those rows stay stamped
+    # (same pattern as notify_password_reset). A crash mid-loop still drops the
+    # remaining batch (already stamped), which beats double-sending.
+    failed = 0
+    failed_ids: list[int] = []
+    for email, subject, body, ids in outbox:
+        if email_service.deliver(subject, [email], body):
+            continue
+        if settings.EMAIL_BACKEND == "disabled":
+            continue
+        failed += 1
+        failed_ids.extend(ids)
+    if failed_ids:
+        db.query(Notification).filter(Notification.id.in_(failed_ids)).update(
+            {Notification.emailed_at: None}, synchronize_session=False
+        )
+        db.commit()
+        logger.error(
+            "Digest delivery FAILED for %d user(s) covering %d operation(s); "
+            "their rows were released and will be retried on the next "
+            "scheduled run (ensure EMAIL_DIGEST_LOOKBACK_HOURS covers the gap).",
+            failed, len(failed_ids),
+        )
 
     return {
         "users": len(by_user),
         "emails_sent": len(outbox),
         "operations": operations,
+        "failed": failed,
     }
 
 

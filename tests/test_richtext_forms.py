@@ -1,36 +1,6 @@
-"""Tests for rich-text editor and form behavior.
-
-Covers:
-
-  1. Bold/Italic/Underline (toolbar and Ctrl+B/I/U) apply when the
-     contenteditable has focus but no caret yet, and formatBlock
-     (blockquote/pre) toggles off on a second click.
-
-  2. Calendar prev/next buttons page the month instead of closing the popover.
-
-  3. The disabled Reporter <select> does not render the open-caret.
-
-  4. The toolbar image button routes through the attachment flow rather
-     than inserting an inline <img>.
-
-These tests check:
-
-  * The frontend source carries the markers for each behavior, so a
-    refactor that removes one is caught.
-  * The old inline-image embed path is gone (no _bhRtPickImage,
-    no insertHTML.*<img).
-  * Server-side sanitisation lets rich-text tags survive a round-trip
-    through bug descriptions and comment bodies (bold, italic, underline,
-    lists, blockquote, pre, code, paragraphs).
-  * Server-side sanitisation still strips dangerous payloads
-    (<script>, javascript: URLs, onerror handlers).
-  * The Reporter field stays disabled in the rendered modal so the
-    custom-dropdown's disabled branch is exercised.
-  * Admin-only comment edit/delete and attachment delete rules hold
-    (re-covered here so this suite is self-contained).
-
-All tests run against a tmp SQLite file from the conftest fixture;
-nothing here touches a production database.
+"""Rich-text editor and form behavior: frontend-source markers for B/I/U, calendar nav,
+disabled Reporter caret, and image-as-attachment; plus server-side sanitiser round-trip
+(rich tags survive, unsafe payloads stripped) and admin-only mutation rules.
 """
 from __future__ import annotations
 
@@ -73,9 +43,7 @@ def _read_static(name):
     return p.read_text(encoding="utf-8")
 
 
-# The rich-text editor, custom select, and date input live in the React source.
-# The shipped JS bundle is content-hashed and minified, so marker tests read
-# the source files directly.
+# Shipped bundle is hashed/minified, so marker tests read the React source directly.
 def _read_frontend(relpath):
     p = Path(__file__).resolve().parents[1] / "frontend" / "src" / relpath
     return p.read_text(encoding="utf-8")
@@ -115,17 +83,14 @@ class TestRichTextFixMarkers:
         assert "ensureCaret" in js, "ensure-caret helper must exist"
 
     def test_app_js_runs_cmd_after_focus_restore(self):
-        """Bold/Italic/Underline must run via the restored-selection helper,
-        not by bare execCommand calls inside the keyboard handler."""
+        """B/I/U run via the restored-selection helper, not bare execCommand in the keydown handler."""
         js = _rich_editor()
         for cmd in ("bold", "italic", "underline"):
             assert f'runCmd("{cmd}")' in js, (
                 f"Ctrl+{cmd[0].upper()} should go through runCmd "
                 "not bare execCommand"
             )
-        # Strip line comments before checking for direct execCommand calls.
-        # The word still appears in comments explaining the Chrome workaround,
-        # so we only inspect non-comment lines.
+        # Inspect non-comment lines only; execCommand still appears in workaround comments.
         code_only = "\n".join(
             ln for ln in js.splitlines()
             if not ln.lstrip().startswith("//")
@@ -154,26 +119,18 @@ class TestRichTextFixMarkers:
         )
 
     def test_app_js_uses_inline_wrapper_for_collapsed_caret(self):
-        """First-click Bold/Italic/Underline on a collapsed caret manually
-        wraps a ZWSP placeholder. Assert that path is wired."""
+        """First-click B/I/U on a collapsed caret wraps a ZWSP placeholder."""
         js = _rich_editor()
         assert "toggleInlineAtCaret" in js, "manual-toggle helper missing"
         assert "INLINE_TOGGLE" in js, "inline-tag map missing"
-        # ZWSP separator must also be inserted on toggle-off; without it,
-        # Chrome absorbs the next keystroke back into the wrapper.
+        # ZWSP separator on toggle-off; without it Chrome absorbs the next keystroke into the wrapper.
         assert "insertBefore(sep, n.nextSibling)" in js, (
             "ZWSP separator must be inserted after wrapper on toggle-off"
         )
 
     def test_app_js_uses_preventdefault_on_toolbar_mousedown(self):
-        """The toolbar mousedown must call preventDefault before running the
-        command. Without it, focus moves from the contenteditable to the button
-        and the execCommand typing state is lost before the user types.
-
-        This checks that preventDefault stays regardless of whether the runner
-        is the raw helper or the undo-history snapshot wrapper."""
+        """Toolbar mousedown preventDefaults before running, else focus leaves the contenteditable and typing state is lost."""
         js = _rich_editor()
-        # handleToolbarMouseDown calls preventDefault then runToolbarCmd.
         m = re.search(
             r'handleToolbarMouseDown.*?e\.preventDefault\(\).*?runToolbarCmd',
             js, re.S,
@@ -181,9 +138,7 @@ class TestRichTextFixMarkers:
         assert m, "mousedown must preventDefault before running the toolbar command"
 
     def test_app_js_has_manual_formatting_implementations(self):
-        """Chrome silently no-ops execCommand("bold") inside the bug modal's
-        stacking context, so the editor implements its own helpers. These must
-        exist or B/I/U/list/blockquote stop working."""
+        """Chrome no-ops execCommand inside the modal's stacking context, so the editor ships its own helpers."""
         js = _rich_editor()
         assert "applyInlineWrap" in js, "manual inline wrap missing"
         assert "applyList" in js, "manual list toggle missing"
@@ -194,8 +149,7 @@ class TestRichTextFixMarkers:
         )
 
     def test_app_js_has_visible_active_state(self):
-        """Toolbar buttons get an .is-active class via updateActiveStates
-        to indicate that Bold/Italic/etc. is active at the caret."""
+        """Toolbar buttons get .is-active via updateActiveStates when the format is active at the caret."""
         js = _rich_editor()
         assert "updateActiveStates" in js
         css = _styles_css()
@@ -208,12 +162,10 @@ class TestRichTextFixMarkers:
 # 2. Calendar prev / next stays open
 # ===========================================================================
 class TestCalendarNavStaysOpen:
-    """Nav clicks must call e.stopPropagation() so the rebuilt DOM isn't
-    mistaken for an outside click that closes the popover."""
+    """Nav clicks stopPropagation so the rebuilt DOM isn't mistaken for an outside click that closes the popover."""
 
     def test_app_js_stops_propagation_for_nav_clicks(self):
         js = _bh_date()
-        # stopPropagation keeps the popover open when the month re-renders.
         m = re.search(
             r'data-nav="next".*?navMonth\(1\)',
             js, re.S,
@@ -230,8 +182,7 @@ class TestCalendarNavStaysOpen:
 # ===========================================================================
 class TestReporterDropdownNoCaret:
     def test_index_html_reporter_select_is_disabled(self):
-        # Reporter <select> lives in BugModal.tsx. Pin disabled here so a
-        # refactor that removes it doesn't silently bypass caret-suppression.
+        # Pin `disabled` so a refactor can't silently bypass caret-suppression.
         src = _bug_modal()
         assert re.search(
             r'<select[^>]*name="reporter_id"[^>]*\bdisabled\b',
@@ -247,9 +198,7 @@ class TestReporterDropdownNoCaret:
         ), "disabled-select caret-suppression branch missing"
 
     def test_app_js_observer_rerenders_label_on_disabled_change(self):
-        # The old vanilla implementation used a MutationObserver to track
-        # disabled changes. In React this is just a prop, so no observer is
-        # needed. Pin that both caret and trigger are driven by `disabled`.
+        # In React `disabled` is a prop (no MutationObserver); pin caret + trigger to it.
         js = _bh_select()
         assert re.search(
             r'!disabled\s*&&\s*<span className="bh-sel-caret"',
@@ -269,8 +218,7 @@ class TestReporterDropdownNoCaret:
 class TestImageInsertionAsAttachment:
     def test_app_js_no_legacy_pickimage_helper(self):
         js = _rich_editor()
-        # The old helper embedded images via insertHTML, leaving blobs that
-        # couldn't be resized or deleted. It must be gone.
+        # The old insertHTML embed left un-resizable/un-deletable blobs; must be gone.
         assert "_bhRtPickImage" not in js, (
             "Legacy inline-image picker must be removed"
         )
@@ -296,8 +244,7 @@ class TestImageInsertionAsAttachment:
 # 5. Rich HTML in description / comment survives the round-trip
 # ===========================================================================
 class TestRichHtmlRoundtrip:
-    """Post descriptions and comments with rich formatting, fetch them back,
-    and assert each tag survives the sanitiser round-trip."""
+    """Rich formatting in descriptions/comments survives the sanitiser round-trip."""
 
     @pytest.fixture()
     def bug(self, admin_client):
@@ -360,12 +307,9 @@ class TestSanitiserStillBlocksUnsafe:
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"description": html})
         assert r.status_code == 200
         got = r.json()["description"]
-        # The sanitiser drops the <script> tag but may keep the text content
-        # as inert plain text. That's acceptable — no XSS because the
-        # executable wrapper is gone.
+        # Tag dropped; inert text content may remain (no executable wrapper = no XSS).
         assert "<script" not in got.lower()
         assert "</script" not in got.lower()
-        # Surrounding paragraph + neighbouring text must survive.
         assert "before" in got and "after" in got
 
     def test_javascript_url_in_anchor_is_stripped(self, admin_client, bug):
@@ -385,8 +329,7 @@ class TestSanitiserStillBlocksUnsafe:
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"description": html})
         got = r.json()["description"]
         assert "<iframe" not in got.lower()
-        # Body text outside the iframe must still survive.
-        assert "x</p>" in got
+        assert "x</p>" in got  # text outside the iframe survives
 
 
 # ===========================================================================
@@ -397,8 +340,7 @@ class TestAdminOnlyMutations:
     def _make_user(self, client, name, role="user"):
         body = {"name": name, "email": f"{name.lower()}@x.test",
                 "role": role, "password": "User12345Aa"}
-        # Give the new user access to all existing projects. The user must be
-        # able to see the bug before the admin-only rule can apply.
+        # User must see the bug (all projects) before the admin-only rule applies.
         pids = [p["id"] for p in client.get("/api/projects").json()]
         if pids:
             body["project_ids"] = pids
@@ -472,9 +414,7 @@ class TestAdminOnlyMutations:
 # 8. Database safety: schema is unchanged across reboot (idempotent init)
 # ===========================================================================
 class TestInitDbIsIdempotent:
-    """init_db is a three-pass routine (create-if-missing / add-column /
-    add-index). Running it twice on the same DB must leave the schema
-    identical, so a redeploy never alters an existing database."""
+    """init_db (create/add-column/add-index) run twice leaves the schema identical — no destructive DDL on redeploy."""
 
     def test_running_init_twice_does_not_recreate_tables(self, tmp_path, monkeypatch):
         import sys
@@ -505,9 +445,7 @@ class TestInitDbIsIdempotent:
         )
 
     def test_no_new_tables_introduced_by_v26_fixes(self, tmp_path, monkeypatch):
-        """Verify the canonical core tables are created by init_db. A new table
-        added in future still passes; the idempotence test above catches
-        double-init drift."""
+        """init_db creates the canonical core tables (future additions still pass)."""
         import sys
         db_file = tmp_path / "schema.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
@@ -528,8 +466,7 @@ class TestInitDbIsIdempotent:
 
         init_db()
         names = set(inspect(engine).get_table_names())
-        # Only the canonical core tables are checked; pinning the full set
-        # would be brittle.
+        # Check only core tables; pinning the full set would be brittle.
         for required in ("users", "projects", "bugs", "comments",
                          "attachments", "activity_log"):
             assert required in names, f"missing canonical table {required!r}"

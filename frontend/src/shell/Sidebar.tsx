@@ -1,10 +1,4 @@
-/**
- * Sidebar — project/team rail.
- *
- * Brand mark and view nav belong to TopChrome; this component owns only the
- * project/user lists. Swatch/avatar click = filter, name click = edit.
- * Account actions live in ProfileMenu (top-right).
- */
+// Sidebar — project/team rail. Swatch/avatar click = filter, name click = edit.
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
@@ -16,12 +10,11 @@ import { NAV_ITEMS } from "./navItems";
 
 interface Props {
   readonly mobileOpen: boolean;
-  /** Close the mobile drawer after navigating (no-op on desktop). */
+  /** Closes the mobile drawer after navigating. */
   readonly onNavigate?: () => void;
 }
 
-// Lets non-<button> interactive spans respond to Enter/Space like a click.
-// Spans are used instead of buttons here to keep the existing grid layout intact.
+// Enter/Space activation for interactive spans (spans keep the grid layout intact).
 function keyActivate(fn: () => void) {
   return (e: { key: string; preventDefault: () => void }) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -53,7 +46,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     health,
   } = useApp();
 
-  // Mirrors the TopChrome nav gate so mobile and desktop can't drift.
+  // Mirrors the TopChrome nav gate.
   const allowed = (v: ViewName): boolean => {
     const need = VIEW_MIN_ROLE[v];
     return !need || roleRank(currentUser.role) >= roleRank(need);
@@ -64,7 +57,6 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     onNavigate?.();
   };
 
-  // ----- filter toggles ----------------------------------------------------
   const toggleProjectFilter = (id: number) => {
     setFilters((prev) => ({
       ...prev,
@@ -83,7 +75,6 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     }));
   };
 
-  // ----- deletes -----------------------------------------------------------
   const handleDeleteProject = async (id: number) => {
     const project = projects.find((p) => p.id === id);
     const name = project ? project.name : `#${id}`;
@@ -134,7 +125,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
       id="sidebar"
       aria-label="Projects and team"
     >
-      {/* Mobile-only brand header — hidden on desktop where TopChrome owns the brand. */}
+      {/* Mobile-only brand header (desktop brand is in TopChrome). */}
       <div className="sidebar-brand">
         <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
         <div className="wm">
@@ -143,7 +134,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
         </div>
       </div>
 
-      {/* Mobile-only view nav (hidden ≥900px via CSS). Desktop uses TopChrome nav instead. */}
+      {/* Mobile-only view nav (hidden ≥900px via CSS). */}
       <nav className="sidebar-nav" aria-label="Main sections">
         {NAV_ITEMS.filter((item) => allowed(item.view)).map((item) => (
           <button
@@ -321,8 +312,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
         </section>
       )}
 
-      {/* Desktop collapse toggle — hidden on mobile, where the close button below takes its place.
-          AppContext persists the collapsed state to localStorage. */}
+      {/* Desktop collapse toggle; AppContext persists the state. */}
       <button
         type="button"
         className="sidebar-collapse-btn"
@@ -348,7 +338,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
         <span className="collapse-label">Collapse sidebar</span>
       </button>
 
-      {/* Mobile-only close button — hidden on desktop, where the collapse button above is shown. */}
+      {/* Mobile-only close button. */}
       <button
         type="button"
         className="sidebar-close-btn"

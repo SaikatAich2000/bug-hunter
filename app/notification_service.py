@@ -1,17 +1,9 @@
-"""Per-user in-app notifications.
+"""Per-user in-app notifications, the counterpart to app/email_service.py.
 
-The in-app counterpart to app/email_service.py. Where a route sends an email
-about an event, it also writes one notification row per recipient via
-``notify()`` to the same recipients the email layer targets (reporter +
-assignees minus the actor, event managers, etc.). Notifications are therefore
-per-user and role-respecting: a row is only ever created for a user already
-entitled to know about the event, and no endpoint exposes another user's
-notifications.
-
-Unlike the email layer (which runs in a BackgroundTask off primitive
-snapshots), notifications are small DB inserts written synchronously on the
-request's own Session and committed with it. That keeps them transactional
-with the change that caused them and immediately assertable in tests.
+Rows are written synchronously on the request's Session and committed with it,
+so they're transactional with the change that caused them. Recipients match the
+email layer (reporter + assignees minus actor, event managers), so a row is
+only ever created for a user entitled to know.
 """
 from __future__ import annotations
 
@@ -40,22 +32,15 @@ def notify(
     exclude: int | None = None,
     background: "BackgroundTasks | None" = None,
 ) -> list[int]:
-    """Queue an in-app notification for each distinct recipient, and (when a
-    ``background`` task runner is given) schedule an immediate web push to the
-    same recipients.
+    """Queue an in-app notification per distinct recipient; with a ``background``
+    runner, also schedule an immediate web push to them.
 
-    Rows are ``db.add``-ed but not committed; the caller commits as part of the
-    same transaction as the triggering change. ``None`` ids, the ``exclude`` id
-    (the actor), and duplicates are skipped. Returns the list of recipient user
-    ids actually queued.
-
-    The web push (if scheduled) fires regardless of the email-digest setting:
-    push is the real-time channel, the digest only batches email.
+    Rows are added but not committed (caller commits). None ids, ``exclude`` (the
+    actor), and duplicates are skipped. Returns the queued recipient ids. Push
+    fires regardless of the email-digest setting.
     """
-    # In immediate-email mode the row is born already-emailed, so switching to
-    # digest mode later never re-sends past notifications. In digest mode it
-    # stays NULL so the daily job picks each row up exactly once.
-    # (read_at tracks the in-app read state separately.)
+    # Immediate-email mode stamps emailed_at now so a later switch to digest mode
+    # never re-sends; digest mode leaves it NULL for the daily job to pick up once.
     emailed_at = None if get_settings().EMAIL_DIGEST_ENABLED else _utcnow()
 
     seen: set[int] = set()
@@ -77,8 +62,7 @@ def notify(
         ))
 
     if background is not None and recipients:
-        # Lazy import: keeps this module free of push/FCM dependencies for
-        # callers that never schedule a push.
+        # Lazy import: keeps push/FCM deps out for callers that never push.
         from app import push_service
         push_service.schedule(
             background, recipients, title=title, body=body,

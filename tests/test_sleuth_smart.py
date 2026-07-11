@@ -1,15 +1,11 @@
-"""Tests for Sleuth's NLU helpers and unknown-intent fallback.
-
-Pure in-process: no DB, no network, no LLM calls.
-Covers bare free-text search, enum-word guard, quoted-search precedence,
-"did you mean" suggestions, and the unknown-intent Response shape.
+"""Sleuth NLU helpers and unknown-intent fallback (pure in-process): free-text search,
+enum-word guard, quoted-search precedence, "did you mean" suggestions, and the unknown Response shape.
 """
 from __future__ import annotations
 
 import os
 
-# Disable the cloud layer and point at a throwaway DB so importing app modules
-# never touches a real database.
+# Disable the cloud layer and point at a throwaway DB so imports never touch a real database.
 os.environ.setdefault("SLEUTH_CLOUD_ENABLED", "0")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./_sleuth_smart_test.db")
 os.environ.setdefault("SESSION_SECRET", "x" * 32)
@@ -38,8 +34,7 @@ def test_no_cue_means_no_text_search():
 
 
 def test_enum_only_phrase_is_not_text_search():
-    # "high priority" and "in progress" are filter values, not search topics.
-    # The enum extractors own them; the bare-text path must decline.
+    # "high priority"/"in progress" are enum filter values, not search topics.
     assert nlu._extract_text_search("bugs about high priority") is None
     assert nlu._extract_text_search("anything regarding in progress") is None
 

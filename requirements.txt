@@ -9,6 +9,13 @@ python-multipart==0.0.20
 bcrypt==4.2.1
 itsdangerous==2.2.0
 
+# IANA time-zone database for the email-digest scheduler (app/scheduler.py).
+# The slim base image ships no system zoneinfo, so without this package
+# ZoneInfo(EMAIL_DIGEST_TIMEZONE) — e.g. "Asia/Kolkata" — cannot resolve and the
+# scheduler silently falls back to UTC, firing the digest at the cron time in UTC
+# instead of local time (08:00 IST would run at 13:30 IST). Data-only package.
+tzdata==2026.3
+
 # T6: EXIF / metadata stripper for uploaded images. Pillow is lazily
 # imported by app/image_strip.py so deploys that skip it (or fail to
 # install it) still serve uploads — they just keep the source metadata.

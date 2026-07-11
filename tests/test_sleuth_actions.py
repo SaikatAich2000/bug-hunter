@@ -1,8 +1,4 @@
-"""Tests the write side of the assistant: action plans, confirmation flow,
-permission denial, audit trail, pronoun resolution, and atomicity.
-
-Uses self-contained temp-SQLite isolation.
-"""
+"""Assistant write side: action plans, confirmation flow, permission denial, audit, pronouns, atomicity (temp-SQLite)."""
 from __future__ import annotations
 
 import os as _os, sys as _sys
@@ -23,9 +19,7 @@ os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminPass123!"
 os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 
-# Force a fresh import of app.* bound to this file's dedicated DB. If an earlier
-# test module already imported app.database, the engine is still pointing at its
-# (possibly torn-down) DB, and seed()'s create_all will fail with "no such table".
+# Force a fresh import of app.* bound to this file's DB; a stale engine would fail create_all.
 import sys as _sys_purge
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
@@ -42,13 +36,7 @@ import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Re-bind module-level app.* references to the current import generation.
-
-    conftest purges app.* from sys.modules between tests to rebind the engine.
-    Without this, our executor/memstore/engine stay stale while execute()'s
-    internal imports resolve to the fresh generation, causing staged actions
-    and DB reads to diverge.
-    """
+    """Re-bind module-level app.* refs to the current import generation (conftest purges app.* between tests)."""
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -312,8 +300,7 @@ def test_create_project_perm() -> None:
         proj = db.query(models.Project).filter_by(name="Mercury").first()
         check("create_project (admin) — project exists", proj is not None)
 
-        # Sleuth writes are admin-only, so this is denied before staging;
-        # the follow-up "yes" should be treated as idle.
+        # Admin-only write: denied before staging, so the follow-up "yes" is idle.
         denied = executor.execute("create project Saturn", db, bob)
         check("create_project (regular) — denied up front",
               denied.intent == "action_denied", f"got {denied.intent}")
@@ -378,8 +365,7 @@ def test_action_no_target() -> None:
         check("missing target — action_invalid intent",
               resp.intent == "action_invalid", f"got {resp.intent}")
 
-        # No colon means no comment body; the parser sets action_comment to None
-        # and returns action_invalid before ever touching the DB.
+        # No colon → no comment body → action_invalid before touching the DB.
         resp = executor.execute("comment on bug 999999", db, admin)
         check("missing comment — action_invalid",
               resp.intent == "action_invalid", f"got {resp.intent}")
@@ -411,7 +397,7 @@ def test_audit_atomicity() -> None:
     db = SessionLocal()
     try:
         admin = db.get(models.User, admin_id)
-        # Use a non-existent user ID to force a controlled failure path.
+        # Non-existent user id forces a controlled failure path.
         from app.chatbot import actions as _actions
         plan = _actions.ActionPlan(
             kind="assign", actor_user_id=admin_id,

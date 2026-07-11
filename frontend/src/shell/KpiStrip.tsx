@@ -1,7 +1,4 @@
-/**
- * KPI strip — the tile numbers, the active-tile highlight and the
- * click-to-filter toggle. Shown on the list and analytics views only.
- */
+// KPI strip — tile numbers + click-to-filter toggle. List and analytics views only.
 import { useApp, KPI_FILTER_MAP } from "../state/AppContext";
 
 function arraysEqualAsSets(a: string[], b: string[]): boolean {
@@ -48,9 +45,7 @@ export default function KpiStrip() {
       : arraysEqualAsSets(filters.status, target);
   };
 
-  // Clicking an active tile clears the filter (toggle). No navigation: staying
-  // on Analytics when clicking a KPI there is intentional; the active highlight
-  // is the feedback.
+  // Active tile toggles the filter off; intentionally no navigation.
   const onKpiClick = (key: string) => {
     const target = KPI_FILTER_MAP[key];
     if (!target) return;

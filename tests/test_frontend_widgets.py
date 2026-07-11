@@ -1,11 +1,5 @@
-"""Source-level guards for frontend behavior that cannot be exercised via TestClient.
-
-Covers:
-  1. Reports chip checkbox: native input hidden, custom indicator span rendered.
-  2. Delete-attachment button carries type="button" so it cannot submit the bug form.
-  3. Comment composer rejects files-only submissions with a toast.
-  4. Reports panels use theme tokens instead of hard-coded white.
-  5. App version is reported consistently.
+"""Source-level guards for frontend behavior TestClient can't reach.
+Chip checkbox, delete-attachment type, files-only comment reject, theme tokens, app version.
 """
 from __future__ import annotations
 
@@ -17,17 +11,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# These tests pin fix-markers in the React source so a refactor that silently
-# drops a fix still breaks CI. We read the human-readable source rather than
-# the built bundle, which is content-hashed and minified.
+# Pin fix-markers in the readable React source (the built bundle is hashed/minified).
 FRONTEND = REPO_ROOT / "frontend" / "src"
 RICH_EDITOR = FRONTEND / "components" / "RichEditor.tsx"
 BUG_MODAL = FRONTEND / "modals" / "BugModal.tsx"
 BUG_HELPERS = FRONTEND / "modals" / "bug" / "helpers.tsx"
 REPORTS_VIEW = FRONTEND / "views" / "ReportsView.tsx"
 SIDEBAR = FRONTEND / "shell" / "Sidebar.tsx"
-# NAV_ITEMS is shared between TopChrome (desktop) and Sidebar (mobile drawer)
-# so the two nav surfaces can't drift.
+# NAV_ITEMS is shared by TopChrome and Sidebar so the two nav surfaces can't drift.
 TOPCHROME = FRONTEND / "shell" / "TopChrome.tsx"
 NAVITEMS = FRONTEND / "shell" / "navItems.ts"
 TYPES = FRONTEND / "types.ts"
@@ -35,19 +26,14 @@ FORMAT_TS = FRONTEND / "lib" / "format.ts"
 STYLES_CSS = FRONTEND / "styles" / "styles.css"
 
 
-# ---------------------------------------------------------------------------
 # Application version
-# ---------------------------------------------------------------------------
 def test_app_version_is_3_1():
     from app import __version__
     assert __version__ == "3.1"
 
 
 def test_config_default_app_version_is_3_1(monkeypatch):
-    """The baked-in APP_VERSION default must match the current release so a
-    clean deploy without a .env override still reports the right version.
-    Reloads config with the dotenv loader stubbed and APP_VERSION unset to read
-    the literal default rather than any local override."""
+    """Baked-in APP_VERSION default must match the release; reads the literal default with dotenv stubbed."""
     import importlib
     import dotenv
     import app.config as config
@@ -62,12 +48,9 @@ def test_config_default_app_version_is_3_1(monkeypatch):
         importlib.reload(config)
 
 
-# ---------------------------------------------------------------------------
 # Delete-attachment button must not submit the bug form
-# ---------------------------------------------------------------------------
 def test_delete_attachment_button_has_type_button():
-    """A bare <button> inside a <form> defaults to type=submit in both HTML and JSX,
-    so clicking delete would also save the bug. type="button" prevents that."""
+    """A bare button in a form defaults to submit; type=button stops delete from saving the bug."""
     src = BUG_HELPERS.read_text(encoding="utf-8")
     assert 'data-act="delete-attachment"' in src
     needle = 'data-act="delete-attachment"'
@@ -90,31 +73,21 @@ def test_delete_attachment_button_has_type_button():
     assert occurrences >= 1, "no rendered delete-attachment button found"
 
 
-# ---------------------------------------------------------------------------
 # Comment composer files-only must not silently become bug-level
-# ---------------------------------------------------------------------------
 def test_post_comment_rejects_files_without_body():
-    """Files in the comment composer must accompany text; attaching files alone
-    would silently create a bug-level attachment instead. The reject branch shows
-    a toast directing the user to the correct uploader."""
+    """Files-only comment submissions are rejected with a toast (would otherwise become bug-level attachments)."""
     src = BUG_MODAL.read_text(encoding="utf-8")
     assert "if (!body && files.length > 0)" in src, (
         "postComment is missing the files-only reject branch"
     )
     assert "Add attachment" in src
-    # The old "commentId = body ? ... : null" three-way split produced bug-level
-    # attachments; the new path always creates a comment first.
+    # The old three-way commentId split produced bug-level attachments; now a comment is always created first.
     assert "const commentId = body ? await _postCommentCreate" not in src
 
 
-# ---------------------------------------------------------------------------
 # Chip checkbox UI — custom indicator span + hidden native checkbox
-# ---------------------------------------------------------------------------
 def test_reports_chip_indicator_span_is_rendered():
-    """The indicator span replaces the native checkbox visually. CSS hides the
-    native input (opacity:0 + absolute positioning) and reveals the span when
-    :has(input:checked) matches. If either side breaks, the chip degrades to a
-    plain checkbox."""
+    """Indicator span replaces the native checkbox (hidden input + :has); if either side breaks, the chip degrades."""
     js = REPORTS_VIEW.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
     assert "reports-chip-indicator" in js, "ReportsView no longer emits the indicator span"
@@ -124,9 +97,7 @@ def test_reports_chip_indicator_span_is_rendered():
     assert ".reports-chip:has(input:checked)" in css
 
 
-# ---------------------------------------------------------------------------
 # Reports view uses theme tokens, not literal white
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("selector_block,must_contain", [
     (".reports-side {", "var(--bg-elev)"),
     (".reports-main {", "var(--bg-elev)"),
@@ -134,8 +105,7 @@ def test_reports_chip_indicator_span_is_rendered():
     (".reports-summary-card {", "var(--bg-elev-2)"),
 ])
 def test_reports_view_uses_theme_tokens(selector_block, must_contain):
-    """Reports panels must use CSS theme variables so they work in both dark and
-    light themes, not hard-coded white."""
+    """Reports panels use CSS theme variables, not hard-coded white."""
     css = STYLES_CSS.read_text(encoding="utf-8")
     start = css.find(selector_block)
     assert start != -1, f"selector {selector_block!r} missing from CSS"
@@ -148,10 +118,7 @@ def test_reports_view_uses_theme_tokens(selector_block, must_contain):
 
 
 def test_no_literal_export_csv_button_in_index_html():
-    """The sidebar Export CSV button was replaced by the Reports view. Pins that
-    the old button is gone, VIEW_MIN_ROLE in types.ts still gates Reports to
-    manager+, and both nav surfaces (TopChrome + Sidebar) consume that map so
-    visibility can't drift."""
+    """Sidebar Export CSV button is gone; VIEW_MIN_ROLE gates Reports to manager+ on both nav surfaces."""
     sidebar_src = SIDEBAR.read_text(encoding="utf-8")
     assert 'id="exportCsvBtn"' not in sidebar_src
     assert "Export CSV" not in sidebar_src
@@ -164,8 +131,7 @@ def test_no_literal_export_csv_button_in_index_html():
     assert re.search(r'reports:\s*"manager"', m.group(1)), (
         "Reports must be gated to manager+ in VIEW_MIN_ROLE"
     )
-    # Both nav surfaces (desktop chrome bar and mobile drawer) must consume the
-    # gate so the map and the rendered button set can't drift.
+    # Both nav surfaces must consume the gate so map and buttons can't drift.
     nav_src = TOPCHROME.read_text(encoding="utf-8")
     assert "VIEW_MIN_ROLE" in nav_src, "TopChrome must consult VIEW_MIN_ROLE to gate nav buttons"
     assert "allowed(item.view)" in nav_src, "TopChrome must filter NAV_ITEMS through the role gate"
@@ -174,13 +140,9 @@ def test_no_literal_export_csv_button_in_index_html():
     assert "VIEW_MIN_ROLE" in sidebar_src, "Sidebar must consult VIEW_MIN_ROLE to gate its drawer nav"
 
 
-# ---------------------------------------------------------------------------
 # Smoke: a manager-only API still works after the version bump
-# ---------------------------------------------------------------------------
 def test_health_endpoint_reports_version(client):
-    # /api/health exposes whatever version the app is configured with (3.1
-    # baked in, or an APP_VERSION env override). Compare against the configured
-    # value rather than a hard-coded literal so the check holds under either.
+    # /api/health reports the configured version; compare against config, not a literal.
     from app.main import settings
     r = client.get("/api/health")
     assert r.status_code == 200
@@ -188,9 +150,7 @@ def test_health_endpoint_reports_version(client):
 
 
 def test_login_page_shows_version(client):
-    """The login page renders "Version <X>" below the sign-in card so users can
-    identify the release without logging in. <X> is the app's configured version
-    (3.1 default, or an APP_VERSION override), substituted server-side."""
+    """Login page renders 'Version <X>' (server-side substituted) below the sign-in card."""
     from app.main import settings
     r = client.get("/login.html")
     assert r.status_code == 200
@@ -202,16 +162,10 @@ def test_login_page_shows_version(client):
     assert 'class="auth-version"' in body
 
 
-# ---------------------------------------------------------------------------
-# Rich-text editor undo/redo: snapshot-based history so Ctrl+Z works across
-# typed characters and toolbar formatting commands. The browser's native
-# contenteditable undo skips toolbar mutations because those go through direct
-# DOM manipulation rather than document.execCommand.
-# ---------------------------------------------------------------------------
+# Snapshot-based undo/redo: native contenteditable undo skips toolbar DOM mutations.
 def test_rich_editor_has_snapshot_history():
     src = RICH_EDITOR.read_text(encoding="utf-8")
-    # History structure must exist on every editor instance (stack + index,
-    # typed as HistoryState).
+    # History structure (stack + index, typed HistoryState) must exist per instance.
     assert "HistoryState" in src and "stack:" in src and "idx:" in src, (
         "snapshot history state missing from RichEditor"
     )
@@ -225,17 +179,14 @@ def test_rich_editor_has_snapshot_history():
 
 
 def test_rich_editor_seeds_initial_snapshot():
-    """The first Ctrl+Z must be able to return to the editor's initial state.
-    That requires a seed snapshot at mount time — resetHistory() (called from
-    the mount layout effect) pushes it."""
+    """First Ctrl+Z can return to the initial state: resetHistory() seeds a snapshot at mount."""
     src = RICH_EDITOR.read_text(encoding="utf-8")
     # resetHistory must seed an initial snapshot().
     start = src.find("const resetHistory")
     assert start != -1, "resetHistory helper missing"
     body = src[start:start + 400]
     assert "snapshot()" in body, "resetHistory must seed an initial snapshot()"
-    # Must run at mount, before any user input arrives: the call lives inside
-    # the mount layout effect.
+    # Must run at mount, inside the mount layout effect, before any user input.
     assert "resetHistory();" in src
     le = src.find("useLayoutEffect(() => {")
     assert le != -1, "mount layout effect missing"
@@ -244,18 +195,11 @@ def test_rich_editor_seeds_initial_snapshot():
     )
 
 
-# ---------------------------------------------------------------------------
-# Timestamp formatter: must always render both date and time (comments, audit
-# log, session list, bug modal metadata) with no today-only shortcut that hides
-# one half.
-# ---------------------------------------------------------------------------
+# formatDate must always render both date and time, no today-only shortcut.
 def test_format_date_always_includes_date_and_time():
-    """The formatDate() helper must combine the locale date and locale time.
-    Verifies both toLocale*() calls are present and the today-only shortcut
-    is gone."""
+    """formatDate() must combine locale date and time; the today-only shortcut is gone."""
     src = FORMAT_TS.read_text(encoding="utf-8")
-    # Slice until the next top-level export so the check spans the whole
-    # function body regardless of formatting.
+    # Slice to the next top-level export so the check spans the whole function.
     start = src.find("export function formatDate")
     assert start != -1, "formatDate helper missing"
     end = src.find("\nexport function", start + 1)

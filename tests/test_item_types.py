@@ -1,14 +1,5 @@
-"""Tests for the Bug / Requirement / Task work-item type feature.
-
-A single "bugs" table holds three flavors of work item distinguished by
-the `item_type` column. Coverage includes:
-
-- /api/meta exposes the allowed types
-- create/update/list/filter honor item_type
-- default value is "Bug" so pre-existing rows keep their semantics
-- by_type breakdown in stats
-- migration safety: running init_db twice is idempotent
-- the audit log records type changes like any other tracked field
+"""Tests for Bug/Requirement/Task work-item types (one bugs table, item_type column).
+Meta exposure, CRUD/filtering, 'Bug' default, stats by_type, idempotent init_db, audit nouns.
 """
 from __future__ import annotations
 
@@ -33,18 +24,14 @@ def _make_item(client, project_id, item_type="Bug", **extra):
     return r.json()
 
 
-# ---------------------------------------------------------------------------
 # Meta
-# ---------------------------------------------------------------------------
 def test_meta_exposes_item_types(client):
     body = client.get("/api/meta").json()
     assert "item_types" in body
     assert set(body["item_types"]) == {"Bug", "Requirement", "Task"}
 
 
-# ---------------------------------------------------------------------------
 # Create / update
-# ---------------------------------------------------------------------------
 def test_create_each_item_type(admin_client):
     p = _make_project(admin_client)
     for t in ("Bug", "Requirement", "Task"):
@@ -99,9 +86,7 @@ def test_update_item_type(admin_client):
     assert "item_type_changed" in actions
 
 
-# ---------------------------------------------------------------------------
 # Filter / list
-# ---------------------------------------------------------------------------
 def test_filter_by_item_type(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Bug", title="A bug")
@@ -117,8 +102,7 @@ def test_filter_by_item_type(admin_client):
 
 
 def test_filter_by_due_date(admin_client):
-    """Exact-day match on due_date — used by reporting and the events
-    detail view's date filter."""
+    """Exact-day due_date match, used by reporting and the events detail date filter."""
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Task", due_date="2026-05-28")
     _make_item(admin_client, p["id"], item_type="Task", due_date="2026-05-29")
@@ -129,17 +113,14 @@ def test_filter_by_due_date(admin_client):
     assert rows["items"][0]["due_date"] == "2026-05-28"
 
 
-# ---------------------------------------------------------------------------
 # Stats
-# ---------------------------------------------------------------------------
 def test_stats_includes_by_type(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Bug")
     _make_item(admin_client, p["id"], item_type="Bug")
     _make_item(admin_client, p["id"], item_type="Requirement")
     _make_item(admin_client, p["id"], item_type="Task")
-    # Create an event so the by_type["Event"] count is non-zero too —
-    # the SPA reads this for the Events pill on the KPI row.
+    # An event makes by_type['Event'] non-zero; the SPA reads it for the Events KPI pill.
     admin_client.post("/api/events", json={"name": "kickoff"})
     s = admin_client.get("/api/stats").json()
     assert "by_type" in s
@@ -149,10 +130,7 @@ def test_stats_includes_by_type(admin_client):
     assert s["by_type"].get("Event") == 1
 
 
-# ---------------------------------------------------------------------------
-# XLSX export — the type column is present and a Task row carries Task,
-# verified against the Item Detail report.
-# ---------------------------------------------------------------------------
+# XLSX export carries the type column (verified against the Item Detail report).
 def test_xlsx_export_includes_type_column(admin_client):
     import io
     from openpyxl import load_workbook
@@ -172,9 +150,7 @@ def test_xlsx_export_includes_type_column(admin_client):
     assert "Task" in body_text
 
 
-# ---------------------------------------------------------------------------
 # Email subject / body uses the work-item type
-# ---------------------------------------------------------------------------
 def test_email_subject_uses_item_type(monkeypatch):
     """Email subjects and bodies should reflect the actual item type, not always 'bug'."""
     from app.email_service import (
@@ -251,12 +227,9 @@ def test_email_subject_uses_item_type(monkeypatch):
     assert "commented on bug" not in body.lower()
 
 
-# ---------------------------------------------------------------------------
 # Audit-log detail strings carry the right noun
-# ---------------------------------------------------------------------------
 def test_audit_log_detail_uses_item_type(admin_client):
-    """The audit row written when an item is created says e.g. 'Task created
-    with status …', not 'Bug created with status …'."""
+    """The create audit row says e.g. 'Task created with status ...', not 'Bug created ...'."""
     p = _make_project(admin_client)
     row = _make_item(admin_client, p["id"], item_type="Task")
     acts = admin_client.get(f"/api/bugs/{row['id']}/activity").json()
@@ -280,12 +253,9 @@ def test_audit_log_delete_uses_item_type(admin_client):
     assert "requirement" in matching[0]["detail"].lower()
 
 
-# ---------------------------------------------------------------------------
 # Migration safety
-# ---------------------------------------------------------------------------
 def test_init_db_is_idempotent(admin_client):
-    """Re-running init_db() against a populated database must be a no-op —
-    this is what protects the prod DB on every redeploy."""
+    """Re-running init_db() on a populated DB is a no-op; protects prod on every redeploy."""
     from app.database import init_db
     # The first call already ran at app startup; a second and third must be safe.
     init_db()
@@ -297,11 +267,8 @@ def test_init_db_is_idempotent(admin_client):
 
 
 def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch):
-    """Simulate a row inserted before the item_type column existed.
-    init_db() adds the column with DEFAULT 'Bug', so legacy rows stay
-    interpreted as bugs — same guarantee the live DB gets on upgrade."""
-    # Build a minimal "old" SQLite DB without the item_type column, then
-    # point the engine at it and call init_db().
+    """Legacy row without item_type: init_db adds the column DEFAULT 'Bug' so rows stay bugs."""
+    # Build a minimal old SQLite DB without item_type, point the engine at it, run init_db().
     import sqlite3
     db_file = tmp_path / "legacy.db"
     con = sqlite3.connect(db_file)
@@ -339,8 +306,7 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
     con.commit()
     con.close()
 
-    # Boot the app against this legacy DB; init_db() should add item_type
-    # with DEFAULT 'Bug'.
+    # Boot against the legacy DB; init_db() should add item_type DEFAULT 'Bug'.
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
     monkeypatch.setenv("API_KEY", "")
     monkeypatch.setenv("EMAIL_BACKEND", "disabled")
@@ -359,7 +325,6 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
     from fastapi.testclient import TestClient
     from app.main import app
     with TestClient(app) as c:
-        # Authenticate.
         r = c.post("/api/auth/login", json={
             "email": "admin@test.local", "password": "Admin1234",
         })

@@ -1,5 +1,4 @@
-"""Unit tests for the chatbot NLU, executor, llm, and routes/bugs helper
-functions, exercising each helper directly."""
+"""Direct unit tests for chatbot nlu/executor/llm and routes/bugs helpers."""
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
@@ -8,9 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# nlu.py helpers
-# ---------------------------------------------------------------------------
 def test_named_window_today():
     from app.chatbot.nlu import _named_window
     now = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
@@ -177,7 +173,7 @@ def test_typo_fallback_no_typo_run_when_filled():
     from app.chatbot.nlu import _typo_fallback, _PRIORITY_SYNONYMS
     out = ["Critical"]
     _typo_fallback("blocker", _PRIORITY_SYNONYMS, out)
-    # list already has a value, so typo_fallback should leave it unchanged
+    # already-filled list must stay unchanged
     assert out == ["Critical"]
 
 
@@ -190,9 +186,6 @@ def test_append_unique():
     assert out == ["A", "B"]
 
 
-# ---------------------------------------------------------------------------
-# executor.py helpers
-# ---------------------------------------------------------------------------
 def test_clarify_ambiguous_names_returns_response():
     from app.chatbot.executor import _clarify_ambiguous_names
     from app.chatbot.nlu import ParsedQuery
@@ -345,9 +338,6 @@ def test_dedupe_display_names_skips_missing_keys():
     assert out == ["Alice"]
 
 
-# ---------------------------------------------------------------------------
-# Plan-builder branches in _build_action_plan
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def fake_actor():
     return SimpleNamespace(id=42, name="Tester", role="admin")
@@ -521,9 +511,6 @@ def test_plan_unknown_kind(fake_actor):
     assert "don't know how" in err
 
 
-# ---------------------------------------------------------------------------
-# llm.py helpers
-# ---------------------------------------------------------------------------
 def test_build_pq_from_llm_clean():
     from app.chatbot.llm import _build_pq_from_llm
     parsed = {
@@ -554,9 +541,6 @@ def test_build_pq_from_llm_negative_bid_ignored():
     assert pq.bug_id is None
 
 
-# ---------------------------------------------------------------------------
-# routes/bugs.py helpers
-# ---------------------------------------------------------------------------
 def test_normalize_choice_list_empties_stripped():
     from app.routes.bugs import _normalize_choice_list
     out = _normalize_choice_list(["New", None, "", "Closed"],

@@ -1,23 +1,6 @@
-/* ============================================================
-   Bug Hunter — UI styles ("Spectrum Tide" theme)
+/* Bug Hunter UI styles ("Spectrum Tide" theme) — 5-colour system (cerulean/gold/steel/walnut/brick-red) driving KPI + badge coding; every selector/id/class/token NAME is retained, only token VALUES changed, so JS hooks + backend token tests stay green. */
 
-   Spectrum Tide = ocean-deep base × brand-logo colours, a five-colour system:
-   - Ocean cerulean  (--accent)        primary: buttons, links, nav, KPI Total
-   - Brand gold      (--accent-2/warn)  In Progress, KPI Open, gold accents
-   - Cool steel      (silver)           Resolved, Low priority, borders, ghost
-   - Walnut brown                       Closed
-   - Brick red       (--danger)         Reopened, Critical, PROD, danger
-   KPI tiles + status/priority/env badges are colour-coded across the palette.
-   - Self-hosted Plus Jakarta Sans (UI) + JetBrains Mono (IDs/code), CSP-safe.
-   - Per-user notifications bell + dropdown panel in the top bar.
-   - All animations honour prefers-reduced-motion.
-   - Every selector / id / class + every design-token NAME retained — only the
-     token VALUES changed, so JS hooks + backend token tests stay green.
-   ============================================================ */
-
-/* ---------- Fonts (self-hosted, CSP-safe — no external CDN) ----------
-   Plus Jakarta Sans for UI text, JetBrains Mono for IDs/code. Bundled as
-   variable woff2 under public/fonts → served at /static/fonts/. */
+/* Self-hosted Plus Jakarta Sans (UI) + JetBrains Mono (IDs/code), CSP-safe, served from /static/fonts/. */
 @font-face {
   font-family: "Plus Jakarta Sans";
   src: url("/static/fonts/PlusJakartaSans.woff2") format("woff2");
@@ -32,9 +15,7 @@
   font-style: normal;
   font-display: swap;
 }
-/* Asap — OFL-licensed, self-hosted (CSP-safe). Our free stand-in for Steam's
-   proprietary "Motiva Sans": the font stack prefers Motiva Sans, then Asap,
-   then Steam's own Arial fallback. */
+/* Asap (OFL-licensed) is our free stand-in for Steam's proprietary Motiva Sans in the font stack fallback. */
 @font-face {
   font-family: "Asap";
   src: url("/static/fonts/Asap.woff2") format("woff2");
@@ -43,15 +24,10 @@
   font-display: swap;
 }
 
-/* ---------- Reset & base ---------- */
+
 * { box-sizing: border-box; }
 
-/* Honour the HTML `hidden` attribute even on flex/grid containers that
-   declare their own display. Without this, [hidden] = display:none from
-   the UA sheet is silently overridden by our component CSS (e.g.
-   `.filter-bar { display: flex }`), so JS toggling `.hidden = true` did
-   nothing. This was the cause of the bug filter-bar leaking onto the
-   Audit page even though setView() correctly flagged it. */
+/* [hidden] must be forced: component rules like `.filter-bar { display: flex }` otherwise silently override the UA default, which let a hidden filter-bar leak onto the Audit page. */
 [hidden] { display: none !important; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: transparent; }
@@ -73,11 +49,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  /* Prevent horizontal page scrolling. Decorative aurora blobs (auth pages)
-     and occasional wide children bleed past the right edge; clipping at the
-     root keeps the viewport aligned. Wide content such as tables scrolls
-     inside its own .table-scroll container, and position:fixed overlays
-     (modals, drawer, popovers) are not affected by this clip. */
+  /* Clips decorative aurora blobs + wide children that bleed past the edge; .table-scroll and fixed overlays are unaffected. */
   overflow-x: hidden;
   max-width: 100%;
 }
@@ -88,19 +60,12 @@ html, body {
   font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
-/* ---------- Theme tokens ---------- */
+
 :root,
 [data-theme="dark"] {
-  /* ---- Steam (dark) — captured live from store.steampowered.com ----
-     Token NAMES are preserved 1:1 (JS hooks + backend token tests key off
-     them); only the VALUES change to the Steam palette. Steam-specific
-     additive tokens (--chrome / --content / --field* / --panel-field /
-     --diag / --green-* / --ease-out + a reduced radius scale) are appended
-     at the end of the block — they introduce no name collisions. */
+  /* Steam (dark) values captured live from store.steampowered.com; token NAMES stay 1:1 for JS hooks/backend tests, only VALUES change. */
   --bg: #0f1924;                 /* Steam deepest base (mockup --base) */
-  /* Subtle Steam aurora baked into the base — the calm, near-static version of
-     the mockup's drifting glow (three faint brand-blue/green radials over the
-     deep base). No animation, so it respects reduced-motion by default. */
+  /* Static aurora (no animation) so reduced-motion is respected by default. */
   --bg-grad:
     radial-gradient(60% 55% at 12% 0%, rgba(103, 193, 245, 0.10), transparent 60%),
     radial-gradient(55% 50% at 92% 8%, rgba(45, 115, 255, 0.08), transparent 60%),
@@ -164,11 +129,9 @@ html, body {
   --scrollbar-thumb: #2a3f55;
   --scrollbar-thumb-hover: #3a5675;
 
-  /* ---- Additive Steam tokens (no existing name touched) ---- */
+  /* Additive Steam tokens — no existing name touched. */
   --chrome: #171a21;            /* Steam global chrome bar */
-  /* Chrome (top bar + supernav) is the dark Steam band in dark theme; these
-     semantic tokens let it flip to a light surface under [data-theme="light"]
-     without scattering theme-specific hex through the chrome rules. */
+  /* Semantic tokens so chrome can flip to a light surface under [data-theme="light"] without hardcoding theme-specific hex. */
   --chrome-fg: #b8c6d4;         /* idle nav / type-tab text */
   --chrome-fg-strong: #ffffff;  /* wordmark + hover */
   --chrome-fg-muted: #b0bcca;   /* secondary text */
@@ -191,8 +154,7 @@ html, body {
   --green-frame: #3a5713;
   --green-text: #d2efa9;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* Radius scale — matches the Design-Vibes mockup (14px capsules, 11px
-     buttons, 7px fields/chips). */
+  /* Radius scale matches the Design-Vibes mockup (14px capsules, 11px buttons, 7px fields/chips). */
   --r-card: 14px;
   --r-btn: 11px;
   --r-field: 7px;
@@ -201,12 +163,7 @@ html, body {
 }
 
 [data-theme="light"] {
-  /* ---- Steam (light interpretation) ----
-     Steam ships no light theme, so this keeps the Steam identity (iconic
-     blue, gold, green Install button, steel panel-field headers — the
-     additive tokens inherit from :root) on light content surfaces. The
-     accent + status hues are AA-darkened for text and white-on-fill.
-     Token names preserved. */
+  /* Steam ships no light theme, so this keeps the Steam identity on light surfaces; accent + status hues are AA-darkened for text/white-on-fill. */
   --bg: #dde7f0;                 /* cool Steam-grey base */
   --bg-grad: radial-gradient(60% 55% at 12% 0%, rgba(47,143,190,0.14), transparent 60%),
              radial-gradient(55% 50% at 92% 8%, rgba(26,159,255,0.10), transparent 60%),
@@ -224,8 +181,7 @@ html, body {
   --text-muted: #4d5e6e;
   --text-faint: #5e6a78;
 
-  /* Steam iconic blue darkened to hit WCAG-AA (~4.7:1) for accent text and
-     white-on-accent buttons on the white light surfaces. */
+  /* Steam iconic blue darkened to hit WCAG-AA (~4.7:1) for accent text and white-on-accent buttons on white. */
   --accent: #1a7fb8;
   --accent-strong: #0f5e8f;
   --accent-2: #8a6010;
@@ -272,13 +228,10 @@ html, body {
   --scrollbar-thumb: #b8c6d6;
   --scrollbar-thumb-hover: #8fa1b5;
 
-  /* Light surface for the content layer (additive --panel-field / --green-*
-     stay Steam-constant by inheriting from :root). */
+  /* Content layer surface; additive --panel-field / --green-* stay Steam-constant by inheriting from :root. */
   --content: #ffffff;
 
-  /* Light chrome — the top bar + supernav now follow the light theme (a clean
-     white steel band with dark text + AA-darkened Steam-blue accents) instead
-     of staying dark. */
+  /* Chrome + supernav follow the light theme (white steel band, dark text, AA-darkened Steam-blue accents) instead of staying dark. */
   --chrome: linear-gradient(180deg, #ffffff 0%, #eef3f8 100%);
   --chrome-fg: #41515f;
   --chrome-fg-strong: #16222e;
@@ -306,13 +259,8 @@ body {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* ============================================================
-   App shell — Steam two-tier chrome
-   Global chrome (top view-nav) + supernav (type tabs + search) + frame
-   (library rail + main). Fixed-viewport: chrome/supernav stay put while the
-   rail and main scroll internally — the Steam client model.
-   ============================================================ */
-/* ---------- Global chrome bar (full-width top bar — matches the mockup) ---------- */
+/* App shell: Steam two-tier chrome (top view-nav + supernav type-tabs/search) + frame (rail + main); chrome/supernav are fixed while rail/main scroll internally, the Steam client model. */
+/* Global chrome bar — full-width top bar matching the mockup. */
 .chrome {
   position: relative;
   z-index: 20;
@@ -358,7 +306,7 @@ body {
   margin-top: 2px;
 }
 
-/* Horizontal view nav. */
+
 .chrome .nav { flex-direction: row; gap: 2px; height: 100%; align-items: stretch; }
 .chrome .nav-btn {
   position: relative;
@@ -392,8 +340,7 @@ body {
 .chrome .spacer { flex: 1; }
 .chrome-right { display: flex; align-items: center; gap: 12px; flex: none; }
 
-/* Mobile-only "Ask Sleuth" chrome button (desktop uses the floating FAB). The
-   ≤900px block below flips it to inline-flex and hides the FAB. */
+/* Mobile-only "Ask Sleuth" chrome button; desktop uses the floating FAB, the ≤900px block flips this to inline-flex and hides it. */
 .chrome-sleuth-btn {
   display: none;
   align-items: center;
@@ -417,7 +364,7 @@ body {
 .chrome-sleuth-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 .chrome-sleuth-logo { width: 20px; height: 20px; flex: none; display: block; }
 
-/* ---------- Supernav: work-item type tabs + search ---------- */
+
 .supernav {
   position: relative;
   z-index: 19;
@@ -440,9 +387,7 @@ body {
   justify-content: flex-end;
 }
 .supernav .search-wrap input { height: 30px; padding: 0 14px; }
-/* Type tabs sit inline in the band (no standalone bordered strip). They use the
-   theme-aware chrome tokens so the text stays readable whether the band is the
-   dark Steam band (dark theme) or the light steel band (light theme). */
+/* Type tabs sit inline in the band; theme-aware chrome tokens keep text readable in both the dark Steam band and light steel band. */
 .supernav .type-tabs { border-bottom: 0; padding: 0; margin: 0; height: 100%; align-items: stretch; overflow: visible; }
 .supernav .type-tab { padding: 0 14px; border-radius: 0; color: var(--chrome-fg-muted); }
 .supernav .type-tab:hover { color: var(--chrome-fg-strong); background: var(--chrome-hover-bg); }
@@ -450,22 +395,18 @@ body {
 .supernav .type-tab-count { color: var(--chrome-count-fg); background: var(--chrome-count-bg); }
 .supernav .type-tab.active .type-tab-count { color: var(--accent-text); background: var(--chrome-accent); }
 
-/* ---------- Frame: fixed library-rail sidebar + scrolling main ----------
-   The chrome (56px) + supernav (42px) are full-width bars above; the frame
-   fills the rest. Sidebar and nav coexist — no collapse (matches the mockup). */
+/* Frame: chrome (56px) + supernav (42px) are full-width bars above; the frame fills the rest, sidebar and nav coexist with no collapse (matches the mockup). */
 .frame {
   position: relative;
   z-index: 5;
   display: grid;
   grid-template-columns: 236px 1fr;
   height: calc(100vh - 98px);
-  /* Animate the rail column width when the sidebar collapses or expands.
-     Browsers interpolate the px track; the global prefers-reduced-motion
-     guard above disables the transition. */
+  /* Animates the rail column width on collapse/expand; global reduced-motion guard above disables this. */
   transition: grid-template-columns 0.26s var(--ease-out);
 }
 
-/* ---------- Page header ---------- */
+
 .pagehead {
   display: flex;
   align-items: flex-end;
@@ -487,12 +428,10 @@ body {
 .pagehead .sub b { color: var(--accent); font-weight: 600; }
 .pagehead .actions { display: flex; gap: 10px; align-items: center; flex: none; }
 
-/* ---------- Content wrapper ---------- */
+
 .content { position: relative; z-index: 1; padding-bottom: 40px; }
 
-/* ---------- Page / view entrance transitions ----------
-   Each view re-mounts on navigation, so its root replays the entrance; the
-   page-head titles re-key on view too. All motion is guarded. */
+/* Each view re-mounts on navigation so its root replays the entrance; page-head titles re-key on view too. All motion is guarded. */
 @media (prefers-reduced-motion: no-preference) {
   .view { animation: bh-view-in 0.34s var(--ease-out) both; }
   .pagehead-titles { animation: bh-head-in 0.34s var(--ease-out) both; }
@@ -502,7 +441,7 @@ body {
 @keyframes bh-head-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 @keyframes bh-underline-in { from { transform: scaleX(0.2); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
 
-/* ---------- Steam table panel (field-gradient header) ---------- */
+/* Steam table panel with a field-gradient header. */
 .panel {
   margin: 0;
   border-radius: var(--r-card);
@@ -530,10 +469,9 @@ body {
 /* The table inside a panel hands its frame to the panel. */
 .panel .table-scroll { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 
-/* ---------- Sidebar ---------- */
+
 .sidebar {
-  /* Steam "library rail" — a vertical gradient that fades to the deepest
-     base at the bottom (dark) / a soft tint (light). */
+  /* Steam "library rail" gradient, fading to the deepest base (dark) / a soft tint (light). */
   background: linear-gradient(180deg, var(--bg-elev-2), var(--bg));
   border-right: 1px solid var(--border);
   display: flex;
@@ -543,20 +481,15 @@ body {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
-  /* Clip horizontally so content is revealed cleanly as the rail animates
-     its width, rather than wrapping during the transition. */
+  /* Clips horizontally so content is revealed cleanly as the rail animates width, instead of wrapping mid-transition. */
   overflow-x: hidden;
   transition: padding 0.26s var(--ease-out);
   z-index: 10;
 }
-/* Mobile drawer view-nav. The desktop chrome bar owns the view nav, so this is
-   hidden on wide screens and shown only inside the phone drawer (see the
-   max-width:900px block, where .chrome .nav is hidden and this is shown). */
+/* Desktop chrome bar owns the view nav; this is hidden on wide screens and shown only inside the phone drawer (see max-width:900px block). */
 .sidebar-nav { display: none; }
 
-/* Mobile drawer brand header — wordmark and version at the top of the drawer.
-   Hidden on desktop, where the chrome bar shows the brand; the ≤900px block
-   shows it. */
+/* Mobile drawer brand header (wordmark + version); hidden on desktop where the chrome bar shows the brand. */
 .sidebar-brand { display: none; }
 .sidebar-brand .logo { width: 38px; height: 38px; border-radius: 50%; flex: none; }
 .sidebar-brand .wm { line-height: 1.1; }
@@ -618,11 +551,7 @@ body {
 }
 .nav-icon { font-size: 16px; flex-shrink: 0; }
 
-/* ---------- Sidebar collapse toggle (footer control) ----------
-   margin-top:auto pins it to the bottom of the flex-column rail; sticky keeps
-   it visible when the project/team lists scroll beneath it. The collapsed
-   appearance (narrow rail, hidden label, rotated chevron) is driven by the
-   body.sidebar-collapsed class — see the @media (min-width:901px) block. */
+/* Sidebar collapse toggle: margin-top:auto + sticky pins it above scrolling lists; collapsed look is driven by body.sidebar-collapsed (see @media min-width:901px). */
 .sidebar-collapse-btn,
 .sidebar-close-btn {
   margin-top: auto;
@@ -652,15 +581,12 @@ body {
 .sidebar-close-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 .sidebar-collapse-btn .collapse-icon,
 .sidebar-close-btn svg { flex: none; transition: transform 0.2s var(--ease-out); }
-/* Hidden on desktop, where the collapse button is shown instead; the ≤900px
-   block shows the close button and hides the collapse button. */
+/* Hidden on desktop (collapse button shown instead); the ≤900px block shows this and hides the collapse button. */
 .sidebar-close-btn { display: none; }
 /* When collapsed, rotate the chevron to indicate the expand action. */
 body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(180deg); }
 
-/* Desktop only: collapsing narrows the rail to an icon strip and hides the
-   lists. The mobile drawer (≤900px) ignores the collapse state; there the
-   sidebar is off-canvas, controlled by the menu button and backdrop. */
+/* Desktop only: collapsing narrows the rail to an icon strip. Mobile drawer (≤900px) ignores collapse state — sidebar is off-canvas there instead. */
 @media (min-width: 901px) {
   body.sidebar-collapsed .frame { grid-template-columns: 46px 1fr; }
   body.sidebar-collapsed .sidebar { padding-left: 0; padding-right: 0; overflow: hidden; }
@@ -692,10 +618,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   max-height: 220px;
   overflow-y: auto;
 }
-/* Let the LAST entity list grow to fill the rail — the Team list for
-   managers/admins, or Projects for regular users — instead of capping at
-   220px and leaving dead space above the collapse button. Earlier sections
-   (e.g. Projects when Team is present) keep the 220px cap and scroll. */
+/* The LAST entity list (Team for managers/admins, else Projects) grows to fill the rail instead of capping at 220px; earlier sections keep the cap and scroll. */
 .sidebar > .side-section:last-of-type {
   flex: 1 1 auto;
   min-height: 0;
@@ -770,7 +693,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   flex-shrink: 0;
 }
 
-/* ---------- Main (the scrolling content column of the frame grid) ---------- */
+/* Main — the scrolling content column of the frame grid. */
 .main {
   display: flex;
   flex-direction: column;
@@ -781,8 +704,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   background: var(--bg-elev);
 }
 
-/* Search box — lives in the SuperNav band (.supernav .search-wrap overrides
-   the flex sizing); these rules own the input chrome. */
+/* Search box lives in the SuperNav band (.supernav .search-wrap overrides flex sizing); these rules own the input chrome. */
 .search-wrap {
   display: flex;
   justify-content: center;
@@ -812,12 +734,10 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 }
 .search-wrap input::placeholder { color: var(--text-faint); }
 
-/* ---------- Notifications (bell + panel) ---------- */
-/* The bell sits inside .chrome-right, which owns the right alignment, so the
-   wrap itself only needs to be a positioning context for the dropdown. */
+
+/* .chrome-right owns the right alignment; this wrap is just a positioning context for the dropdown. */
 .notif-wrap { position: relative; flex-shrink: 0; }
-/* Higher specificity than the generic `.icon-btn` (which sets a 30px square +
-   14px font and, being later in the file, would otherwise override these). */
+/* Needs higher specificity than the generic `.icon-btn`, which is later in the file and would otherwise override this. */
 .chrome .notif-btn,
 .notif-btn {
   position: relative;
@@ -831,9 +751,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .notif-btn:hover { background: var(--accent-soft); }
 .notif-bell { filter: grayscale(0.1); display: block; }
 .notif-badge {
-  /* Pinned to the very top-right CORNER (pushed slightly outside the button)
-     so it never sits over the bell glyph — a 30px bell with a 16px corner pill
-     means the count badges the icon instead of eclipsing it. Fits "99+". */
+  /* Pinned to the corner, pushed slightly outside the button, so the 16px pill badges the bell glyph instead of eclipsing it; fits "99+". */
   position: absolute;
   top: -2px; right: -2px;
   min-width: 16px; height: 16px;
@@ -867,9 +785,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   from { opacity: 0; transform: translateY(-6px) scale(0.985); }
   to { opacity: 1; transform: none; }
 }
-/* On phones the bell is not at the viewport edge, so a 380px panel anchored
-   with right:0 overflows the left side. Anchor it to the viewport instead:
-   a fixed sheet spanning the width with 8px gutters, below the 56px chrome bar. */
+/* On phones the bell isn't at the viewport edge, so a right:0-anchored 380px panel would overflow left; anchor to the viewport instead. */
 @media (max-width: 600px) {
   .notif-panel {
     position: fixed;
@@ -954,7 +870,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .notif-item:hover .notif-del { opacity: 1; }
 .notif-del:hover { background: var(--danger-soft); color: var(--danger); }
 
-/* ---------- Profile menu (top-right account control) ---------- */
+/* Profile menu — top-right account control. */
 .profile-wrap { position: relative; flex-shrink: 0; }
 .profile-btn {
   display: inline-flex;
@@ -1048,10 +964,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .profile-menu-item.danger:hover { background: var(--danger-soft); color: var(--danger); }
 .profile-menu-ic { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
 
-/* ---------- KPI strip ----------
-   Each tile is a real <button> so keyboard users can tab to it and screen
-   readers announce it as a control. We strip the browser button styling
-   and rebuild on top of the existing tile look. */
+/* KPI strip: each tile is a real <button> for keyboard/screen-reader access; browser button styling is stripped and rebuilt as the tile look. */
 .kpi-strip {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -1119,18 +1032,13 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   color: var(--accent);
   line-height: 1.05;
   letter-spacing: -0.01em;
-  /* Total tile = Steam cyan; other tiles override via .kpi-* below. Use
-     background-image (not the shorthand) so background-clip:text survives. */
+  /* background-image (not the shorthand) so background-clip:text survives; other tiles override via .kpi-* below. */
   background-image: linear-gradient(135deg, #79c8f6, #1a9fff);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-/* Steam KPI colour-coding — Total=cyan, Open=gold, Resolved=green,
-   Closed=walnut, Resolve Later=amber. Fixed mid-tone gradients chosen to read
-   on BOTH the dark tiles and the white light-theme tiles (background-IMAGE
-   keeps the inherited background-clip:text intact so the digits always
-   render). Total (base .kpi-num) is cyan — set on the base rule above. */
+/* Steam KPI colour-coding (Total=cyan, Open=gold, Resolved=green, Closed=walnut, Later=amber); mid-tones chosen to read on both dark and light-theme tiles. */
 .kpi-num.kpi-open     { background-image: linear-gradient(135deg, #ecb455, #c9882a); }
 .kpi-num.kpi-resolved { background-image: linear-gradient(135deg, #84d271, #4f9a3f); }
 .kpi-num.kpi-closed   { background-image: linear-gradient(135deg, #cf9a66, #9c6f43); }
@@ -1169,7 +1077,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 }
 @keyframes bh-kpi-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 
-/* ---------- Filter bar ---------- */
+
 .filter-bar {
   display: flex;
   gap: 8px;
@@ -1178,7 +1086,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   align-items: center;
 }
 
-/* ---------- Multi-select dropdown ---------- */
+
 .ms-wrap {
   position: relative;
   display: inline-flex;
@@ -1272,7 +1180,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .ms-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ms-empty { padding: 8px; color: var(--text-faint); font-size: 12px; text-align: center; }
 
-/* ---------- Buttons ---------- */
+
 .btn {
   border: 1px solid var(--border-strong);
   background: var(--bg-elev);
@@ -1295,9 +1203,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .btn:hover { border-color: var(--accent); background: var(--bg-elev-3); }
 .btn:active { transform: translateY(1px); }
 .btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
-/* Primary = Steam green "Install/Play" button. The white shine is a second
-   BACKGROUND layer (not an overlay) so it sweeps UNDER the label on hover,
-   keeping the text crisp — no markup change needed. */
+/* Primary = Steam green "Install/Play" button; the white shine is a second background layer (not an overlay) so it sweeps under the label, keeping text crisp. */
 .btn.primary {
   background-color: transparent;
   background-image: linear-gradient(105deg, transparent 42%, rgba(255,255,255,0.22) 50%, transparent 58%), var(--green-face);
@@ -1353,7 +1259,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .icon-btn:hover { background: var(--bg-elev-2); color: var(--text); }
 .icon-btn.danger:hover { background: var(--danger); color: white; }
 
-/* ---------- Table ---------- */
+
 .view { padding: 0 24px 24px; }
 
 .table-scroll {
@@ -1368,14 +1274,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   min-width: 720px;
   border-collapse: collapse;
   font-size: 13px;
-  /* table-layout: auto is the key here. With "fixed" + a mix of pixel
-     and percentage column widths, the browser scales the columns
-     proportionally when they sum past 100 % and the min-width hints
-     I'd set on individual <td>s were ignored. That's what made the
-     # column truncate to "#1..." and the Tasks title shrink while
-     other columns had visible slack. With "auto", the browser sizes
-     small cols to their content (helped by white-space:nowrap) and
-     the title col with width:100% greedily fills whatever's left. */
+  /* auto (not fixed) avoids the browser proportionally rescaling pixel/percent columns past 100%, which truncated the # column and shrank the title. */
   table-layout: auto;
 }
 .bug-table th, .bug-table td {
@@ -1384,10 +1283,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
-/* Small fixed-width columns: shrink to content, never wrap or
-   ellipsize. The width:1% is the classic table trick to tell the
-   browser "I don't want any of the leftover space — give it all to
-   whichever column asked for width:100%." */
+/* width:1% is the classic table trick: this column wants none of the leftover space, so it all goes to whichever column asked for width:100%. */
 .bug-table th.col-id,        .bug-table td.col-id,
 .bug-table th.col-status,    .bug-table td.col-status,
 .bug-table th.col-priority,  .bug-table td.col-priority,
@@ -1398,9 +1294,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   width: 1%;
   white-space: nowrap;
 }
-/* Project / event / assignees can have long values — let them keep a
-   sensible cap so a 50-char project name doesn't push the title
-   column down to nothing. Within the cap, content wraps. */
+/* Cap these so a long project/event/assignee value doesn't push the title column down to nothing; content wraps within the cap. */
 .bug-table th.col-project,   .bug-table td.col-project,
 .bug-table th.col-event,     .bug-table td.col-event,
 .bug-table th.col-assignees, .bug-table td.col-assignees {
@@ -1410,8 +1304,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .bug-table td.col-project   { max-width: 200px; white-space: normal; word-break: break-word; }
 .bug-table td.col-event     { max-width: 220px; white-space: normal; }
 .bug-table td.col-assignees { max-width: 280px; white-space: normal; }
-/* Title is the greedy column — it expands to fill leftover space. The
-   inner .title-text wraps and is line-clamped to 2 lines (see below). */
+/* Title is the greedy column, expanding to fill leftover space; inner .title-text wraps and is line-clamped to 2 lines. */
 .bug-table th.col-title, .bug-table td.col-title {
   width: 100%;
   white-space: normal;
@@ -1432,8 +1325,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   cursor: pointer;
   transition: background 0.12s ease;
 }
-/* Steam row hover — a cyan wash that fades to the right + a glowing spine on
-   the leading cell. */
+/* Steam row hover: a cyan wash fading right + a glowing spine on the leading cell. */
 .bug-table tbody tr:hover { background: linear-gradient(to right, var(--accent-soft), transparent 78%); }
 .bug-table tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .bug-table tbody tr:last-child td { border-bottom: none; }
@@ -1502,7 +1394,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 }
 .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ---------- Badges ---------- */
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -1552,7 +1444,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .badge[data-env="UAT"]  { color: var(--env-uat); border-color: rgba(217,169,63,0.45); }
 .badge[data-env="PROD"] { color: var(--env-prod); border-color: rgba(207,70,60,0.45); }
 
-/* Work-item-type badges — Bug / Requirement / Task. */
+
 .badge[data-type="Bug"]         { color: var(--danger); border-color: rgba(207,70,60,0.45); }
 .badge[data-type="Requirement"] { color: var(--accent); border-color: rgba(58,166,214,0.45); }
 .badge[data-type="Task"]        { color: var(--ok); border-color: rgba(31,169,143,0.45); }
@@ -1571,12 +1463,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   padding: 2px 8px 2px 4px;
   border-radius: 999px;
   font-size: 11px;
-  /* Each chip stays on a single line — the cap is enforced by max-width
-     + ellipsis on the inner .assignee-chip-name span (the avatar circle
-     keeps its fixed size). Without nowrap + ellipsis-on-name-span, a
-     long name like "Chinmaya Venkataraman" used to wrap
-     character-by-character because word-break:break-all forced mid-word
-     breaks at the chip boundary, producing "Ka mal" / "Shu bha m S ing h". */
+  /* nowrap + ellipsis on the inner name span keeps each chip on one line; without it, word-break:break-all forced long names to wrap mid-word at the chip boundary. */
   max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
@@ -1617,7 +1504,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   border: 1px solid var(--border);
 }
 
-/* ---------- Charts ---------- */
+
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
@@ -1646,7 +1533,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .chart-host { width: 100%; min-height: 180px; }
 .chart-host svg { width: 100%; height: auto; display: block; }
 
-/* ---------- Audit list ---------- */
+
 .audit-controls {
   display: flex;
   gap: 8px;
@@ -1655,11 +1542,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   align-items: center;
   padding: 18px 24px 12px;
 }
-/* Shared card chrome for the audit + sessions control bars. Declared here,
-   BEFORE every responsive @media block, so the phone overrides
-   (max-width:700px / 380px) win on source order and the desktop 24px side
-   margins collapse on small screens (previously this block lived after the
-   media queries and always beat them — the cascade trap). */
+/* Declared before every responsive @media block so phone overrides win on source order; it used to live after them and always beat them (cascade trap). */
 .audit-controls,
 .sessions-controls {
   padding: 14px 16px;
@@ -1765,7 +1648,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   flex-shrink: 0;
 }
 
-/* ---------- Modals ---------- */
+
 .modal {
   position: fixed;
   inset: 0;
@@ -1792,9 +1675,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   flex-direction: column;
   box-shadow: var(--shadow-xl);
   animation: modal-rise 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
-  /* Clip children to the rounded corners so the field-gradient modal header's
-     top corners follow the card radius (date/select popovers inside are
-     position:fixed, so they still escape this clip). */
+  /* Clips children to the card radius; position:fixed date/select popovers inside still escape this clip. */
   overflow: hidden;
 }
 @keyframes modal-rise { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -1831,9 +1712,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   justify-content: space-between;
   gap: 12px;
   padding: 14px 18px;
-  /* Steam field-gradient header — the same steel panel-field + diagonal sheen
-     as the work-items table header, so a modal reads as the same surface
-     family as the rest of the app. */
+  /* Same steel panel-field + diagonal sheen as the work-items table header, so a modal reads as the same surface family. */
   background: var(--panel-field);
   border-bottom: 1px solid #000;
   flex-shrink: 0;
@@ -1859,8 +1738,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   overflow-wrap: anywhere;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
-/* Title + subtitle stack — shared by the generic Modal wrapper
-   (.modal-head-text) and the bug modal (.bug-modal-head-left). */
+/* Title + subtitle stack, shared by the generic Modal wrapper and the bug modal. */
 .modal-head-text,
 .bug-modal-head-left {
   display: flex;
@@ -1877,8 +1755,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   color: #cfe6f6;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
 }
-/* On the steel gradient the muted/small subtitle needs light ink, not the
-   dark steel --text-muted it carries elsewhere. */
+/* Needs light ink on the steel gradient, not the dark --text-muted it carries elsewhere. */
 .modal-head .muted,
 .modal-head .small { color: #cfe6f6; }
 .detail-head-actions,
@@ -1888,10 +1765,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   align-items: center;
   flex-shrink: 0;
 }
-/* Close button + any header icon-btn read light on the gradient (the bright
-   base ink carries through hover — a brighter explicit hover colour trips
-   SonarLint's translucent-overlay contrast check, which can't see the dark
-   steel beneath the 16%-white veil). */
+/* Base ink stays light through hover; a brighter explicit hover colour trips SonarLint's contrast check, which can't see the dark steel beneath the white veil. */
 .modal-head .icon-btn { color: #dbeafe; }
 .modal-head .icon-btn:hover { background: rgba(255, 255, 255, 0.16); }
 
@@ -1998,7 +1872,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 }
 .bug-side-meta-row .v { color: var(--text); text-align: right; }
 
-/* Form fields */
+
 .field {
   display: flex;
   flex-direction: column;
@@ -2007,9 +1881,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   flex: 1;
   min-width: 0;
 }
-/* fieldset.field — neutralize the browser's default border/padding/margin
-   so a <fieldset class="field"> looks identical to <label class="field">.
-   Used for chip-picker groups where <label> can't wrap a non-control. */
+/* Neutralizes default fieldset border/padding/margin so it matches <label class="field">; used for chip-picker groups where <label> can't wrap a non-control. */
 fieldset.field {
   border: 0;
   padding: 0;
@@ -2042,9 +1914,7 @@ fieldset.field > legend {
   font-family: inherit;
   outline: none;
   width: 100%;
-  /* Subtle inner shadow and outline give input fields a clear editable
-     boundary, rather than the greyed-out look of the earlier --bg-elev-2
-     plus soft --border combination. */
+  /* Inner shadow + outline give input fields a clear editable boundary vs. the earlier greyed-out --bg-elev-2/soft-border look. */
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02),
               0 1px 2px rgba(0, 0, 0, 0.18);
   transition: border-color 0.15s ease, box-shadow 0.15s ease,
@@ -2062,22 +1932,17 @@ fieldset.field > legend {
   box-shadow: var(--shadow-focus);
   background: var(--bg-elev-3);
 }
-/* Disabled state — must look DIFFERENT from enabled (the previous design
-   made enabled fields look disabled, which is what this rule fixes by
-   contrast: enabled looks crisp; disabled looks washed out). */
+/* Disabled must look different from enabled — the previous design made enabled fields look disabled; this fixes it by contrast. */
 .field input:disabled, .field select:disabled, .field textarea:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   background: var(--bg-elev);
   border-style: dashed;
 }
-/* Locked chip-picker (assignees / managers) — used in the bug modal's
-   read-only mode so regular users can SEE who's assigned but can't
-   change it. */
+/* Locked chip-picker: bug modal read-only mode lets regular users see assignees/managers but not change them. */
 .chip-picker.locked { pointer-events: none; opacity: 0.7; }
 
-/* Read-only banner shown above the form when the current user can't
-   edit this item (e.g. a regular user opening a Task or Requirement). */
+/* Shown above the form when the current user can't edit this item (e.g. a regular user opening a Task or Requirement). */
 .bug-readonly-banner {
   background: linear-gradient(135deg, rgba(248, 165, 50, 0.16), rgba(248, 165, 50, 0.08));
   border: 1px solid rgba(248, 165, 50, 0.32);
@@ -2089,10 +1954,7 @@ fieldset.field > legend {
 }
 .field input[type="color"] { padding: 2px; height: 38px; cursor: pointer; }
 
-/* Password reveal — an eye toggle button overlaid on the right of a password
-   field. <PasswordInput> renders <div.pw-wrap><input/><button.pw-toggle/></div>
-   inside a .field, so the input keeps its normal .field styling; we only carve
-   out room on the right for the button. */
+/* Password reveal: <PasswordInput> renders .pw-wrap > input + .pw-toggle inside a .field, so the input keeps normal styling and we just carve out room for the button. */
 .pw-wrap { position: relative; display: flex; width: 100%; }
 .field .pw-wrap input { padding-right: 42px; }
 .pw-toggle {
@@ -2121,21 +1983,14 @@ fieldset.field > legend {
   align-items: center;
   gap: 10px;
 }
-/* Custom themed checkbox — ONE consistent square for EVERY checkbox in the app
-   (user Active toggle, list-table select, report filters, …) across light/dark,
-   instead of the browser's native accent-color box. Accent-gradient fill +
-   drawn tick. Component rules below only adjust layout, never the look. The
-   intentionally-hidden .reports-chip checkbox opts out via its own
-   higher-specificity opacity:0 rule. */
+/* One consistent themed checkbox square app-wide (accent-gradient fill + drawn tick) instead of the native box; .reports-chip opts out via its own higher-specificity opacity:0 rule. */
 input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
   width: 18px;
   height: 18px;
-  /* Reset the generic `.field input` box model (same specificity, defined
-     earlier): its 10px/13px padding + 100% width is what stretched the
-     checkbox into a rectangle. */
+  /* Resets the generic `.field input` box model (same specificity, defined earlier) whose padding + 100% width stretched the checkbox into a rectangle. */
   min-width: 18px;
   padding: 0;
   margin: 0;
@@ -2173,7 +2028,7 @@ input[type="checkbox"]:checked::after {
 .row .field { flex: 1; }
 .row .f-grow { flex: 2; }
 
-/* Chip picker */
+
 .chip-picker {
   display: flex;
   flex-wrap: wrap;
@@ -2206,7 +2061,7 @@ input[type="checkbox"]:checked::after {
   box-shadow: 0 2px 6px var(--accent-glow);
 }
 
-/* Comments */
+
 .comment {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
@@ -2245,7 +2100,7 @@ input[type="checkbox"]:checked::after {
   border-top: 1px solid var(--border);
 }
 
-/* Activity row */
+
 .activity-row {
   background: var(--bg-elev-2);
   padding: 11px 14px;
@@ -2292,14 +2147,13 @@ input[type="checkbox"]:checked::after {
   font-size: 12px;
 }
 
-/* When the comments list is empty (hidden by JS), drop the composer's
-   visual separator so a thin border-line doesn't hover above nothing. */
+/* Drops the composer's visual separator when the comments list is empty (hidden by JS), so a border-line doesn't hover above nothing. */
 .bug-comments-list[hidden] + .comment-form {
   margin-top: 4px;
   padding-top: 0;
   border-top: none;
 }
-/* Comment form */
+
 .comment-form {
   margin-top: 18px;
   padding-top: 18px;
@@ -2352,9 +2206,7 @@ input[type="checkbox"]:checked::after {
 .comment-attach-btn:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .comment-attach-btn input[type="file"] { display: none; }
 
-/* Create-mode bug attachment picker — slimmer than the comment composer
-   (no textarea above), sits just under the description. The hint line
-   gives the user the context that further attachments go via comments. */
+/* Create-mode attachment picker: slimmer than the comment composer (no textarea), sits under the description; hint line notes more attachments go via comments. */
 .bug-create-attach-section .comment-form {
   margin-top: 8px;
   padding-top: 12px;
@@ -2447,7 +2299,7 @@ input[type="checkbox"]:checked::after {
   border-color: #b91c1c;
 }
 
-/* Attachments display */
+
 .attachment-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -2489,9 +2341,8 @@ input[type="checkbox"]:checked::after {
   color: var(--text-muted);
 }
 
-/* ---- Video attachment: compact poster thumbnail in the card -------------- */
-/* Clicking it (or "View") opens the full player in the lightbox — the card
-   stays small, no cramped inline controls. */
+/* Video attachment: compact poster thumbnail; clicking (or "View") opens the full player in the lightbox instead of cramped inline controls. */
+
 .attach-video-thumb {
   position: relative;
   display: block;
@@ -2531,7 +2382,7 @@ input[type="checkbox"]:checked::after {
   transform: scale(1.08);
 }
 
-/* ---- VideoPlayer (custom themed controls over native <video>) ------------- */
+/* VideoPlayer — custom themed controls over the native <video>. */
 .vplayer {
   position: relative;
   width: 100%;
@@ -2584,9 +2435,7 @@ input[type="checkbox"]:checked::after {
   transition: background 0.15s ease, transform 0.15s ease;
 }
 .vplayer-bigplay:hover { background: var(--accent); transform: scale(1.06); }
-/* Control bar — ALWAYS visible (windowed and fullscreen, playing or paused) so
-   the seek bar is always grabbable. CSS :hover / auto-hide proved unreliable
-   inside the fullscreen top layer where the bar vanished mid-play. */
+/* Control bar is always visible (not hover/auto-hide) — that proved unreliable inside the fullscreen top layer, where the bar vanished mid-play. */
 .vplayer-bar {
   position: absolute;
   left: 0;
@@ -2620,8 +2469,7 @@ input[type="checkbox"]:checked::after {
   font-variant-numeric: tabular-nums;
   opacity: 0.92;
 }
-/* Seek + volume: a track with played/buffered fills and a transparent native
-   range on top whose thumb is the visible handle. */
+/* Seek + volume: a track with played/buffered fills, transparent native range on top whose thumb is the visible handle. */
 .vplayer-seek {
   position: relative;
   flex: 1 1 auto;
@@ -2702,7 +2550,7 @@ input[type="checkbox"]:checked::after {
 }
 .vplayer-range::-moz-range-track { background: transparent; }
 
-/* ---- VideoLightbox (the "View" overlay) ----------------------------------- */
+/* VideoLightbox — the "View" overlay. */
 .video-lightbox {
   position: fixed;
   inset: 0;
@@ -2746,7 +2594,7 @@ input[type="checkbox"]:checked::after {
   white-space: nowrap;
 }
 
-/* ---- Attachment drag-and-drop zones --------------------------------------- */
+/* Attachment drag-and-drop zones. */
 .attach-dropzone { position: relative; }
 .attach-drop-hint {
   display: none;
@@ -2813,7 +2661,7 @@ input[type="checkbox"]:checked::after {
 .attach-actions button:not(.danger):hover { background: var(--accent); color: white; border-color: var(--accent); }
 .attach-actions button.danger:hover { background: var(--danger); color: white; border-color: var(--danger); }
 
-/* Toast */
+
 .toast {
   position: fixed;
   bottom: 28px;
@@ -2834,10 +2682,7 @@ input[type="checkbox"]:checked::after {
 @keyframes toast-rise { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .toast[hidden] { display: none; }
 
-/* On phones the toast spans the viewport (12px gutters) instead of using the
-   centered pill layout: pinning it to both edges conflicts with the base
-   translateX(-50%), so the X transform is reset and a translateY-only entrance
-   is used. Long messages wrap, and the toast clears the bottom safe-area inset. */
+/* On phones the toast spans the viewport; pinning both edges conflicts with the base translateX(-50%), so the X transform is reset to a translateY-only entrance. */
 @media (max-width: 600px) {
   .toast {
     left: 12px;
@@ -2853,9 +2698,7 @@ input[type="checkbox"]:checked::after {
   }
 }
 @keyframes toast-rise-m { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-/* Variants stay fully OPAQUE so the text is always readable — a solid surface
-   fallback first, then a subtle opaque tint via color-mix (never a translucent
-   soft tint, which washed out over the page background). */
+/* Variants stay fully opaque (solid fallback, then color-mix tint) — a translucent soft tint washed out over the page background. */
 .toast.error {
   border-color: var(--danger); border-width: 1.5px;
   color: var(--danger-strong); font-weight: 600;
@@ -2869,36 +2712,29 @@ input[type="checkbox"]:checked::after {
   background: color-mix(in srgb, var(--ok) 12%, var(--bg-elev));
 }
 
-/* Sidebar backdrop */
+
 .sidebar-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(2, 6, 23, 0.55);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
-  /* Sits above the chrome (20) so the whole bar dims behind the open drawer,
-     and just below the drawer itself (45). */
+  /* Above the chrome (20) so the whole bar dims behind the open drawer; below the drawer itself (45). */
   z-index: 44;
 }
 .sidebar-backdrop[hidden] { display: none; }
 
-/* Responsive */
+
 @media (max-width: 1100px) {
   .kpi-strip { grid-template-columns: repeat(3, 1fr); }
   .bug-modal-grid { grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; }
 }
 
 @media (max-width: 900px) {
-  /* The frame collapses to a single column; the sidebar becomes an off-canvas
-     drawer toggled by the chrome menu button. */
+  /* The frame collapses to a single column; the sidebar becomes an off-canvas drawer toggled by the chrome menu button. */
   .frame {
     grid-template-columns: 1fr;
-    /* Remove the desktop stacking context. On desktop .frame is
-       position:relative with z-index:5, which contains the off-canvas sidebar
-       (z-index:45). The mobile backdrop sits at the document root (z-index:44),
-       so it would otherwise paint over the entire frame, including the open
-       drawer. z-index:auto lets the fixed sidebar and backdrop stack against
-       the root instead. */
+    /* Removes the desktop stacking context (position:relative + z-index:5 would trap the off-canvas sidebar under the root-level backdrop). */
     z-index: auto;
   }
   .sidebar {
@@ -2909,21 +2745,18 @@ input[type="checkbox"]:checked::after {
     padding: 14px 12px;
     transform: translateX(-100%);
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    /* Above the chrome (20) + backdrop (44) so the full drawer — including its
-       top view-nav items — covers the bar on phones. */
+    /* Above the chrome (20) + backdrop (44) so the full drawer covers the bar on phones. */
     z-index: 45;
   }
   .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-xl); }
-  /* The collapse control is a desktop affordance; on the mobile drawer its
-     twin — the close button — takes over (closes the off-canvas drawer). */
+  /* Collapse control is a desktop affordance; the close button takes over on the mobile drawer. */
   .sidebar-collapse-btn { display: none; }
   .sidebar-close-btn { display: flex; }
   .chrome .menu-btn { display: inline-flex; width: 40px; height: 40px; }
   /* On phones the brand version line is dropped to keep the bar tidy. */
   .brandmark .wm small { display: none; }
   .chrome .nav { display: none; }
-  /* The chrome nav is hidden on phones — surface the view nav at the top of
-     the drawer instead, so every section stays reachable on mobile. */
+  /* Chrome nav is hidden on phones; surface the view nav at the top of the drawer so every section stays reachable. */
   .sidebar-nav {
     display: flex;
     flex-direction: column;
@@ -2957,10 +2790,7 @@ input[type="checkbox"]:checked::after {
   .filter-bar { padding: 0 12px 12px; }
   .chrome { padding: 0 12px; gap: 12px; }
   .pagehead { padding: 16px 12px 4px; }
-  /* Compact the right cluster: hide the profile name (avatar remains) so the
-     Ask Sleuth button, bell, and avatar fit on one row. The brand wordmark is
-     also hidden (logo only); the wordmark and version are shown in the drawer
-     brand header instead. */
+  /* Hide profile name + brand wordmark (logo/avatar remain) so Ask Sleuth, bell, and avatar fit one row; wordmark/version show in the drawer instead. */
   .chrome-right { gap: 8px; }
   .brandmark .wm { display: none; }
   .profile-name, .profile-caret { display: none; }
@@ -3006,33 +2836,18 @@ input[type="checkbox"]:checked::after {
   .bug-modal-body .modal-foot { padding: 12px 14px; }
 }
 
-/* ---------- responsive polish -----------------------------------------
-   These rules are additive: they tune the existing breakpoints rather
-   than redefine the layout. Goals:
-     - Filter-bar dropdowns stop bleeding past the viewport on tablets.
-     - Bug table scrolls horizontally on narrow screens (with momentum
-       on iOS) instead of clipping.
-     - Multi-select panels never overflow off-screen.
-     - The new bug-create attachment section stays single-column on
-       narrow screens and doesn't push the metadata grid sideways.
-     - Touch targets are big enough on phones.
----------------------------------------------------------------------- */
+/* Responsive polish: additive tuning of existing breakpoints (filter-bar overflow, table scroll, multi-select clipping, attachment layout, touch targets). */
 
 /* Tablet portrait — keep filter buttons readable. */
 @media (max-width: 820px) {
   .ms-btn { min-width: 120px; max-width: 200px; }
   /* Multi-select panel must not extend beyond the visible viewport. */
   .ms-panel { max-width: calc(100vw - 32px); }
-  /* Bug table gets horizontal scroll with momentum, instead of the
-     content overflowing the modal frame. The wrapper in the HTML is
-     `.table-scroll`; ensure it can scroll on touch. */
+  /* Bug table gets horizontal scroll with momentum instead of overflowing the modal frame. */
   .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 }
 
-/* The supernav type-tabs plus the search box total roughly 900px on one row,
-   which overflows on tablets and phones. Below 900px the flex spacer is
-   removed, the tab strip scrolls horizontally within its own track, and the
-   search box is given a fixed compact width on the right. */
+/* Type-tabs + search overflow ~900px on tablets/phones; below that the spacer is removed, tabs scroll in their own track, and search gets a fixed compact width. */
 @media (max-width: 900px) {
   .supernav .grow { display: none; }
   .supernav .type-tabs {
@@ -3049,9 +2864,7 @@ input[type="checkbox"]:checked::after {
 
 /* Phone landscape & smaller — improve touch targets and modal density. */
 @media (max-width: 600px) {
-  /* Bigger comfortable tap targets — Apple HIG / Material both ~44px.
-     Icon-style buttons get explicit boxes (they're box-sizing:border-box and
-     the overlay ones are absolutely positioned, so growing them won't reflow). */
+  /* Bigger tap targets (Apple HIG / Material ~44px); overlay icon buttons are absolutely positioned so growing them won't reflow. */
   .icon-btn { width: 40px; height: 40px; min-height: 40px; }
   .notif-del, .attach-staged-remove { width: 36px; height: 36px; }
   .bh-date-clear { width: 28px; height: 28px; }
@@ -3060,9 +2873,7 @@ input[type="checkbox"]:checked::after {
   .chip { padding: 6px 10px; }
   /* Filter-bar wraps onto two rows on phones; keep margin tight. */
   .filter-bar { gap: 6px; padding: 0 10px 10px; }
-  /* The create-mode attachment uploader: stack the label and previews
-     vertically when the row would otherwise hide the previews under
-     the file button. */
+  /* Stack the label and previews vertically — the row would otherwise hide previews under the file button. */
   .bug-create-attach-section .comment-form-row {
     flex-direction: column;
     align-items: flex-start;
@@ -3070,8 +2881,7 @@ input[type="checkbox"]:checked::after {
   .bug-create-attach-section .attach-staged-list { width: 100%; }
 }
 
-/* Very narrow phones — fall back to a single KPI per row and trim
-   non-essential bug table columns aggressively. */
+/* Very narrow phones: fall back to a single KPI per row and trim non-essential bug table columns aggressively. */
 @media (max-width: 380px) {
   .kpi-strip { grid-template-columns: 1fr; }
   .kpi:nth-child(5) { grid-column: auto; }
@@ -3080,16 +2890,13 @@ input[type="checkbox"]:checked::after {
   .bug-table { min-width: 360px; }
   .chrome { gap: 8px; }
   .pagehead h1 { font-size: 17px; }
-  /* Toast responsiveness is handled by the @media (max-width: 600px) .toast
-     rule above (full-width banner, transform reset). */
-  /* Login card: tighten padding so the form fits without scrolling on
-     small phones (iPhone SE etc.). */
+  /* Toast responsiveness is handled by the @media (max-width: 600px) .toast rule above. */
+  /* Tighten padding so the login card fits without scrolling on small phones (iPhone SE etc.). */
   .auth-card { padding: 24px 18px; border-radius: 11px; }
   .auth-logo { width: 54px; height: 54px; }
 }
 
-/* Print — when someone hits print on a bug detail, drop chrome and
-   give them clean output. Was missing entirely before. */
+/* Print: drop chrome for clean output — was missing entirely before. */
 @media print {
   .sidebar, .chrome, .supernav, .filter-bar, .sleuth-fab, .sleuth-panel,
   .modal-foot, .bug-modal-head-actions, .pagination, .empty-state { display: none !important; }
@@ -3099,7 +2906,7 @@ input[type="checkbox"]:checked::after {
   a { color: inherit; text-decoration: underline; }
 }
 
-/* Helpers */
+
 .muted { color: var(--text-muted); }
 .muted.small { font-size: 11px; }
 .no-cursor { cursor: default !important; }
@@ -3117,7 +2924,7 @@ input[type="checkbox"]:checked::after {
   font-weight: 600;
 }
 
-/* Bar charts */
+
 .bar-row { margin-bottom: 10px; }
 .bar-label {
   display: flex;
@@ -3144,9 +2951,7 @@ input[type="checkbox"]:checked::after {
   .audit-time { width: 100%; margin-top: 4px; padding-left: 28px; }
 }
 
-/* ============================================================
- * Auth pages
- * ============================================================ */
+/* Auth pages. */
 .auth-body {
   min-height: 100vh;
   display: flex;
@@ -3159,9 +2964,7 @@ input[type="checkbox"]:checked::after {
   position: relative;
   overflow: hidden;
 }
-/* The version line is a sibling of #root (kept outside the React tree so
-   _serve_html can substitute __APP_VERSION__). Column layout above stacks it
-   directly beneath the sign-in card, centered — instead of beside it. */
+/* The version line is a sibling of #root (kept outside the React tree so _serve_html can substitute __APP_VERSION__); column layout stacks it centered beneath the card. */
 .auth-body::before, .auth-body::after {
   content: "";
   position: absolute;
@@ -3311,9 +3114,7 @@ input[type="checkbox"]:checked::after {
 }
 .field em.js-required.hidden { display: none; }
 
-/* Reporter is always the logged-in user — the select is disabled and only
-   ever holds one option. Stripping the dropdown caret makes it read as a
-   static field rather than implying the user can pick someone else. */
+/* Reporter is always the logged-in user (disabled, one option); stripping the caret makes it read as static rather than implying a choice. */
 .reporter-select {
   width: 100% !important;
   max-width: 100%;
@@ -3340,10 +3141,8 @@ input[type="checkbox"]:checked::after {
   .ms-btn, .ms-wrap { flex-basis: 100%; }
 }
 
-/* Sessions admin view */
-/* Padding/margin + card chrome come from the shared .audit-controls,
-   .sessions-controls rule declared earlier (before the @media blocks); this
-   rule only owns the flex layout so the phone overrides keep winning. */
+/* Padding/margin + card chrome come from the shared .audit-controls/.sessions-controls rule declared earlier; this only owns flex layout so phone overrides keep winning. */
+
 .sessions-controls {
   display: flex;
   gap: 12px;
@@ -3547,9 +3346,7 @@ input[type="checkbox"]:checked::after {
 }
 .upload-sub { font-size: 12px; color: var(--text-muted); }
 
-/* ============================================================
- * Work-item types — split "+ New" button + dropdown menu
- * ============================================================ */
+/* Work-item types — split "+ New" button + dropdown menu. */
 .new-item-wrap {
   position: relative;
   display: inline-flex;
@@ -3595,9 +3392,7 @@ input[type="checkbox"]:checked::after {
 }
 .new-item-menu button:hover { background: var(--bg-elev-2); }
 
-/* ============================================================
- * Events view — list (card grid) + detail (drill-in)
- * ============================================================ */
+/* Events view — list (card grid) + detail (drill-in). */
 .events-controls {
   display: flex;
   align-items: center;
@@ -3718,9 +3513,7 @@ input[type="checkbox"]:checked::after {
   gap: 8px;
   flex-shrink: 0;
 }
-/* Events detail header stacks on phones: the title takes the full first row
-   and the action buttons drop below, right-aligned, instead of crushing the
-   ellipsised title. */
+/* Events detail header stacks on phones: title takes the full first row, actions drop below right-aligned, instead of crushing the ellipsised title. */
 @media (max-width: 600px) {
   .events-detail-head { flex-wrap: wrap; }
   .events-detail-head h2 { flex: 1 1 100%; order: -1; white-space: normal; overflow: visible; text-overflow: clip; }
@@ -3763,9 +3556,7 @@ input[type="checkbox"]:checked::after {
   font-size: 12px;
 }
 
-/* ============================================================
- * Type tabs above the work-items table
- * ============================================================ */
+/* Type tabs above the work-items table. */
 .type-tabs {
   display: flex;
   gap: 4px;
@@ -3820,9 +3611,7 @@ input[type="checkbox"]:checked::after {
   .type-tab { padding: 8px 10px; font-size: 13px; }
 }
 
-/* Per-tab specialty columns — actual sizing is handled in the main
-   .bug-table block (auto layout + width:1% / 100% trick). The rules
-   below only handle responsive hide-out at narrow widths. */
+/* Per-tab specialty columns: sizing is handled in the main .bug-table block; these rules only handle responsive hide-out at narrow widths. */
 .event-pill {
   display: inline-flex;
   align-items: center;
@@ -3842,9 +3631,7 @@ input[type="checkbox"]:checked::after {
   .col-due, .col-event { display: none; }
 }
 
-/* Inline type marker shown inside the title cell — a small colored chip
-   carrying the type emoji. The full type name is repeated in the
-   title-meta line beneath it. */
+/* Inline type marker in the title cell (colored chip + emoji); full type name repeats in the title-meta line beneath it. */
 .inline-type {
   display: inline-flex;
   align-items: center;
@@ -3862,13 +3649,7 @@ input[type="checkbox"]:checked::after {
 .inline-type[data-type="Requirement"] { background: rgba(139,92,246,0.10); border-color: rgba(139,92,246,0.35); }
 .inline-type[data-type="Task"]        { background: rgba(16,185,129,0.10); border-color: rgba(16,185,129,0.35); }
 
-/* ============================================================
- * v2.5 — Events list + Event detail search/filter bars
- *
- * Visual match for the main work-items filter bar so the UI feels
- * consistent across views. Both bars use the same card-style chrome
- * as .events-controls / .audit-controls / .sessions-controls.
- * ============================================================ */
+/* Events list + Event detail search/filter bars use the same card-style chrome as .events-controls / .audit-controls / .sessions-controls for visual consistency. */
 .events-filter-bar,
 .events-detail-filter-bar {
   display: flex;
@@ -3940,13 +3721,7 @@ input[type="checkbox"]:checked::after {
   }
 }
 
-/* ============================================================
- * v2.6 — Custom date picker
- *
- * The native <input type="date"> is hidden via .bh-date-native and
- * replaced by a button + popover that match the screenshot. The native
- * input stays in the DOM so form submission picks up its value.
- * ============================================================ */
+/* Custom date picker: native <input type="date"> is visually hidden via .bh-date-native and replaced by a button + popover; it stays in the DOM so form submission still picks up its value. */
 .bh-date-wrap {
   position: relative;
   display: inline-block;
@@ -4003,11 +3778,7 @@ input[type="checkbox"]:checked::after {
 .bh-date-clear:hover { color: var(--danger, #ef4444); background: rgba(239, 68, 68, 0.15); }
 
 .bh-date-pop {
-  /* JS sets position:fixed + top/left at open time so the popover
-     escapes any overflow:hidden / transformed ancestor (modal-card,
-     backdrop-filter wrapper, etc.). z-index sits above everything
-     including the bug modal (z 1000-ish) and the global loader
-     overlay base. */
+  /* JS sets position:fixed + top/left at open time so this escapes overflow:hidden/transformed ancestors; z-index sits above the bug modal and global loader overlay. */
   position: fixed;
   z-index: 100000;
   width: 320px;
@@ -4116,13 +3887,7 @@ input[type="checkbox"]:checked::after {
   .bh-date-pop { width: calc(100vw - 24px); }
 }
 
-/* ============================================================
- * v2.6 — Rich-text editor
- *
- * Wraps a hidden textarea (kept for form submission) with a toolbar
- * and a contenteditable surface. The toolbar groups B / I / U / S,
- * lists, quote / code, image / clear-formatting.
- * ============================================================ */
+/* Rich-text editor: wraps a hidden textarea (kept for form submission) with a toolbar (B/I/U/S, lists, quote/code, image/clear) + contenteditable surface. */
 .bh-rt-wrap {
   position: relative;
   display: flex;
@@ -4280,12 +4045,7 @@ input[type="checkbox"]:checked::after {
   border: 1px solid var(--border);
 }
 
-/* ============================================================
- * v2.6 — Custom single-select dropdown
- *
- * The native <select> is hidden via .bh-sel-native; the button + popover
- * give a consistent cross-browser look that matches the calendar.
- * ============================================================ */
+/* Custom single-select dropdown: native <select> hidden via .bh-sel-native; button + popover give a consistent cross-browser look matching the calendar. */
 .bh-sel-wrap {
   position: relative;
   display: inline-block;
@@ -4344,9 +4104,7 @@ input[type="checkbox"]:checked::after {
 .bh-sel-btn[aria-expanded="true"] .bh-sel-caret { transform: rotate(180deg); }
 
 .bh-sel-pop {
-  /* See .bh-date-pop — placed via JS as position:fixed so the panel
-     doesn't get clipped by the modal-foot or any other scroll/clip
-     ancestor. min-width matches the trigger button (set by JS). */
+  /* Placed via JS as position:fixed (see .bh-date-pop) so it isn't clipped by modal-foot or other scroll/clip ancestors; min-width matches the trigger button. */
   position: fixed;
   z-index: 100000;
   min-width: 180px;
@@ -4379,7 +4137,7 @@ input[type="checkbox"]:checked::after {
 .bh-sel-row:hover { background: var(--bg-elev-2); }
 .bh-sel-row.is-selected { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
-/* Audit "Load more" footer */
+
 .audit-load-more {
   display: flex;
   align-items: center;
@@ -4394,15 +4152,7 @@ input[type="checkbox"]:checked::after {
   .bh-rt-editor { min-height: 90px; padding: 8px 10px; }
 }
 
-/* ============================================================
- * v2.5 — Global blocking loader
- *
- * Full-viewport overlay shown while an action is in flight. The
- * pointer-events:all on the overlay catches every click so the
- * user can't double-submit or click somewhere else mid-request.
- * The spinner is a pure-CSS ring (no asset dep) so it works even
- * before web fonts / images load.
- * ============================================================ */
+/* Global blocking loader: full-viewport overlay catches every click (no double-submit) while an action is in flight; spinner is pure CSS so it works before fonts/images load. */
 .global-loader {
   position: fixed;
   inset: 0;
@@ -4454,8 +4204,7 @@ body.is-loading .bug-table,
 body.is-loading .modal-card,
 body.is-loading .events-grid,
 body.is-loading .events-detail-mode {
-  /* The overlay already blocks clicks; this just makes it visually
-     obvious that the page is busy. */
+  /* The overlay already blocks clicks; this just makes it visually obvious the page is busy. */
   filter: saturate(0.85);
 }
 
@@ -4464,9 +4213,7 @@ body.is-loading .events-detail-mode {
   .global-loader-spinner { width: 36px; height: 36px; }
 }
 
-/* ============================================================
- * v2.5 — Comment admin actions (edit / delete)
- * ============================================================ */
+/* Comment admin actions (edit / delete). */
 .comment-head-right {
   display: inline-flex;
   align-items: center;
@@ -4512,9 +4259,7 @@ body.is-loading .events-detail-mode {
 }
 .comment-edit-actions .btn { padding: 6px 14px; font-size: 12px; }
 
-/* ============================================================
- * v2.5 — Bug-level "Add attachment" uploader inside detail modal
- * ============================================================ */
+/* Bug-level "Add attachment" uploader inside the detail modal. */
 .bug-section-head {
   display: flex;
   align-items: center;
@@ -4527,8 +4272,7 @@ body.is-loading .events-detail-mode {
   margin: 0;
 }
 .bug-attach-add-btn {
-  /* Same look as the comment composer's attach button — keep the UI
-     consistent so users don't have to learn a new control. */
+  /* Matches the comment composer's attach button so users don't have to learn a new control. */
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -4569,49 +4313,13 @@ body.is-loading .events-detail-mode {
   font-size: 12px;
 }
 
-/* ============================================================
- * v2.5 — Top bar / events / column layout polish
- *
- * The previous layout had the Events controls bar sit flush against
- * the page intro card and the bug-table relied on fixed pixel widths
- * that cramped at midsize viewports. We loosen both: the events
- * controls now have a generous margin and a clean visual separator,
- * and the bug table uses min-width based columns with a flexible
- * Title column so the available horizontal space is always used.
- * ============================================================ */
+/* Top bar / events / column layout polish (looser Events controls margin, min-width-based bug-table columns) is merged into the original rule blocks earlier in this file (Sonar css:S4666 - no duplicate selectors) so cascade order can't drift if the file is reorganized. */
 
-/* v2.5 layout polish properties were merged into the original rule
-   blocks earlier in this file (Sonar css:S4666 - no duplicate
-   selectors). What was once a "polish overrides" section is now
-   inlined at the source so the cascade order can't drift away from
-   the intent if the file is re-organized.
 
-   The audit/sessions control-bar chrome moved up next to the base
-   .sessions-controls rule (before the responsive @media blocks) so the
-   phone margin overrides win on source order. */
 
 #commentForm textarea { width: 100%; }
 
-/* ===========================================================================
-   REPORTS view
-   Sidebar filter panel + main table + Download.
-
-   Layout invariants:
-   - Both grid columns get min-width: 0 so a wide table can never push
-     the main panel past the viewport edge — CSS grid items default to
-     min-width: auto, which is the cell's intrinsic min-content width,
-     and that's the exact thing that was leaking out to the right.
-   - The filter panel splits into a SCROLLABLE inner area and a PINNED
-     action footer (Run report + Reset). The Run button stays visible
-     no matter how far down the filter list you scroll.
-   - The result table scrolls horizontally INSIDE its container; the
-     container itself never exceeds 100% of the right column's width.
-   - Three responsive breakpoints (1200 / 1000 / 720 px) so the panel
-     resizes / stacks cleanly on smaller screens.
-
-   Uses the app's theme tokens so the panel matches both themes — no
-   hard-coded white panels.
-=========================================================================== */
+/* REPORTS view: sidebar filter panel + main table + Download. Grid columns get min-width:0 (else intrinsic min-content leaks a wide table past the viewport edge); filter panel has a scrollable inner area + pinned Run/Reset footer; result table scrolls horizontally inside its container; 3 breakpoints (1200/1000/720px); uses theme tokens, no hard-coded white panels. */
 .reports-intro { padding: 18px 24px 8px; }
 
 .reports-shell {
@@ -4718,10 +4426,7 @@ body.is-loading .events-detail-mode {
   filter: invert(0.9) hue-rotate(180deg);
   cursor: pointer;
 }
-/* Pinned action footer — flex-shrink: 0 so it stays at the bottom of
-   the side panel while the filter list scrolls. Background-blocked
-   from the scroll content above with a contrasting bg + border so the
-   user understands the buttons are anchored. */
+/* Pinned action footer (flex-shrink:0) stays at the bottom while the filter list scrolls; contrasting bg + border signal the buttons are anchored. */
 .reports-side-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -4734,9 +4439,7 @@ body.is-loading .events-detail-mode {
 .reports-side-actions .btn { width: 100%; min-width: 0; }
 .reports-side-actions .btn.primary { font-weight: 700; }
 
-/* Chip group — each chip is a pill that hides its native checkbox.
-   Click the pill to toggle. Selected state uses the accent gradient
-   so a glance at the panel tells you what's filtered without reading. */
+/* Each chip is a pill hiding its native checkbox; selected state uses the accent gradient so a glance shows what's filtered. */
 .reports-chips {
   display: flex;
   flex-wrap: wrap;
@@ -4810,8 +4513,7 @@ body.is-loading .events-detail-mode {
 }
 .reports-chip:has(input:focus-visible) { box-shadow: var(--shadow-focus); }
 
-/* Checkbox row (Include Not a Bug) — themed shell; the checkbox itself inherits
-   the global custom square (no native accent override). */
+/* Checkbox row (Include Not a Bug) — themed shell; checkbox itself inherits the global custom square (no native accent override). */
 .reports-side .check-row {
   display: flex;
   flex-direction: row;
@@ -4844,9 +4546,7 @@ body.is-loading .events-detail-mode {
   box-shadow: var(--shadow-sm);
   min-height: 320px;
   color: var(--text);
-  /* Critical: lets the table-scroll inside size to OUR width, not its
-     own intrinsic content width. Without this the table pushes the
-     panel beyond the viewport. */
+  /* Critical: lets the table-scroll inside size to OUR width, not its own intrinsic content width, which would push the panel past the viewport. */
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -4902,8 +4602,7 @@ body.is-loading .events-detail-mode {
   -webkit-text-fill-color: transparent;
   overflow-wrap: anywhere;
 }
-/* Breakdown summaries (by type / status / priority …): a compact label→count
-   list instead of a raw JSON blob. */
+/* Breakdown summaries (by type/status/priority): compact label→count list instead of a raw JSON blob. */
 .reports-summary-breakdown {
   list-style: none;
   margin: 6px 0 0;
@@ -4938,9 +4637,7 @@ body.is-loading .events-detail-mode {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elev-2);
-  /* The wrapper itself MUST clip to the parent's width — otherwise the
-     wide table inside extends the wrapper, the wrapper extends the
-     panel, and the panel pushes out of the viewport. */
+  /* Must clip to the parent's width — otherwise the wide table extends the wrapper, which extends the panel past the viewport. */
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -4962,9 +4659,7 @@ body.is-loading .events-detail-mode {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-/* Common column hints — narrow ones stay tight; wide text columns
-   get a sensible max so a 4000-char description doesn't make one
-   row twenty lines tall. */
+/* Wide text columns get a sensible max so a 4000-char description doesn't make one row twenty lines tall. */
 .reports-table td { max-width: 360px; }
 .reports-table thead th {
   position: sticky;
@@ -4989,12 +4684,9 @@ body.is-loading .events-detail-mode {
 }
 .reports-truncated { padding: 10px 14px; font-size: 12px; }
 
-/* ===========================================================================
-   Item links + bulk actions
-   Reuses the palette + radius tokens above and stays responsive.
-   =========================================================================== */
+/* Item links + bulk actions: reuses the palette + radius tokens above and stays responsive. */
 
-/* ---- Item links section (bug modal) --------------------------------------- */
+
 .bug-links-list {
   display: flex;
   flex-direction: column;
@@ -5061,7 +4753,7 @@ body.is-loading .events-detail-mode {
   min-width: 200px;
 }
 
-/* ---- ItemPicker (searchable link target combobox) ------------------------- */
+/* ItemPicker — searchable link target combobox. */
 .item-picker {
   position: relative;
   width: 100%;
@@ -5241,7 +4933,7 @@ body.is-loading .events-detail-mode {
   background: var(--bg-elev);
 }
 
-/* ---- Bulk actions (list view) --------------------------------------------- */
+/* Bulk actions (list view). */
 .bulk-bar {
   display: flex;
   align-items: center;
@@ -5266,8 +4958,7 @@ body.is-loading .events-detail-mode {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
   margin-right: 4px;
 }
-/* Themed bulk action pickers (BhSelect) — sized to sit in the bar like the
-   old native selects, but matching the app's dropdown styling. */
+/* Themed bulk action pickers (BhSelect), sized to sit in the bar like the old native selects but matching the app's dropdown styling. */
 .bulk-select-wrap {
   flex: 0 0 auto;
   min-width: 140px;
@@ -5284,9 +4975,7 @@ body.is-loading .events-detail-mode {
   margin-left: auto;
 }
 
-/* Checkbox column + selected-row highlight. The select checkbox itself inherits
-   the global custom square — no per-table size/accent override, so every
-   checkbox in the app looks identical. */
+/* Checkbox column + selected-row highlight; the select checkbox inherits the global custom square with no per-table override, so every checkbox looks identical. */
 .col-select {
   width: 34px;
   text-align: center;
@@ -5300,7 +4989,7 @@ body.is-loading .events-detail-mode {
   background: var(--accent-glow);
 }
 
-/* ---- Responsive ----------------------------------------------------------- */
+
 @media (max-width: 900px) {
   .bulk-bar {
     position: sticky;

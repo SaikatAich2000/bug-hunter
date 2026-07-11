@@ -1,8 +1,4 @@
-"""Regression tests for Bug Hunter.
-
-Covers auth, user/project/bug CRUD, comments, attachments,
-audit trail, stats, security, and edge cases.
-"""
+"""Regression tests: auth, CRUD, comments, attachments, audit, stats, security, edge cases."""
 from __future__ import annotations
 
 import io
@@ -34,9 +30,7 @@ def _create_user(c, name, email, role="user", password="TestUserPwd9X", is_activ
         name = name + "_user"
     body = {"name": name, "email": email, "role": role,
             "password": password, "is_active": is_active}
-    # Assign the new user to all existing projects so regression tests keep
-    # exercising the "see everything" model (a non-admin must be able to see
-    # a bug before per-role rules apply).
+    # Assign to all projects so non-admins can see every bug in these tests.
     pids = [p["id"] for p in c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -79,9 +73,7 @@ class TestAuth:
         assert r.status_code == 200, r.text
 
     def test_login_with_inactive_user_is_unified_401(self, admin_client):
-        """A deactivated user must get the same 401 as a wrong password
-        so the response doesn't reveal which accounts are disabled
-        (previously returned 403)."""
+        """Deactivated user gets the same 401 as a wrong password (no account-state leak)."""
         u = _create_user(admin_client, "Deact", "deact@x.com",
                          password="DeactivatedZx9Q", is_active=False)
         _logout(admin_client)
@@ -89,8 +81,7 @@ class TestAuth:
             "email": "deact@x.com", "password": "DeactivatedZx9Q",
         })
         assert r.status_code == 401, f"got {r.status_code}: {r.text}"
-        # Same message as wrong-password so disabled accounts are
-        # indistinguishable from non-existent ones.
+        # Same message as wrong-password so disabled accounts aren't enumerable.
         assert r.json()["detail"] == "Invalid email or password"
 
     def test_session_cookie_is_httponly(self, client):
@@ -454,8 +445,7 @@ class TestBugs:
         assert r.status_code == 422
 
     def test_bug_update_to_same_reporter_should_not_fail_for_user(self, admin_client):
-        """Regression: PUTting a bug with the user's own reporter_id must succeed,
-        not 403 with "Only admins or managers can change the reporter"."""
+        """PUTting a bug with the user's own reporter_id must succeed, not 403."""
         p = _create_project(admin_client, name="N15")
         u = _create_user(admin_client, "Owner", "owner@x.com", password="TestUserPwd9X")
         _logout(admin_client)
@@ -486,8 +476,7 @@ class TestBugs:
         assert r.status_code == 200
 
     def test_xlsx_export_works(self, admin_client):
-        """Smoke test for the Reports XLSX export (replacement for the
-        legacy /export.csv path): a freshly-created bug must appear in the output."""
+        """A freshly-created bug must appear in the Reports XLSX export."""
         import io
         from openpyxl import load_workbook
         p = _create_project(admin_client, name="N18")
@@ -578,9 +567,7 @@ class TestCommentsAttachments:
             assert d.status_code != 500, "header injection from filename crashed server"
 
     def test_uploader_cannot_delete_their_own_attachment_v25(self, admin_client):
-        """Attachment deletion is admin-only. The uploader-keeps-rights rule
-        was removed: even the uploader gets 403. Uploads themselves stay open
-        to assigned users."""
+        """Attachment deletion is admin-only: even the uploader gets 403."""
         p = _create_project(admin_client, name="C9")
         bug = _create_bug(admin_client, p["id"])
         u = _create_user(admin_client, "Up", "up@x.com", password="TestUserPwd9X")
@@ -662,8 +649,7 @@ class TestEdgeCases:
         assert r.status_code == 422, f"got {r.status_code}: {r.text}"
 
     def test_title_with_padded_whitespace_below_min_length(self, admin_client):
-        """'  a  ' has raw length 5 (passes min_length=3) but trims to 'a'.
-        The validator must re-check length after stripping and reject it."""
+        """Length must be re-checked after stripping: '  a  ' trims to 1 char and must 422."""
         p = _create_project(admin_client, name="E2")
         r = admin_client.post("/api/bugs", json={
             "project_id": p["id"], "title": "  a  ",   # raw len=5, trimmed=1
@@ -715,16 +701,14 @@ class TestEdgeCases:
         assert r.json()["items"] == []
 
     def test_large_search_query(self, admin_client):
-        """q is capped at 200 chars; an over-length value must be rejected cleanly
-        (422), not crash the server."""
+        """Over-length q (cap 200 chars) must 422 cleanly, not crash."""
         r = admin_client.get("/api/bugs?q=" + "x" * 5000)
         assert r.status_code == 422  # bounded by the q max_length guard
         r = admin_client.get("/api/bugs?q=" + "x" * 50)
         assert r.status_code == 200
 
     def test_bug_status_case_insensitive_filter(self, admin_client):
-        """Creation is case-insensitive ('new' → 'New' via _normalize_choice),
-        so the list filter must be too; otherwise ?status=new would return 0."""
+        """List status filter must be case-insensitive, matching creation normalization."""
         p = _create_project(admin_client, name="E8")
         _create_bug(admin_client, p["id"], status="New")
         r = admin_client.get("/api/bugs?status=New")
@@ -753,8 +737,7 @@ class TestSecurity:
         assert r1.json()["detail"] == r2.json()["detail"]
 
     def test_unauth_xlsx_export_blocked(self, client):
-        """Unauthenticated calls to the XLSX export (replacement for the
-        legacy /api/bugs/export.csv) must be rejected with 401."""
+        """Unauthenticated XLSX export must 401."""
         r = client.post("/api/reports/export.xlsx", json={
             "report_key": "item_detail", "filters": {},
         })
@@ -772,8 +755,7 @@ class TestSecurity:
         assert d.status_code == 401
 
     def test_audit_endpoint_is_hidden_from_regular_users(self, user_client):
-        """Audit trail must be inaccessible to regular users (403).
-        Manager and admin access is covered by separate tests."""
+        """Audit trail must be 403 for regular users."""
         r = user_client.get("/api/audit")
         assert r.status_code == 403
 
@@ -793,17 +775,12 @@ class TestSecurity:
 # 8b. CSRF, UPLOAD RATE LIMIT, RESPONSE HEADERS
 # ===========================================================================
 class TestV321Security:
-    """Security hardening:
-      - CSRF: state-changing /api/* requests with a foreign Origin are blocked (403).
-      - Upload rate limit: 20 attachments / 60s / user.
-      - Response headers: Server stripped, CORP=same-origin.
-    """
+    """CSRF origin checks, upload rate limit (20/60s/user), hardened response headers."""
 
     # ---- CSRF Origin check ----
     def test_csrf_blocks_state_change_from_foreign_origin(self, admin_client):
         """A POST with a foreign Origin must 403 before any work is done."""
-        # Create a valid project first so the rejection clearly comes from
-        # the CSRF check, not a missing-project error.
+        # Valid project first so the 403 clearly comes from the CSRF check.
         p = _create_project(admin_client, name="CSRF1")
         baseline_count = admin_client.get("/api/bugs").json()["total"]
 

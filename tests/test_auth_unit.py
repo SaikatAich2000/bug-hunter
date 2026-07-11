@@ -1,9 +1,4 @@
-"""Unit tests for the pure helpers in app/auth.py.
-
-Covers password hashing, session-token signing/parsing, reset-token helpers,
-and the role-based can_* permission predicates. No DB session or HTTP client
-needed.
-"""
+"""Unit tests for pure helpers in app/auth.py: hashing, session tokens, reset tokens, role predicates."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,9 +12,7 @@ def _u(role: str):
     return SimpleNamespace(role=role)
 
 
-# ---------------------------------------------------------------------------
 # Password hashing
-# ---------------------------------------------------------------------------
 def test_hash_password_roundtrip():
     h = auth.hash_password("CorrectHorse9")
     assert h and h != "CorrectHorse9"
@@ -39,9 +32,7 @@ def test_verify_password_false_paths():
     assert auth.verify_password("pw", "not-a-bcrypt-hash") is False
 
 
-# ---------------------------------------------------------------------------
 # Session tokens
-# ---------------------------------------------------------------------------
 def test_session_token_roundtrip_with_jti():
     jti = auth.new_jti()
     tok = auth.make_session_token(42, 3, jti=jti)
@@ -74,18 +65,14 @@ def test_parse_session_token_too_many_parts_is_none():
     assert auth.parse_session_token(signed) is None
 
 
-# ---------------------------------------------------------------------------
 # Reset tokens
-# ---------------------------------------------------------------------------
 def test_reset_token_hash_is_stable_and_matches():
     raw, h = auth.generate_reset_token()
     assert h == auth.hash_reset_token(raw)
     assert h != raw and len(h) == 64  # SHA-256 hex digest
 
 
-# ---------------------------------------------------------------------------
 # Role-based permission predicates
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "fn,admin,manager,user",
     [

@@ -1,13 +1,8 @@
 """Firebase Cloud Messaging transport (optional external integration).
 
-Lazily initialises the Firebase Admin SDK from a service-account JSON and
-sends a notification to many device tokens. Excluded from the coverage gate
-because it requires a live Firebase project; ``app.push_service`` mocks
-``send()`` in tests.
-
-``firebase_admin`` is imported lazily inside each function, every failure is
-caught and logged, and a failed init disables push for the process lifetime
-rather than raising.
+Lazily initialises the Firebase Admin SDK and multicasts notifications.
+Never raises: failures are logged and a failed init disables push for the
+process lifetime. Tests mock ``send()`` via ``app.push_service``.
 """
 from __future__ import annotations
 
@@ -18,8 +13,7 @@ from app.config import get_settings
 
 logger = logging.getLogger("bug_hunter.push")
 
-# Firebase app created once and cached. A hard init failure latches the flag
-# so we skip retrying on every subsequent send call.
+# Cached Firebase app; a hard init failure latches so sends stop retrying.
 _state: dict = {"app": None, "init_failed": False}
 _init_lock = threading.Lock()
 
@@ -28,10 +22,7 @@ _DEAD_TOKEN_ERRORS = frozenset({"UnregisteredError", "SenderIdMismatchError"})
 
 
 def _ensure_app():
-    """Return the cached Firebase app, initialising it on first call.
-
-    Returns None (never raises) if push is not configured or the SDK fails to start.
-    """
+    """Return the cached Firebase app, initialising on first call; None on failure."""
     if _state["app"] is not None:
         return _state["app"]
     if _state["init_failed"]:
@@ -68,12 +59,8 @@ def _is_dead_token(exc) -> bool:
 
 
 def _webpush_config(messaging, url: str):
-    """Build a WebpushConfig with a click-through link, but only for https URLs.
-
-    FCM rejects non-https link values and an encode-time error would abort the
-    entire multicast. The URL is also in data["url"], so skipping the link here
-    only drops a browser convenience.
-    """
+    """WebpushConfig with a click-through link — https only; FCM rejects other
+    schemes and would abort the whole multicast. data["url"] still carries it."""
     if url.startswith("https://"):
         return messaging.WebpushConfig(
             fcm_options=messaging.WebpushFCMOptions(link=url),
@@ -84,14 +71,12 @@ def _webpush_config(messaging, url: str):
 def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = None) -> list[str]:
     """Send one notification to many FCM tokens.
 
-    Returns the list of tokens FCM reported as invalid/unregistered, so the
-    caller can prune them. Returns ``[]`` on any failure and never raises.
+    Returns the tokens FCM reported dead (for pruning); [] on failure, never raises.
     """
     tokens = list(tokens or [])
     if not tokens:
         return []
-    # Normalize url before use: a None would cause url.startswith("https://") to
-    # raise AttributeError outside the try/except, breaking the never-raises contract.
+    # None url would raise in url.startswith(), breaking the never-raises contract.
     url = url or ""
     app = _ensure_app()
     if app is None:
@@ -105,9 +90,7 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
     payload = {"url": url or "/"}
     if data:
         payload.update({k: str(v) for k, v in data.items()})
-    # data["url"] carries the deep link for the Android app and the web service
-    # worker. The webpush link is a browser click-through convenience only — see
-    # _webpush_config for why it is conditional on https.
+    # data["url"] is the deep link for Android and the web service worker.
     message = messaging.MulticastMessage(
         tokens=tokens,
         notification=messaging.Notification(title=title, body=body),
@@ -121,8 +104,7 @@ def send(tokens, *, title: str, body: str, url: str = "", data: dict | None = No
         return []
 
     if len(resp.responses) != len(tokens):  # pragma: no cover - FCM returns 1:1
-        # A misaligned response would silently drop unmatched tokens under zip().
-        # Log the mismatch so it surfaces rather than being swallowed.
+        # zip() would silently drop unmatched tokens; surface the mismatch.
         logger.warning(
             "FCM returned %d responses for %d tokens — response/token mismatch",
             len(resp.responses), len(tokens),

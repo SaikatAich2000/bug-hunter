@@ -1,9 +1,5 @@
-"""Tests for app/email_service.py rendering + dispatch.
-
-The main suite runs with EMAIL_BACKEND=disabled, so the render/transport
-paths never execute. These tests exercise them directly: every notify_*
-body builder via the console backend, the recipient-selection helpers, and
-the SMTP transport against a fake smtplib (no real network).
+"""Rendering + dispatch tests for app/email_service.py.
+Every notify_* body builder, recipient helpers, and SMTP transport against a fake smtplib.
 """
 from __future__ import annotations
 
@@ -12,9 +8,7 @@ from types import SimpleNamespace
 
 from app import email_service as es
 
-# config.py binds settings from os.getenv at class-definition time and
-# auto-loads .env, so setenv+cache_clear can't reshape an already-imported
-# Settings object. We monkeypatch get_settings directly instead.
+# Settings binds os.getenv at class-definition time, so monkeypatch get_settings directly.
 
 
 def _use_backend(monkeypatch, backend: str, **over) -> None:
@@ -63,9 +57,7 @@ def _event(**over) -> es.EventSnapshot:
     return es.EventSnapshot(**base)
 
 
-# ---------------------------------------------------------------------------
 # Recipient selection
-# ---------------------------------------------------------------------------
 def test_recipients_dedup_and_exclude_actor():
     dup = _user(2, "Dev A", "deva@bh.local")
     bug = _bug(assignees=(dup, _user(2, "Dev A copy", "DEVA@bh.local"), _user(9, "", "")))
@@ -91,9 +83,7 @@ def test_event_recipients_dedup_and_exclude():
     assert es._event_recipients(ev, exclude_user_id=2) == []
 
 
-# ---------------------------------------------------------------------------
 # Console backend — every notify_* body builder runs end to end
-# ---------------------------------------------------------------------------
 def test_console_renders_every_notification(monkeypatch, caplog):
     _use_backend(monkeypatch, "console")
     bug = _bug(item_type="Task", event_name="Standup")
@@ -148,9 +138,7 @@ def test_deliver_drops_blank_recipients(monkeypatch, caplog):
     assert not any("console-email" in (r.message or "") for r in caplog.records)
 
 
-# ---------------------------------------------------------------------------
 # SMTP transport (fake smtplib — no network)
-# ---------------------------------------------------------------------------
 class _FakeSMTP:
     instances: list["_FakeSMTP"] = []
 

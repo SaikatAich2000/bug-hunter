@@ -1,13 +1,5 @@
-"""Hardening tests for detail caps, email redaction, partial updates, image
-limits, error handling, optimistic concurrency, case-insensitive email
-uniqueness, spreadsheet defang, and related edges.
-
-All DB tests use the temp SQLite instance that the ``client`` / ``admin_client``
-fixtures create; non-DB units are exercised directly.
-
-``app.*`` modules are imported inside test bodies, not at the top level,
-because the ``client`` fixture tears down and re-imports every ``app.*`` module
-between tests.
+"""Hardening tests: detail caps, email redaction, partial updates, image limits, concurrency, defang.
+DB tests use the fixtures' temp SQLite; app.* imports live inside test bodies.
 """
 from __future__ import annotations
 
@@ -33,10 +25,7 @@ def _make_item(client, project_id, **extra):
 
 
 def _become_regular_user(admin_client, email="linker@test.local"):
-    """Create a regular user (as admin) and re-login the client as that user.
-
-    The user is added to all existing projects so they can see items before the
-    per-type or admin-only rules are tested against them."""
+    """Create a regular user (as admin), add them to all projects, and re-login as them."""
     pids = [p["id"] for p in admin_client.get("/api/projects").json()]
     body = {"name": "Linker", "email": email, "role": "user", "password": "User12345"}
     if pids:
@@ -48,8 +37,7 @@ def _become_regular_user(admin_client, email="linker@test.local"):
     assert r.status_code == 200, r.text
 
 
-# Detail-cap tests: attachments, activity, and comments all share the same
-# bounding logic.
+# Detail caps: attachments, activity, and comments share the same bounding logic.
 def test_get_bug_attachments_capped_but_count_exact(admin_client, monkeypatch):
     import app.routes.bugs as bugs_mod
     monkeypatch.setattr(bugs_mod, "_DETAIL_ATTACHMENTS_MAX", 1)
@@ -86,8 +74,7 @@ def test_comments_list_endpoint_capped(admin_client, monkeypatch):
     assert len(rows) == 1
 
 
-# Console email: body suppressed at INFO to avoid leaking tokens; CRLF stripped
-# from headers to block injection.
+# Console email: body suppressed at INFO (live token leak); CRLF stripped from headers.
 def test_console_email_suppresses_body_at_info(caplog):
     from email.message import EmailMessage
     from app import email_service
@@ -140,8 +127,7 @@ def test_image_oversized_skipped_before_decode(monkeypatch):
     assert out == data   # returned as-is, not decoded
 
 
-# Unhandled errors must return a sanitized 500 with security headers present.
-# Also exercises get_db's rollback-on-exception path.
+# Unhandled errors return a sanitized 500 with security headers; covers get_db rollback.
 def test_unhandled_exception_clean_500_with_headers(client):
     from fastapi import Depends
     from sqlalchemy import text as sqltext
@@ -188,8 +174,7 @@ def test_docs_disabled_when_cookie_secure(monkeypatch):
     assert main_mod.app.openapi_url is None
 
 
-# DB unavailable at boot should degrade gracefully, not crash; /health must
-# reflect the degraded state.
+# DB down at boot degrades gracefully; /health reflects the degraded state.
 def test_safe_init_db_degrades_on_failure(client):
     import app.main as main_mod
     from sqlalchemy.exc import SQLAlchemyError
@@ -233,8 +218,7 @@ def test_extract_json_scans_past_leading_prose_brace():
     assert ej_local(reply) == {"mode": "answer", "text": "hi"}
 
 
-# Sleuth write path validates field values the same way the REST API does.
-# Drive through execute_plan to cover _apply_set_field, not just the helper.
+# Sleuth writes validate like REST; drive execute_plan to cover _apply_set_field.
 def test_sleuth_set_invalid_value_rejected_via_execute(admin_client):
     from sqlalchemy import select
     from app.database import SessionLocal
@@ -292,8 +276,7 @@ def test_pending_action_expires_after_confirm_window(client):
 # Redaction covers secrets and PII before egress.
 def test_redaction_covers_more_secret_shapes():
     from app.chatbot.redaction import redact
-    # Build tokens by concatenation so no complete token literal sits in source
-    # (keeps secret scanners quiet) while redact() still sees the full string.
+    # Tokens built by concatenation so no complete literal sits in source (secret scanners).
     body = "abcdefghij1234567890"
     hex32 = "0123456789abcdef0123456789abcdef"
     samples = [
@@ -380,8 +363,7 @@ def test_expected_version_negative_is_422(admin_client):
 
 
 def test_optimistic_check_noop_when_row_vanished(client):
-    # Concurrent-delete race: the locked row read returns nothing → the check is
-    # a no-op (the caller's own load then 404s).
+    # Concurrent-delete race: locked read returns nothing -> check is a no-op.
     from app.database import SessionLocal
     from app.routes.bugs import _enforce_optimistic_concurrency
     db = SessionLocal()
@@ -420,9 +402,7 @@ def test_update_user_email_case_insensitive_conflict(admin_client):
 
 
 def test_create_user_db_unique_race_still_409(admin_client, monkeypatch):
-    # Defense-in-depth: if two concurrent creates both pass the case-insensitive
-    # pre-check, the DB unique constraint must still 409 (not 500). Bypass the
-    # pre-check to exercise that IntegrityError backstop.
+    # Defense-in-depth: the DB unique constraint must 409 (not 500) if the pre-check races.
     import app.routes.users as users_mod
     admin_client.post("/api/users", json={
         "name": "Race", "email": "race@x.com", "role": "user", "password": "Abcd1234"})

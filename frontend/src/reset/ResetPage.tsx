@@ -56,10 +56,7 @@ export default function ResetPage() {
           location.replace("/login.html");
         }, 1500);
       } else {
-        // /api/auth/reset-password can return 422 with `detail` as a Pydantic
-        // error array (server-side strength/blocklist checks, reachable because
-        // the client only enforces length>=8). Stringify each item so the user
-        // sees a real message rather than "[object Object]".
+        // 422 `detail` may be a Pydantic error array — stringify items to avoid "[object Object]".
         let msg = "Reset failed";
         try {
           const detail: unknown = ((await res.json()) as { detail?: unknown }).detail;

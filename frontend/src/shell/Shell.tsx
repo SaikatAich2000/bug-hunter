@@ -1,13 +1,5 @@
-/**
- * App shell — two-tier chrome:
- *   TopChrome  — brand + view nav + Ask Sleuth / bell / profile
- *   SuperNav   — work-item type tabs + search (list / analytics only)
- *   frame      — Sidebar rail + main (PageHead + content)
- *
- * Only the active view is mounted. Views that own their data (events / audit /
- * sessions / reports) re-fetch on mount; list and analytics re-fetch here
- * because they read shared context rather than fetching privately.
- */
+// App shell — TopChrome + SuperNav + Sidebar/main frame. Only the active view is mounted;
+// list/analytics re-fetch here because they read shared context, other views fetch on mount.
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { VIEW_MIN_ROLE } from "../types";
@@ -18,8 +10,7 @@ import PageHead from "./PageHead";
 import Sidebar from "./Sidebar";
 import KpiStrip from "./KpiStrip";
 import FilterBar from "./FilterBar";
-// ListView is eager so the first paint needs no extra round-trip.
-// The remaining views are lazy-split; each chunk loads on first navigation.
+// ListView is eager for first paint; other views are lazy-split.
 import ListView from "../views/ListView";
 const EventsView = lazy(() => import("../views/EventsView"));
 const AnalyticsView = lazy(() => import("../views/AnalyticsView"));
@@ -36,8 +27,7 @@ export default function Shell() {
 
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Silently refresh the FCM token on boot so the backend stays current.
-  // No-op when push is unsupported or permission was never granted.
+  // Refresh FCM token on boot; no-op when push is unsupported/ungranted.
   useEffect(() => {
     void initPushOnBoot();
   }, []);
@@ -53,10 +43,7 @@ export default function Shell() {
     else if (view === "analytics") void refreshStats();
   }, [view, refreshAll, refreshStats]);
 
-  // Hiding the nav button isn't enough — a deep link or stale state can still
-  // land an under-privileged user on a gated view, triggering its fetch and an
-  // error toast. Bounce them to the list and skip rendering for one frame.
-  // The backend is the real authority; this is just UX protection.
+  // UX-only role gate (backend is the authority): bounce deep links to gated views.
   const need = VIEW_MIN_ROLE[view];
   const denied = need != null && roleRank(currentUser.role) < roleRank(need);
   useEffect(() => {
@@ -72,7 +59,6 @@ export default function Shell() {
         onClick={() => setMobileOpen(false)}
       ></div>
 
-      {/* TopChrome + SuperNav above; Sidebar rail + scrolling main below. */}
       <TopChrome onOpenMobile={() => setMobileOpen(true)} />
       <SuperNav />
 

@@ -1,7 +1,4 @@
-/**
- * Type filter tabs with badge counts sourced from stats.by_type.
- * Visible only on the list and analytics views.
- */
+// Type filter tabs with badge counts from stats.by_type (list/analytics only).
 import { useApp, type TabName } from "../state/AppContext";
 
 const TABS: { tab: TabName; text: string; countId: string }[] = [
@@ -16,7 +13,7 @@ export default function TypeTabs() {
 
   const show = view === "list" || view === "analytics";
 
-  // Counts are always global (by_type), not filtered by the active tab.
+  // Counts are global, not filtered by the active tab.
   const byType = stats?.by_type ?? {};
   const counts: Record<TabName, number> = {
     Bug: byType["Bug"] ?? 0,

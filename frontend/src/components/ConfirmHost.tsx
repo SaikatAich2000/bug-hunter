@@ -1,10 +1,4 @@
-/**
- * Promise-based confirm dialog.
- *
- * Usage: `if (await confirmDialog("Delete bug #5?", {...})) ...`
- * The App shell renders <ConfirmHost/> once; it subscribes to a module-level
- * queue. Escape resolves false.
- */
+/** Promise-based confirm dialog; App renders <ConfirmHost/> once, confirmDialog() awaits a boolean. */
 import { useEffect, useState } from "react";
 
 export interface ConfirmOptions {
@@ -45,7 +39,7 @@ export default function ConfirmHost() {
   useEffect(() => {
     push = (p: Pending) => {
       setCurrent((prev) => {
-        // A second confirm while one is open cancels the first.
+        // second confirm cancels the first
         prev?.resolve(false);
         return p;
       });
@@ -60,7 +54,7 @@ export default function ConfirmHost() {
     setCurrent(null);
   };
 
-  // Escape closes (capture phase to beat the global modal-Escape handler).
+  // capture-phase Escape beats the global modal-Escape handler
   useEffect(() => {
     if (!current) return;
     const onKey = (e: KeyboardEvent) => {

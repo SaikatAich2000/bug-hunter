@@ -1,22 +1,6 @@
-"""Offline evaluation harness for the Sleuth assistant.
-
-Six pure, network-free metrics. The model and agent tools are injected as
-callables (like ``evals.judge`` and ``agent.run_agent``), so everything runs in
-CI without a live provider and doubles as a reusable measurement toolkit:
-
-  - llm_judge   : grounding / faithfulness score          -> app.chatbot.evals
-  - trajectory  : did the read-only agent take a sensible tool path?
-  - outcome     : did the final Response achieve the goal?
-  - confidence  : is the judge's score calibrated? (Brier score)
-  - reliability : are answers / routes stable across reruns?
-  - pass_at_k   : fraction of K samples that pass
-
-Nothing here touches a network or database. The two pieces that would normally
-need DB/LLM access (trajectory over ``agent.run_agent``, outcome over a
-caller-supplied Response) receive their dependencies through injected callables,
-so the same code serves unit tests, offline golden-set batches, and live smoke
-runs. The live counterpart is ``cloud_llm.metrics_snapshot``; these metrics are
-designed to corroborate it.
+"""Offline eval harness: pure, network-free metrics (trajectory, outcome,
+calibration, reliability, agreement, pass@k). Model/tools are injected so
+everything runs in CI; live counterpart is cloud_llm.metrics_snapshot.
 """
 from __future__ import annotations
 
@@ -50,16 +34,8 @@ class TrajectoryScore:
 
 def score_trajectory(actions: Sequence[str], *, max_steps: int,
                      grounded_final: bool) -> TrajectoryScore:
-    """Score an agent's ordered tool-use trajectory.
-
-    ``actions`` is the sequence the loop emitted, e.g.
-    ``["retrieve", "query", "final"]``. Valid means every step is a known
-    action, the last step is terminal (``final`` / ``answer_data``), and no
-    terminal appears mid-run. ``efficient`` means it finished within
-    ``max_steps``. ``grounded_final`` is decided by the caller (a ``final``
-    that cited retrieved records, or an ``answer_data`` with a real table) and
-    lifts the blended score.
-    """
+    """Score an ordered action sequence: valid = known actions, terminal only
+    last; efficient = within max_steps; grounded_final is caller-decided."""
     acts = [str(a).strip().lower() for a in actions]
     steps = len(acts)
     valid = (
@@ -71,7 +47,7 @@ def score_trajectory(actions: Sequence[str], *, max_steps: int,
     efficient = 0 < steps <= max(1, max_steps)
     score = 0.0
     if valid:
-        # Validity is the floor; grounding and efficiency each add weight.
+        # validity is the floor; grounding and efficiency add weight
         score = 0.5 + (0.3 if grounded_final else 0.0) + (0.2 if efficient else 0.0)
     return TrajectoryScore(valid=valid, efficient=efficient,
                            grounded_final=grounded_final, steps=steps,
@@ -81,13 +57,7 @@ def score_trajectory(actions: Sequence[str], *, max_steps: int,
 def run_and_trace(message: str, *, call_model: Callable, run_query: Callable,
                   run_retrieve: Callable, max_steps: int,
                   history: str = "", context: str = "") -> "tuple[Any, list[str]]":
-    """Run ``agent.run_agent`` while recording the action sequence.
-
-    Returns ``(AgentResult, actions)`` where ``actions`` ends with the terminal
-    action (``final`` / ``answer_data``), or stops at the last tool call if the
-    loop gave up (kind == "none"). Model and tools are injected, so a scripted
-    ``call_model`` makes the whole run deterministic.
-    """
+    """Run ``agent.run_agent`` recording the action sequence; returns (result, actions)."""
     from app.chatbot import agent
     actions: list[str] = []
 
@@ -122,13 +92,8 @@ class OutcomeResult:
 
 
 def check_outcome(resp: Any, spec: dict) -> OutcomeResult:
-    """Compare a Sleuth ``Response`` against an expected-goal ``spec``.
-
-    Recognised spec keys (all optional): ``intent`` (exact match),
-    ``intent_prefix`` (startswith), ``has_table`` / ``has_file`` (a block of
-    that kind is present), ``text_contains`` (case-insensitive substring across
-    all text blocks).
-    """
+    """Compare a Response against a spec (intent, intent_prefix, has_table,
+    has_file, text_contains — all optional)."""
     if resp is None:
         return OutcomeResult(ok=False, reasons=["no response"])
     reasons: list[str] = []
@@ -158,8 +123,7 @@ def check_outcome(resp: Any, spec: dict) -> OutcomeResult:
 # Confidence — is the judge's 0..1 score calibrated against actual correctness?
 # ---------------------------------------------------------------------------
 def brier_score(pairs: Sequence["tuple[float, bool]"]) -> float:
-    """Mean squared error between predicted confidence (0..1) and the true
-    binary outcome. 0.0 is perfect calibration; 1.0 is worst. Empty -> 0.0."""
+    """MSE of confidence vs binary outcome (0.0 = perfect). Empty -> 0.0."""
     items = list(pairs)
     if not items:
         return 0.0
@@ -171,16 +135,13 @@ def brier_score(pairs: Sequence["tuple[float, bool]"]) -> float:
 # Reliability — stability of answers / routes across reruns.
 # ---------------------------------------------------------------------------
 def answer_variance(answers: Sequence[str]) -> float:
-    """Fraction of distinct whitespace/case-normalised replies across reruns.
-    0.0 = identical every time, 1.0 = all different. Deterministic data routes
-    should score near 0; conversational replies can vary. Empty -> 0.0."""
+    """Fraction of distinct normalised replies across reruns (0.0 = identical)."""
     norm = [" ".join((a or "").lower().split()) for a in answers]
     return round(len(set(norm)) / len(norm), 4) if norm else 0.0
 
 
 def route_stability(routes: Sequence[Any]) -> float:
-    """Fraction of reruns that match the most common route. 1.0 = perfectly
-    stable. Empty -> 1.0."""
+    """Fraction of reruns matching the modal route (1.0 = stable). Empty -> 1.0."""
     items = list(routes)
     if not items:
         return 1.0
@@ -189,8 +150,7 @@ def route_stability(routes: Sequence[Any]) -> float:
 
 
 def self_consistency(values: Sequence[Any]) -> float:
-    """Fraction of a repeated discrete signal that equals the modal value
-    (e.g. a judge verdict re-run N times). 1.0 = identical every time."""
+    """Fraction of a repeated discrete signal equal to the modal value."""
     return route_stability(values)
 
 
@@ -198,8 +158,7 @@ def self_consistency(values: Sequence[Any]) -> float:
 # Agreement — judge decision vs a hand-labelled golden set.
 # ---------------------------------------------------------------------------
 def agreement(predicted: Sequence[bool], expected: Sequence[bool]) -> float:
-    """Fraction of cases where ``predicted`` matches ``expected`` (zipped to
-    the shorter sequence). Empty -> 1.0."""
+    """Fraction of predicted == expected (zipped to shorter). Empty -> 1.0."""
     pairs = list(zip(predicted, expected))
     if not pairs:
         return 1.0

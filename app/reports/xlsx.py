@@ -1,18 +1,5 @@
-"""XLSX writer for reports.
-
-Produces a multi-sheet workbook from a ReportResult:
-
-  Sheet 1 — Summary/aggregate table (matches the on-screen view).
-  Sheet 2 — Items (drill-down detail). Only present when the report has
-             detail rows; "item_detail", "pending_snapshot", and "aging"
-             put their data in sheet 1 directly.
-  Sheet 3 — Filters Applied: what filters generated this file, plus the
-             run date and summary counts. Useful when the file is
-             forwarded weeks later and the recipient needs context.
-
-Consumed by app/routes/reports.py (download response) and
-app/chatbot/excel.py (Sleuth chat-bubble file block).
-"""
+"""XLSX writer for reports: Summary sheet, optional Items drill-down, Filters
+Applied sheet. Used by routes/reports.py and chatbot/excel.py."""
 from __future__ import annotations
 
 import io
@@ -41,19 +28,14 @@ _BANNER_FG = "FFFFFF"
 _ZEBRA_FILL = "F2F4F8"
 
 
-# Formula-injection guard: spreadsheet apps treat cells whose value starts
-# with these characters as formulas, so a bug title like `=cmd|'/c calc'!A1`
-# would execute on open. Prefixing with a single quote (OWASP recommendation)
-# neutralizes it; Excel hides the quote on display.
+# Formula-injection guard: a leading char here makes Excel treat the cell as
+# a formula (e.g. `=cmd|'/c calc'!A1`). OWASP fix: prefix with a quote.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _defang_formula_text(s: str) -> str:
-    """Prefix s with a single quote when it starts with a formula trigger.
-
-    Checks both the literal first character (catches leading whitespace control
-    chars) and the first non-whitespace character, because spreadsheet apps
-    trim leading spaces before formula evaluation, so " =cmd" still fires."""
+    """Prefix with a quote if s starts with a formula trigger (checks both
+    the raw and whitespace-stripped first char — Excel trims leading spaces)."""
     if not s:
         return s
     stripped = s.lstrip()
@@ -99,9 +81,7 @@ def _write_table(
     """Write a banner + header + rows. Returns the next free row index."""
     ncols = max(1, len(columns))
 
-    # Defang banner and header labels too. The banner is server-controlled
-    # today, but running everything through _defang_formula_text avoids a
-    # silent assumption that must be maintained forever.
+    # Defang banner/headers too, even though they're server-controlled today.
     banner_cell = ws.cell(row=start_row, column=1, value=_defang_formula_text(banner))
     banner_cell.font = Font(bold=True, color=_BANNER_FG, size=12)
     banner_cell.fill = PatternFill("solid", fgColor=_BANNER_FILL)
@@ -187,8 +167,7 @@ def _write_filters_block(ws, result: ReportResult, start_row: int) -> int:
     f = result.filters or {}
     for key, label in _FILTER_LABELS:
         ws.cell(row=row, column=1, value=label)
-        # text_search and label are user free-text, so their values need the
-        # same formula-injection treatment as data cells.
+        # text_search/label are user free-text — defang like data cells.
         ws.cell(row=row, column=2, value=_coerce(_format_filter_display(f.get(key))))
         row += 1
     return row

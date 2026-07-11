@@ -1,8 +1,5 @@
 """Tests for app/chatbot/cloud_llm.py.
-
-Covers httpx provider calls (including model-name validation), the circuit
-breaker, grounding/judge/answer helpers, the read-only agent loop, and recent
-history — all with fakes so nothing hits the network or needs a live model.
+Provider calls, circuit breaker, grounding/judge/answer helpers, agent loop, recent history - all faked, no network.
 """
 from __future__ import annotations
 
@@ -40,15 +37,13 @@ def _settings(**over):
 
 
 def _actor(role="admin", uid=1):
-    """Minimal actor for pure helpers. role='admin' keeps project scope
-    unrestricted (accessible_project_ids → None) without a DB session."""
+    """Minimal actor for pure helpers; role='admin' keeps project scope unrestricted without a DB."""
     return types.SimpleNamespace(id=uid, role=role, name="Tester")
 
 
 @pytest.fixture(autouse=True)
 def _reset_cooldown(monkeypatch):
-    # Rebind to the current module generation; conftest purges app.* between
-    # tests, so patching must land on the same object cloud_llm's imports see.
+    # Rebind to the current module generation (conftest purges app.* between tests).
     import importlib
     global cloud_llm
     cloud_llm = importlib.import_module("app.chatbot.cloud_llm")
@@ -80,9 +75,7 @@ def _install_httpx(monkeypatch, *, payload=None, raise_status=False, post_raises
     return hx
 
 
-# ---------------------------------------------------------------------------
 # is_available
-# ---------------------------------------------------------------------------
 def test_is_available_disabled(monkeypatch):
     monkeypatch.setattr(cloud_llm, "get_settings", lambda: _settings(SLEUTH_CLOUD_ENABLED=False))
     assert cloud_llm.is_available() is False
@@ -100,9 +93,7 @@ def test_is_available_true(monkeypatch):
     assert cloud_llm.is_available() is True
 
 
-# ---------------------------------------------------------------------------
 # _call_groq
-# ---------------------------------------------------------------------------
 def test_call_groq_no_key(monkeypatch):
     monkeypatch.setattr(cloud_llm, "get_settings", lambda: _settings(GROQ_API_KEY=""))
     assert cloud_llm._call_groq("s", "u") is None
@@ -129,9 +120,7 @@ def test_call_groq_http_error(monkeypatch):
     assert cloud_llm._call_groq("s", "u") is None
 
 
-# ---------------------------------------------------------------------------
 # _call_openrouter
-# ---------------------------------------------------------------------------
 def test_call_openrouter_no_key(monkeypatch):
     monkeypatch.setattr(cloud_llm, "get_settings", lambda: _settings(OPENROUTER_API_KEY=""))
     assert cloud_llm._call_openrouter("s", "u") is None
@@ -157,9 +146,7 @@ def test_call_openrouter_post_raises(monkeypatch):
     assert cloud_llm._call_openrouter("s", "u") is None
 
 
-# ---------------------------------------------------------------------------
 # Cooldown + _complete
-# ---------------------------------------------------------------------------
 def test_cooldown_trip_and_in(monkeypatch):
     assert cloud_llm._in_cooldown() is False
     cloud_llm._trip_cooldown()
@@ -207,9 +194,7 @@ def test_complete_json_is_subcall(monkeypatch):
     assert seen["trip"] is False
 
 
-# ---------------------------------------------------------------------------
 # _extract_json
-# ---------------------------------------------------------------------------
 def test_extract_json_wrapping_fence():
     assert cloud_llm._extract_json('```json\n{"a": 1}\n```') == {"a": 1}
 
@@ -243,9 +228,7 @@ def test_extract_json_bare_fence():
     assert cloud_llm._extract_json('```\n{"a": 1}\n```') == {"a": 1}
 
 
-# ---------------------------------------------------------------------------
 # _grounding
-# ---------------------------------------------------------------------------
 def test_grounding_retrieval_and_rag(monkeypatch):
     from app.chatbot import retrieval, rag
     hit = types.SimpleNamespace(id=7)
@@ -289,9 +272,7 @@ def test_grounding_rag_raises(monkeypatch):
     assert text == ""
 
 
-# ---------------------------------------------------------------------------
 # _judge_text
-# ---------------------------------------------------------------------------
 def test_judge_text_applies_verdict(monkeypatch):
     from app.chatbot import evals
     monkeypatch.setattr(evals, "judge", lambda m, c, t, call_model: {"score": 0.9})
@@ -326,9 +307,7 @@ def test_judge_text_counts_unavailable_on_none_verdict(monkeypatch):
     assert cloud_llm.metrics_snapshot().get("judge:unavailable") == 1
 
 
-# ---------------------------------------------------------------------------
 # _answer_response
-# ---------------------------------------------------------------------------
 def test_answer_response_empty_returns_none():
     assert cloud_llm._answer_response("   ", _settings(), set()) is None
 
@@ -351,8 +330,7 @@ def test_answer_response_verifies_and_judges(monkeypatch):
 
 
 def test_answer_response_skips_judge_for_chit_chat(monkeypatch):
-    # Without retrieved context or a bug citation, the answer is not
-    # grounding-checkable, so the eval judge must not run on chit-chat.
+    # Not grounding-checkable without context/citation, so the judge must not run on chit-chat.
     judged = {"called": False}
     monkeypatch.setattr(
         cloud_llm, "_judge_text",
@@ -376,9 +354,7 @@ def test_answer_response_judges_when_context_present(monkeypatch):
     assert resp.blocks[0].payload["text"] == "Here is what the records show. [judged]"
 
 
-# ---------------------------------------------------------------------------
 # _run_agent (drive the bound closures via a fake agent)
-# ---------------------------------------------------------------------------
 def _install_fake_agent(monkeypatch, result, *, capture=None):
     agent = sys.modules.get("app.chatbot.agent")
     if agent is None:  # lazy import, mirrors how cloud_llm loads it
@@ -466,9 +442,7 @@ def test_run_agent_query_tool_error(monkeypatch):
     assert cap["query"] == "The query could not be run."
 
 
-# ---------------------------------------------------------------------------
 # _recent_history
-# ---------------------------------------------------------------------------
 class _Q:
     def __init__(self, first=None, all_=None):
         self._first = first
@@ -528,27 +502,21 @@ def test_recent_history_swallows_errors():
     assert cloud_llm._recent_history(_Boom(), types.SimpleNamespace(id=1)) == ""
 
 
-# ---------------------------------------------------------------------------
 # is_available — httpx import failure (66-67)
-# ---------------------------------------------------------------------------
 def test_is_available_httpx_missing(monkeypatch):
     monkeypatch.setattr(cloud_llm, "get_settings", lambda: _settings())
     monkeypatch.setitem(sys.modules, "httpx", None)  # None entry causes `import httpx` to raise ImportError
     assert cloud_llm.is_available() is False
 
 
-# ---------------------------------------------------------------------------
 # _complete subcall unparseable (262->266: skip trip when trip_cooldown=False)
-# ---------------------------------------------------------------------------
 def test_complete_subcall_unparseable_no_trip(monkeypatch):
     monkeypatch.setattr(cloud_llm, "_call_groq", lambda s, u, **kw: "totally not json")
     assert cloud_llm._complete("s", "u", trip_cooldown=False) is None
     assert cloud_llm._in_cooldown() is False
 
 
-# ---------------------------------------------------------------------------
 # try_understand branches
-# ---------------------------------------------------------------------------
 def test_try_understand_unavailable(monkeypatch):
     monkeypatch.setattr(cloud_llm, "is_available", lambda: False)
     assert cloud_llm.try_understand("q", None, None) is None
@@ -594,9 +562,7 @@ def test_try_understand_single_shot_path(monkeypatch):
     assert cloud_llm.try_understand("q", None, None) is sentinel
 
 
-# ---------------------------------------------------------------------------
 # _single_shot branches
-# ---------------------------------------------------------------------------
 def test_single_shot_parsed_none(monkeypatch):
     monkeypatch.setattr(cloud_llm, "_complete", lambda s, p, **kw: None)
     assert cloud_llm._single_shot("m", None, None, _now(), "", "", set(), _settings()) is None
@@ -624,9 +590,7 @@ def test_single_shot_unknown_mode(monkeypatch):
     assert cloud_llm._single_shot("m", None, None, _now(), "", "", set(), _settings()) is None
 
 
-# ---------------------------------------------------------------------------
 # _route_data_query branches
-# ---------------------------------------------------------------------------
 def _patch_route(monkeypatch, *, intent, resp):
     import importlib
     ex = importlib.import_module("app.chatbot.executor")
@@ -659,15 +623,12 @@ def test_route_dispatch_tags_intent(monkeypatch):
 
 
 def test_route_drops_oversized_canonical_query(monkeypatch):
-    # An implausibly long model-authored canonical query is dropped before
-    # reaching the NLU, so dispatch is never called.
+    # An implausibly long model-authored canonical query is dropped before the NLU.
     _patch_route(monkeypatch, intent="list_bugs", resp=object())
     assert cloud_llm._route_data_query("open bugs " * 80, None, _actor(), _now()) is None
 
 
-# ---------------------------------------------------------------------------
 # Sampling: elevated temperature on the chat path, deterministic for sub-calls
-# ---------------------------------------------------------------------------
 def test_chat_path_elevated_temperature_tools_stay_deterministic(monkeypatch):
     captured = []
 
@@ -691,9 +652,7 @@ def test_chat_path_elevated_temperature_tools_stay_deterministic(monkeypatch):
     assert captured[-1]["temperature"] == 0.0
 
 
-# ---------------------------------------------------------------------------
 # Answer guardrails: control-char scrub, app-side ceiling, hallucinated-write flag
-# ---------------------------------------------------------------------------
 def test_scrub_control_chars():
     assert cloud_llm._scrub_control_chars("a\x00b\x07c\x7fd\n\te") == "abcd\n\te"
     assert cloud_llm._scrub_control_chars("plain") == "plain"

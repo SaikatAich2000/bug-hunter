@@ -9,19 +9,9 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-# ---------------------------------------------------------------------------
-# HTML sanitizer for rich-text fields (description, comment body)
-#
-# The contenteditable editor emits HTML. Storing it raw would be a stored-XSS
-# bug, so we sanitize on the server before writing to the database. The
-# allowlist covers only the tags the editor produces, plus <img> for pasted
-# screenshots (the editor base64-encodes pastes into data: URLs on src).
-#
-# We use a hand-rolled allowlist parser rather than bleach because bleach
-# drags in html5lib (~200 KB of extra deps) and our tag set is small enough
-# not to need it. If the allowed tags grow substantially, replace
-# sanitize_html() with a bleach call — the interface is the same.
-# ---------------------------------------------------------------------------
+# Server-side HTML sanitizer for rich-text fields (description, comment body):
+# the contenteditable editor emits HTML and storing it raw would be stored XSS.
+# Hand-rolled allowlist (avoids bleach/html5lib); swap for bleach if tags grow.
 _ALLOWED_TAGS = {
     "p", "br", "div", "span",
     "b", "strong", "i", "em", "u", "s", "strike", "del", "ins",
@@ -31,27 +21,22 @@ _ALLOWED_TAGS = {
     "a", "img",
 }
 _ALLOWED_ATTRS = {
-    # Anything not listed here is stripped even for whitelisted tags — that's
-    # what blocks <img onerror=...>. We don't accept `rel` on <a> because we
-    # force our own rel="noopener nofollow" unconditionally below, preventing
-    # a crafted rel="" from stripping the hardening.
+    # Anything not listed is stripped even on allowed tags (blocks <img onerror=>).
+    # `rel` on <a> is omitted so our forced rel="noopener nofollow" can't be stripped.
     "a":   {"href", "title"},
     "img": {"src", "alt", "title", "width", "height"},
     "code": {"class"},   # editor may emit `<code class="language-X">`
     "pre":  {"class"},
 }
-# Allowed URL schemes for href/src. data: is handled separately below.
+# Allowed URL schemes for href/src; data: is handled separately below.
 _ALLOWED_URL_SCHEMES = ("http:", "https:", "mailto:", "/", "#")
-# Only raster data: URLs are allowed. data:image/svg+xml is an XML document
-# that can carry <script>/onload and executes in our origin, so it's excluded.
+# Raster data: URLs only — data:image/svg+xml is scriptable, so it's excluded.
 _DATA_IMAGE_RASTER_PREFIXES = (
     "data:image/png", "data:image/jpeg", "data:image/jpg",
     "data:image/gif", "data:image/webp", "data:image/bmp", "data:image/avif",
 )
-# RCDATA/CDATA elements in the HTML spec (script, style, etc.). Their tags are
-# not on the allowlist, so we already drop the tags, but we also drop their
-# text content rather than re-emitting it. This closes a parser-differential
-# / mutation-XSS risk if any downstream consumer uses a real HTML5 tokenizer.
+# RCDATA/CDATA elements: their text content is dropped too (not just the tag),
+# closing a parser-differential / mutation-XSS risk against a real HTML5 tokenizer.
 _RCDATA_DROP_TAGS = frozenset({
     "script", "style", "textarea", "title", "noscript", "xmp",
     "iframe", "noframes", "template",
@@ -59,14 +44,12 @@ _RCDATA_DROP_TAGS = frozenset({
 
 
 class _HTMLAllowlistSanitizer(HTMLParser):
-    """Drops every tag/attr not on the allowlist. Text content survives even
-    when its parent tag is stripped."""
-    # convert_charrefs=False preserves &amp; / &lt; as-is instead of collapsing
-    # them into raw characters that would need re-escaping later.
+    """Drops every tag/attr not on the allowlist; text content always survives."""
+    # convert_charrefs=False keeps &amp;/&lt; as-is instead of collapsing them.
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self.out: list[str] = []
-        # Tracks nesting depth inside RCDATA elements so their text is suppressed.
+        # Nesting depth inside RCDATA elements, so their text is suppressed.
         self._drop_text_depth = 0
 
     def _safe_url(self, raw: str) -> Optional[str]:
@@ -74,13 +57,9 @@ class _HTMLAllowlistSanitizer(HTMLParser):
             return None
         s = raw.strip()
         low = s.lower()
-        # Explicit data:image/* (pasted screenshot), capped here to avoid
-        # runaway storage. Upload-based attachments don't go through this
-        # path; this is for inline pastes only.
+        # Inline pasted screenshots only (uploads take a different path).
         if low.startswith("data:image/"):
-            # SVG is scriptable (can carry <script>/onload), so only raster
-            # bitmap types pass. Also cap the size to avoid runaway storage;
-            # this path is for inline pastes, not upload-based attachments.
+            # Raster bitmaps only (SVG is scriptable); size-capped to bound storage.
             if not low.startswith(_DATA_IMAGE_RASTER_PREFIXES):
                 return None
             if len(s) > 14 * 1024 * 1024:
@@ -108,8 +87,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
             v_safe = (v.replace("&", "&amp;").replace("<", "&lt;")
                        .replace(">", "&gt;").replace('"', "&quot;"))
             kept.append(f'{k}="{v_safe}"')
-        # Always inject rel on <a> (we don't accept the user-supplied one),
-        # so reverse-tabnabbing hardening can't be stripped by the input.
+        # Force our own rel on <a> so reverse-tabnabbing hardening can't be stripped.
         if t == "a":
             kept.append('rel="noopener nofollow"')
         return kept
@@ -117,7 +95,6 @@ class _HTMLAllowlistSanitizer(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         t = tag.lower()
         if t in _RCDATA_DROP_TAGS:
-            # Track depth so we suppress content inside script/style/etc.
             self._drop_text_depth += 1
             return
         if t not in _ALLOWED_TAGS:
@@ -140,16 +117,14 @@ class _HTMLAllowlistSanitizer(HTMLParser):
         self.out.append(f"</{t}>")
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        # <br/> / <img .../> — re-emit as a start tag only. A self-closing RCDATA
-        # tag (e.g. <script/>) opens and closes in one token; skip it without
-        # touching _drop_text_depth so the counter doesn't get stuck.
+        # <br/> / <img .../> re-emit as a start tag. A self-closing RCDATA tag
+        # is skipped without touching _drop_text_depth (it opens+closes at once).
         if tag.lower() in _RCDATA_DROP_TAGS:
             return
         self.handle_starttag(tag, attrs)
 
     def handle_data(self, data: str) -> None:
         if self._drop_text_depth > 0:
-            # Inside a suppressed element — discard rather than re-emit.
             return
         self.out.append(
             data.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -163,11 +138,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
 
 
 def sanitize_html(value: Optional[str]) -> str:
-    """Return sanitized HTML suitable for storage and display.
-
-    Strips every tag and attribute not on the allowlist. Text content
-    always survives. Idempotent: sanitize(sanitize(x)) == sanitize(x).
-    Returns an empty string for None input."""
+    """Return allowlist-sanitized HTML for storage/display; idempotent, "" for None."""
     if value is None:
         return ""
     s = str(value)
@@ -177,17 +148,9 @@ def sanitize_html(value: Optional[str]) -> str:
     return "".join(p.out)
 
 
-# Status sets are per item type so workflow terms only appear where they make
-# sense ("Not a Bug" is Bug-only; "Blocked"/"Done" are Task-only; "Approved"/
-# "Implemented" are Requirement-only). "New" appears in every list so the
-# default value on create is always valid regardless of type.
-#
-# Rows with a status that is no longer valid for their current item_type are
-# not rejected on read — they display as-is and can be updated to a valid
-# value — but create/update calls that send an out-of-set status are rejected
-# by the model validator below.
-#
-# ALLOWED_STATUSES is the union used by type-agnostic filter endpoints.
+# Per-item-type status sets; "New" is in every list so the create default is
+# always valid. Out-of-set statuses display as-is on read but are rejected on
+# create/update. ALLOWED_STATUSES is the union for type-agnostic filters.
 STATUSES_BY_TYPE = {
     "Bug": [
         "New", "In Progress", "Resolved", "Closed", "Reopened",
@@ -208,26 +171,16 @@ EXCLUDED_FROM_TOTAL_STATUSES = ["Not a Bug"]
 
 
 def statuses_for_type(item_type: str) -> list[str]:
-    """Return the valid statuses for the given item_type.
-
-    Falls back to the Bug list for unknown types so rows predating the
-    item_type column still have a valid status set."""
+    """Valid statuses for item_type; falls back to Bug for unknown/legacy types."""
     return STATUSES_BY_TYPE.get(item_type or "Bug", STATUSES_BY_TYPE["Bug"])
 ALLOWED_PRIORITIES = ["Low", "Medium", "High", "Critical"]
 ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
-# The bugs table holds three work-item flavors:
-#   Bug          — defects (the original use case)
-#   Requirement  — features / specs / stories
-#   Task         — standup tasks, typically one per team member per day
-# Type is a classifier for filtering and badges; all other fields apply to all
-# three flavors.
+# Work-item flavors; a classifier for filtering/badges, other fields apply to all.
 ALLOWED_ITEM_TYPES = ["Bug", "Requirement", "Task"]
 ALLOWED_ROLES = ["admin", "manager", "user"]
-# Link relationship kinds. Stored on the directed source→target edge; the route
-# renders the inverse label on the target side (e.g. "blocks" → "is blocked by").
+# Link kinds on the directed source→target edge; route renders the inverse label.
 ALLOWED_LINK_TYPES = ["relates", "blocks", "duplicate"]
-# Bulk operations the multi-select toolbar can request. Each goes through the
-# same permission / audit / notification path as the equivalent single-item op.
+# Bulk toolbar actions; each reuses the single-item permission/audit/notify path.
 ALLOWED_BULK_ACTIONS = [
     "set_status", "set_priority", "set_environment", "delete",
 ]
@@ -238,10 +191,7 @@ MIN_PROJECT_NAME_LENGTH = 2
 
 
 def normalize_choice(value: str, allowed: list[str], label: str) -> str:
-    """Case-insensitive lookup against `allowed`; returns the canonical form.
-
-    Called from both create/update validators and filter routes so all
-    callers accept the same casings."""
+    """Case-insensitive lookup against `allowed`; returns the canonical form."""
     if not isinstance(value, str):
         raise ValueError(f"Invalid {label}. Allowed: {', '.join(allowed)}")
     needle = value.strip().lower()
@@ -255,10 +205,8 @@ def normalize_choice(value: str, allowed: list[str], label: str) -> str:
 _normalize_choice = normalize_choice
 
 
-# Validates the local part (no leading/trailing/consecutive dots), domain labels
-# (alphanumeric with internal hyphens only), and an alphabetic TLD. Rejects
-# malformed addresses before they reach the DB or a password-reset send.
-# Quantifiers are bounded to avoid ReDoS.
+# Validates local part, domain labels, and an alphabetic TLD; quantifiers
+# bounded to avoid ReDoS.
 _EMAIL_RE = re.compile(
     r"^(?![.])(?!.*[.]{2})[A-Za-z0-9._%+\-]+(?<![.])@"
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
@@ -273,10 +221,7 @@ def _validate_email(value: str) -> str:
 
 
 def _strip_and_check_min_length(v: str, min_len: int, label: str) -> str:
-    """Strip surrounding whitespace, then enforce min length.
-
-    Pydantic's Field(min_length=...) measures the raw pre-strip value, so
-    '  a  ' would pass a min_length=3 check without this."""
+    """Strip whitespace then enforce min length (Field(min_length) measures pre-strip)."""
     if not isinstance(v, str):
         raise ValueError(f"{label} must be a string")
     v = v.strip()
@@ -302,12 +247,11 @@ def _normalize_role(v: str) -> str:
 def _check_password_strength(v: str) -> str:
     if not isinstance(v, str):
         raise ValueError("Password must be a string")
-    # 'changeme' is the factory default on many existing accounts; always
-    # accept it so existing deployments aren't locked out after an upgrade
-    # that raises PASSWORD_MIN_LENGTH above 8.
+    # 'changeme' is the factory default; always accept so upgrades raising
+    # PASSWORD_MIN_LENGTH don't lock out existing accounts.
     if v.lower() == "changeme":
         return v
-    # Hard upper bound as a DoS guard — bcrypt cost scales with input length.
+    # DoS guard — bcrypt cost scales with input length.
     if len(v) > 200:
         raise ValueError("Password is too long")
     from app.config import get_settings  # local import avoids an import cycle
@@ -315,9 +259,7 @@ def _check_password_strength(v: str) -> str:
     min_len = max(1, settings.PASSWORD_MIN_LENGTH)
     if len(v) < min_len:
         raise ValueError(f"Password must be at least {min_len} characters")
-    # We don't require special characters. NIST 800-63B §5.1.1.2 notes that
-    # character-class mandates push users toward predictable substitutions
-    # without meaningfully raising entropy. Length + letter + digit is enough.
+    # No special-character mandate (NIST 800-63B §5.1.1.2); length + letter + digit.
     if settings.PASSWORD_REQUIRE_COMPLEXITY:
         has_letter = any(c.isalpha() for c in v)
         has_digit = any(c.isdigit() for c in v)
@@ -337,10 +279,8 @@ class UserIn(BaseModel):
     role: str = Field(default="user")
     password: str
     is_active: bool = True
-    # Projects this user can access. A manager/user is restricted to these;
-    # omitting them creates an untagged user who sees nothing until tagged.
-    # Admin role ignores tags entirely. The route validates existence and the
-    # creator's own access. max_length caps abusive payloads.
+    # Projects a manager/user can access (admins ignore tags); untagged = sees
+    # nothing. Route validates existence and the creator's access.
     project_ids: list[int] = Field(default_factory=list, max_length=1000)
 
     @field_validator("name")
@@ -378,11 +318,9 @@ class UserUpdate(BaseModel):
     email: Optional[str] = Field(default=None, max_length=254)
     role: Optional[str] = None
     is_active: Optional[bool] = None
-    # Admin password reset. If present, replaces the stored hash. Omit to
-    # leave the password unchanged.
+    # Admin password reset; replaces the hash if present, omit to leave unchanged.
     password: Optional[str] = None
-    # Replace project memberships. None/omit = unchanged; empty list = untag.
-    # Route validates project existence and the editor's own access.
+    # Replace memberships. None/omit = unchanged; empty list = untag.
     project_ids: Optional[list[int]] = Field(default=None, max_length=1000)
 
     @field_validator("name")
@@ -430,9 +368,7 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
-    # Project memberships (sorted by id). Populated by the route from
-    # user_projects; defaults to [] on paths that skip that join. An empty
-    # list means untagged — non-admin users see nothing; admins see everything.
+    # Project memberships (sorted by id), route-populated; [] = untagged.
     project_ids: list[int] = Field(default_factory=list)
 
 
@@ -440,9 +376,7 @@ class UserOut(BaseModel):
 # Auth
 # ---------------------------------------------------------------------------
 class LoginIn(BaseModel):
-    # Both fields are bounded so an unauthenticated caller can't POST a huge
-    # body and burn CPU in bcrypt / the sha256 pre-hash. 200 matches the
-    # new-password cap (no stored hash can exceed it); 254 = RFC 5321 email max.
+    # Bounded so an unauthenticated caller can't burn bcrypt CPU on a huge body.
     email: str = Field(max_length=254)
     password: str = Field(max_length=200)
 
@@ -453,8 +387,7 @@ class LoginIn(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    # Accept any non-empty current password and let bcrypt-verify decide.
-    # We can't introspect historical hashes, so we just guard against empty input.
+    # Accept any non-empty current password; bcrypt-verify decides.
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str
 
@@ -465,7 +398,7 @@ class ChangePasswordIn(BaseModel):
 
 
 class ForgotPasswordIn(BaseModel):
-    # Length cap mirrors LoginIn — same DoS risk on an unauthenticated endpoint.
+    # Length cap mirrors LoginIn (unauthenticated DoS risk).
     email: str = Field(max_length=254)
 
     @field_validator("email")
@@ -475,8 +408,7 @@ class ForgotPasswordIn(BaseModel):
 
 
 class ResetPasswordIn(BaseModel):
-    # The token is a hex SHA-256 value; cap it so a huge body can't be
-    # hashed / compared unnecessarily.
+    # Token is a hex SHA-256 value; capped to bound hashing/comparison.
     token: str = Field(min_length=1, max_length=512)
     new_password: str
 
@@ -539,8 +471,7 @@ class ProjectOut(BaseModel):
 class BugCreate(BaseModel):
     project_id: int
     title: str = Field(max_length=200)
-    # Rich HTML description. 1 MB ceiling so several inline pasted screenshots
-    # (base64 data URLs) can fit. Sanitized by the field validator below.
+    # Rich HTML; 1 MB ceiling fits inline pasted screenshots. Sanitized below.
     description: str = Field(default="", max_length=1_000_000)
     reporter_id: Optional[int] = None
     assignee_ids: list[int] = Field(default_factory=list, max_length=200)
@@ -549,7 +480,7 @@ class BugCreate(BaseModel):
     priority: str = Field(default="Medium")
     environment: str = Field(default="DEV")
     due_date: Optional[str] = None
-    # Link to an event (e.g. today's standup) at creation time.
+    # Link to an event at creation time.
     event_id: Optional[int] = None
 
     @field_validator("title")
@@ -560,9 +491,8 @@ class BugCreate(BaseModel):
     @field_validator("description")
     @classmethod
     def _strip_desc(cls, v: str) -> str:
-        # Sanitize HTML from the SPA editor before storage. Also strip outer
-        # whitespace so an empty body like "<p><br></p>" compares cleanly
-        # against empty-string checks downstream.
+        # Sanitize SPA-editor HTML; strip outer whitespace so "<p><br></p>"
+        # compares cleanly against empty-string checks.
         if not isinstance(v, str): return v
         return sanitize_html(v.strip())
 
@@ -574,8 +504,7 @@ class BugCreate(BaseModel):
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: str) -> str:
-        # Checks against the global union here. The per-type check runs in
-        # _check_status_for_type below once item_type is also available.
+        # Global union here; per-type check runs in _check_status_for_type below.
         return _normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
@@ -608,8 +537,7 @@ class BugCreate(BaseModel):
 
     @model_validator(mode="after")
     def _check_status_for_type(self) -> "BugCreate":
-        # Cross-field check: status must be valid for the chosen item_type.
-        # "New" is in every set so the default always passes.
+        # Cross-field: status must be valid for the chosen item_type.
         allowed = statuses_for_type(self.item_type)
         if self.status not in allowed:
             raise ValueError(
@@ -630,18 +558,16 @@ class BugUpdate(BaseModel):
     priority: Optional[str] = None
     environment: Optional[str] = None
     due_date: Optional[str] = None
-    # Set to an int to link to an event, or null/0 to unlink. The route uses
-    # Pydantic's exclude_unset to distinguish "clearing" from "not provided".
+    # int to link, null/0 to unlink; route uses exclude_unset to tell "clear"
+    # from "not provided".
     event_id: Optional[int] = None
 
-    # Optimistic concurrency (opt-in). The client can echo the item's
-    # updated_at as it last saw it; a mismatch returns 409 instead of silently
-    # clobbering a concurrent edit. Omitting it keeps last-write-wins behaviour.
+    # Opt-in optimistic concurrency: echo the last-seen updated_at; a mismatch
+    # returns 409. Omit for last-write-wins.
     expected_updated_at: Optional[str] = Field(default=None, max_length=64)
 
-    # Preferred concurrency token: the item's integer version counter. More
-    # reliable than expected_updated_at (sub-second precision, no clock skew).
-    # Omitting both fields preserves last-write-wins.
+    # Preferred concurrency token: the integer version counter (sub-second, no
+    # clock skew). Omit both fields for last-write-wins.
     expected_version: Optional[int] = Field(default=None, ge=0)
 
     @field_validator("title")
@@ -746,23 +672,19 @@ class BugListResponse(BaseModel):
 # Comment / Activity / Detail
 # ---------------------------------------------------------------------------
 class CommentIn(BaseModel):
-    # 200 KB ceiling so a pasted screenshot (base64 data URL) fits.
-    # Dangerous payloads are stripped by the sanitizer regardless.
+    # 200 KB ceiling fits a pasted screenshot; sanitizer strips dangerous payloads.
     body: str = Field(min_length=1, max_length=200_000)
 
     @field_validator("body")
     @classmethod
     def _strip(cls, v: str) -> str:
-        # Sanitize server-side regardless of the editor's behaviour (defense
-        # in depth against stored XSS). Then require that the result contains
-        # either visible text or an <img> with a src — a body that's all tags
-        # and whitespace after sanitization is treated as empty.
+        # Sanitize server-side, then require visible text or an <img src> —
+        # an all-tags/whitespace body is treated as empty.
         if not isinstance(v, str):
             raise ValueError("Comment body must be a string")
         cleaned = sanitize_html(v.strip())
         text_only = re.sub(r"<[^>]+>", "", cleaned).strip()
-        # A src-less <img> (stripped by the sanitizer) shouldn't count as
-        # non-empty, so check for the attribute explicitly.
+        # Check src explicitly so a src-less <img> doesn't count as non-empty.
         has_image = re.search(r"<img\b[^>]*\bsrc=", cleaned, re.IGNORECASE) is not None
         if not text_only and not has_image:
             raise ValueError("Comment body cannot be empty")
@@ -807,10 +729,8 @@ class BugLinkIn(BaseModel):
 
 
 class BugLinkOut(BaseModel):
-    """One link from a given bug's perspective. `direction` is "outgoing" when
-    this bug is the source and "incoming" when it's the target. `label` is the
-    human-readable phrasing from this side (e.g. stored "blocks" shows as
-    "is blocked by" on the target)."""
+    """One link from a bug's perspective. `direction` is outgoing (this bug is
+    source) or incoming; `label` is the phrasing from this side."""
     id: int
     link_type: str
     direction: str          # "outgoing" | "incoming"
@@ -822,18 +742,13 @@ class BugLinkOut(BaseModel):
     created_at: datetime
 
 
-# ---------------------------------------------------------------------------
 # Bulk actions — the multi-select toolbar on the list view.
-# ---------------------------------------------------------------------------
 class BulkActionIn(BaseModel):
     action: str
     ids: list[int] = Field(min_length=1, max_length=500)
-    # Value for set_status / set_priority / set_environment. No valid value
-    # exceeds 20 chars; the route still normalizes against the allowed set.
+    # Value for set_status / set_priority / set_environment; route normalizes it.
     value: Optional[str] = Field(default=None, max_length=20)
-    # Optional {bug_id: version} map for optimistic concurrency. When provided,
-    # rows whose version drifted are reported as conflicts and left unchanged.
-    # Omit to keep last-write-wins behaviour.
+    # Optional {bug_id: version} map; drifted rows are reported as conflicts.
     expected_versions: Optional[dict[int, int]] = Field(default=None, max_length=500)
 
     @field_validator("action")
@@ -874,12 +789,8 @@ class BugDetail(BugOut):
 # Sessions (admin only)
 # ---------------------------------------------------------------------------
 class SessionOut(BaseModel):
-    """One row in the admin "active sessions" panel.
-
-    `is_current` marks the session the admin is using right now, so the UI
-    can label it and disable the revoke button. The API also rejects
-    self-revocation; see routes/sessions.py.
-    """
+    """One row in the admin "active sessions" panel; `is_current` marks the
+    admin's own session (self-revocation is rejected in routes/sessions.py)."""
     id: int
     user_id: int
     user_name: Optional[str] = None
@@ -904,8 +815,7 @@ class StatsOut(BaseModel):
     resolved: int
     closed: int
     resolve_later: int
-    # Kept for backward compatibility with older clients and external integrations.
-    # The UI no longer renders these, but removing them would break cached frontends.
+    # Kept for backward compatibility; the UI no longer renders these.
     projects: int = 0
     users: int = 0
     by_status: dict[str, int]
@@ -924,14 +834,10 @@ class EventCreate(BaseModel):
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=10000)
     scheduled_for: Optional[str] = None  # YYYY-MM-DD
-    # Owning project. Scopes visibility — non-admin users only see events for
-    # their projects. Optional at the API level so a project-less event is
-    # valid (admins only). The SPA always sends one. When provided, the route
-    # validates existence and the creator's access.
+    # Owning project, scopes visibility. Optional (project-less = admins only);
+    # route validates existence and the creator's access.
     project_id: Optional[int] = None
-    # Admin/manager users to notify on event create/update/delete. Does not
-    # include notifications for individual tasks filed under the event.
-    # Empty list = no extra recipients beyond the creator.
+    # Admin/manager users to notify on event create/update/delete (not per-task).
     manager_ids: list[int] = Field(default_factory=list, max_length=200)
 
     @field_validator("name")
@@ -968,8 +874,7 @@ class EventUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=10000)
     scheduled_for: Optional[str] = None
     manager_ids: Optional[list[int]] = Field(default=None, max_length=200)
-    # Move to a different project. None/omit = leave unchanged. Route validates
-    # existence and the editor's access to the target project.
+    # Move to a different project; None/omit = unchanged. Route validates access.
     project_id: Optional[int] = None
 
     @field_validator("name")
@@ -1009,15 +914,14 @@ class EventOut(BaseModel):
     name: str
     description: str
     scheduled_for: Optional[str] = None
-    # Nullable so events created before this column was added still serialize.
-    # project_name is resolved by the route for display.
+    # Nullable for pre-column events; project_name resolved by the route.
     project_id: Optional[int] = None
     project_name: Optional[str] = None
     created_by_user_id: Optional[int] = None
     created_by_name: Optional[str] = None
     item_count: int = 0
     assignee_count: int = 0
-    # Full briefs so the UI can render names/emails without an extra round-trip.
+    # Full briefs so the UI renders names/emails without an extra round-trip.
     managers: list[UserBrief] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -1026,8 +930,7 @@ class EventOut(BaseModel):
 class EventDetail(EventOut):
     """Event with its full item list, returned by /api/events/{id}."""
     items: list[BugOut] = Field(default_factory=list)
-    # Set when the item list was capped at the server ceiling, so the client
-    # can show "showing N of M" rather than a silently truncated view.
+    # True when the item list hit the server ceiling (client shows "N of M").
     items_truncated: bool = False
 
 
@@ -1066,13 +969,9 @@ class PushUnsubscribeIn(BaseModel):
 
 
 class PushConfigOut(BaseModel):
-    """Public Firebase web config for the browser messaging SDK.
-
-    All values here are publishable (they appear in any Firebase web app).
-    The secret — the server-side service-account JSON — never leaves the
-    backend. `enabled` is False when push isn't configured, so the frontend
-    can hide the toggle without a separate capability check.
-    """
+    """Public Firebase web config for the browser messaging SDK. All values are
+    publishable; the service-account secret stays on the backend. `enabled` is
+    False when push isn't configured."""
     enabled: bool
     api_key: str = ""
     auth_domain: str = ""

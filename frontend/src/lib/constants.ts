@@ -1,21 +1,13 @@
-/**
- * Client-side constants that mirror server policy (app/config.py +
- * app/schemas._check_password_strength) for early UI feedback.
- * The server is always the final authority.
- */
+/** Mirrors server password policy for early UI feedback; server is authoritative. */
 
-/** Must match PASSWORD_MIN_LENGTH on the server (default 8). */
+/** Must match server PASSWORD_MIN_LENGTH. */
 export const PASSWORD_MIN_LENGTH = 8;
 
-/** Displayed to the user as the password requirement hint. */
 export const PASSWORD_HINT = `At least ${PASSWORD_MIN_LENGTH} characters, including a letter and a number`;
 
-/**
- * Returns an error message if the password fails policy, or null if it passes.
- * Rules: minimum length + at least one letter and one digit.
- */
+/** Error message if the password fails policy, else null. */
 export function validatePassword(pw: string): string | null {
-  // 'changeme' is the legacy default password; the server accepts it, so we must too.
+  // legacy default password; server accepts it, so we must too
   if (pw.toLowerCase() === "changeme") {
     return null;
   }
@@ -28,7 +20,7 @@ export function validatePassword(pw: string): string | null {
   return null;
 }
 
-/** Lightweight format check for early feedback; server validation is authoritative. */
+/** Lightweight email format check; server is authoritative. */
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }

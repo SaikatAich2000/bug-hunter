@@ -1,10 +1,5 @@
-"""Tests for app/chatbot/llm.py (Sleuth's optional local llama.cpp layer).
-
-Neither a GGUF model file nor llama-cpp-python is available in the hermetic
-suite, so these tests inject a fake ``llama_cpp`` module and shim the bare
-``open`` builtin to intercept ``/proc``/``/sys`` memory reads. Together they
-cover the RAM-budget math, availability gating, lazy load/idle-unload, JSON
-extraction, and read-only intent dispatch.
+"""Tests for app/chatbot/llm.py (optional local llama.cpp layer) with a fake llama_cpp module.
+RAM-budget math, availability gating, lazy load/idle-unload, JSON extraction, intent dispatch.
 """
 from __future__ import annotations
 
@@ -20,11 +15,7 @@ from app.chatbot import executor
 
 @pytest.fixture(autouse=True)
 def _reset_module_state(monkeypatch):
-    # The conftest `client` fixture purges all app.* from sys.modules to force
-    # a fresh engine import. Without this rebind, a test running after that
-    # would hold a stale `llm`/`executor` reference while llm's internal
-    # `import executor` resolves to a new generation, making monkeypatches
-    # invisible inside the call.
+    # Rebind after the fixture purges app.*; otherwise monkeypatches land on a stale generation.
     import importlib
     global llm, executor
     llm = importlib.import_module("app.chatbot.llm")
@@ -38,9 +29,7 @@ def _reset_module_state(monkeypatch):
     yield
 
 
-# ---------------------------------------------------------------------------
 # _read_int
-# ---------------------------------------------------------------------------
 def test_read_int_valid(tmp_path):
     p = tmp_path / "v"
     p.write_text("12345\n", encoding="utf-8")
@@ -62,9 +51,7 @@ def test_read_int_missing_and_garbage(tmp_path):
     assert llm._read_int(str(p)) is None
 
 
-# ---------------------------------------------------------------------------
 # _read_meminfo_kb (bare open shim)
-# ---------------------------------------------------------------------------
 def _meminfo_open(content):
     def _open(path, *a, **k):
         if path == "/proc/meminfo":
@@ -99,9 +86,7 @@ def test_read_meminfo_malformed_line(monkeypatch):
     assert llm._read_meminfo_kb("MemAvailable") is None
 
 
-# ---------------------------------------------------------------------------
 # _detect_container_limit_mb
-# ---------------------------------------------------------------------------
 def _read_int_map(mapping):
     return lambda path: mapping.get(path)
 
@@ -133,9 +118,7 @@ def test_container_limit_none(monkeypatch):
     assert llm._detect_container_limit_mb() is None
 
 
-# ---------------------------------------------------------------------------
 # _detect_available_mb
-# ---------------------------------------------------------------------------
 def test_available_min_of_cg_and_mem(monkeypatch):
     monkeypatch.setattr(llm, "_detect_container_limit_mb", lambda: 300)
     monkeypatch.setattr(llm, "_read_meminfo_kb", lambda key: 1024 * 1024)  # 1024 MB
@@ -160,9 +143,7 @@ def test_available_fallback(monkeypatch):
     assert llm._detect_available_mb() == 512
 
 
-# ---------------------------------------------------------------------------
 # _model_file_size_mb / memory_budget / memory_shortfall_message
-# ---------------------------------------------------------------------------
 def test_model_file_size_present(monkeypatch, tmp_path):
     p = tmp_path / "m.gguf"
     p.write_bytes(b"x" * (3 * 1024 * 1024))
@@ -201,9 +182,7 @@ def test_memory_shortfall_message_none_when_ok(monkeypatch):
     assert llm.memory_shortfall_message() is None
 
 
-# ---------------------------------------------------------------------------
 # is_available
-# ---------------------------------------------------------------------------
 def test_is_available_no_model(monkeypatch, tmp_path):
     monkeypatch.setattr(llm, "_MODEL_PATH", tmp_path / "absent.gguf")
     assert llm.is_available() is False
@@ -230,8 +209,7 @@ def test_is_available_insufficient_ram(monkeypatch, tmp_path):
 
 
 def test_is_available_no_llama_cpp_already_warned(monkeypatch, tmp_path):
-    # When the one-shot warning has already fired, the flag is True and the
-    # log is skipped, but the function still returns False.
+    # Warning already fired: log skipped but still returns False.
     p = tmp_path / "m.gguf"
     p.write_bytes(b"x")
     monkeypatch.setattr(llm, "_MODEL_PATH", p)
@@ -260,9 +238,7 @@ def test_is_available_true(monkeypatch, tmp_path):
     assert llm.is_available() is True
 
 
-# ---------------------------------------------------------------------------
 # _ensure_loaded / _unload
-# ---------------------------------------------------------------------------
 def _install_fake_llama(monkeypatch, instances):
     mod = types.ModuleType("llama_cpp")
 
@@ -314,9 +290,7 @@ def test_unload(monkeypatch):
     assert llm._llm is None
 
 
-# ---------------------------------------------------------------------------
 # Idle reaper + budget cache
-# ---------------------------------------------------------------------------
 def test_maybe_unload_idle_unloads_when_idle(monkeypatch):
     monkeypatch.setattr(llm, "_llm", object())
     monkeypatch.setattr(llm, "_last_used_at", 1.0)        # ancient
@@ -374,9 +348,7 @@ def test_cached_budget_memoizes(monkeypatch):
     assert calls["n"] == 2   # cache cleared → recomputed
 
 
-# ---------------------------------------------------------------------------
 # _extract_json
-# ---------------------------------------------------------------------------
 def test_extract_json_empty():
     assert llm._extract_json("") is None
 
@@ -401,9 +373,7 @@ def test_extract_json_invalid():
     assert llm._extract_json("{not valid json") is None
 
 
-# ---------------------------------------------------------------------------
 # _run_inference
-# ---------------------------------------------------------------------------
 def test_run_inference_load_fails(monkeypatch):
     def _boom():
         raise RuntimeError("load failed")
@@ -438,9 +408,7 @@ def test_run_inference_bad_output_shape(monkeypatch):
     assert llm._run_inference("x") is None
 
 
-# ---------------------------------------------------------------------------
 # _build_pq_from_llm
-# ---------------------------------------------------------------------------
 def test_build_pq_filters_and_bug_id():
     parsed = {
         "filters": {
@@ -465,16 +433,13 @@ def test_build_pq_rejects_bad_bug_id():
 
 
 def test_build_pq_recovers_role_and_time_from_message():
-    # The compact LLM JSON omits role/time, so they must be recovered from the
-    # raw message rather than silently dropped.
+    # Compact LLM JSON omits role/time; they must be recovered from the raw message.
     pq = llm._build_pq_from_llm("show admins active today", {})
     assert pq.role_filter == "admin"
     assert pq.time_window is not None and pq.time_window.label == "today"
 
 
-# ---------------------------------------------------------------------------
 # _dispatch_llm_intent
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def _stub_handlers(monkeypatch):
     sentinels = {}
@@ -508,9 +473,7 @@ def test_dispatch_unknown_returns_none(_stub_handlers):
     assert llm._dispatch_llm_intent("nonsense", None, pq, None, None) is None
 
 
-# ---------------------------------------------------------------------------
 # try_understand
-# ---------------------------------------------------------------------------
 def test_try_understand_unavailable(monkeypatch):
     monkeypatch.setattr(llm, "is_available", lambda: False)
     assert llm.try_understand("x", None, None) is None

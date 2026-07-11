@@ -123,7 +123,13 @@ def _resolve_tz(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
     except Exception:  # noqa: BLE001 — unknown tz must not break startup
-        logger.warning("Unknown EMAIL_DIGEST_TIMEZONE=%r; using UTC.", name)
+        logger.warning(
+            "Could not load EMAIL_DIGEST_TIMEZONE=%r; falling back to UTC, so the "
+            "digest fires at the cron time in UTC rather than local time. This "
+            "usually means the IANA tz database is missing from the image — "
+            "ensure the 'tzdata' package is installed (it is in requirements.txt).",
+            name,
+        )
         return timezone.utc
 
 
@@ -197,7 +203,18 @@ def start() -> None:
     settings = get_settings()
     expr = settings.EMAIL_DIGEST_CRON
     if not expr:
-        return  # default: scheduling left to an external runner
+        if settings.EMAIL_DIGEST_ENABLED:
+            # Digest mode suppresses the immediate per-operation emails, so with
+            # no cron here AND no external runner nothing is ever delivered.
+            # Surface that silent gap loudly instead of losing a team's email.
+            logger.warning(
+                "EMAIL_DIGEST_ENABLED is true but EMAIL_DIGEST_CRON is empty: the "
+                "in-app scheduler will NOT run and immediate emails are "
+                "suppressed, so no work-item email will be sent. Set "
+                "EMAIL_DIGEST_CRON (e.g. '0 8 * * *') and restart, or run "
+                "'python -m app.jobs.email_digest' from an external scheduler."
+            )
+        return  # scheduling left to an external runner
     if not settings.EMAIL_DIGEST_ENABLED:
         logger.warning(
             "EMAIL_DIGEST_CRON is set but EMAIL_DIGEST_ENABLED is false — "

@@ -1,11 +1,6 @@
 /**
- * Events view — two modes:
- *   • list   — card grid with debounced search and exact-date filter
- *   • detail — single event with header, meta, managers, item table,
- *              and status/priority/assignee multi-filters
- *
- * When the shared bug modal closes while detail is open the detail refetches
- * so counts and status stay current.
+ * Events view — list mode (card grid, debounced search, date filter) and
+ * detail mode (one event + filterable item table).
  */
 import {
   useCallback,
@@ -27,17 +22,13 @@ import { debounce, formatDate, initials } from "../lib/format";
 import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import type { BugOut, EventDetail, EventOut, ViewName } from "../types";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 /** Per-type emoji marker. */
 const ITEM_TYPE_EMOJI: Record<string, string> = { Bug: "🐞", Requirement: "📐", Task: "✅" };
 function itemTypeEmoji(t: string): string {
   return ITEM_TYPE_EMOJI[t] ?? "📝";
 }
 
-/* Columns for the items table — "All" minus the actions column (items are deleted via the bug modal). */
+/* Items-table columns — "All" minus actions (items are deleted via the bug modal). */
 type DetailCol =
   | "id"
   | "title-with-type"

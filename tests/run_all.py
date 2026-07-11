@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Run every Sleuth test file in sequence.
-
-Usage:  python3 tests/run_all.py
-or:     ./tests/run_all.py
-
-Exits non-zero if any file fails. Each test file lives in a fresh temp
-SQLite database and never touches the production data — see
-test_sleuth_safety.py for the formal guarantees.
-"""
+"""Run every test file in sequence (python3 tests/run_all.py); exits non-zero on any failure."""
 from __future__ import annotations
 
 import os

@@ -1,11 +1,5 @@
-"""Audit search and forgot-password tests.
-
-Audit search must match on bug numbers (entity_id), entity types, and actor
-names, not just action/detail/actor_name.
-
-Forgot-password validates emails against the DB. By default unknown addresses
-get 204 (enumeration-safe), but the product owner added an opt-out flag that
-restores the friendlier 404 for unknown addresses.
+"""Audit search must match bug numbers (entity_id), entity types, and actor names.
+Forgot-password: 204 by default (enumeration-safe), opt-out flag restores 404.
 """
 from __future__ import annotations
 
@@ -57,7 +51,6 @@ def test_audit_search_by_entity_type(admin_client):
 
 def test_audit_search_keeps_existing_behaviour(admin_client):
     _seed_audit_data(admin_client)
-    # Searching by actor name should still work.
     rows = admin_client.get("/api/audit?q=Test").json()  # admin name is "Test Admin"
     assert any("test admin" in (r.get("actor_name") or "").lower() for r in rows)
 
@@ -76,9 +69,7 @@ def test_forgot_password_unknown_email_returns_204_by_default(client):
 
 
 def test_forgot_password_inactive_email_returns_204_by_default(admin_client):
-    """Inactive accounts should not receive reset emails. Under the enumeration-safe
-    default, the response is still 204, same as any other address."""
-    # Create a user and immediately deactivate them.
+    """Inactive accounts still get 204 under the enumeration-safe default."""
     u = admin_client.post("/api/users", json={
         "name": "Inactive", "email": "off@test.local",
         "role": "user", "password": "Inactive99",
@@ -95,10 +86,7 @@ def test_forgot_password_inactive_email_returns_204_by_default(admin_client):
 
 
 def test_forgot_password_enumeration_optout_returns_404(client, monkeypatch):
-    """FORGOT_PASSWORD_ENUMERATION_SAFE=False restores the friendlier (but leakier)
-    legacy behaviour: unknown addresses get a 404. We patch the live Settings class
-    so the route (which calls get_settings() per request) picks up the change.
-    """
+    """FORGOT_PASSWORD_ENUMERATION_SAFE=False restores the legacy 404 for unknown addresses."""
     import app.config as config
     monkeypatch.setattr(config.Settings, "FORGOT_PASSWORD_ENUMERATION_SAFE", False)
     r = client.post("/api/auth/forgot-password",

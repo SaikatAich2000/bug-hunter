@@ -1,16 +1,7 @@
-"""Tests for Sleuth's cloud LLM layer (Groq / OpenRouter fallback).
+"""Sleuth cloud LLM layer (Groq / OpenRouter fallback), all providers monkeypatched.
 
-All provider calls are monkeypatched; nothing hits the network. The tests
-pin the safety contract:
-
-  - Off by default (no key / flag => layer invisible).
-  - Data questions go through the same deterministic SQL path as the rule
-    engine — the model only picks the filter, so numbers are real and match
-    a direct rule query.
-  - The cloud layer can never initiate a write, even if the model emits a
-    close/delete/assign canonical query.
-  - Groq failure falls back to OpenRouter.
-  - Everything sent outbound is redacted first.
+Safety contract: off by default; data questions run the deterministic SQL path (model only picks
+the filter); the layer never writes; Groq failure falls back to OpenRouter; outbound text is redacted.
 """
 from __future__ import annotations
 
@@ -37,16 +28,7 @@ from app.config import get_settings  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _rebind_app_modules():
-    """Keep this file's module references on the live generation.
-
-    The conftest `client` fixture purges every `app.*` entry from sys.modules
-    to force an engine re-import. Any test running after one of those would
-    hold a stale `executor`/`cloud_llm`/`engine`, so a mock placed on our
-    reference would be invisible inside execute(), and the seeded DB would
-    differ from the one executor queries. Re-importing them all together each
-    test keeps everything on one consistent generation. (Production never
-    purges modules; this is purely test hygiene.)
-    """
+    """Re-bind this file's app.* references to the live generation (conftest purges app.* between tests)."""
     import importlib
     g = globals()
     db_mod = importlib.import_module("app.database")
@@ -94,14 +76,7 @@ def db():
 
 @pytest.fixture()
 def enabled(monkeypatch):
-    """Force the cloud layer on for the test.
-
-    We patch is_available() directly rather than flipping settings, because
-    other suites call get_settings.cache_clear() which rebuilds Settings from
-    the real .env and would silently re-disable the layer. is_available() is
-    the single gate that both try_understand() and the executor consult, so
-    this one patch reliably activates the whole path.
-    """
+    """Force the cloud layer on by patching is_available() (the single gate), robust to get_settings.cache_clear()."""
     monkeypatch.setattr(cloud_llm, "is_available", lambda: True)
 
 
@@ -138,9 +113,9 @@ def test_cloud_never_writes(db, enabled, monkeypatch):
     # A write canonical query from the model must be silently dropped.
     _groq_returns(monkeypatch, f'{{"mode":"data","canonical_query":"close bug {bug.id}"}}')
     resp = cloud_llm.try_understand("can you close the login crash please", db, db.actor)
-    assert resp is None                      # dropped, fell through
+    assert resp is None                      # write dropped, fell through
     db.expire_all()
-    assert db.get(models.Bug, bug.id).status == "New"   # unchanged
+    assert db.get(models.Bug, bug.id).status == "New"
 
 
 def test_falls_back_to_openrouter(db, enabled, monkeypatch):
@@ -167,8 +142,7 @@ def test_secrets_redacted_before_send(db, enabled, monkeypatch):
 
 
 def test_report_person_date_matches_rule_path(db, enabled, monkeypatch):
-    # The model picks the report filter; counts come from the same SQL handler
-    # the rules use, so results are identical.
+    # Model picks the report filter; counts come from the same SQL handler the rules use.
     _groq_returns(
         monkeypatch,
         '{"mode":"data","canonical_query":"report of who solved how many bugs last week"}',
@@ -191,8 +165,7 @@ def test_answer_mode_returns_conversational_text(db, enabled, monkeypatch):
 
 
 def test_cloud_preempts_weak_classifier_in_execute(db, enabled, monkeypatch):
-    # A conversational message the rules can't parse should bypass the weaker
-    # classifier and reach the cloud layer when it's enabled.
+    # A message the rules can't parse should reach the cloud layer when enabled.
     _groq_returns(monkeypatch,
                     '{"mode":"answer","text":"Happy to help with your bugs!"}')
     resp = executor.execute("be smart, not dumb", db, db.actor)
@@ -201,8 +174,7 @@ def test_cloud_preempts_weak_classifier_in_execute(db, enabled, monkeypatch):
 
 
 def test_ai_first_beats_greedy_rule_match(db, enabled, monkeypatch):
-    # The word "admin" in a permissions question would greedy-match list_users
-    # in the keyword rules. With cloud enabled, the AI answers first.
+    # "admin" would greedy-match list_users in the keyword rules; cloud answers first.
     _groq_returns(
         monkeypatch,
         '{"mode":"answer","text":"No - only an admin can revoke sessions, '
@@ -227,10 +199,8 @@ def test_trivial_greetings_skip_the_cloud(db, enabled, monkeypatch):
 
 
 def test_multiword_greetings_skip_the_cloud(db, monkeypatch):
-    # Regression for the "hi AI" -> "there are no bugs" bug. The cloud hop is
-    # gated on the parsed intent, so the whole greeting/thanks family stays on
-    # the canned path, not just bare exact tokens. Verified by counting calls
-    # to is_available(), which is the single gate into the cloud layer.
+    # Regression ("hi AI" -> "no bugs"): the cloud hop is gated on parsed intent, so the whole
+    # greeting/thanks family stays canned. Verified by counting is_available(), the single cloud gate.
     seen = {"n": 0}
 
     def counting_is_available():

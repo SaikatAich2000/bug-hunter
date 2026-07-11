@@ -1,5 +1,4 @@
-// App root — global chrome (loader, toast, confirm dialog, Sleuth panel) plus
-// the shell and a document-level Escape handler.
+// App root — global chrome (loader, toast, confirm, Sleuth) + shell + Escape handler.
 import { lazy, Suspense, useEffect } from "react";
 import Shell from "./shell/Shell";
 import ConfirmHost from "./components/ConfirmHost";

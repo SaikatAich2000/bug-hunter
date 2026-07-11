@@ -1,16 +1,5 @@
-"""Infrastructure tests for app/main.py, app/scheduler.py, app/push_service.py,
-app/database.py, app/notification_service.py, app/email_service.py, and
-app/jobs/email_digest.py. These cover middleware edges, lifespan branches,
-cron dispatch, push/email transport stubs, and additive DB migrations.
-
-Module-reimport discipline: the ``client`` fixture deletes and re-imports every
-``app.*`` module per test, so a module captured at this file's top level goes
-stale. Use the ``client`` / ``admin_client`` fixtures (which trigger the reimport),
-then import ``app.<mod>`` inside the test body. For module-import-time branches
-in app.main (CORS '*', etc.) drive a fresh import with ``_fresh_app``.
-
-No real network: FCM transport and SMTP are always mocked; email/push are
-enabled per-test via monkeypatch.
+"""Infra tests: app.main middleware/lifespan, scheduler, push/email transports, DB migrations.
+Client fixture reimports app.* per test — import app.<mod> inside test bodies; network is always mocked.
 """
 from __future__ import annotations
 
@@ -34,13 +23,7 @@ def _uid(db, email: str) -> int:
 
 
 def _fresh_app(monkeypatch, tmp_path, **env):
-    """Reimport app.main from scratch with the given env overrides applied.
-
-    Uses the same hermetic baseline as the ``client`` fixture so nothing reaches
-    the network and the SQLite temp DB is isolated per call. Useful for exercising
-    module-import-time branches (CORS origins, COOKIE_SECURE, etc.) that are
-    evaluated when the module loads.
-    """
+    """Reimport app.main hermetically with env overrides, for module-import-time branches."""
     db_file = tmp_path / "fresh.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
     monkeypatch.setenv("API_KEY", "")
@@ -65,9 +48,7 @@ def _fresh_app(monkeypatch, tmp_path, **env):
     return main
 
 
-# ===========================================================================
 # app/main.py — asset version hashing
-# ===========================================================================
 def test_cov_main_asset_version_missing_dir_is_dev():
     # Non-existent static dir returns the sentinel "dev".
     from app.main import _compute_asset_version
@@ -103,9 +84,7 @@ def test_cov_main_asset_version_skips_unreadable_dir_entry(tmp_path, monkeypatch
     assert isinstance(v, str) and len(v) == 12
 
 
-# ===========================================================================
 # app/main.py — health / meta endpoints
-# ===========================================================================
 def test_cov_main_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
@@ -123,9 +102,7 @@ def test_cov_main_meta(client):
         assert key in j
 
 
-# ===========================================================================
 # app/main.py — HTML serving + __APP_VERSION__ substitution
-# ===========================================================================
 def test_cov_main_login_html_substitutes_app_version(client):
     r = client.get("/login.html")
     assert r.status_code == 200
@@ -174,9 +151,7 @@ def test_cov_main_html_cache_reuse(client):
     assert a == b
 
 
-# ===========================================================================
 # app/main.py — _has_valid_session: legacy / jti / expired / DB error
-# ===========================================================================
 def test_cov_main_has_valid_session_no_cookie(client):
     from app.main import _has_valid_session
 
@@ -187,8 +162,7 @@ def test_cov_main_has_valid_session_no_cookie(client):
 
 
 def test_cov_main_has_valid_session_legacy_token(client, monkeypatch):
-    # A token with jti=None (legacy format) is accepted on signature alone,
-    # skipping the sessions-table lookup.
+    # jti=None (legacy) is accepted on signature alone, no sessions-table lookup.
     import app.main as main
 
     class _Req:
@@ -251,8 +225,7 @@ def test_cov_main_has_valid_session_naive_expiry_is_valid(admin_client, monkeypa
 
 
 def test_cov_main_has_valid_session_db_error_returns_false(client, monkeypatch):
-    # A SQLAlchemyError during the lookup should be swallowed and return False
-    # rather than propagating a 500.
+    # SQLAlchemyError during lookup is swallowed → False, not a 500.
     import app.main as main
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -272,9 +245,7 @@ def test_cov_main_has_valid_session_db_error_returns_false(client, monkeypatch):
     assert main._has_valid_session(_Req()) is False
 
 
-# ===========================================================================
 # app/main.py — middleware edges (security headers, rate limit, CSRF)
-# ===========================================================================
 def test_cov_main_security_headers_present(client):
     r = client.get("/api/health")
     assert r.headers.get("Content-Security-Policy")
@@ -283,8 +254,7 @@ def test_cov_main_security_headers_present(client):
 
 
 def test_cov_main_hsts_emitted_when_cookie_secure(monkeypatch, tmp_path):
-    # HSTS is only emitted when COOKIE_SECURE is set. We also need a 32+ char
-    # secret so lifespan doesn't fail-closed before we can hit the endpoint.
+    # HSTS needs COOKIE_SECURE; 32+ char secret so lifespan doesn't fail-closed first.
     main = _fresh_app(
         monkeypatch, tmp_path,
         COOKIE_SECURE="true",
@@ -307,8 +277,7 @@ def test_cov_main_rate_limit_returns_429(client):
 
 
 def test_cov_main_rate_limit_trusts_xff_when_configured(monkeypatch, tmp_path):
-    # With TRUST_PROXY_FORWARDED_FOR the limiter buckets by the left-most
-    # X-Forwarded-For entry, so two distinct IPs get independent buckets.
+    # With TRUST_PROXY_FORWARDED_FOR, buckets key on the left-most XFF entry.
     main = _fresh_app(monkeypatch, tmp_path, TRUST_PROXY_FORWARDED_FOR="true")
     from fastapi.testclient import TestClient
     with TestClient(main.app) as c:
@@ -356,12 +325,9 @@ def test_cov_main_csrf_skips_non_browser(admin_client):
     assert r.status_code in (200, 201)
 
 
-# ===========================================================================
 # app/main.py — CORS module-import branches
-# ===========================================================================
 def test_cov_main_cors_wildcard_disables_credentials(monkeypatch, tmp_path):
-    # CORS_ORIGINS="*" disables credentials (required by the spec) and still
-    # registers CORSMiddleware so preflights pass.
+    # CORS_ORIGINS="*" must disable credentials (spec) yet still pass preflights.
     main = _fresh_app(monkeypatch, tmp_path, CORS_ORIGINS="*")
     assert main._allow_credentials is False
     assert "*" in main._origins
@@ -385,9 +351,7 @@ def test_cov_main_cors_concrete_origin_registers(monkeypatch, tmp_path):
     assert main._origins == ["https://bugs.example.com"]
 
 
-# ===========================================================================
 # app/main.py — exception handler + 404 / validation
-# ===========================================================================
 def test_cov_main_http_exception_handler_preserves_headers(client):
     # Hitting an auth-required endpoint unauthenticated exercises the custom 401 handler.
     r = client.get("/api/users")
@@ -407,8 +371,7 @@ def test_cov_main_validation_error(admin_client):
 
 
 def test_cov_main_body_size_limit_rejects_huge_content_length(client):
-    # BodySizeLimitMiddleware rejects an oversized Content-Length before reading.
-    # Some stacks normalise the header, so accept any sensible rejection code.
+    # Oversized Content-Length rejected before reading; rejection code varies by stack.
     big = str(200 * 1024 * 1024)
     r = client.post(
         "/api/auth/login",
@@ -418,9 +381,7 @@ def test_cov_main_body_size_limit_rejects_huge_content_length(client):
     assert r.status_code in (413, 400, 422, 401)
 
 
-# ===========================================================================
 # app/scheduler.py — cron helpers + lifecycle + loop/tick dispatch
-# ===========================================================================
 def test_cov_scheduler_parse_and_matches():
     from app.scheduler import CronSchedule, _parse_field
     assert _parse_field("*/20", 0, 59) == {0, 20, 40}
@@ -531,9 +492,7 @@ def test_cov_scheduler_start_noop_when_disabled(monkeypatch):
     assert scheduler._task is None
 
 
-# ===========================================================================
 # app/push_service.py
-# ===========================================================================
 def test_cov_push_deep_link_all_branches():
     from app import push_service
     assert push_service._deep_link(5, None) == "/#bug=5"
@@ -732,9 +691,7 @@ def test_cov_push_push_to_users_swallows_transport_exception(admin_client, monke
     assert any("push_to_users failed" in (r.message or "") for r in caplog.records)
 
 
-# ===========================================================================
 # app/database.py
-# ===========================================================================
 def test_cov_database_get_db_yields_and_closes(client, monkeypatch):
     # get_db yields a session and closes it in its finally block.
     import app.database as database
@@ -793,9 +750,7 @@ def test_cov_database_init_db_idempotent(client):
     database.init_db()
 
 
-# ===========================================================================
 # app/notification_service.py
-# ===========================================================================
 def test_cov_notification_emailed_at_branch(admin_client, monkeypatch):
     # When the digest is on, new notifications are born un-emailed (emailed_at
     # is None) so the digest job can pick them up. When the digest is off, rows
@@ -824,9 +779,7 @@ def test_cov_notification_emailed_at_branch(admin_client, monkeypatch):
     db.close()
 
 
-# ===========================================================================
 # app/email_service.py
-# ===========================================================================
 from types import SimpleNamespace  # noqa: E402  (test-local helper imports)
 
 
@@ -1066,9 +1019,7 @@ def test_cov_email_event_suppressed_when_digest_on(monkeypatch):
     assert sent == []
 
 
-# ===========================================================================
 # app/jobs/email_digest.py
-# ===========================================================================
 def test_cov_digest_main_returns_zero_when_disabled(admin_client, monkeypatch):
     from app.config import get_settings
     monkeypatch.setattr(get_settings(), "EMAIL_DIGEST_ENABLED", False)
@@ -1150,15 +1101,13 @@ def test_cov_digest_run_digest_empty_returns_zeroes(admin_client):
     db = _session()
     stats = run_digest(db, now=_utcnow(), lookback_hours=1)
     db.close()
-    assert stats == {"users": 0, "emails_sent": 0, "operations": 0}
+    assert stats == {"users": 0, "emails_sent": 0, "operations": 0, "failed": 0}
 
 
-# ===========================================================================
 # Branch edges that can't be reached deterministically through HTTP requests:
 # rate-limit eviction, CSRF host-absent / referer-miss, bootstrap/lifespan
 # fail-closed RuntimeErrors, DB additive-migration ALTER paths, and a few
 # scheduler.matches edge cases. Drive middleware and helpers directly.
-# ===========================================================================
 
 # Tiny ASGI Request/Response doubles for direct middleware dispatch.
 class _FakeURL:

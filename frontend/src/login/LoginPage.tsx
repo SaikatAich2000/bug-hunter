@@ -1,11 +1,5 @@
-// Playwright selects inputs by name="email" / name="password" and the submit
-// button, so those attributes are load-bearing — don't rename them.
-//
-// "__APP_VERSION__" is substituted server-side by _serve_html() in app/main.py;
-// keep it verbatim in any template that serves it.
-//
-// No inline scripts or styles: the CSP is strict (script-src 'self', no
-// 'unsafe-inline'). Theme bootstrap lives in main.tsx.
+// Login page. Test contract: name="email"/"password" + submit button are Playwright selectors.
+// Strict CSP (no inline scripts/styles); __APP_VERSION__ is substituted server-side — keep verbatim.
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, MouseEvent as ReactMouseEvent } from "react";
 import PasswordInput from "../components/PasswordInput";
@@ -98,8 +92,7 @@ export default function LoginPage() {
         setLoginAlert({ msg, kind: "error" });
         return;
       }
-      // Redirect to `next` if given, but only accept a relative path to
-      // prevent open-redirect via absolute or protocol-relative URLs.
+      // Only accept a relative `next` path — prevents open redirect.
       const params = new URLSearchParams(location.search);
       const requested = params.get("next") || "/";
       const next = /^\/(?![/\\])/.test(requested) ? requested : "/";
@@ -124,7 +117,6 @@ export default function LoginPage() {
         body: JSON.stringify({ email }),
       });
       if (res.status === 204) {
-        // 204 means the server queued a reset email.
         setForgotAlert({
           msg: "Reset link sent. Check your inbox — the link expires in 30 minutes",
           kind: "success",
@@ -284,9 +276,7 @@ export default function LoginPage() {
           </div>
         </form>
       </div>
-      {/* Version string lives in login.html, not here — __APP_VERSION__ is
-          replaced server-side by _serve_html() and would be emitted verbatim
-          from this bundle. */}
+      {/* Version string lives in login.html — bundle would emit __APP_VERSION__ verbatim. */}
     </main>
   );
 }

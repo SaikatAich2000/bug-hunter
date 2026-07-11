@@ -1,13 +1,7 @@
-"""Email service.
+"""Email service with console / smtp / disabled backends.
 
-Three backends:
-  - console   : logs the email to stdout. Default, used for dev.
-  - smtp      : sends via a real SMTP server.
-  - disabled  : sends nothing. For tests.
-
-Public functions are meant to be called from a FastAPI BackgroundTasks
-instance: they take pre-fetched primitives (not DB sessions or ORM objects)
-so they work after the request has finished and the session is closed.
+Public functions run from FastAPI BackgroundTasks: they take pre-fetched
+primitives (no DB sessions/ORM) so they work after the request session closes.
 """
 from __future__ import annotations
 
@@ -23,9 +17,7 @@ from app.config import Settings, get_settings
 
 logger = logging.getLogger("bug_hunter.email")
 
-# Neutralize live single-use credentials (e.g. a password-reset link's
-# ?token=… / &token=…) before any body is written to a debug log. Replaces the
-# token value so a captured DEBUG log can't be replayed.
+# Redact ?token=/&token= values so a DEBUG log can't be replayed.
 _TOKEN_IN_URL_RE = re.compile(r"(?i)([?&]token=)[^&\s]+")
 
 
@@ -52,13 +44,9 @@ class UserSnapshot:
 
 @dataclass(frozen=True)
 class BugSnapshot:
-    """Snapshot of a single work-item row passed to the email layer.
+    """Snapshot of one work-item row for the email layer.
 
-    `item_type` is the work-item flavor: "Bug" / "Requirement" / "Task".
-    `event_name` is set when the item belongs to an event and is rendered as a
-    standalone metadata line. Rows created before these columns existed default
-    to "Bug" / None, so callers that don't set the fields still produce correct
-    emails.
+    Defaults ("Bug" / None) keep pre-migration rows and older callers correct.
     """
     id: int
     title: str
@@ -83,9 +71,7 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
         return False   # nothing sent → report failure, like the except path below
 
     try:
-        # create_default_context() already enables hostname checking and cert
-        # verification on Python 3.10+; we set them explicitly to make the
-        # security posture obvious without relying on stdlib version behaviour.
+        # Explicit TLS settings make the security posture obvious.
         ctx = ssl.create_default_context()
         ctx.check_hostname = True
         ctx.verify_mode = ssl.CERT_REQUIRED
@@ -114,16 +100,13 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
         logger.info("SMTP email sent: subject=%r to=%s", msg["Subject"], msg["To"])
         return True
     except (smtplib.SMTPException, OSError):
-        # Narrow the catch to network and SMTP-protocol errors so programming
-        # mistakes (wrong header type, etc.) still raise instead of disappearing.
-        # Returns False so transactional callers (e.g. password reset) can log it.
+        # Narrow catch: programming errors still raise; callers see False.
         logger.exception("Failed to send email via SMTP")
         return False
 
 
 def _send_console(msg: EmailMessage) -> None:
-    # Only log routing metadata at INFO; the body may contain a live reset link
-    # or bug/comment PII. Gate the full body behind DEBUG for local dev only.
+    # Body may contain a live reset link or PII — gate it behind DEBUG.
     logger.info(
         "[console-email] to=%s subject=%r (body suppressed — set log level "
         "DEBUG to include it)",
@@ -131,15 +114,12 @@ def _send_console(msg: EmailMessage) -> None:
     )
     if logger.isEnabledFor(logging.DEBUG):
         body = msg.get_content() if msg.is_multipart() is False else "(multipart)"
-        # Redact token-bearing URLs so a DEBUG log can't leak a replayable credential.
         logger.debug("[console-email] body for %r:\n%s", msg["Subject"],
                      _redact_secrets_for_log(body.strip()))
 
 
 def _header_safe(value: str) -> str:
-    """Strip CR/LF so a crafted title/subject/address can't inject extra email
-    headers (header-injection defense; the stdlib also rejects these, but we
-    neutralize them up front so a bug title with a newline can't 500 the send)."""
+    """Strip CR/LF — header-injection defense; also keeps a newline from 500ing the send."""
     return value.replace("\r", " ").replace("\n", " ")
 
 
@@ -149,9 +129,7 @@ def _build(subject: str, to: list[str], body: str, settings: Settings) -> EmailM
     if len(to) == 1:
         msg["To"] = _header_safe(to[0])
     else:
-        # With multiple recipients, use Bcc to prevent each person seeing the
-        # others' addresses (directory-harvesting / cross-recipient PII).
-        # Address To: back to the sender; smtplib delivers via the Bcc envelope.
+        # Bcc hides recipients from each other; smtplib delivers via the envelope.
         msg["To"] = _header_safe(settings.EMAIL_FROM)
         msg["Bcc"] = ", ".join(_header_safe(addr) for addr in to)
     msg["Subject"] = _header_safe(subject)
@@ -160,12 +138,9 @@ def _build(subject: str, to: list[str], body: str, settings: Settings) -> EmailM
 
 
 def deliver(subject: str, to: list[str], body: str) -> bool:
-    """Public dispatch: pick the right backend based on settings.
+    """Dispatch to the configured backend.
 
-    Returns True when a message was actually handed to a backend (and, for
-    SMTP, accepted), False when delivery was skipped (disabled / no recipients)
-    or the SMTP send failed. Transactional callers can use this to log a
-    delivery failure rather than silently believing the mail went out."""
+    True = handed to a backend (and accepted, for SMTP); False = skipped or failed."""
     settings = get_settings()
     if settings.EMAIL_BACKEND == "disabled":
         return False
@@ -181,15 +156,8 @@ def deliver(subject: str, to: list[str], body: str) -> bool:
 
 
 def _digest_owns_work_item_email() -> bool:
-    """True when the once-a-day digest job, not an immediate send, owns the
-    work-item operation emails (new item / update / assignment / comment /
-    event). When EMAIL_DIGEST_ENABLED is on, those `notify_*` functions send
-    nothing and the operation is delivered later by `app.jobs.email_digest`,
-    batched into one email per user.
-
-    Security/transactional emails (e.g. password reset) never consult this and
-    always send immediately.
-    """
+    """True when the daily digest job (not immediate `notify_*` sends) owns
+    work-item emails. Transactional emails (password reset) never consult this."""
     return get_settings().EMAIL_DIGEST_ENABLED
 
 
@@ -349,9 +317,7 @@ def notify_comment_added(
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class EventSnapshot:
-    """Snapshot of an event for emails. Decoupled from the ORM so the
-    BackgroundTask thread can use it after the request session closes.
-    """
+    """Event snapshot for emails; ORM-free so BackgroundTasks can use it."""
     id: int
     name: str
     description: str
@@ -472,8 +438,7 @@ def notify_password_reset(email: str, name: str, reset_url: str) -> None:
         "",
         "— Bug Hunter",
     ])
-    # Password reset is transactional, not a digestible notification: if the
-    # backend couldn't deliver it, log a clear error (the user otherwise gets
-    # the generic "if an account exists, a link was sent" response).
+    # Transactional: log a clear error on failure — the user only sees the
+    # generic "if an account exists" response.
     if not deliver(subject, [email], body) and get_settings().EMAIL_BACKEND != "disabled":
         logger.error("Password-reset email was NOT delivered for a reset request.")

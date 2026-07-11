@@ -1,20 +1,6 @@
-"""Sleuth Excel writer.
-
-Generates an xlsx in memory and stages it under a short-lived random token.
-The /api/chat/download/{token} endpoint streams it to the browser and drops
-the bytes from the in-memory cache once the TTL expires.
-
-Staging (rather than returning the bytes inline) keeps the /api/chat/ask
-JSON payload small, lets the user re-download by re-clicking the link within
-the TTL without rebuilding the workbook, and bounds the cache by row count
-and TTL so spreadsheet bytes don't accumulate.
-
-Memory budget: each row is roughly 0.5 KB serialized; exports are capped at
-5000 rows (executor.py), about 2.5 MB per workbook plus openpyxl overhead.
-
-Concurrency: a `threading.Lock` guards the cache. The chat router is ASGI
-but the cache is sync; the lock avoids races where two requests evict the
-same token mid-read.
+"""Sleuth Excel writer: builds xlsx in memory, staged under a short-lived
+token for /api/chat/download/{token}. Cache is TTL- and size-bounded,
+guarded by a threading.Lock.
 """
 from __future__ import annotations
 
@@ -37,11 +23,8 @@ class ExcelGenerationError(Exception):
     """Raised when the workbook can't be built (e.g. openpyxl missing)."""
 
 
-# How long a staged file stays available before it is evicted.
-_TTL_SECONDS = 30 * 60   # 30 minutes
-# Hard cap on the number of staged files at any time. Older entries are
-# evicted FIFO-by-creation when this is exceeded.
-_MAX_ENTRIES = 50
+_TTL_SECONDS = 30 * 60
+_MAX_ENTRIES = 50  # hard cap; oldest evicted when exceeded
 
 
 _cache_lock = threading.Lock()
@@ -57,8 +40,7 @@ def _evict_expired_locked(now: float) -> None:
 
 
 def _evict_oldest_locked() -> None:
-    """If the cache is over the size limit, drop the entry with the
-    soonest expiry so newer staged files can land. Caller holds the lock."""
+    """Drop the soonest-expiring entry when over the cap. Caller holds the lock."""
     if len(_cache) < _MAX_ENTRIES:
         return
     oldest = min(_cache.items(), key=lambda kv: kv[1][2])
@@ -72,17 +54,13 @@ _HEADER_STYLE_FILL = "1F2A44"   # Bug Hunter dark accent
 _HEADER_STYLE_FG = "FFFFFF"
 
 
-# Characters Excel/Numbers/LibreOffice interpret as a formula when they
-# start a cell. A bug title like `=cmd|'/c calc.exe'!A1` would execute
-# on open. Neutralized by prefixing a single quote — same defense as the
-# CSV export in routes/bugs.py and the reports writer (reports/xlsx.py).
+# Formula-injection defense: leading trigger chars get a quote prefix,
+# same as routes/bugs.py CSV export and reports/xlsx.py.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _defang_formula_text(s: str) -> str:
-    # Test the raw first char (leading tab/CR/newline) AND the first
-    # non-whitespace char — apps trim leading spaces, so " =cmd" is still a
-    # formula. Prefix the original value so its on-screen text is unchanged.
+    # check raw AND lstripped first char — apps trim leading spaces, " =cmd" still fires
     if not s:
         return s
     stripped = s.lstrip()
@@ -91,7 +69,7 @@ def _defang_formula_text(s: str) -> str:
     return s
 
 
-# Column order — matches what executor._bug_row produces.
+# Column order matches executor._bug_row.
 _COLUMNS: list[tuple[str, str, int]] = [
     ("id",          "ID",          8),
     ("title",       "Title",       50),
@@ -109,8 +87,7 @@ _COLUMNS: list[tuple[str, str, int]] = [
 
 def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     if not OPENPYXL_AVAILABLE:
-        # User-facing message (surfaced verbatim in the chat reply) — don't leak
-        # the dependency name / server internals.
+        # user-facing message — don't leak dependency name / server internals
         raise ExcelGenerationError(
             "The spreadsheet exporter is unavailable on this server right now."
         )
@@ -119,8 +96,7 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     ws = wb.active
     ws.title = "Bugs"
 
-    # Top-row banner with the filter description, helpful so the recipient
-    # knows what they're looking at without re-asking the chatbot.
+    # banner row with the filter description
     banner = f"Bug Hunter export — {description}" if description else "Bug Hunter export"
     ws.cell(row=1, column=1, value=banner).font = Font(bold=True, size=12)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_COLUMNS))
@@ -141,10 +117,10 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
             val = row.get(key, "")
             if isinstance(val, str):
                 val = _defang_formula_text(val)
-            # openpyxl chokes on None for some types; coerce to "".
+            # openpyxl chokes on None for some types; coerce to ""
             ws.cell(row=r, column=c, value="" if val is None else val)
 
-    # Freeze the top two rows (banner + header) so scrolling keeps them.
+    # freeze banner + header rows
     ws.freeze_panes = "A3"
 
     buf = io.BytesIO()
@@ -157,25 +133,14 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
 # ---------------------------------------------------------------------------
 def stage_workbook(rows: list[dict[str, Any]], filename: str,
                    owner_id: int, description: str = "") -> tuple[str, int]:
-    """Build the workbook and stash it under a fresh download token, bound to
-    ``owner_id`` (only that user may later fetch it).
-
-    Returns (token, size_bytes). Raises ExcelGenerationError on failure.
-    """
+    """Build the workbook and stage it under a fresh token bound to ``owner_id``.
+    Returns (token, size_bytes); raises ExcelGenerationError on failure."""
     payload = _build_workbook(rows, description)
     return stage_bytes(payload, filename, owner_id)
 
 
 def stage_bytes(payload: bytes, filename: str, owner_id: int) -> tuple[str, int]:
-    """Stash already-built xlsx bytes under a fresh download token, bound to
-    ``owner_id``.
-
-    Lets callers that built the workbook elsewhere (e.g. the reports
-    engine in app/reports/xlsx.py) reuse the chat router's download
-    infrastructure without rebuilding the cache themselves.
-
-    Returns (token, size_bytes).
-    """
+    """Stage pre-built xlsx bytes under a fresh owner-bound token. Returns (token, size)."""
     token = secrets.token_urlsafe(20)
     expires = time.time() + _TTL_SECONDS
     with _cache_lock:
@@ -186,15 +151,10 @@ def stage_bytes(payload: bytes, filename: str, owner_id: int) -> tuple[str, int]
 
 
 def fetch_staged(token: str, owner_id: int) -> Optional[tuple[bytes, str]]:
-    """Return (bytes, filename) if the token is valid and owned by ``owner_id``,
-    else None.
+    """Return (bytes, filename) if token is valid AND owned by ``owner_id``, else None.
 
-    The owner check makes the token a per-user capability: a staged report can
-    contain data the requester was authorized to see (manager/admin reports), so
-    another authenticated user who learns/guesses the token cannot download it.
-    A mismatch returns None (the router returns 404, so the token's existence
-    can't be probed). The entry stays in the cache after a fetch so the owner
-    can click the link again within TTL.
+    Owner check makes the token a per-user capability; mismatch returns None so
+    the router 404s and token existence can't be probed.
     """
     if not token:
         return None

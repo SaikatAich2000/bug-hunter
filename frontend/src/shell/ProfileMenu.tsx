@@ -1,17 +1,11 @@
-/**
- * Top-right account control. Avatar + name button opens a dropdown with
- * role/email, change-password, theme toggle, and log-out.
- *
- * id="accountName" must stay: the UI smoke test polls it as the SPA-ready
- * signal. The other element ids are referenced by Playwright selectors.
- */
+// Top-right account dropdown (change-password, theme, log-out).
+// Test contract: id="accountName" is the smoke test's SPA-ready signal; other ids are Playwright selectors.
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
 import { initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
 
-/** Reads the theme the inline boot script stamped on <html data-theme>. */
 function currentTheme(): "dark" | "light" {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
@@ -48,8 +42,7 @@ export default function ProfileMenu() {
       danger: false,
     });
     if (!ok) return;
-    // Deregister the push token while the session is still valid so a shared
-    // browser doesn't keep delivering notifications to the previous user.
+    // Deregister push token while the session is still valid (shared-browser safety).
     try {
       const { unsubscribeOnLogout } = await import("../lib/push");
       await unsubscribeOnLogout();

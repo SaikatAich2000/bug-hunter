@@ -1,9 +1,5 @@
-"""Tests for app/config.py env-var parsers and is_production, plus evals._as_bool.
-
-The parsers are fail-closed: unrecognized booleans fall back to the declared
-default (so garbage input can't silently flip a security switch), ints/floats
-tolerate garbage and float-formatted strings, and non-finite floats are
-rejected. Each branch gets its own test here.
+"""Tests for app/config.py env parsers and is_production, plus evals._as_bool.
+Parsers are fail-closed: bad booleans fall back to defaults; non-finite floats are rejected.
 """
 from __future__ import annotations
 
@@ -11,9 +7,7 @@ from app import config
 from app.chatbot import evals
 
 
-# ---------------------------------------------------------------------------
 # _load_dotenv
-# ---------------------------------------------------------------------------
 def test_load_dotenv_oserror_is_logged(monkeypatch):
     def _raise(*_a, **_k):
         raise OSError("malformed .env")
@@ -29,9 +23,7 @@ def test_load_dotenv_ok(monkeypatch):
     assert "path" in seen
 
 
-# ---------------------------------------------------------------------------
 # _env_bool
-# ---------------------------------------------------------------------------
 def test_env_bool_truthy_falsy(monkeypatch):
     monkeypatch.setenv("X_BOOL", "Yes")
     assert config._env_bool("X_BOOL") is True
@@ -53,9 +45,7 @@ def test_env_bool_garbage_returns_default(monkeypatch):
     assert config._env_bool("X_BOOL", default=False) is False
 
 
-# ---------------------------------------------------------------------------
 # _env_int
-# ---------------------------------------------------------------------------
 def test_env_int_valid_and_missing(monkeypatch):
     monkeypatch.setenv("X_INT", "42")
     assert config._env_int("X_INT", 1) == 42
@@ -78,9 +68,7 @@ def test_env_int_clamps_minimum(monkeypatch):
     assert config._env_int("X_INT", 1, minimum=0) == 0
 
 
-# ---------------------------------------------------------------------------
 # _env_float
-# ---------------------------------------------------------------------------
 def test_env_float_valid_and_missing(monkeypatch):
     monkeypatch.setenv("X_F", "2.5")
     assert config._env_float("X_F", 1.0) == 2.5
@@ -104,9 +92,7 @@ def test_env_float_clamps_minimum(monkeypatch):
     assert config._env_float("X_F", 1.0, minimum=0.0) == 0.0
 
 
-# ---------------------------------------------------------------------------
 # Settings.is_production
-# ---------------------------------------------------------------------------
 def test_is_production_explicit_env():
     s = config.Settings()
     for env in ("production", "prod", "staging"):
@@ -126,9 +112,7 @@ def test_is_production_falls_back_to_cookie_secure():
     assert s.is_production is False
 
 
-# ---------------------------------------------------------------------------
 # evals._as_bool
-# ---------------------------------------------------------------------------
 def test_as_bool_none_returns_default():
     assert evals._as_bool(None, True) is True
     assert evals._as_bool(None, False) is False

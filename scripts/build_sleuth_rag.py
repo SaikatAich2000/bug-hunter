@@ -1,14 +1,6 @@
-"""Build / refresh the Sleuth RAG index.
+"""Build/refresh the Sleuth RAG index (bugs, comments, docs/) in the local Chroma store.
 
-Usage (from the repo root, with the app's env loaded):
-
-    SLEUTH_RAG_ENABLED=1 GEMINI_API_KEY=... python scripts/build_sleuth_rag.py
-
-Indexes every bug, comment, and docs/ file into the local Chroma store at
-SLEUTH_RAG_DIR. Safe to re-run — it upserts, so existing vectors are
-replaced, not duplicated. Run it after a bulk import or on a schedule
-(cron / a periodic worker). Incremental single-bug updates can call
-app.chatbot.rag.upsert_bug() from the bug create/update route instead.
+Safe to re-run — upserts, so existing vectors are replaced, not duplicated.
 """
 from __future__ import annotations
 
@@ -22,7 +14,7 @@ from app.chatbot import rag  # noqa: E402
 
 
 def _misconfig_reasons() -> list[str]:
-    """Reasons RAG indexing can't work at all (vs simply finding nothing)."""
+    """Reasons RAG indexing can't work at all."""
     from app.config import get_settings
     s = get_settings()
     reasons: list[str] = []
@@ -46,12 +38,10 @@ def main() -> int:
     if n == 0:
         reasons = _misconfig_reasons()
         if reasons:
-            # A genuine misconfiguration — fail so a cron/CI wrapper notices.
+            # Fail so a cron/CI wrapper notices.
             print("Indexed 0 documents — misconfigured: " + "; ".join(reasons))
             return 1
-        # Correctly configured but nothing to index (new/empty DB, no docs).
-        # A no-op, not a failure: exit 0 so schedulers don't alert on an empty
-        # install.
+        # Empty corpus is a no-op, not a failure — don't alert schedulers.
         print("Indexed 0 documents — nothing to index yet (empty corpus).")
         return 0
     print(f"Indexed {n} documents into the Sleuth RAG store.")

@@ -1,11 +1,5 @@
-"""Tests for the daily email-digest job (app/jobs/email_digest.py).
-
-Covers grouped delivery per user, idempotency, the lookback window, inactive
-user skipping, the global toggle, and the suppression of immediate work-item
-emails (while security emails like password-reset still send immediately).
-
-Tests seed notification rows on a real DB session and call the job in-process,
-patching email_service.deliver so no SMTP is touched.
+"""Daily email-digest job tests (app/jobs/email_digest.py): grouping, idempotency, lookback, toggles.
+Rows seeded on a real DB session; the job runs in-process with email_service.deliver patched.
 """
 from __future__ import annotations
 
@@ -14,9 +8,7 @@ from datetime import timedelta
 BOOTSTRAP_EMAIL = "admin@test.local"
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _capture_deliver(monkeypatch) -> list[tuple[str, list[str], str]]:
     """Record (subject, to, body) for every deliver() call."""
     sent: list[tuple[str, list[str], str]] = []
@@ -67,9 +59,7 @@ def _enable_digest(monkeypatch, on=True):
     monkeypatch.setattr(get_settings(), "EMAIL_DIGEST_ENABLED", on)
 
 
-# ---------------------------------------------------------------------------
 # run_digest
-# ---------------------------------------------------------------------------
 def test_one_grouped_email_per_user_then_idempotent(admin_client, monkeypatch):
     sent = _capture_deliver(monkeypatch)
     uid2 = _mk_user(admin_client, "Dev Two", "dev2@test.local")
@@ -84,7 +74,7 @@ def test_one_grouped_email_per_user_then_idempotent(admin_client, monkeypatch):
     db.commit()
 
     stats = run_digest(db, now=_utcnow())
-    assert stats == {"users": 2, "emails_sent": 2, "operations": 3}
+    assert stats == {"users": 2, "emails_sent": 2, "operations": 3, "failed": 0}
     assert len(sent) == 2
 
     admin_body = next(b for (_s, to, b) in sent if BOOTSTRAP_EMAIL in to)
@@ -142,9 +132,56 @@ def test_inactive_user_is_skipped_unstamped(admin_client, monkeypatch):
     db.close()
 
 
-# ---------------------------------------------------------------------------
+def test_failed_send_releases_rows_for_retry(admin_client, monkeypatch):
+    """A real-backend delivery failure releases the failed user's rows (emailed_at cleared) for retry."""
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "EMAIL_BACKEND", "smtp")
+    monkeypatch.setattr("app.email_service.deliver", lambda s, t, b: False)
+
+    db = _session()
+    from app.models import _utcnow
+    from app.jobs.email_digest import run_digest
+    admin_id = _user_id(db, BOOTSTRAP_EMAIL)
+    row = _add_notif(db, admin_id, "updated", "smtp was down for this one")
+    db.commit()
+
+    stats = run_digest(db, now=_utcnow())
+    assert stats["emails_sent"] == 1 and stats["failed"] == 1
+    db.refresh(row)
+    assert row.emailed_at is None  # released, not lost
+
+    # Backend recovers: the next run picks the same row up and stamps it.
+    sent: list[tuple[str, list[str], str]] = []
+    monkeypatch.setattr(
+        "app.email_service.deliver",
+        lambda s, t, b: (sent.append((s, t, b)), True)[1],
+    )
+    stats2 = run_digest(db, now=_utcnow())
+    assert stats2["emails_sent"] == 1 and stats2["failed"] == 0
+    assert len(sent) == 1 and "smtp was down for this one" in sent[0][2]
+    db.refresh(row)
+    assert row.emailed_at is not None
+    db.close()
+
+
+def test_disabled_backend_keeps_rows_stamped(admin_client):
+    """EMAIL_BACKEND=disabled is an operator choice, not a failure: rows stay stamped, never replayed."""
+    db = _session()
+    from app.models import _utcnow
+    from app.jobs.email_digest import run_digest
+    admin_id = _user_id(db, BOOTSTRAP_EMAIL)
+    row = _add_notif(db, admin_id, "updated", "backend is off")
+    db.commit()
+
+    # conftest pins EMAIL_BACKEND=disabled; use the real deliver() here.
+    stats = run_digest(db, now=_utcnow())
+    assert stats["emails_sent"] == 1 and stats["failed"] == 0
+    db.refresh(row)
+    assert row.emailed_at is not None
+    db.close()
+
+
 # main() entry point + the global toggle
-# ---------------------------------------------------------------------------
 def test_main_is_noop_when_disabled(admin_client, monkeypatch):
     _enable_digest(monkeypatch, on=False)
     sent = _capture_deliver(monkeypatch)
@@ -174,9 +211,7 @@ def test_main_sends_when_enabled(admin_client, monkeypatch):
     assert "activity digest" in sent[0][0].lower()
 
 
-# ---------------------------------------------------------------------------
 # Suppression of immediate work-item emails — but not security emails
-# ---------------------------------------------------------------------------
 def test_digest_on_suppresses_work_item_email_but_not_password_reset(
     admin_client, monkeypatch,
 ):
@@ -201,9 +236,7 @@ def test_digest_on_suppresses_work_item_email_but_not_password_reset(
 
 
 def test_immediate_era_operations_are_never_later_digested(admin_client, monkeypatch):
-    """Operations recorded while the digest is off are born already-emailed
-    (emailed_at stamped at creation), so enabling the digest later never
-    re-sends them."""
+    """Immediate-era operations are born already-emailed, so enabling the digest never re-sends them."""
     _enable_digest(monkeypatch, on=False)  # immediate mode when the op happens
     from app import notification_service
     from app.models import _utcnow
@@ -225,8 +258,7 @@ def test_immediate_era_operations_are_never_later_digested(admin_client, monkeyp
 
 
 def test_digest_era_operations_are_picked_up(admin_client, monkeypatch):
-    """Operations recorded while the digest is on are left with emailed_at NULL
-    so the daily job picks them up."""
+    """Digest-era operations keep emailed_at NULL so the daily job picks them up."""
     _enable_digest(monkeypatch, on=True)
     from app import notification_service
     from app.models import _utcnow

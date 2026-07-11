@@ -37,14 +37,11 @@ def list_projects(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[Project]:
-    # Admins (accessible is None) see everything; restricted users only see the
-    # projects they belong to, giving zero-effort scoping for dropdowns and filters.
-    # No memberships → empty set → empty list.
+    # None = admin (see all); restricted users see only their memberships
     accessible = accessible_project_ids(db, user)
     stmt = select(Project).order_by(func.lower(Project.name))
     if accessible is not None:
         stmt = stmt.where(Project.id.in_(accessible))
-    # 500 is a safe ceiling; the projects table is small and admin-managed.
     return list(db.scalars(stmt.limit(500)).all())
 
 
@@ -61,8 +58,7 @@ def create_project(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Project name already exists") from exc
-    # Auto-enroll the creating manager so they don't immediately lose visibility
-    # of the project they just made. Admins are unrestricted, so no row needed.
+    # auto-enroll the creating manager so they keep visibility of their new project
     if actor.role != ROLE_ADMIN:
         add_user_project(db, actor.id, p.id)
     _audit(db, actor, "project_created", p.id, f"Created project '{p.name}'")
@@ -78,7 +74,7 @@ def get_project(
     user: User = Depends(get_current_user),
 ) -> Project:
     p = db.get(Project, project_id)
-    # Return 404 for out-of-scope projects so we don't leak which projects exist.
+    # 404 not 403 — scoping must not leak existence
     if p is None or not can_access_project(accessible_project_ids(db, user), project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     return p
@@ -92,11 +88,10 @@ def update_project(
     actor: User = Depends(require_manager_or_admin),
 ) -> Project:
     p = db.get(Project, project_id)
-    # 404 for out-of-scope projects so restricted managers can't probe existence.
+    # 404 not 403 — scoping must not leak existence
     if p is None or not can_access_project(accessible_project_ids(db, actor), project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
-    # exclude_unset so omitted fields (description, color, etc.) aren't silently
-    # reset to schema defaults and logged as changes.
+    # exclude_unset so omitted fields aren't reset to schema defaults
     fields = payload.model_dump(exclude_unset=True)
     changes = []
     for key, value in fields.items():
@@ -123,12 +118,7 @@ def delete_project(
     db: Session = Depends(get_db),
     actor: User = Depends(require_admin),
 ) -> dict[str, str]:
-    # Lock the row FOR UPDATE before counting bugs. A concurrent bug insert takes
-    # a FOR KEY SHARE on this row, which conflicts, so the two operations serialize:
-    # either the insert commits first (our count catches it → 409) or we delete
-    # first (the insert then fails its FK). Without this lock, count-then-delete
-    # could silently destroy a bug that was just added. SQLite serializes writes
-    # anyway, so with_for_update is a no-op there.
+    # FOR UPDATE closes the count-then-delete race with a concurrent bug insert
     p = db.get(Project, project_id, with_for_update=True)
     if p is None:
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)

@@ -1,15 +1,10 @@
-"""Unit tests for the reports-engine helper functions (no DB round-trip).
+"""Unit tests for reports-engine helpers (no DB round-trip).
 
-Covers: _days_open_value, _bug_scalar_fields, _bug_relation_fields, _ttr_row,
-_ttr_summary, _fold_throughput_row, _percentile, and the filter-blob parsers.
-
-The throughput query tuple shape (see _build_throughput_query) is:
+Throughput query tuple shape (see _build_throughput_query):
   (bug_id, actor_user_id, actor_name, created_at, detail,
    item_type, title, priority, current_status, project_name)
-
-_bug_scalar_fields/_bug_relation_fields are typed to accept a Bug, so the
-tests use real transient (never-flushed) ORM instances. Column defaults only
-apply at flush, so unset attributes read back as None or [].
+Scalar/relation-field tests use transient (never-flushed) Bug instances, so
+column defaults (applied only at flush) read back as None or [].
 """
 from __future__ import annotations
 

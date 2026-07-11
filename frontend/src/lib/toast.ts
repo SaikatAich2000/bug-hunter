@@ -1,12 +1,4 @@
-/**
- * Toast notifications.
- *
- * The app shell renders a single `<div id="toast" class="toast" hidden>`;
- * toast() swaps its text + type class and unhides it for 3.5s.
- *
- * Imperative so it can be called from anywhere (API error paths, editors)
- * without prop-drilling.
- */
+/** Imperative toasts via the shell's #toast div — callable anywhere without prop-drilling. */
 import { ApiError } from "./api";
 
 export type ToastType = "info" | "success" | "error";
@@ -25,7 +17,7 @@ export function toast(msg: string, type: ToastType = "info"): void {
   }, 3500);
 }
 
-/** Error toast that stays quiet for the silent 401-redirect ApiError. */
+/** Error toast; quiet for the silent 401-redirect ApiError. */
 export function toastError(err: unknown): void {
   if (err instanceof ApiError && err.silent) return;
   let msg = "Something went wrong";

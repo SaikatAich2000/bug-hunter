@@ -1,18 +1,10 @@
 """Retrieval-Augmented Generation for Sleuth's cloud layer.
 
-Indexes bugs, comments, and any plain-text/markdown docs under
-SLEUTH_DOCS_DIR into a local Chroma vector store using Gemini embeddings.
-retrieve_text() returns the top-k snippets as a compact context block for
-cloud_llm.
-
-This deployment is single-tenant, so retrieval is not org-filtered. The
-`where` parameter on the Chroma query is the seam for a future tenant/project
-filter; mirror the SQL handlers' scoping there if this ever becomes
-multi-tenant.
-
-Everything is lazy and gated: with SLEUTH_RAG_ENABLED off, chromadb missing,
-or no embedding key, retrieve_text() returns "" and the cloud layer runs
-without grounding. Nothing here can break startup.
+Indexes bugs, comments, and docs under SLEUTH_DOCS_DIR into a local Chroma
+store with Gemini embeddings; retrieve_text() returns top-k snippets for
+cloud_llm. Single-tenant (the `where` param is the seam for future scoping).
+Fully lazy and gated: with RAG off, chromadb missing, or no key, it returns ""
+and nothing here can break startup.
 """
 from __future__ import annotations
 
@@ -42,13 +34,9 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         model = f"models/{s.GEMINI_EMBED_MODEL}"
         r = httpx.post(
             f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
-            # Key in a header rather than the URL query string so it won't
-            # appear in logged exception URLs or proxy access logs (same
-            # approach as cloud_llm.py).
+            # Key in a header, not the URL, so it stays out of logged URLs.
             headers={"x-goog-api-key": s.GEMINI_API_KEY},
-            # Redact before sending: bug descriptions, comment bodies, and
-            # doc content are outbound egress just like the generation path,
-            # so they pass the same PII gate. Redact first, then truncate.
+            # Outbound egress passes the same PII gate: redact first, then truncate.
             json={"requests": [
                 {"model": model, "content": {"parts": [{"text": redact(t)[:8000]}]}}
                 for t in texts
@@ -70,7 +58,7 @@ def _collection():
     try:
         import chromadb
         client = chromadb.PersistentClient(path=s.SLEUTH_RAG_DIR)
-        # Embeddings are supplied explicitly, so no embedding_function needed.
+        # Embeddings supplied explicitly, so no embedding_function needed.
         return client.get_or_create_collection(
             _COLLECTION, metadata={"hnsw:space": "cosine"}
         )
@@ -148,8 +136,7 @@ def _embed_upsert(col, ids: list[str], docs: list[str], metas: list[dict]) -> in
 
 
 def index_all(db: Session) -> int:
-    """Full (re)index of bugs, comments, and docs. Returns the doc count.
-    Called from scripts/build_sleuth_rag.py or a periodic job."""
+    """Full (re)index of bugs, comments, and docs; returns the doc count."""
     col = _collection()
     if col is None:
         return 0

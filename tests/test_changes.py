@@ -1,12 +1,5 @@
-"""Tests for status values, KPI fields, multi-select filters, and list performance.
-
-Coverage:
-  1. Two new statuses: "Not a Bug" and "Resolve Later"
-  2. KPI strip (total / open / resolved / closed / resolve_later),
-     plus `users` and `projects` for backward compat
-  3. Multi-select filters via repeated query params (?status=A&status=B)
-  4. "Not a Bug" is excluded from the `bugs` total
-  5. Attachment counts use a single aggregate query, not N+1
+"""Status values, KPI fields, multi-select filters, and list performance.
+Covers the two new statuses, KPI strip shape, repeated ?status params, and the aggregate attachment-count query.
 """
 from __future__ import annotations
 
@@ -238,10 +231,7 @@ class TestAttachmentCountPerf:
         assert items["no-att-bug"]["attachment_count"] == 0
 
     def test_list_bugs_uses_single_count_query(self, admin_client):
-        """Instrument SQLAlchemy and verify query count stays constant regardless of result size.
-
-        Threshold is generous (< 15) so it fails loudly if the N+1 pattern returns
-        for attachment counts."""
+        """Instrument SQLAlchemy and verify query count stays constant (generous <15 threshold catches an N+1 return)."""
         from sqlalchemy import event
         from app.database import engine
 
@@ -264,8 +254,7 @@ class TestAttachmentCountPerf:
         finally:
             event.remove(engine, "before_cursor_execute", _on_exec)
 
-        # N+1 would produce ~1 + 10 = 11 queries for attachment counts alone,
-        # plus all other queries — easily 20+. The fixed path uses one aggregate.
+        # N+1 would be 20+ queries here; the fixed path uses one aggregate.
         assert queries < 15, (
             f"list_bugs ran {queries} SQL queries for 10 bugs — N+1 regression?"
         )

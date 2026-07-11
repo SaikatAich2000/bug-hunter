@@ -1,11 +1,4 @@
-/**
- * Typed fetch wrapper for the JSON API.
- *
- * Sends same-origin cookies. A 401 triggers a single redirect to /login.html
- * (deduplicated so concurrent in-flight requests don't double-redirect after a
- * session revoke). 204 resolves to null. FastAPI's {detail} field — string or
- * Pydantic validation list — is unwrapped into ApiError.message.
- */
+/** Typed fetch wrapper: cookies, deduped 401 redirect, FastAPI {detail} unwrapping. */
 
 export const API = "/api";
 
@@ -32,13 +25,13 @@ export function bounceToLogin(): void {
   location.replace(`/login.html?next=${next}`);
 }
 
-/** Pull a readable message out of a FastAPI error body. */
+/** Readable message from a FastAPI error body. */
 function detailToMessage(body: unknown, fallback: string): string {
   if (!body || typeof body !== "object") return fallback;
   const detail = (body as { detail?: unknown }).detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
-    // Pydantic validation errors: [{loc, msg, type}, ...]
+    // Pydantic validation error list
     const msgs = detail
       .map((d) =>
         d && typeof d === "object" && "msg" in d
@@ -77,7 +70,7 @@ export async function api<T = unknown>(
 
   if (res.status === 401) {
     bounceToLogin();
-    // Page is navigating away; suppress any caller-side toast.
+    // navigating away; silent suppresses caller toasts
     throw new ApiError("Session expired", 401, true);
   }
 
@@ -100,7 +93,7 @@ export async function api<T = unknown>(
   return parsed as T;
 }
 
-/** Fetch a binary endpoint (e.g. XLSX export). Returns blob + filename. */
+/** Fetch a binary endpoint; returns blob + filename. */
 export async function apiBlob(
   path: string,
   opts: ApiOptions = {},
@@ -129,9 +122,7 @@ export async function apiBlob(
     throw new ApiError(msg, res.status);
   }
   const cd = res.headers.get("Content-Disposition") || "";
-  // RFC 5987 filename* takes priority (percent-encoded, handles non-ASCII).
-  // The plain regex excludes '*' as its first char to avoid a partial match
-  // against the filename* form that would produce a garbled name.
+  // RFC 5987 filename* wins; plain regex excludes '*' so it can't half-match that form
   const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(cd);
   const plain = /filename="?([^";*][^";]*)"?/i.exec(cd);
   let raw = "";
@@ -140,7 +131,7 @@ export async function apiBlob(
   } else if (plain) {
     raw = plain[1].trim();
   }
-  // Strip path separators so a server-supplied name can't influence download location.
+  // strip path separators from server-supplied names
   const filename: string | null = raw ? (raw.replace(/[\\/]/g, "_").trim() || null) : null;
   return { blob: await res.blob(), filename };
 }

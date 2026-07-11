@@ -1,11 +1,5 @@
-/**
- * Top bar: hamburger, brand mark, horizontal nav (role-gated), notifications,
- * profile menu.
- *
- * Nav visibility uses VIEW_MIN_ROLE from types.ts — the same map the Shell uses
- * for view mounting and the Sidebar uses for its mobile drawer, so all three
- * surfaces stay in sync automatically.
- */
+// Top bar: hamburger, brand, role-gated nav (VIEW_MIN_ROLE, shared with Shell/Sidebar),
+// notifications, profile menu.
 import { useApp } from "../state/AppContext";
 import NotificationsBell from "./NotificationsBell";
 import ProfileMenu from "./ProfileMenu";
@@ -20,7 +14,6 @@ interface Props {
 export default function TopChrome({ onOpenMobile }: Props) {
   const { currentUser, view, setView, roleRank, health } = useApp();
 
-  // Shares VIEW_MIN_ROLE with the Shell and Sidebar so gating can't drift.
   const allowed = (v: ViewName): boolean => {
     const need = VIEW_MIN_ROLE[v];
     return !need || roleRank(currentUser.role) >= roleRank(need);
@@ -32,7 +25,6 @@ export default function TopChrome({ onOpenMobile }: Props) {
         ☰
       </button>
 
-      {/* Brand mark */}
       <div className="brandmark" id="brandMark">
         <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
         <div className="wm">
@@ -58,8 +50,7 @@ export default function TopChrome({ onOpenMobile }: Props) {
       <div className="spacer"></div>
 
       <div className="chrome-right">
-        {/* Mobile Sleuth entry point. The FAB is hidden on small screens; this
-            forwards to it so panel open/close logic stays in one place. */}
+        {/* Forwards to the Sleuth FAB so panel open/close logic stays in one place. */}
         <button
           type="button"
           className="chrome-sleuth-btn"

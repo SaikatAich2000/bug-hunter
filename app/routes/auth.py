@@ -38,8 +38,7 @@ from app.schemas import (
 
 logger = logging.getLogger("bug_hunter.auth")
 
-# Always run bcrypt verify, even when no user matches the email, so response
-# timing can't distinguish "account not found" from "wrong password".
+# Verified for unknown emails so timing can't distinguish "no account" from "wrong password".
 _DUMMY_PASSWORD_HASH = hash_password("dummy-not-a-real-credential")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -57,12 +56,7 @@ def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id:
 
 
 def _reject_if_breached(plain: str) -> None:
-    """Reject a password that appears in the HIBP corpus.
-
-    Called from every code path that sets a password. On a network error it
-    allows the password through, so an HIBP outage doesn't block legitimate
-    password changes; see app/password_breach.py.
-    """
+    """Reject an HIBP-breached password; fails open on network errors (see app/password_breach.py)."""
     if is_password_breached(plain):
         raise HTTPException(
             status_code=400,
@@ -72,12 +66,7 @@ def _reject_if_breached(plain: str) -> None:
 
 
 def _mask_email(email: str) -> str:
-    """Mask the local part of an email for safe inclusion in logs.
-
-    Log stores often have broader access controls than the app DB, so writing
-    raw emails there leaks PII; the masked form stays useful for diagnosis.
-    ``alice@example.com`` becomes ``a***@example.com``.
-    """
+    """Mask email local part for logs (``alice@x.com`` -> ``a***@x.com``); avoids PII in log stores."""
     if not email or "@" not in email:
         return "***"
     local, _, domain = email.partition("@")
@@ -88,20 +77,13 @@ def _mask_email(email: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    """Client IP for the session log and audit trail.
-
-    Only honours X-Forwarded-For when TRUST_PROXY_FORWARDED_FOR is set;
-    otherwise a client could spoof the header and forge the recorded IP.
-    Matches the rate-limit middleware's ``_client_ip`` in app/main.py.
-    """
+    """Client IP for sessions/audit. X-Forwarded-For is honoured only when
+    TRUST_PROXY_FORWARDED_FOR is set (spoofable otherwise); matches the rate limiter."""
     settings = get_settings()
     if settings.TRUST_PROXY_FORWARDED_FOR:
         fwd = request.headers.get("x-forwarded-for", "")
         if fwd:
-            # Take the right-most (proxy-appended) entry, not the client-supplied
-            # left-most one, which could be spoofed to poison the session list /
-            # audit trail. trusted_forwarded_ip also validates it parses as a real
-            # IP. Matches the rate limiter.
+            # Right-most proxy-appended entry; the left-most is client-spoofable.
             ip = trusted_forwarded_ip(fwd, settings.TRUST_PROXY_HOP_COUNT)
             if ip is not None:
                 return ip[:64]
@@ -112,23 +94,20 @@ def _client_ip(request: Request) -> str:
 
 @router.post("/login", response_model=MeOut)
 def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)) -> User:
-    """Verify credentials, create a server-side session row, and set the
-    signed cookie. The cookie carries a `jti` that maps back to the row,
-    which is what makes per-session admin revocation possible."""
-    # Check lockout before bcrypt so a login flood doesn't turn into a CPU flood.
+    """Verify credentials, create a session row, and set the signed cookie.
+    The cookie's `jti` maps back to the row, enabling per-session admin revocation."""
+    # Check lockout before bcrypt so a login flood doesn't become a CPU flood.
     account_lockout.check_locked(payload.email)
 
     # LoginIn already lowercases the email.
     user = db.scalar(select(User).where(User.email == payload.email))
-    # Run bcrypt either way; the dummy hash never matches, so password_ok
-    # stays False for unknown emails while keeping response timing uniform.
+    # Run bcrypt even for unknown emails to keep response timing uniform.
     if user is None:
         verify_password(payload.password, _DUMMY_PASSWORD_HASH)
         password_ok = False
     else:
         password_ok = verify_password(payload.password, user.password_hash)
-    # Same 401 for all failure modes so the response never leaks whether the
-    # account exists or is disabled. The audit trail records the distinction.
+    # Same 401 for all failures so existence/disabled status doesn't leak.
     if user is None or not password_ok:
         account_lockout.record_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -137,7 +116,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
         account_lockout.record_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # Success: clear the bucket so transient typos don't carry forward.
+    # Clear the lockout bucket so transient typos don't carry forward.
     account_lockout.clear(payload.email)
 
     settings = get_settings()
@@ -160,9 +139,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
 
 @router.post("/logout", status_code=204)
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    """Clear the session cookie and remove the corresponding server-side
-    session row. Always returns 204, even with no session, so logout is
-    idempotent."""
+    """Clear the session cookie and its server-side row; always 204 (idempotent)."""
     from app.auth import COOKIE_NAME, parse_session_token
     token = request.cookies.get(COOKIE_NAME, "")
     parsed = parse_session_token(token)
@@ -172,7 +149,7 @@ def logout(request: Request, db: Session = Depends(get_db)) -> Response:
         if user:
             _audit(db, user, "logout", f"{user.email} logged out")
         if jti:
-            # Delete only this session; other open sessions for the same user remain.
+            # Only this session; the user's other sessions remain.
             db.execute(
                 SessionRow.__table__.delete().where(SessionRow.jti == jti)
             )
@@ -195,38 +172,28 @@ def change_password(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Response:
-    """Logged-in user updates their own password.
-
-    Security-relevant side effects:
-      - Bumps user.session_version, invalidating all other active sessions.
-      - Deletes the user's existing session rows, then issues a fresh cookie
-        and session row for the current request so the user isn't logged out
-        by their own action.
-      - Marks all outstanding password-reset tokens for this user as used.
-    """
+    """Change own password: bumps session_version (killing other sessions), invalidates
+    outstanding reset tokens, and re-issues a fresh session so the caller stays logged in."""
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    # Reject a no-op change to the same password: it would bump session_version
-    # and boot every other device for no security gain.
+    # Reject same-password change: it would boot every other device for no gain.
     if verify_password(payload.new_password, user.password_hash):
         raise HTTPException(
             status_code=400,
             detail="New password must be different from the current password.",
         )
 
-    # HIBP check on the new password before touching the DB.
     _reject_if_breached(payload.new_password)
 
     user.password_hash = hash_password(payload.new_password)
     user.session_version = (user.session_version or 0) + 1
     invalidated = invalidate_outstanding_reset_tokens(db, user.id)
 
-    # The session_version bump already invalidates existing sessions; delete the
-    # rows too so the admin session list doesn't fill with stale entries.
+    # Rows are already invalid via the version bump; delete so the admin session list stays clean.
     db.execute(SessionRow.__table__.delete().where(SessionRow.user_id == user.id))
 
-    # Issue a fresh session for the current device so the user isn't bounced to login.
+    # Fresh session for the current device so the user isn't bounced to login.
     settings = get_settings()
     jti = new_jti()
     new_sess = SessionRow(
@@ -254,19 +221,12 @@ def forgot_password(
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> Response:
-    """Issue a password-reset email.
-
-    Enumeration resistance is controlled by FORGOT_PASSWORD_ENUMERATION_SAFE
-    (default True): the endpoint always returns 204 and never reveals whether
-    the email maps to an account. Set it False for a friendlier UX that 404s on
-    an unknown address, a lower-security trade-off. Either way a reset email is
-    sent only to a real, active account and every attempt is audited.
-    """
+    """Issue a password-reset email. With FORGOT_PASSWORD_ENUMERATION_SAFE (default)
+    always 204 so account existence never leaks; otherwise 404s on unknown addresses."""
     settings = get_settings()
     user = db.scalar(select(User).where(User.email == payload.email))
     if user is None or not user.is_active:
-        # In enumeration-safe mode, run (and discard) the same token work so
-        # response timing doesn't reveal whether the account exists.
+        # Run (and discard) the same token work so timing doesn't reveal account existence.
         if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
             generate_reset_token()
         _audit(db, None, "password_reset_no_account",
@@ -274,12 +234,11 @@ def forgot_password(
         db.commit()
         if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
             return Response(status_code=204)
-        # Enumeration-safe is off: reveal that the address is unknown.
         raise HTTPException(
             status_code=404,
             detail="We couldn't find an account with that email. Check the address or contact an administrator",
         )
-    # Purge stale tokens here; there's no background job for this table.
+    # Purge stale tokens inline; there's no background job for this table.
     purge_consumed_reset_tokens(db)
     raw_token, token_hash = generate_reset_token()
     prt = PasswordResetToken(
@@ -292,7 +251,6 @@ def forgot_password(
            f"Password reset requested for {user.email}")
     db.commit()
 
-    # Build the reset link; queue email send to background.
     base = get_settings().APP_BASE_URL.rstrip("/")
     reset_url = f"{base}/reset.html?token={raw_token}"
     background.add_task(
@@ -303,12 +261,8 @@ def forgot_password(
 
 @router.post("/reset-password", status_code=204)
 def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> Response:
-    """Use a valid reset token to set a new password.
-
-    Like change_password, this bumps the user's session_version so any
-    currently-active sessions become invalid, and invalidates every other
-    outstanding reset token for the same user.
-    """
+    """Set a new password via reset token; bumps session_version and
+    invalidates the user's other outstanding reset tokens."""
     h = hash_reset_token(payload.token)
     prt = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == h))
     if prt is None:
@@ -324,14 +278,10 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> R
     if user is None or not user.is_active:
         raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
 
-    # Check HIBP after validating the token so the breach signal isn't
-    # returned to a caller with an invalid token.
+    # HIBP check after token validation so invalid-token callers can't probe the breach signal.
     _reject_if_breached(payload.new_password)
 
-    # Atomically consume the token via a guarded UPDATE that only succeeds if it
-    # was still unused. If two requests race on the same token, exactly one
-    # UPDATE affects a row; the loser sees rowcount 0 and is rejected, closing
-    # the single-use replay window.
+    # Guarded UPDATE consumes the token once: a racing request sees rowcount 0, closing replay.
     consumed = (
         db.query(PasswordResetToken)
         .filter(
@@ -346,11 +296,9 @@ def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> R
 
     user.password_hash = hash_password(payload.new_password)
     user.session_version = (user.session_version or 0) + 1
-    # The used token is already consumed above; invalidate any remaining ones.
     invalidated = invalidate_outstanding_reset_tokens(db, user.id)
 
-    # Delete session rows so the admin list doesn't fill with stale entries
-    # (the session_version bump already makes them functionally invalid).
+    # Rows are already invalid via the version bump; delete so the admin session list stays clean.
     db.execute(SessionRow.__table__.delete().where(SessionRow.user_id == user.id))
 
     _audit(db, user, "password_reset",

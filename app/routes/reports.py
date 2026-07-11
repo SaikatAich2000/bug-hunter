@@ -1,11 +1,6 @@
-"""Reports REST router — three endpoints, all manager-or-admin only.
+"""Reports REST router: /types, /run, /export.xlsx — all manager-or-admin only.
 
-  GET  /api/reports/types         catalog of report types and filter vocab
-  POST /api/reports/run           run a report and return JSON rows
-  POST /api/reports/export.xlsx   run a report and stream an .xlsx workbook
-
-Regular users get 403 here. The sidebar also hides the entry via
-data-needs-role="manager", but that's UI convenience, not the access gate.
+The sidebar hiding is UI convenience; the role dependency is the access gate.
 """
 from __future__ import annotations
 
@@ -53,7 +48,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 # I/O models
 # ---------------------------------------------------------------------------
 class FilterIn(BaseModel):
-    """Inbound filter blob. Every field is optional; omitting a field means no filter applied."""
+    """Inbound filter blob; omitted fields mean no filter."""
     date_from: Optional[str] = None
     date_to: Optional[str] = None
     item_types: list[str] = Field(default_factory=list)
@@ -129,9 +124,7 @@ def _run_or_400(payload: ReportRunIn, db: Session, user: User):
             ),
         )
     filters = _build_filters(payload)
-    # Restrict the report to the actor's accessible projects (None for admins
-    # means unrestricted). Using the engine's internal field prevents a manager
-    # from widening their own scope by sending extra project_ids in the payload.
+    # restrict_project_ids is route-set, never payload — a manager can't widen scope
     filters.restrict_project_ids = accessible_project_ids(db, user)
     try:
         return run_report(payload.report_key, filters, db), filters
@@ -145,11 +138,7 @@ def run(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ) -> dict[str, Any]:
-    """Run a report and return JSON rows for the on-screen table.
-
-    Capped at 1000 rows to keep the response size sensible. Use the XLSX
-    export endpoint for full data.
-    """
+    """Run a report and return JSON rows, capped at 1000; XLSX export has full data."""
     result, _filters = _run_or_400(payload, db, user)
     api = result.to_api()
     rendered_cap = 1000
@@ -181,18 +170,10 @@ def export_xlsx(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ) -> StreamingResponse:
-    """Run the report and stream the resulting workbook as an .xlsx download.
-
-    The workbook is built fully in memory, so we cap at MAX_REPORT_ROWS
-    (config) to avoid exhausting memory on large exports. We return 413 when
-    the cap is exceeded so the caller knows to narrow their filters.
-    """
+    """Run the report and stream the workbook; 413 past MAX_REPORT_ROWS (in-memory build)."""
     result, filters = _run_or_400(payload, db, user)
-    # Use whichever row count is larger: detail reports drive off `rows`,
-    # aggregated reports off `detail_rows`. Also check `result.truncated`
-    # because aggregate reports (throughput/TTR/timeline) can have a small
-    # visible row count while the underlying scan already hit its cap — exporting
-    # them without this check would silently ship under-counted totals.
+    # max() covers detail vs aggregate reports; truncated catches a capped scan
+    # that would otherwise silently ship under-counted totals
     settings = get_settings()
     n_rows = max(result.total, len(result.detail_rows))
     if n_rows > settings.MAX_REPORT_ROWS or result.truncated:
@@ -206,7 +187,7 @@ def export_xlsx(
     try:
         payload_bytes = build_workbook_bytes(result)
     except XlsxBuildError as exc:
-        # Log the real cause server-side; don't leak config or dependency state to the client.
+        # log the real cause server-side; don't leak config state to the client
         logger.exception("XLSX build failed: %s", exc)
         raise HTTPException(
             status_code=500,

@@ -1,19 +1,7 @@
-"""Sleuth Layer 2 — statistical intent classifier.
+"""Sleuth Layer 2 — statistical intent classifier (pure-Python TF-IDF + cosine).
 
-Catches paraphrases that the rule-based parser in nlu.py misses. Pure
-Python, no external model files or GPU; the trained state is just the
-corpus dict and the IDF weights computed at import time.
-
-A hand-curated corpus maps example phrasings to intent labels. Incoming
-messages are tokenized, converted to TF-IDF vectors, and matched by cosine
-similarity. Below a confidence threshold the call returns None, leaving
-dispatch to the LLM or "unknown".
-
-The bug-tracker vocabulary is small and closed, so paraphrases like "show
-me the open ones" / "list all open" / "what's still open" share enough
-tokens that cosine similarity groups them reliably. A neural classifier
-(DistilBERT, MiniLM) would cost 100-500 MB RAM for little practical gain
-on this constrained vocabulary.
+Catches paraphrases the rule engine in nlu.py misses. Below the confidence
+threshold it returns None, leaving dispatch to the LLM or "unknown".
 """
 from __future__ import annotations
 
@@ -26,9 +14,7 @@ from dataclasses import dataclass
 # ---------------------------------------------------------------------------
 # Training corpus
 # ---------------------------------------------------------------------------
-# Each tuple is (intent_label, example_phrasings). Labels match what
-# nlu.parse() emits as pq.intent, so executor.execute() dispatches on them
-# uniformly.
+# (intent_label, example_phrasings); labels match nlu.parse() intents.
 _CORPUS: list[tuple[str, list[str]]] = [
     ("greeting", [
         "hi", "hello", "hey there", "good morning", "yo", "howdy",
@@ -135,9 +121,8 @@ _STOPWORDS = {
 
 
 def _tokenize(text: str) -> list[str]:
-    """Lowercase, extract alphanumeric tokens, drop stop-words. Pure-digit
-    tokens are replaced with the placeholder ``<num>`` so "bug 5" and
-    "bug 12" produce the same vector."""
+    """Lowercase alphanumeric tokens minus stop-words; digits become ``<num>``
+    so "bug 5" and "bug 12" vectorize the same."""
     if not text:
         return []
     tokens: list[str] = []
@@ -180,8 +165,7 @@ def _train(corpus: list[tuple[str, list[str]]]) -> _TrainedModel:
         t: math.log((1 + n) / (1 + d)) + 1.0
         for t, d in df.items()
     }
-    # Cache each doc's vector norm so cosine similarity is a single dot
-    # product per query.
+    # Cache doc norms so cosine is a single dot product per query.
     doc_norms: list[float] = []
     for _intent, tc in docs:
         s = 0.0
@@ -234,24 +218,17 @@ def _cosine(qc: Counter[str], q_norm: float,
 
 
 def predict(message: str, threshold: float = 0.35) -> Prediction | None:
-    """Return the most likely intent label for ``message``, or None if the
-    classifier isn't confident enough.
-
-    The threshold is calibrated so paraphrases of corpus examples cross it
-    but free-form noise does not. Raising it trades recall for precision."""
+    """Return the most likely intent for ``message``, or None below the
+    confidence threshold (calibrated: paraphrases pass, noise doesn't)."""
     tokens = _tokenize(message)
     if not tokens:
         return None
-    # A message whose only token is <num> (e.g. "is it 5?") carries no real
-    # signal but can spuriously cross the threshold against corpus docs that
-    # also contain <num>. OOV words flow through to the cosine gate below,
-    # which handles them correctly by returning None.
+    # A <num>-only message ("is it 5?") has no signal but can spuriously match
+    # corpus docs that also contain <num>.
     if all(t == "<num>" for t in tokens):
         return None
     qc, q_norm = _vec(tokens, _MODEL.idf)
 
-    # Score every corpus doc individually; the best match across all docs
-    # wins, regardless of which example phrase it came from.
     best_intent = ""
     best_score = -1.0
     runner_intent = ""
@@ -260,7 +237,7 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
         score = _cosine(qc, q_norm, dc, d_norm, _MODEL.idf)
         if score > best_score:
             if best_intent != intent:
-                # New top intent from a different class; demote old best.
+                # New top intent from a different class — demote old best.
                 runner_intent = best_intent
                 runner_score = best_score
             best_intent = intent

@@ -1,27 +1,5 @@
-/**
- * BhDateInput — custom date picker. Class names must match styles.css:
- *
- *   <div class="bh-date-wrap">
- *     <input type="hidden" class="bh-date-native" …>   ← form-submission value
- *     <button class="bh-date-btn" aria-haspopup="dialog" aria-expanded>
- *       <span class="bh-date-icon">📅</span>
- *       <span class="bh-date-label [bh-date-placeholder]">Jun 12, 2026 | Select date</span>
- *     </button>
- *     <button class="bh-date-clear" type="button">×</button> ← only when a value is set
- *     <div class="bh-date-pop" role="dialog">               ← only while open
- *       .bh-date-head  (‹ nav / .bh-date-title / › nav)
- *       .bh-date-grid  (7 × .bh-date-dow + 42 × .bh-date-cell)
- *       .bh-date-foot  (.bh-date-today)
- *     </div>
- *   </div>
- *
- * The popover is portaled to <body> so `position: fixed` coordinates are always
- * viewport-relative. Rendering it in-place would make any ancestor with a
- * transform/filter/contain (modal backdrop, entrance animation, etc.) the
- * containing block, shifting the panel and inflating <main>'s scroll height.
- * popRef still points at the real node, keeping the outside-click guard and
- * placePop math correct. Value is fully controlled via props.
- */
+// BhDateInput — controlled custom date picker; bh-date-* class names must match styles.css.
+// Popover is portaled to <body> so transformed ancestors can't break its fixed positioning.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -31,7 +9,7 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** Format a JS Date as YYYY-MM-DD in local time. */
+/** YYYY-MM-DD in local time. */
 function isoDate(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -39,13 +17,11 @@ function isoDate(d: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Parse YYYY-MM-DD as a local-time Date, rejecting impossible dates like
- *  2026-02-31 (JS rolls those forward) via a round-trip equality check. */
+/** Parse YYYY-MM-DD as local time; round-trip check rejects dates JS would roll over. */
 function parseIso(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split("-").map((n) => Number.parseInt(n, 10));
   const date = new Date(y, m - 1, d);
-  // Round-trip check: JS silently rolls over out-of-range dates.
   if (isoDate(date) !== s) return null;
   return date;
 }
@@ -64,7 +40,7 @@ interface Cell {
   muted: boolean;
 }
 
-/** One calendar cell, marking prev/next-month bleed. */
+/** One calendar cell; muted = prev/next-month bleed. */
 function computeCell(
   offset: number,
   daysInMonth: number,
@@ -100,8 +76,7 @@ interface Props {
 
 export default function BhDateInput({ name, value, onChange, required, disabled, id }: Props) {
   const [open, setOpen] = useState(false);
-  // Viewed month is independent of the selected value so the user can browse
-  // without committing. Re-seeded from value each time the popover opens.
+  // Viewed month is independent of the value (browse without committing); re-seeded on open.
   const [view, setView] = useState<{ y: number; m: number }>(() => {
     const seed = parseIso(value) ?? new Date();
     return { y: seed.getFullYear(), m: seed.getMonth() };
@@ -132,8 +107,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
     pop.style.left = `${left}px`;
   }, []);
 
-  // Place before paint, then again next frame (fonts/styles can shift
-  // measurements), and track the trigger on scroll/resize.
+  // Place before paint, re-place next frame (late layout shifts), track scroll/resize.
   useLayoutEffect(() => {
     if (!open) return;
     placePop();
@@ -185,7 +159,7 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
     });
   };
 
-  // Build the 6×7 = 42-cell grid (covers any month with overflow).
+  // 6×7 = 42-cell grid covers any month.
   const startDow = new Date(view.y, view.m, 1).getDay(); // 0=Sun
   const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
   const daysInPrev = new Date(view.y, view.m, 0).getDate();

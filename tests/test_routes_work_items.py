@@ -1,11 +1,7 @@
 """Coverage tests for app.routes.events and app.routes.bugs.
 
-Uses the public API wherever possible. A handful of helpers are called
-directly when an HTTP path can't reach the branch cleanly (rate-limit
-internals, event brief with a null creator).
-
-Modules are imported inside each test because the client fixture
-re-imports all app.* modules per test; top-level imports would go stale.
+Prefers the public API; a few helpers are called directly for branches HTTP can't reach.
+app.* is imported inside each test because the client fixture re-imports it per test.
 """
 from __future__ import annotations
 
@@ -96,8 +92,7 @@ def test_cov_events_update_changes_manager_set(admin_client):
 
 
 def test_cov_events_update_same_manager_set_is_noop(admin_client):
-    """Re-sending the identical manager list in a different order is a no-op.
-    Exercises the early-return in _apply_event_manager_diff."""
+    """Re-sending the same manager set in different order is a no-op (early-return in _apply_event_manager_diff)."""
     m1 = _make_user(admin_client, "MgrC", role="manager", email="mgrc@cov.test")
     m2 = _make_user(admin_client, "MgrD", role="manager", email="mgrd@cov.test")
     ev = _make_event(admin_client, name="mgr-same", manager_ids=[m1["id"], m2["id"]])
@@ -113,8 +108,7 @@ def test_cov_events_update_no_change_rolls_back(admin_client):
     ev = _make_event(admin_client, name="No-op event")
     audit_before = admin_client.get("/api/audit").json()
     n_before = sum(1 for a in audit_before if a.get("entity_type") == "event")
-    # Same name, no manager_ids → _compute_event_changes finds nothing and
-    # _persist_event_update rolls back without writing an audit row.
+    # No real change → _persist_event_update rolls back without an audit row.
     r = admin_client.put(f"/api/events/{ev['id']}", json={"name": "No-op event"})
     assert r.status_code == 200, r.text
     audit_after = admin_client.get("/api/audit").json()
@@ -138,9 +132,7 @@ def test_cov_events_delete_missing_404(admin_client):
 
 # --- _event_brief: null creator -------------------------------------------
 def test_cov_events_brief_with_null_creator(admin_client):
-    """Events with a NULL created_by_user_id (seeded directly, or creator
-    removed via FK SET NULL) must still render. Drives the false branch of
-    `if ev.created_by_user_id:` in _event_brief."""
+    """Event with NULL created_by_user_id still renders (false branch of _event_brief's creator check)."""
     from app.database import SessionLocal
     from app.models import Event
 
@@ -170,11 +162,7 @@ def test_cov_events_brief_with_null_creator(admin_client):
 
 # --- _check_user_rate: cap eviction and timestamp expiry ------------------
 def test_cov_bugs_rate_guard_cap_eviction_and_expiry(client):
-    """Unit-tests the two inner branches of the sliding-window rate guard:
-      - bucket dict at capacity → oldest user's bucket is evicted
-      - timestamp older than the window cutoff is popped from the deque
-    These can't be reached cleanly over HTTP without 20+ uploads; client
-    is requested only to ensure app.* is freshly imported."""
+    """Two inner branches of the sliding-window rate guard: at-capacity eviction, and stale-timestamp pop."""
     import threading
     import time
 
@@ -294,9 +282,7 @@ def test_cov_bugs_list_comments_with_attachment(admin_client):
 
 # --- _read_upload_with_limit: oversized upload returns 413 ----------------
 def test_cov_bugs_upload_too_large_413(admin_client, monkeypatch):
-    """Shrinks MAX_FILE_BYTES to a few bytes so a small upload trips the 413
-    guard. The module global is read at call time, so monkeypatching it
-    takes effect immediately."""
+    """Shrink MAX_FILE_BYTES (read at call time) so a small upload trips the 413 guard."""
     import app.routes.bugs as bugs
     monkeypatch.setattr(bugs, "MAX_FILE_BYTES", 4)
 
@@ -352,10 +338,7 @@ def test_cov_bugs_list_activity_missing_bug_404(admin_client):
     assert r.json()["detail"] == "Bug not found"
 
 
-# ---------------------------------------------------------------------------
-# Happy-path status transitions per item_type — exercises statuses_for_type
-# across all three item flavors and confirms cross-type rejection.
-# ---------------------------------------------------------------------------
+# statuses_for_type across all three item flavors, plus cross-type rejection.
 def test_cov_bugs_status_transitions_per_item_type(admin_client):
     p = _make_project(admin_client, name="StatusProj")
     bug = _make_item(admin_client, p["id"], item_type="Bug")

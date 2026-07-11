@@ -51,7 +51,7 @@ export function fileIcon(
   return "📎";
 }
 
-/** Icon per audit/activity action. Used in both the bug modal feed and the Audit Trail view. */
+/** Icon per audit/activity action. */
 export function activityIcon(action: string): string {
   if (action.includes("session")) return "🔐";
   if (action.includes("login")) return "🔑";
@@ -67,7 +67,7 @@ export function activityIcon(action: string): string {
   return "📝";
 }
 
-/** Compact relative time ("just now", "5m", "3h", "2d", else a date). */
+/** Compact relative time ("5m", "3h", else a date). */
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "";
   const then = new Date(iso).getTime();

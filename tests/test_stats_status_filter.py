@@ -1,7 +1,4 @@
-"""Verify that GET /api/stats?status=... scopes chart breakdowns while leaving
-headline KPI counts global. The Analytics view filters in place on tile-click,
-but the KPI strip must stay stable so all tiles remain visible and toggleable.
-"""
+"""GET /api/stats?status=... scopes chart breakdowns while headline KPI counts stay global (stable KPI strip)."""
 from __future__ import annotations
 
 _BOOTSTRAP_EMAIL = "admin@test.local"
@@ -57,8 +54,7 @@ def test_status_filter_scopes_charts_but_not_kpis(client):
     assert "Resolved" not in filt["by_status"], filt["by_status"]
     assert filt["by_status"].get("New", 0) >= 2
 
-    # The lone High-priority Resolved bug is excluded from the priority
-    # breakdown, so High drops by exactly one compared with the global view.
+    # The excluded High-priority Resolved bug drops High by exactly one vs the global view.
     assert filt["by_priority"].get("Low", 0) >= 1
     assert filt["by_priority"].get("High", 0) == glob["by_priority"].get("High", 0) - 1
 

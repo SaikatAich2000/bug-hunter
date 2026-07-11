@@ -1,9 +1,5 @@
-"""Source guards for item links, bulk actions, Sleuth document-ingest, the
-two-tier layout, and the removal of the watchers and labels features.
-
-Behavior is covered end-to-end by test_links and test_bulk; these sniff the
-source wiring and the removals so a refactor can't silently re-introduce a
-dropped feature or break the layout.
+"""Source guards for item links, bulk actions, ingest, two-tier layout, and removed watchers/labels.
+Behavior is covered by test_links/test_bulk; these pin source wiring so refactors can't drift.
 """
 from __future__ import annotations
 
@@ -31,9 +27,7 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
 # Kept features — item links + bulk + ingest
-# ---------------------------------------------------------------------------
 def test_models_define_buglink_only():
     models = _read(APP / "models.py")
     assert "class BugLink(" in models, "item-linking model must stay"
@@ -72,9 +66,7 @@ def test_sleuth_panel_admin_upload_and_text():
     assert ">Online<" in src, "status must read just 'Online'"
 
 
-# ---------------------------------------------------------------------------
 # Removed features — watchers and labels must be gone everywhere
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("needle", [
     "bug_watchers", "bug_labels", "class Label(", "watchers:", "labels:",
 ])
@@ -111,9 +103,7 @@ def test_frontend_has_no_label_or_watch_wiring(src_file, gone):
     assert gone not in _read(src_file), f"{src_file.name} still wires {gone!r}"
 
 
-# ---------------------------------------------------------------------------
 # Two-tier (no-collapse) layout
-# ---------------------------------------------------------------------------
 def test_shell_uses_frame_not_collapsible_rail():
     shell = _read(SHELL)
     assert '"frame"' in shell, "Shell must render the frame layout"

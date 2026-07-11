@@ -1,29 +1,11 @@
-/**
- * BhSelect — custom single-select with a portaled popover. Class names must
- * match styles.css:
- *
- *   <div class="bh-sel-wrap">
- *     <select class="bh-sel-native" …>           ← form value + keyboard path
- *     <button class="bh-sel-btn [is-disabled]" aria-haspopup="listbox" aria-expanded>
- *       <span class="bh-sel-label [bh-sel-placeholder]">…</span>
- *       <span class="bh-sel-caret">▾</span>       ← hidden while disabled
- *     </button>
- *     <div class="bh-sel-pop" role="listbox">     ← only while open
- *       <button class="bh-sel-row [is-selected]" role="option"
- *               aria-selected data-bh-sel-i="i">…</button> × n
- *     </div>
- *   </div>
- *
- * Portaled to <body> so ancestor transforms/contain can't break the fixed
- * positioning. Value is controlled externally.
- */
+/** Custom single-select; popover portaled to <body> so ancestor transforms can't break fixed positioning. */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export interface BhSelectOption {
   value: string;
   label: string;
-  /** Rendered as the title attr on the native <option>. */
+  /** title attr on the native <option>. */
   title?: string;
 }
 
@@ -37,7 +19,7 @@ interface Props {
   ariaLabel?: string;
 }
 
-// Matches placeholder labels of the form "— … —".
+// placeholder labels look like "— … —"
 const PLACEHOLDER_RE = /^—.*—$/;
 
 export default function BhSelect({ value, onChange, options, disabled, id, name, ariaLabel }: Props) {
@@ -46,7 +28,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Position the panel with fixed coords; flip above when clipping below.
+  // fixed-coord placement; flips above when clipping below
   const placePop = useCallback(() => {
     const btn = btnRef.current;
     const pop = popRef.current;
@@ -82,7 +64,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     };
   }, [open, placePop]);
 
-  // Close on outside click.
+  // close on outside click
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
@@ -99,8 +81,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  // Capture-phase Escape so stopPropagation prevents the app-level bubble
-  // handler from closing the surrounding modal mid-form.
+  // capture-phase Escape so the surrounding modal doesn't close mid-form
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -113,7 +94,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("keydown", onKey, true);
   }, [open]);
 
-  // Unmatched value gives selectedIndex -1; label falls back to "—".
+  // unmatched value → selectedIndex -1, label "—"
   const selectedIndex = options.findIndex((o) => o.value === value);
   const selOpt = selectedIndex >= 0 ? options[selectedIndex] : undefined;
   const labelText = selOpt ? selOpt.label : "";
@@ -121,7 +102,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
 
   return (
     <div className="bh-sel-wrap" ref={wrapRef}>
-      {/* Kept in the DOM for form submission (.name) and keyboard accessibility. */}
+      {/* native select stays for form submission + keyboard a11y */}
       <select
         className="bh-sel-native"
         id={id}
@@ -152,11 +133,10 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
         <span className={`bh-sel-label${isPlaceholder ? " bh-sel-placeholder" : ""}`}>
           {labelText || "—"}
         </span>
-        {/* Hide the caret when disabled; a non-interactive affordance misleads. */}
+        {/* no caret when disabled */}
         {!disabled && <span className="bh-sel-caret" aria-hidden="true">▾</span>}
       </button>
-      {/* Portal to <body> so ancestor transforms/stacking contexts don't shift
-          the fixed-position panel. popRef still points at the real node. */}
+      {/* portal to <body>; popRef still points at the real node */}
       {open &&
         createPortal(
           <div className="bh-sel-pop" role="listbox" ref={popRef}>

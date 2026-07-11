@@ -1,10 +1,5 @@
-// Frontend domain types, mirrored from the FastAPI backend
-// (app/schemas.py, app/routes/*, app/reports/*, app/chatbot/router.py).
+// Frontend domain types mirroring the FastAPI backend schemas.
 // Dates are ISO-8601 strings. Keep in sync when backend schemas change.
-
-// ---------------------------------------------------------------------------
-// Core string unions
-// ---------------------------------------------------------------------------
 
 /** Mirrors app/schemas.py ALLOWED_ITEM_TYPES. */
 export type ItemType = "Bug" | "Requirement" | "Task";
@@ -15,19 +10,12 @@ export type Role = "admin" | "manager" | "user";
 /** SPA-side main-view selector (frontend-only, no backend schema). */
 export type ViewName = "list" | "events" | "analytics" | "audit" | "sessions" | "reports";
 
-// Minimum role to open each view. Shared by Sidebar (hides nav button) and
-// Shell (blocks mount + fetch) so the two stay in sync. Views not listed are
-// open to all authenticated users. The backend is the real authority — these
-// routes are also role-gated server-side.
+// Minimum role per view, shared by Sidebar + Shell; backend is the real authority.
 export const VIEW_MIN_ROLE: Partial<Record<ViewName, Role>> = {
   reports: "manager",
   audit: "manager",
   sessions: "admin",
 };
-
-// ---------------------------------------------------------------------------
-// Users / auth
-// ---------------------------------------------------------------------------
 
 /** Mirrors app/schemas.py MeOut (login response / current-user refresh). */
 export interface MeOut {
@@ -47,8 +35,7 @@ export interface UserOut {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /** Projects this user can access. Empty means untagged: non-admins see
-   *  nothing until tagged; project tags have no effect on admins. */
+  /** Accessible projects; empty = no access for non-admins, ignored for admins. */
   project_ids: number[];
 }
 
@@ -60,10 +47,6 @@ export interface UserBrief {
   role: Role;
 }
 
-// ---------------------------------------------------------------------------
-// Projects
-// ---------------------------------------------------------------------------
-
 /** Mirrors app/schemas.py ProjectOut. */
 export interface ProjectOut {
   id: number;
@@ -73,10 +56,6 @@ export interface ProjectOut {
   created_at: string;
   updated_at: string;
 }
-
-// ---------------------------------------------------------------------------
-// Work items (bugs / requirements / tasks)
-// ---------------------------------------------------------------------------
 
 /** Mirrors app/schemas.py AttachmentBrief. */
 export interface AttachmentOut {
@@ -181,18 +160,13 @@ export interface BugListResponse {
   pages: number;
 }
 
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
 /** Mirrors app/schemas.py EventOut. */
 export interface EventOut {
   id: number;
   name: string;
   description: string;
   scheduled_for: string | null;
-  /** Owning project; scopes visibility. project_name is resolved server-side;
-   *  project_id is null only on legacy events. */
+  /** Owning project (scopes visibility); null only on legacy events. */
   project_id: number | null;
   project_name: string | null;
   created_by_user_id: number | null;
@@ -209,11 +183,7 @@ export interface EventDetail extends EventOut {
   items: BugOut[];
 }
 
-// ---------------------------------------------------------------------------
-// Sessions (admin only)
-// ---------------------------------------------------------------------------
-
-/** Mirrors app/schemas.py SessionOut (GET /api/sessions rows). */
+/** Mirrors app/schemas.py SessionOut (GET /api/sessions rows, admin only). */
 export interface SessionOut {
   id: number;
   user_id: number;
@@ -227,10 +197,6 @@ export interface SessionOut {
   expires_at: string;
   is_current: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// Stats / analytics
-// ---------------------------------------------------------------------------
 
 /** Mirrors one by_project entry built in app/routes/stats.py stats(). */
 export interface StatsProjectSlice {
@@ -272,10 +238,6 @@ export interface StatsOut {
   timeline: StatsTimelinePoint[];
 }
 
-// ---------------------------------------------------------------------------
-// Meta / health
-// ---------------------------------------------------------------------------
-
 /** Mirrors app/main.py meta() (GET /api/meta). */
 export interface MetaOut {
   statuses: string[];
@@ -292,11 +254,7 @@ export interface HealthOut {
   asset_version: string;
 }
 
-// ---------------------------------------------------------------------------
-// Reports (manager / admin only)
-// ---------------------------------------------------------------------------
-
-/** Mirrors one app/reports/catalog.py REPORT_TYPES entry. */
+/** Mirrors one app/reports/catalog.py REPORT_TYPES entry (reports are manager/admin only). */
 export interface ReportTypeMeta {
   key: string;
   label: string;
@@ -346,10 +304,6 @@ export interface ReportRunResult {
   truncated_cap?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Notifications (per-user)
-// ---------------------------------------------------------------------------
-
 /** Mirrors the `kind` strings written by app/notification_service.py. */
 export type NotificationKind = "assigned" | "reported" | "updated" | "comment" | "event";
 
@@ -371,10 +325,6 @@ export interface UnreadCountOut {
   unread: number;
 }
 
-// ---------------------------------------------------------------------------
-// Sleuth chatbot
-// ---------------------------------------------------------------------------
-
 /** Mirrors app/chatbot/router.py _BlockOut. */
 export interface ChatBlock {
   kind: string;
@@ -387,10 +337,6 @@ export interface ChatOut {
   summary: string;
   intent: string;
 }
-
-// ---------------------------------------------------------------------------
-// SPA client-side state
-// ---------------------------------------------------------------------------
 
 /** Client-side filter state; maps onto GET /api/bugs query params. */
 export interface Filters {

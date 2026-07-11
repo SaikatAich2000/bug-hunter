@@ -1,12 +1,6 @@
-"""Web push orchestration.
-
-Handles FCM token storage and fans notifications out to all of a user's
-registered devices immediately when an operation happens (same trigger points
-as ``notification_service.notify``). Never batched into the email digest.
-
-The FCM network call lives in ``app.fcm_transport`` (mocked in tests); this
-module owns token storage, recipient selection, and pruning tokens FCM marks
-as dead.
+"""Web push orchestration: FCM token storage, recipient selection, and pruning
+dead tokens. Fans notifications to all of a user's devices immediately (never
+digested). The FCM network call lives in ``app.fcm_transport`` (mocked in tests).
 """
 from __future__ import annotations
 
@@ -30,11 +24,8 @@ logger = logging.getLogger("bug_hunter.push")
 
 
 class PushTokenConflict(Exception):
-    """Raised when a subscribe presents a token already bound to a different
-    user. Silently re-homing it would let anyone who learns a victim's FCM
-    token (they're handed to client JS and can leak) hijack that device's push,
-    deregistering the victim and redirecting their device to attacker content.
-    The route turns this into a 409."""
+    """Subscribe presented a token already bound to a different user. Re-homing
+    it would let a leaked FCM token hijack a victim's device push. Route → 409."""
 
 
 def _deep_link(bug_id: int | None, event_id: int | None) -> str:
@@ -55,11 +46,8 @@ def schedule(
     bug_id: int | None = None,
     event_id: int | None = None,
 ) -> None:
-    """Schedule an immediate push to ``user_ids`` as a background task.
-
-    Does nothing (nothing scheduled) when web push is disabled, so callers never
-    pay for it when the feature is off.
-    """
+    """Schedule an immediate background push to ``user_ids``; no-op when web push
+    is disabled."""
     if not get_settings().WEB_PUSH_ENABLED:
         return
     ids = [uid for uid in user_ids if uid is not None]
@@ -79,14 +67,8 @@ def register(
     platform: str = "web",
     user_agent: str = "",
 ) -> PushSubscription:
-    """Upsert a device's FCM token for ``user_id``.
-
-    If the token is already stored for this user, refresh its metadata and
-    ``last_seen_at`` in place. If it belongs to a different user, raise
-    ``PushTokenConflict`` (see that class for the security rationale). On a
-    shared browser, the previous user's logout removes the token, so a
-    subsequent user gets a clean insert.
-    """
+    """Upsert a device's FCM token for ``user_id``: refresh in place if already
+    this user's, else raise ``PushTokenConflict``."""
     def _refresh(sub: PushSubscription) -> PushSubscription:
         sub.platform = platform or "web"
         sub.user_agent = (user_agent or "")[:400]
@@ -117,8 +99,7 @@ def register(
     try:
         db.flush()
     except IntegrityError:
-        # A concurrent subscribe for the same token won the insert race;
-        # re-read and resolve it rather than propagating the error.
+        # Concurrent subscribe won the insert race; re-read and resolve.
         db.rollback()
         other = db.scalar(
             select(PushSubscription).where(PushSubscription.token == token)
@@ -130,8 +111,7 @@ def register(
 
 
 def remove(db: Session, *, token: str, user_id: int | None = None) -> bool:
-    """Delete a subscription by token (optionally constrained to a user).
-    Returns True if a row was removed."""
+    """Delete a subscription by token (optionally user-scoped); True if removed."""
     query = select(PushSubscription).where(PushSubscription.token == token)
     if user_id is not None:
         query = query.where(PushSubscription.user_id == user_id)
@@ -158,12 +138,10 @@ def push_to_users(
     body: str,
     url: str = "",
 ) -> int:
-    """Immediately push to every device of the given users; returns the number
-    of tokens delivered to.
+    """Push to every device of the given users; returns tokens delivered to.
 
-    Runs in a FastAPI ``BackgroundTask`` after the request session closed, so
-    it opens its own session. Returns 0 and does nothing unless web push is
-    enabled. Tokens FCM reports as dead are pruned.
+    Runs in a BackgroundTask after the request session closed, so it opens its
+    own session. No-op (0) unless web push is enabled. Dead tokens are pruned.
     """
     if not get_settings().WEB_PUSH_ENABLED:
         return 0
@@ -183,8 +161,8 @@ def push_to_users(
                 if sub.token in dead:
                     db.delete(sub)
             db.commit()
-        # Count via membership rather than len(tokens) - len(dead): if FCM
-        # returns a dead token we don't have, the subtraction would overstate.
+        # Count by membership: FCM may report a dead token we don't have, which
+        # len(tokens) - len(dead) would overstate.
         return sum(1 for t in tokens if t not in dead)
     except Exception:  # noqa: BLE001 — push must never break the request flow
         logger.exception("push_to_users failed")

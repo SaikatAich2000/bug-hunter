@@ -1,11 +1,5 @@
-"""Tests for the offline evaluation harness (app/chatbot/eval_harness.py).
-
-Covers all six eval metrics as pure unit checks and wired to real Sleuth
-components (the read-only agent loop, executor, and LLM-as-judge) using
-stubbed models so no network or live provider is needed.
-
-  llm_judge · trajectory · outcome · confidence · reliability · pass@k
-"""
+"""Offline eval harness tests (app/chatbot/eval_harness.py): llm_judge, trajectory,
+outcome, confidence, reliability, pass@k — pure units plus stubbed-model wiring."""
 from __future__ import annotations
 
 
@@ -114,8 +108,7 @@ def test_check_outcome_pure():
 
 
 def test_outcome_over_executor_golden_tasks(admin_client):
-    """End-to-end outcome check: a small golden corpus run through the real
-    executor (deterministic path) whose Response must match each goal shape."""
+    """Golden corpus through the real executor: each Response matches its goal shape."""
     from app.database import SessionLocal
     from app import models
     from app.chatbot import executor
@@ -151,9 +144,7 @@ def test_agreement_and_brier_pure():
 
 
 def test_llm_judge_agreement_and_confidence_over_golden_set():
-    """Wire the LLM-as-judge (stubbed verdict model) over a labelled golden set.
-    Pass/caveat decisions must match labels; confidence scores must be
-    well-calibrated (low Brier)."""
+    """Stubbed LLM-judge over a labelled golden set: decisions match labels, confidence calibrated."""
     from app.chatbot import evals
     from app.chatbot import eval_harness as eh
     golden = [
@@ -191,9 +182,7 @@ def test_reliability_metrics_pure():
 
 
 def test_reliability_route_determinism_on_deterministic_layer(admin_client):
-    """CI-safe reliability gate: the deterministic parse+dispatch layer must
-    return the same intent for the same message every time. The LLM routing
-    layer is not tested here because it isn't bit-deterministic."""
+    """Deterministic parse+dispatch returns the same intent every run (LLM layer excluded)."""
     from app.database import SessionLocal
     from app import models
     from app.chatbot import executor
@@ -212,9 +201,7 @@ def test_reliability_route_determinism_on_deterministic_layer(admin_client):
 
 
 def test_reliability_live_counters(admin_client, monkeypatch):
-    """The live counters (cloud_llm.metrics_snapshot) should record which
-    provider served the turn and which route was chosen. This is the data
-    the reliability eval uses to corroborate offline results."""
+    """Live counters record which provider served the turn and which route was chosen."""
     from app.config import get_settings
     from app.database import SessionLocal
     from app import models
@@ -265,8 +252,7 @@ def test_pass_at_k_pure():
 
 
 def test_pass_at_k_over_outcome_checks(admin_client):
-    """pass@k wired to the outcome checker: a deterministic data task should
-    pass every attempt, so pass@k and aggregate are both 1.0."""
+    """A deterministic data task passes every attempt, so pass@k and aggregate are 1.0."""
     from app.database import SessionLocal
     from app import models
     from app.chatbot import executor

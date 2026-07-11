@@ -1,11 +1,5 @@
-"""Tests for web push (Firebase Cloud Messaging).
-
-app.fcm_transport.send is mocked throughout, so no firebase-admin or live
-Firebase project is needed. Covers:
-  - /api/push/config (disabled by default; exposes public config when enabled)
-  - subscribe / unsubscribe (auth required, per-user scoped, token upsert)
-  - push_service.push_to_users: disabled no-op, send + dead-token pruning
-  - immediacy guarantee: an operation fires a push during the request (no cron)
+"""Web push (FCM) tests; app.fcm_transport.send is mocked, no live Firebase.
+Config endpoint, subscribe/unsubscribe, push_to_users, dead-token pruning, request-time immediacy.
 """
 from __future__ import annotations
 
@@ -62,8 +56,7 @@ def _register(user_id: int, token: str):
 
 # -- /api/push/config --------------------------------------------------------
 def test_config_reports_disabled_when_off(admin_client, monkeypatch):
-    # Force off so the test is hermetic regardless of the host's .env
-    # (which may legitimately have WEB_PUSH_ENABLED=true).
+    # Force off so the test is hermetic regardless of the host's .env.
     _enable_push(monkeypatch, on=False)
     r = admin_client.get("/api/push/config")
     assert r.status_code == 200
@@ -207,8 +200,7 @@ def test_operation_fires_push_immediately(admin_client, monkeypatch):
     })
     assert r.status_code == 201, r.text
 
-    # BackgroundTasks run before TestClient returns, so the push arrives
-    # synchronously here — no daily job or cron needed.
+    # BackgroundTasks run before TestClient returns, so the push arrives synchronously.
     pushed = [c for c in calls if "xavier-token" in c["tokens"]]
     assert pushed, calls
     assert "Push me" in pushed[0]["body"]
@@ -223,8 +215,7 @@ def test_actor_does_not_get_their_own_push(admin_client, monkeypatch):
     db.close()
     _register(admin_id, "admin-token")
 
-    # Admin is both actor and sole assignee, so the recipient list is empty
-    # after self-exclusion; no push should fire.
+    # Admin is actor and sole assignee; self-exclusion empties the list, no push.
     proj = admin_client.post("/api/projects", json={"name": "Solo"}).json()
     admin_client.post("/api/bugs", json={
         "project_id": proj["id"], "title": "Just me", "priority": "Low",
@@ -234,8 +225,7 @@ def test_actor_does_not_get_their_own_push(admin_client, monkeypatch):
 
 
 def test_bulk_delete_fires_push_immediately(admin_client, monkeypatch):
-    """Bulk delete must push to assignees, same as a single delete. The bulk
-    path was previously silent; this guards against regression."""
+    """Bulk delete must push to assignees like a single delete; the bulk path was previously silent."""
     _enable_push(monkeypatch, on=True)
     calls = _capture_fcm(monkeypatch)
     yid = _mk_user(admin_client, "Yolanda", "yolanda@test.local")

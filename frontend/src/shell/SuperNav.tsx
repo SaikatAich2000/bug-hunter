@@ -1,12 +1,5 @@
-/**
- * Second chrome band: work-item type tabs (left) and search box (right).
- * Renders only on views where type tabs are relevant (list / analytics);
- * search is list-only.
- *
- * Search debounces 300 ms before writing to filters.q. The lastSent ref lets
- * external clears (Clear-all button) update the input without racing a
- * keystroke in progress.
- */
+// Second chrome band: type tabs + search (list/analytics only; search is list-only).
+// Search debounces 300 ms; lastSent ref lets external clears update the input without racing typing.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { debounce } from "../lib/format";

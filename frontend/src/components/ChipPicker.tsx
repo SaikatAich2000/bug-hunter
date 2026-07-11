@@ -1,22 +1,9 @@
-/**
- * ChipPicker — a selectable chip list. Class names must match styles.css:
- *
- *   <div class="chip-picker [locked]" id="…">
- *     <span class="chip [selected]" data-id="…">
- *       Alice <span class="chip-sub">· admin</span>
- *     </span> × n
- *     — or — <span class="chip-empty">— none available —</span>
- *   </div>
- *
- * Selection is controlled: clicking a chip calls onToggle(id) and the parent
- * flips membership in `selected`. `disabled` applies the `.locked` read-only
- * treatment (pointer-events: none via styles.css).
- */
+/** Controlled selectable chip list; class names must match styles.css. */
 
 export interface ChipItem {
   id: number;
   label: string;
-  /** Secondary text rendered as the `.chip-sub` span (e.g. the user's role). */
+  /** Secondary text rendered as `.chip-sub`. */
   title?: string;
 }
 

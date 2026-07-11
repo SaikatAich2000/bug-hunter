@@ -1,19 +1,7 @@
-"""Per-user conversation memory for the Sleuth assistant.
-
-Conversations are stateful: people say "close it" after viewing a bug, or
-"assign her to bug 5" after listing managers. This module tracks recent
-referents in a small, in-process, TTL-cleaned store.
-
-- Storage is a plain dict keyed by user_id; it does not survive process
-  restarts, so context always starts fresh.
-- A single lock makes all read-modify-write operations thread-safe.
-- A cap of 200 sessions and a 30-minute TTL keep RAM bounded.
-
-Fields tracked per session:
-- last_bug_id     resolves pronouns like "it", "that bug"
-- last_user_id    resolves "her"/"him" after a user is mentioned
-- last_filter     most recent ParsedQuery filter dict (enables refinements)
-- pending_action  serialized ActionPlan awaiting "yes"/"confirm"
+"""Per-user conversation memory for Sleuth, so "close it" or "assign her to
+bug 5" resolve against recent referents. A small in-process, lock-guarded dict
+keyed by user_id; it doesn't survive restarts, and a 200-session cap plus
+30-minute TTL keep RAM bounded.
 """
 from __future__ import annotations
 
@@ -23,11 +11,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-# 200 sessions at ~1 KB each keeps total memory under ~200 KB.
 _MAX_SESSIONS = 200
 _TTL_SECONDS = 30 * 60   # 30 minutes idle
-# Shorter confirm window than the session TTL: a stray "ok" long after a
-# forgotten proposal must not fire a destructive write.
+# Shorter than the session TTL so a stray late "ok" can't fire a write.
 _CONFIRM_TTL_SECONDS = 5 * 60   # 5 minutes
 
 
@@ -41,19 +27,15 @@ class _Session:
     pending_action: Optional[dict[str, Any]] = None
     # Separate from last_seen so later activity doesn't extend the confirm window.
     pending_staged_at: float = 0.0
-    # Candidate bug specs parsed from an uploaded document; only created on
-    # explicit confirmation, never on upload alone.
+    # Candidate specs from an upload; created only on explicit confirmation.
     pending_ingest: Optional[dict[str, Any]] = None
     pending_ingest_staged_at: float = 0.0
     last_seen: float = 0.0   # epoch seconds, for TTL eviction
 
 
 class _Store:
-    """Thread-safe in-process session store.
-
-    All mutating operations hold the lock and refresh last_seen, so ongoing
-    activity keeps a user's context alive.
-    """
+    """Thread-safe in-process session store; every mutation holds the lock and
+    refreshes last_seen so ongoing activity keeps a user's context alive."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -135,12 +117,9 @@ class _Store:
             s.last_seen = now
 
     def take_pending(self, user_id: int) -> Optional[dict[str, Any]]:
-        """Pop and return the staged action (single-use).
-
-        Returns None if there is no pending action, the session has expired,
-        or the confirm window has closed. Clears a stale proposal rather than
-        executing on a late "yes".
-        """
+        """Pop and return the staged action (single-use), or None if none / the
+        session expired / the confirm window closed. Clears a stale proposal
+        rather than executing on a late "yes"."""
         now = time.time()
         with self._lock:
             self._evict_expired_locked(now)

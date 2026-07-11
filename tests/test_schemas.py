@@ -1,34 +1,16 @@
-"""Pure-unit tests for app/schemas.py: Pydantic schemas, field/model
-validators, and the in-house HTML sanitizer.
-
-Tests import directly from ``app.schemas`` with no TestClient or DB. Each
-validator branch gets a passing case and a failing case.
-
-The ``client`` fixture in conftest.py deletes and re-imports every ``app.*``
-module between tests, so a top-level module reference would go stale. We
-import ``app.schemas`` / ``app.config`` inside each test via the ``_S()``
-helper to always hit the same import generation the validators see at
-call time.
-
-Some branches (``not isinstance(v, str)`` guards and ``if v is None: return
-None`` early returns) can't be reached through normal Pydantic model
-construction because Pydantic coerces/rejects the value before the validator
-body runs. For those we call the validator/helper directly.
-"""
+"""Pure-unit tests for app/schemas.py validators and the HTML sanitizer.
+app.schemas is imported lazily via _S() because conftest re-imports app.* between tests."""
 import pytest
 from pydantic import ValidationError
 
 
 def _S():
-    """Return the live app.schemas module for the current import generation.
-    See module docstring for why this is imported lazily."""
+    """Return app.schemas for the current import generation."""
     import app.schemas as schemas
     return schemas
 
 
-# ---------------------------------------------------------------------------
 # HTML sanitizer (_HTMLAllowlistSanitizer / sanitize_html)
-# ---------------------------------------------------------------------------
 def test_cov_sanitize_html_none_returns_empty():
     # None input returns an empty string.
     s = _S()
@@ -168,9 +150,7 @@ def test_cov_sanitize_entityref_and_charref_preserved():
     assert "&#169;" in out
 
 
-# ---------------------------------------------------------------------------
 # normalize_choice (public helper)
-# ---------------------------------------------------------------------------
 def test_cov_normalize_choice_canonicalizes():
     s = _S()
     assert s.normalize_choice("bug", s.ALLOWED_ITEM_TYPES, "item_type") == "Bug"
@@ -190,9 +170,7 @@ def test_cov_normalize_choice_non_string_raises():
         s.normalize_choice(123, s.ALLOWED_ITEM_TYPES, "item_type")
 
 
-# ---------------------------------------------------------------------------
 # _strip_and_check_min_length
-# ---------------------------------------------------------------------------
 def test_cov_strip_and_check_min_length_ok():
     s = _S()
     assert s._strip_and_check_min_length("  abc  ", 2, "Name") == "abc"
@@ -220,9 +198,7 @@ def test_cov_strip_and_check_min_length_empty_when_min_one():
     assert "cannot be empty" in str(exc.value)
 
 
-# ---------------------------------------------------------------------------
 # _normalize_role
-# ---------------------------------------------------------------------------
 def test_cov_normalize_role_ok():
     s = _S()
     assert s._normalize_role("  ADMIN ") == "admin"
@@ -241,9 +217,7 @@ def test_cov_normalize_role_invalid_raises():
         s._normalize_role("superuser")
 
 
-# ---------------------------------------------------------------------------
 # _validate_email
-# ---------------------------------------------------------------------------
 def test_cov_validate_email_ok_lowercased():
     s = _S()
     assert s._validate_email("  USER@Example.COM ") == "user@example.com"
@@ -255,9 +229,7 @@ def test_cov_validate_email_invalid_raises():
         s._validate_email("not-an-email")
 
 
-# ---------------------------------------------------------------------------
 # _check_password_strength  (incl. the permanent 'changeme' exception)
-# ---------------------------------------------------------------------------
 def test_cov_password_changeme_exception_always_passes(monkeypatch):
     # 'changeme' bypasses normal strength checks regardless of the configured minimum.
     import app.config as config
@@ -311,9 +283,7 @@ def test_cov_password_complexity_off_allows_letters_only(monkeypatch):
     assert s._check_password_strength("abcdefgh") == "abcdefgh"
 
 
-# ---------------------------------------------------------------------------
 # UserIn
-# ---------------------------------------------------------------------------
 def test_cov_userin_valid():
     s = _S()
     u = s.UserIn(name="  Alice ", email="A@B.com", role="ADMIN",

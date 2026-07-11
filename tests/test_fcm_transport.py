@@ -1,11 +1,5 @@
-"""Tests for app/fcm_transport.py — the optional Firebase Cloud Messaging transport.
-
-firebase_admin is imported lazily and every failure is caught and logged rather
-than raised. A fake firebase_admin (with credentials and messaging submodules)
-is injected so all branches — init success/failure, dead-token pruning, the
-https-only webpush link, never-raises guarantees — run without a live Firebase
-project. app.push_service mocks send() wholesale in its own tests; this file
-exercises the transport layer directly.
+"""Tests for app/fcm_transport.py (optional FCM transport) against a fake firebase_admin.
+Covers init success/failure, dead-token pruning, https-only webpush link, never-raises guarantees.
 """
 from __future__ import annotations
 
@@ -17,9 +11,7 @@ import pytest
 from app import fcm_transport
 
 
-# ---------------------------------------------------------------------------
 # Fakes
-# ---------------------------------------------------------------------------
 class _Resp:
     def __init__(self, success: bool, exception=None):
         self.success = success
@@ -97,9 +89,7 @@ def _fake_settings(monkeypatch, cred="/path/sa.json"):
     )
 
 
-# ---------------------------------------------------------------------------
 # _ensure_app
-# ---------------------------------------------------------------------------
 def test_ensure_app_returns_cached(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(fcm_transport, "_state", {"app": sentinel, "init_failed": False})
@@ -132,8 +122,7 @@ def test_ensure_app_init_exception_latches(monkeypatch):
 
 
 def test_ensure_app_double_check_app_inside_lock(monkeypatch):
-    """Simulate another thread setting _state['app'] between the outer check and lock
-    acquisition; the inner re-check inside the lock should return it."""
+    """Another thread setting _state['app'] between check and lock: the inner re-check returns it."""
     _fake_settings(monkeypatch)
     sentinel = object()
 
@@ -164,9 +153,7 @@ def test_ensure_app_double_check_init_failed_inside_lock(monkeypatch):
     assert fcm_transport._ensure_app() is None
 
 
-# ---------------------------------------------------------------------------
 # _is_dead_token
-# ---------------------------------------------------------------------------
 def test_is_dead_token_none():
     assert fcm_transport._is_dead_token(None) is False
 
@@ -184,9 +171,7 @@ def test_is_dead_token_other():
     assert fcm_transport._is_dead_token(RuntimeError("quota exceeded")) is False
 
 
-# ---------------------------------------------------------------------------
 # _webpush_config
-# ---------------------------------------------------------------------------
 def test_webpush_config_https():
     m = _make_messaging()
     cfg = fcm_transport._webpush_config(m, "https://app.example/bug/1")
@@ -199,9 +184,7 @@ def test_webpush_config_non_https():
     assert fcm_transport._webpush_config(m, "") is None
 
 
-# ---------------------------------------------------------------------------
 # send
-# ---------------------------------------------------------------------------
 def test_send_empty_tokens_returns_empty():
     assert fcm_transport.send([], title="t", body="b") == []
     assert fcm_transport.send(None, title="t", body="b") == []
@@ -213,8 +196,7 @@ def test_send_app_none_returns_empty(monkeypatch):
 
 
 def test_send_messaging_import_fails_returns_empty(monkeypatch):
-    # _ensure_app succeeds, but firebase_admin.messaging is not importable,
-    # so the lazy import raises. send() must return [] and not propagate.
+    # _ensure_app succeeds but messaging import raises; send() returns [] and doesn't propagate.
     sentinel = object()
     monkeypatch.setattr(fcm_transport, "_ensure_app", lambda: sentinel)
     fa = types.ModuleType("firebase_admin")  # no .messaging, not a package

@@ -1,23 +1,8 @@
-"""HaveIBeenPwned breach check.
+"""HaveIBeenPwned breach check via the k-anonymity API.
 
-Uses the k-anonymity API: only the first 5 hex characters of the password's
-SHA-1 hash are sent; the suffix list is checked locally. The plaintext (and
-the full hash) never leave the server.
-
-API:  GET https://api.pwnedpasswords.com/range/{PREFIX}
-Doc:  https://haveibeenpwned.com/API/v3#PwnedPasswords
-
-Behaviour:
-  - Enabled by default. Set PASSWORD_BREACH_CHECK_ENABLED=false to disable in
-    air-gapped deploys or test environments.
-  - On a network error, timeout, or non-200 response, we log a warning and let
-    the password through. A transient API outage shouldn't block a legitimate
-    password change; local strength checks still apply.
-  - 3 s timeout so a slow API doesn't stall every password change.
-  - Add-Padding: true keeps the response size constant so the server can't
-    infer the prefix's true hit-count from the byte count.
-
-Tests monkeypatch ``_fetch_range`` to return a controlled response.
+Only the first 5 hash chars leave the box; the suffix list is checked locally.
+Fails open (a network/timeout/non-200 error lets the password through) so an
+API outage never blocks a change. Disable with PASSWORD_BREACH_CHECK_ENABLED=false.
 """
 from __future__ import annotations
 
@@ -32,9 +17,8 @@ logger = logging.getLogger("bug_hunter.password_breach")
 _API_URL = "https://api.pwnedpasswords.com/range/"
 _TIMEOUT_SECONDS = 3.0
 
-# 'changeme' is the pre-set default password in existing deployments and is
-# always accepted by the strength validator (see app/schemas), so skip the
-# breach gate for it even though it appears in the HIBP corpus.
+# 'changeme' is the factory-default password (always accepted by the strength
+# validator), so skip the breach gate even though it's in the HIBP corpus.
 _ALWAYS_ALLOWED = frozenset({"changeme"})
 
 
@@ -47,18 +31,12 @@ def _is_enabled() -> bool:
 
 
 def _sha1_hex(plain: str) -> str:
-    # SHA-1 is what the HIBP API requires for its k-anonymity scheme. It is
-    # only used as a lookup key here, not as a stored credential hash (that's
-    # bcrypt, in app/auth.py).
+    # SHA-1 is the HIBP k-anonymity lookup key, not a credential hash (that's bcrypt).
     return hashlib.sha1(plain.encode("utf-8")).hexdigest().upper()  # NOSONAR
 
 
 def _fetch_range(prefix: str) -> str | None:
-    """Return the raw text body for /range/{prefix}, or None on failure.
-
-    Public so tests can monkeypatch this seam without mocking httpx
-    transport internals.
-    """
+    """Return the raw body for /range/{prefix}, or None on failure (test seam)."""
     try:
         with httpx.Client(timeout=_TIMEOUT_SECONDS) as client:
             resp = client.get(
@@ -75,8 +53,7 @@ def _fetch_range(prefix: str) -> str | None:
 
 
 def is_password_breached(plain: str) -> bool:
-    """Return True iff this password appears in the HIBP breach corpus
-    with a non-zero count. Lets the password through on any error."""
+    """True iff the password is in the HIBP corpus with a non-zero count; fails open."""
     if not plain or not _is_enabled():
         return False
     if plain.lower() in _ALWAYS_ALLOWED:
@@ -87,7 +64,7 @@ def is_password_breached(plain: str) -> bool:
     if body is None:
         return False
     for line in body.splitlines():
-        # Lines are "SUFFIX:COUNT". Padding entries use COUNT=0; skip them.
+        # Lines are "SUFFIX:COUNT"; padding entries use COUNT=0.
         s, _, count = line.partition(":")
         if s.strip().upper() == suffix and count.strip() != "0":
             return True

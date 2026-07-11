@@ -1,8 +1,5 @@
 """Targeted tests for defensive branches the main suites don't reach.
-
-Covers three paths masked by the happy path or the repo .env: RAG upsert when
-embedding returns nothing, the digest scheduler with an empty cron expression,
-and a failed password-reset delivery.
+RAG upsert with no embedding, digest scheduler with empty cron, failed reset delivery.
 """
 from __future__ import annotations
 

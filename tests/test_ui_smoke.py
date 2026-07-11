@@ -1,11 +1,5 @@
-"""End-to-end UI smoke tests using a real Chromium via Playwright.
-
-Boots the FastAPI app on a random port and drives a browser through the main
-user flows: login, project creation, bug creation and editing, session revoke,
-and various shell chrome behaviors.
-
-Run from the repo root:  python -m pytest tests/test_ui_smoke.py -q
-"""
+"""End-to-end UI smoke tests: boots the FastAPI app on a random port and
+drives a real Chromium via Playwright through the main user flows."""
 import os
 import socket
 import tempfile

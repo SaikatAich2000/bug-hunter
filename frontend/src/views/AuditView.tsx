@@ -1,10 +1,6 @@
 /**
- * Audit Trail view.
- *
- * Paginates GET /api/audit (entity_type / actor_user_id / q / limit / offset).
- * Filter changes and Refresh replace the list; "Load older entries" appends.
- * A short page signals end-of-history. Search is debounced 300 ms; entity and
- * actor selects fetch immediately.
+ * Audit Trail view. Paginates GET /api/audit; filter changes replace the list,
+ * "Load older entries" appends, a short page signals end-of-history.
  */
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
@@ -17,7 +13,6 @@ import type { AuditRow } from "../types";
 const AUDIT_PAGE_SIZE = 300;
 
 // Memoized so typing in the search box doesn't re-render the whole list.
-// The row is pure over `r` and module-scope helpers, so memo is safe here.
 const AuditRowView = memo(function AuditRowView({ r }: { r: AuditRow }) {
   return (
     <div className="audit-row">
@@ -59,8 +54,7 @@ export default function AuditView() {
   filtersRef.current = { entity, actor, q };
   // Running count of loaded rows, used as the next page offset.
   const loadedCountRef = useRef(0);
-  // Tracks which `q` the last fetch covered so the debounce effect can skip
-  // a redundant request when Clear already fired an immediate fetch.
+  // Last-fetched q — lets the debounce skip a request Clear already fired.
   const lastFetchedQRef = useRef<string | null>(null);
 
   const fetchAudit = useCallback(async (clean: boolean) => {
@@ -77,8 +71,7 @@ export default function AuditView() {
     try {
       const page = await api<AuditRow[]>(`/audit?${params.toString()}`);
       loadedCountRef.current += page.length;
-      // Offset paging over a growing table can return rows we already have.
-      // De-duplicate by id to avoid React key collisions on append.
+      // Offset paging over a growing table can repeat rows — de-dupe by id.
       setRows((prev) => {
         if (clean) return page;
         const seen = new Set(prev.map((r) => r.id));
@@ -87,11 +80,9 @@ export default function AuditView() {
       setDrained(page.length < AUDIT_PAGE_SIZE);
     } catch (err) {
       toastError(err);
-      // Prevent the "Load older" button from retrying a failed request.
-      setDrained(true);
+      setDrained(true); // don't let "Load older" retry a failed request
     } finally {
-      // Show empty-state rather than a blank screen if the first fetch errors.
-      setLoaded(true);
+      setLoaded(true); // empty-state, not a blank screen, on first-fetch error
     }
   }, []);
 
@@ -100,8 +91,7 @@ export default function AuditView() {
     void fetchAudit(true);
   }, [entity, actor, tick, fetchAudit]);
 
-  // Search input: debounced 300 ms. Skips mount and any q already covered
-  // by the immediate effect above.
+  // Search debounced 300 ms; skips mount and q already fetched above.
   const qFirstRef = useRef(true);
   useEffect(() => {
     if (qFirstRef.current) {
@@ -115,9 +105,7 @@ export default function AuditView() {
     return () => clearTimeout(t);
   }, [q, fetchAudit]);
 
-  // Background poll so new events appear without a manual Refresh. Skipped
-  // when the user has paged beyond the first page to avoid collapsing their
-  // accumulated list. Paused while the tab is hidden.
+  // Background poll; paused while hidden.
   useEffect(() => {
     const refresh = () => {
       if (document.hidden) return;
@@ -129,7 +117,7 @@ export default function AuditView() {
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", refresh); };
   }, [fetchAudit]);
 
-  // Resets all filters; the tick bump triggers the immediate clean fetch.
+  // Reset filters; tick bump triggers the immediate clean fetch.
   const onClear = () => {
     setEntity("");
     setActor("");

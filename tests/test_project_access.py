@@ -1,12 +1,5 @@
-"""Tests for project-scoped access control (the user_projects feature).
-
-Managers and regular users only see work items, events, stats, reports, and
-audit entries for their member projects (app/access.py + ``user_projects``
-table). Admins are unrestricted. A non-admin with no memberships sees nothing.
-
-Covers every scoped surface: REST routes, the reports engine, the Sleuth
-chatbot read handlers, the access helpers directly, and the project_ids
-plumbing on the users API and project_id on events.
+"""Project-scoped access control tests (user_projects + app/access.py); admins unrestricted.
+Covers every scoped surface: REST, reports engine, Sleuth read handlers, helpers, plumbing.
 """
 from __future__ import annotations
 
@@ -20,9 +13,7 @@ _PW = "ProjAccess9X"
 _World = namedtuple("_World", "pa pb ba bb")
 
 
-# ---------------------------------------------------------------------------
 # Helpers — sequential logins on a single TestClient (each call replaces the cookie).
-# ---------------------------------------------------------------------------
 def _login(c, email, pw=_PW):
     r = c.post("/api/auth/login", json={"email": email, "password": pw})
     assert r.status_code == 200, r.text
@@ -84,9 +75,7 @@ def _two_project_world(c):
     return _World(pa, pb, ba, bb)
 
 
-# ===========================================================================
 # access.py helpers (direct unit tests)
-# ===========================================================================
 def test_access_helpers_direct(client):
     """Unit tests for accessible_project_ids, can_access_project, and membership helpers."""
     _as_admin(client)
@@ -128,9 +117,7 @@ def test_access_helpers_direct(client):
         db.close()
 
 
-# ===========================================================================
 # Users API — project_ids plumbing
-# ===========================================================================
 def test_create_user_with_project_tags_roundtrips(client):
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
@@ -208,9 +195,7 @@ def test_manager_can_only_grant_own_projects(client):
     assert r.status_code == 403
 
 
-# ===========================================================================
 # Bugs — list / detail / create / update / sub-resources / bulk
-# ===========================================================================
 def test_bug_list_scoped_by_membership(client):
     w = _two_project_world(client)
     ids, total = _bug_ids(client)
@@ -259,8 +244,7 @@ def test_bug_create_and_update_scoped(client):
     r = client.post("/api/bugs", json={"title": "Nope", "project_id": w.pb["id"]})
     assert r.status_code == 400 and "does not exist" in r.json()["detail"]
 
-    # Out-of-scope bug returns 404; moving an in-scope bug to an inaccessible
-    # project is rejected.
+    # Out-of-scope bug is 404; moving an in-scope bug to an inaccessible project is rejected.
     assert client.put(f"/api/bugs/{w.bb['id']}", json={"priority": "High"}).status_code == 404
     r = client.put(f"/api/bugs/{w.ba['id']}", json={"project_id": w.pb["id"]})
     assert r.status_code == 400
@@ -325,9 +309,7 @@ def test_attachment_download_scoped(client):
     assert r.status_code == 404
 
 
-# ===========================================================================
 # Events — require/validate project + scoped visibility
-# ===========================================================================
 def test_event_project_scoping(client):
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
@@ -381,8 +363,7 @@ def test_event_project_move_within_scope_succeeds(client):
 
 
 def test_event_detail_items_filtered_to_scope(client):
-    """An event can hold items from multiple projects; a restricted viewer only sees
-    items that belong to their accessible projects."""
+    """A restricted viewer only sees event items belonging to their accessible projects."""
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
     pb = _mk_project(client, "Beta")
@@ -397,9 +378,7 @@ def test_event_detail_items_filtered_to_scope(client):
     assert item_ids == {in_scope["id"]}
 
 
-# ===========================================================================
 # Stats — scoped aggregations
-# ===========================================================================
 def test_stats_scoped(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -420,9 +399,7 @@ def test_stats_scoped(client):
     assert s["by_type"].get("Event", 0) == 0
 
 
-# ===========================================================================
 # Audit — scoped to a manager's projects
-# ===========================================================================
 def test_audit_scoped_for_manager(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -442,9 +419,7 @@ def test_audit_empty_for_untagged_manager(client):
     assert client.get("/api/audit").json() == []
 
 
-# ===========================================================================
 # Reports — scoped, and not wideable via the payload
-# ===========================================================================
 def test_reports_scoped_and_not_wideable(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -475,8 +450,7 @@ def test_reports_empty_for_untagged_manager(client):
 
 
 def test_reports_throughput_scoped(client):
-    """Audit-log-based reports (throughput/timeline/time-to-resolution) must also
-    respect project scope; a restricted manager never sees another project's data."""
+    """Audit-log-based reports respect project scope; a restricted manager never sees other projects' data."""
     w = _two_project_world(client)
     _as_admin(client)
     client.put(f"/api/bugs/{w.bb['id']}", json={"status": "Resolved"})
@@ -487,9 +461,7 @@ def test_reports_throughput_scoped(client):
     assert "Beta bug" not in str(r.json()["rows"])
 
 
-# ===========================================================================
 # Projects — scoped list/detail + auto-enroll the manager creator
-# ===========================================================================
 def test_projects_scoped_and_creator_autoenrolled(client):
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
@@ -518,9 +490,7 @@ def test_admin_sees_all_projects(client):
     assert {"Alpha", "Beta"} <= names
 
 
-# ===========================================================================
 # Sleuth chatbot — read handlers scoped
-# ===========================================================================
 def test_sleuth_list_bugs_scoped(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -570,9 +540,7 @@ def test_sleuth_untagged_user_sees_nothing(client):
 
 
 def test_sleuth_cloud_data_path_scoped_for_manager(client, monkeypatch):
-    """Regression: the cloud layer's _route_data_query must apply the same project
-    scope as the deterministic path. Previously it dispatched with accessible=None
-    (admin-level), letting a restricted manager see every project via a free-form query."""
+    """Regression: cloud _route_data_query must scope like the deterministic path (was accessible=None, admin-level)."""
     from app.config import get_settings
     from app.chatbot import cloud_llm
     w = _two_project_world(client)
@@ -584,8 +552,7 @@ def test_sleuth_cloud_data_path_scoped_for_manager(client, monkeypatch):
     monkeypatch.setattr(s, "SLEUTH_CLOUD_ENABLED", True)
     monkeypatch.setattr(s, "GROQ_API_KEY", "test-key")
     monkeypatch.setattr(cloud_llm, "_cooldown_until", 0.0, raising=False)
-    # Simulate the model routing a free-form ask to a canonical query; unscoped
-    # this would surface both projects' bugs.
+    # Simulate model routing a free-form ask to a canonical query; unscoped would show both projects.
     monkeypatch.setattr(
         cloud_llm, "_call_groq",
         lambda system, user, **kw: '{"mode":"data","canonical_query":"list all bugs"}',

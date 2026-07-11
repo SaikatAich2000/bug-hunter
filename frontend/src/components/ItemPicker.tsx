@@ -1,11 +1,5 @@
-/**
- * Searchable, multi-select combobox for linking work items.
- *
- * Controlled: `selected` holds the staged items; toggling a row calls
- * `onChange` with the updated array. `excludeIds` strips the current item and
- * already-linked items so self-links and duplicates are impossible. GET /bugs
- * returns all types; the type tabs add a server-side filter.
- */
+// Searchable multi-select combobox for linking work items (controlled).
+// excludeIds strips the current + already-linked items so self-links/duplicates are impossible.
 import {
   useCallback,
   useEffect,
@@ -66,7 +60,7 @@ export default function ItemPicker({
   excludeRef.current = excludeIds;
   const selectedIds = new Set(selected.map((s) => s.id));
 
-  // Sequence counter: a slow response arriving after a newer one is dropped.
+  // Sequence counter drops stale responses.
   const seqRef = useRef(0);
 
   const runSearch = useCallback(async (q: string, type: TypeKey) => {

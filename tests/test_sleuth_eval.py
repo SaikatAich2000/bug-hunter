@@ -1,10 +1,4 @@
-"""Offline evaluation battery for Sleuth's deterministic understanding.
-
-A representative set of (message -> expected intent + key fields) cases that
-doubles as a regression guard: a parser change that breaks routing fails here
-with a clear, named case. Pure rule engine — no network, fully deterministic.
-Extend CASES as new query shapes are supported.
-"""
+"""Offline (message -> expected intent + fields) battery for Sleuth's deterministic parser; a routing regression guard."""
 from __future__ import annotations
 
 # (message, expected_intent, {field: expected_value})

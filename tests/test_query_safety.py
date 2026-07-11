@@ -1,8 +1,5 @@
 """Query safety and edge-case tests.
-
-Covers activity ordering, LIKE-wildcard search, project move rights,
-reporter_id=null semantics, silent SMTP failure, empty-string fields,
-no-op audit suppression, and comment-author preservation.
+Activity ordering, LIKE wildcards, project moves, reporter null, SMTP failure, no-op audit.
 """
 from __future__ import annotations
 
@@ -11,8 +8,7 @@ import io
 
 def _make_user(c, name="Someone Long", email="some@x.com", role="user", password="TestUserPwd9X"):
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Give the new user access to all existing projects so pre-scoping tests
-    # still see everything without needing per-project fixture setup.
+    # Grant all projects so pre-scoping tests see everything without per-project setup.
     pids = [p["id"] for p in c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -36,16 +32,10 @@ def _make_bug(c, project_id, title="A bug for tests", **extra):
     return r.json()
 
 
-# ===========================================================================
 # Activity order: detail vs list-activity with same-second timestamps
-# ===========================================================================
 class TestActivityOrderingDeep:
     def test_activity_detail_and_list_show_reversed_order_when_clock_is_coarse(self, admin_client):
-        """The detail relationship orders by created_at DESC only; list_activity
-        orders by (created_at DESC, id DESC). When multiple activities land in the
-        same second, SQLite returns them insertion-order (asc id) for the plain
-        ORDER BY, but newest-first for the id-desc tiebreaker. Both endpoints
-        must agree."""
+        """Detail orders by created_at DESC only; list adds id DESC. Same-second rows must agree across endpoints."""
         p = _make_project(admin_client, "AO-Deep")
         bug = _make_bug(admin_client, p["id"], title="Activity-order verify")
         for s in ("In Progress", "Resolved", "Closed", "Reopened"):
@@ -65,9 +55,7 @@ class TestActivityOrderingDeep:
 
 
 
-# ===========================================================================
 # Moving a bug to a different project
-# ===========================================================================
 class TestBugProjectMove:
     def test_user_can_move_their_bug_to_any_project(self, admin_client):
         p1 = _make_project(admin_client, "Move-A")
@@ -85,9 +73,7 @@ class TestBugProjectMove:
         assert r.json()["project_id"] == p2["id"]
 
 
-# ===========================================================================
 # Clearing the reporter field
-# ===========================================================================
 class TestReporterUnset:
     def test_admin_can_set_reporter_to_null(self, admin_client):
         """Admin can pass reporter_id=null to clear the reporter."""
@@ -111,9 +97,7 @@ class TestReporterUnset:
         assert r.status_code == 403
 
 
-# ===========================================================================
 # Silent SMTP failure
-# ===========================================================================
 class TestEmailServiceFailureSilent:
     def test_bug_create_succeeds_even_if_email_backend_disabled(self, admin_client):
         """EMAIL_BACKEND=disabled in conftest; the request must not fail when email is unavailable."""
@@ -127,9 +111,7 @@ class TestEmailServiceFailureSilent:
         assert r.status_code == 201
 
 
-# ===========================================================================
 # Empty-string field handling
-# ===========================================================================
 class TestEmptyStringFields:
     def test_bug_update_with_empty_description(self, admin_client):
         """Empty description is valid; there is no min_length constraint."""
@@ -156,13 +138,10 @@ class TestEmptyStringFields:
         assert r.json()["color"] == "#ABCDEF"
 
 
-# ===========================================================================
 # Audit log actor_user_id semantics
-# ===========================================================================
 class TestAuditActorSemantics:
     def test_password_reset_request_audit_has_no_actor(self, admin_client):
-        """Forgot-password is unauthenticated, so the audit row must have
-        actor_user_id=NULL and actor_name='system'."""
+        """Forgot-password is unauthenticated: audit row has actor_user_id NULL and actor_name 'system'."""
         admin_client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
         r = admin_client.get("/api/audit?q=password_reset_requested")
         rows = r.json()
@@ -172,9 +151,7 @@ class TestAuditActorSemantics:
         assert prr[0]["actor_name"] == "system"
 
     def test_filtering_audit_by_actor_excludes_anonymous_actions(self, admin_client):
-        """Filtering by actor_user_id hides system rows (NULL actor). Worth noting:
-        a user filtering their own audit history won't see their own password-reset
-        requests because those are recorded without an actor."""
+        """Actor filter hides system rows (NULL actor), so users won't see their own reset requests."""
         admin_client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})
         r = admin_client.get("/api/audit?actor_user_id=1&q=password_reset_requested")
         rows = r.json()
@@ -183,9 +160,7 @@ class TestAuditActorSemantics:
         assert not any(row["action"] == "password_reset_requested" for row in rows)
 
 
-# ===========================================================================
 # Stress: tons of bugs / pages
-# ===========================================================================
 class TestStress:
     def test_many_bugs_pagination_is_stable(self, admin_client):
         p = _make_project(admin_client, "Stress")
@@ -207,9 +182,7 @@ class TestStress:
         assert any("findable" in b["title"] for b in items)
 
 
-# ===========================================================================
 # Bug attachment edge cases
-# ===========================================================================
 class TestAttachmentEdge:
     def test_attachment_with_no_filename(self, admin_client):
         p = _make_project(admin_client, "AE-1")

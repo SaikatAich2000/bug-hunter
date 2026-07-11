@@ -1,13 +1,5 @@
-"""Tests for the configurable password policy and the permanent 'changeme' exception
-(app/schemas._check_password_strength, driven by app/config flags).
-
-Imports are kept inside each test rather than at the top of the module because
-conftest.py's `client` fixture deletes and re-imports every `app.*` module
-between tests so that env overrides take effect. A top-level import would
-reference a stale module once any client-using test has run. Importing inside
-each test ensures we patch the same Settings class that _check_password_strength
-reads. We patch the class attribute directly so every instance sees the change
-via normal attribute lookup, and monkeypatch restores it afterwards.
+"""Configurable password policy + the permanent 'changeme' exception (_check_password_strength).
+Imports live inside tests; Settings class attributes are patched so every instance sees the change.
 """
 import pytest
 

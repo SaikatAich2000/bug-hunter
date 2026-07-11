@@ -1,15 +1,5 @@
-"""Tests for per-item-type status sets and admin-only comment/attachment edits.
-
-Covers:
-  1. Status sets scoped by item type ("Not a Bug"/"Resolved" for Bug,
-     "Approved"/"Implemented" for Requirement, "Done"/"Blocked"/"Cancelled"
-     for Task, "New" shared by all).
-  2. Comments: edit and delete are admin-only; creation is open to everyone.
-  3. Attachments: delete is admin-only; upload remains open post-creation.
-  4. /api/meta exposes statuses_by_type for the frontend.
-
-All checks are server-side; the SPA mirrors these rules but is not the
-authoritative source.
+"""Per-item-type status sets and admin-only comment/attachment edits (server-side authoritative):
+status sets scoped by item type, admin-only comment edit/delete + attachment delete, and /api/meta statuses_by_type.
 """
 from __future__ import annotations
 
@@ -26,8 +16,7 @@ def _login(client, email, password):
 def _make_user(client, name, role="user", email=None, password="User12345Aa"):
     email = email or f"{name.lower()}@x.test"
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Tag the user into every existing project so tests that predate per-project
-    # scoping continue to see all items.
+    # Tag into every project so non-admins can see all items.
     pids = [p["id"] for p in client.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -121,9 +110,7 @@ def test_requirement_can_use_approved_status(admin_client):
 
 
 def test_changing_type_validates_status_against_new_type(admin_client):
-    """A PUT that changes item_type must also validate the status against the
-    new type. If the combination is invalid the server rejects the whole
-    request (400)."""
+    """A PUT changing item_type revalidates status against the new type; an invalid combo is rejected 400."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Not a Bug"})
@@ -192,8 +179,7 @@ def test_comment_edit_is_admin_only(admin_client):
 
 
 def test_comment_creation_still_open_for_everyone(admin_client):
-    """Comment creation must remain open to any authenticated user.
-    Only edit and delete are restricted to admins."""
+    """Comment creation stays open to any authenticated user; only edit/delete are admin-only."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     _make_user(admin_client, "User2", role="user", email="user2@x.test")
@@ -222,8 +208,7 @@ def test_attachment_delete_is_admin_only(admin_client):
 
 
 def test_attachment_upload_open_post_creation(admin_client):
-    """Uploading attachments after a bug is created must be open to all users;
-    the admin restriction covers delete only."""
+    """Post-creation attachment uploads stay open to all users; the admin restriction covers delete only."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     _make_user(admin_client, "User3", role="user", email="user3@x.test")
@@ -236,8 +221,7 @@ def test_attachment_upload_open_post_creation(admin_client):
 
 
 def test_comment_attachment_delete_is_admin_only(admin_client):
-    """Attachments on comments use the same DELETE endpoint and are subject
-    to the same admin-only rule as bug-level attachments."""
+    """Comment attachments share the DELETE endpoint and the same admin-only rule as bug attachments."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     _make_user(admin_client, "User4", role="user", email="user4@x.test")

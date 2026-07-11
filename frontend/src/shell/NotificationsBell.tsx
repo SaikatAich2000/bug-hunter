@@ -1,16 +1,9 @@
-/**
- * Top-bar bell with unread badge and dropdown panel.
- *
- * Badge count comes from the AppContext session poll. Opening the panel
- * fetches a fresh list; clicking a row marks it read and navigates to the
- * linked item.
- */
+// Top-bar bell with unread badge and dropdown panel; badge count comes from the session poll.
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { timeAgo } from "../lib/format";
 import type { NotificationKind, NotificationOut } from "../types";
 
-/** Emoji per notification kind. */
 const KIND_ICON: Record<NotificationKind, string> = {
   assigned: "🎯",
   reported: "📌",
@@ -32,7 +25,6 @@ export default function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Fetch on open.
   useEffect(() => {
     if (open) void loadNotifications();
   }, [open, loadNotifications]);

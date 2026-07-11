@@ -150,17 +150,22 @@ password, TLS), then restart. Any standard SMTP provider works.
 
 Set `EMAIL_DIGEST_ENABLED=true` to batch each user's notifications (new item,
 update, assignment, comment, event) into one email per day. Password-reset and
-other security emails always send immediately and are never batched. Run the
-digest from cron or Task Scheduler:
+other security emails always send immediately and are never batched.
+
+With the digest on, immediate work-item emails are **off** — the scheduled job
+becomes the only sender, so make sure one of the two schedulers below actually
+runs. Run the digest from cron or Task Scheduler:
 
 ```bash
 python -m app.jobs.email_digest
 ```
 
 Alternatively, set `EMAIL_DIGEST_CRON` (a 5-field cron expression) and
-`EMAIL_DIGEST_TIMEZONE` to let the app run the digest itself. The job is
-idempotent and bounded to its time window, so it can stay scheduled even when the
-digest is off.
+`EMAIL_DIGEST_TIMEZONE` (IANA name, e.g. `Asia/Kolkata`) to let the app run the
+digest itself — the startup log confirms with `Email-digest scheduler started`.
+The job is idempotent, bounded to a lookback window
+(`EMAIL_DIGEST_LOOKBACK_HOURS`, default 50 — twice the daily gap so a missed run
+is caught up), and retries failed sends on the next run.
 
 ### Web push (optional)
 

@@ -1,7 +1,5 @@
-"""Targeted coverage for small defensive/edge branches in the infra layer:
-account-lockout bucket reclamation, the shared X-Forwarded-File parser's
-empty-input guard, animated-image preservation in the EXIF stripper, and the
-scheduler's start() re-entry guard.
+"""Targeted coverage for small defensive/edge branches in the infra layer.
+Lockout bucket reclamation, XFF empty-input guard, animated-image preservation, scheduler re-entry.
 """
 from __future__ import annotations
 
@@ -12,9 +10,7 @@ from app import account_lockout, image_strip, scheduler
 from app.auth import trusted_forwarded_ip
 
 
-# ---------------------------------------------------------------------------
 # account_lockout._reclaim_buckets
-# ---------------------------------------------------------------------------
 def test_reclaim_deletes_idle_bucket():
     account_lockout._reset_for_tests()
     # Idle: unlocked (locked_until 0) and no in-window failures → reclaimed.
@@ -40,18 +36,14 @@ def test_reclaim_evicts_soonest_expiring_when_all_locked(monkeypatch):
     account_lockout._reset_for_tests()
 
 
-# ---------------------------------------------------------------------------
 # auth.trusted_forwarded_ip — empty input guard (line 79)
-# ---------------------------------------------------------------------------
 def test_trusted_forwarded_ip_empty_returns_none():
     assert trusted_forwarded_ip("", 1) is None
     assert trusted_forwarded_ip("   ,  ,", 1) is None
     assert trusted_forwarded_ip(None, 1) is None
 
 
-# ---------------------------------------------------------------------------
 # image_strip — animated/multi-frame images are preserved untouched (85-86)
-# ---------------------------------------------------------------------------
 def test_strip_preserves_animated_image(monkeypatch):
     from PIL import Image
 
@@ -60,16 +52,13 @@ def test_strip_preserves_animated_image(monkeypatch):
         is_animated = True
         n_frames = 3
 
-    # Saving a multi-frame image would silently drop all but the first frame,
-    # so the stripper must return the original bytes unchanged.
+    # Saving multi-frame would drop all but the first frame; must return original bytes.
     monkeypatch.setattr(Image, "open", lambda src: _FakeAnimated())
     data = b"GIF89a-fake-animated-bytes"
     assert image_strip.strip_image_metadata(data, "image/gif") == data
 
 
-# ---------------------------------------------------------------------------
 # scheduler.start() re-entry guard (193-194)
-# ---------------------------------------------------------------------------
 def test_scheduler_start_reentry_is_noop(monkeypatch):
     class _FakeTask:
         def done(self):

@@ -1,14 +1,6 @@
 /**
- * Sleuth — floating launcher (#sleuthFab) + dialog panel (#sleuthPanel).
- * Class names match chatbot.css targets.
- *
- * Security:
- *  - All server text is run through escapeHtml() before mdLite adds any tags.
- *    dangerouslySetInnerHTML is only used on the output of that pipeline, then
- *    passed through the fail-closed sanitizeSleuth allowlist.
- *  - Table / file / suggestions / confirm blocks render via JSX (auto-escaped).
- *  - Bug links use data-open-bug; a delegated click handler (CSP-safe, no
- *    inline JS) dispatches "sleuth:open-bug" on document for AppContext.
+ * Sleuth — floating launcher (#sleuthFab) + dialog panel (#sleuthPanel); classes match chatbot.css.
+ * Security pipeline: server text → escapeHtml → mdLite → fail-closed sanitizeSleuth allowlist before dangerouslySetInnerHTML; other blocks render via auto-escaped JSX; bug links use data-open-bug + a delegated CSP-safe click handler dispatching "sleuth:open-bug".
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
@@ -16,9 +8,7 @@ import { sanitizeSleuth } from "../lib/sanitize";
 import { useApp } from "../state/AppContext";
 import type { ChatBlock, ChatOut } from "../types";
 
-// ---------------------------------------------------------------------------
-// Tiny helpers (.replace(/g) not replaceAll — tsconfig targets ES2020)
-// ---------------------------------------------------------------------------
+// Tiny helpers (.replace(/g) not replaceAll — tsconfig targets ES2020).
 const ESCAPE_MAP: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
@@ -44,9 +34,7 @@ const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const rec = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === "object" ? (v as Record<string, unknown>) : {};
 
-// Safe URL schemes for mdLite links. Fragment links are restricted to the
-// exact form the bug-detail handler emits ("#open-bug-<n>") — a broader
-// "#..." allowlist would let callers plant arbitrary in-app fragments.
+// Safe URL schemes for mdLite links; fragments restricted to "#open-bug-<n>" (broader would allow arbitrary in-app fragments).
 const _SAFE_URL_PREFIXES = ["http://", "https://", "mailto:"];
 const _OPEN_BUG_FRAGMENT_RE = /^#open-bug-\d+$/;
 function _hasSafeUrlPrefix(url: string): boolean {
@@ -57,11 +45,8 @@ function _hasSafeUrlPrefix(url: string): boolean {
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// mdLite: minimal markdown-to-HTML. Input must already be html-escaped.
-// Code spans are skipped so their content is never re-processed. Lists
-// become proper <ul> blocks, not inline <br>-separated lines.
-// ---------------------------------------------------------------------------
+// mdLite: minimal markdown-to-HTML; input must already be html-escaped. Code spans
+// are skipped so content isn't re-processed; lists become proper <ul> blocks.
 
 /**
  * Render inline spans for one line: `code`, **bold**, *italic*, [text](url).
@@ -167,7 +152,7 @@ function mdLite(escaped: string): string {
   return blocks.join("");
 }
 
-// Escape before mdLite, same as any server-supplied text.
+// Escape before mdLite, same as server-supplied text.
 const WELCOME_HTML = mdLite(escapeHtml(
   "Hi! I'm your **Bug Hunter AI Assistant**.\n\n" +
     "I can **answer questions** like:\n" +
@@ -184,10 +169,7 @@ const WELCOME_HTML = mdLite(escapeHtml(
     "Type **help** for the full guide.",
 ));
 
-// ---------------------------------------------------------------------------
-// Message log — discriminated union. Not persisted: chat history may contain
-// sensitive bug data.
-// ---------------------------------------------------------------------------
+// Message log — discriminated union. Not persisted: chat may contain sensitive bug data.
 type MsgBody =
   | { kind: "welcome" }
   | { kind: "user"; text: string }
@@ -198,17 +180,13 @@ type Msg = MsgBody & { id: number };
 
 const KNOWN_KINDS = new Set(["text", "table", "file", "suggestions", "confirm"]);
 
-// ---------------------------------------------------------------------------
-// Panel sizing — drag grip (top-left corner, grows up-and-left) or one-click
-// expand/shrink. Persisted in localStorage.
-// ---------------------------------------------------------------------------
+// Panel sizing — drag grip (top-left, grows up-and-left) or one-click expand/shrink; persisted in localStorage.
 const SLEUTH_MIN_W = 340;
 const SLEUTH_MIN_H = 420;
 const SLEUTH_DEFAULT_W = 400;
 const SLEUTH_DEFAULT_H = 560;
 const SLEUTH_SIZE_KEY = "bh.sleuth.size";
-// Below this width the CSS media query goes near-fullscreen; skip inline size
-// so the two don't fight.
+// Below this width the CSS media query goes near-fullscreen; skip inline size so they don't fight.
 const SLEUTH_NARROW = 540;
 
 interface SleuthSize {
@@ -246,15 +224,11 @@ function clampSize(w: number, h: number): SleuthSize {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Block renderers — one per ChatBlock.kind
-// ---------------------------------------------------------------------------
+// Block renderers — one per ChatBlock.kind.
 function TextBlock({ block }: Readonly<{ block: ChatBlock }>) {
   const safe = escapeHtml(str(block.payload.text) || "");
   let html = mdLite(safe);
-  // Bug-detail responses include [label](#open-bug-N) pseudo-links. Add
-  // data-open-bug so the delegated click handler can pick them up without
-  // inline JS (CSP-safe). Only positive integer ids are accepted.
+  // Tag [label](#open-bug-N) pseudo-links with data-open-bug for the delegated CSP-safe handler; positive int ids only.
   const openBugId = num(block.payload.open_bug_id);
   if (openBugId != null && Number.isInteger(openBugId) && openBugId > 0) {
     html = html
@@ -281,7 +255,7 @@ function TableBlock({ block }: Readonly<{ block: ChatBlock }>) {
         <tbody>
           {rows.map((row, idx) => {
             const rawId = num(ids[idx]);
-            // Bug ids start at 1; reject 0 explicitly (not a Boolean guard).
+            // Bug ids start at 1; reject 0 explicitly.
             const clickable = rawId != null && Number.isInteger(rawId) && rawId > 0;
             const bugId = clickable ? String(rawId) : undefined;
             return (
@@ -433,14 +407,10 @@ function BotMessage({
   );
 }
 
-// ---------------------------------------------------------------------------
-// The widget
-// ---------------------------------------------------------------------------
 export default function SleuthPanel() {
   // Admins get the document-import affordance.
   const { isAdmin, refreshAll } = useApp();
-  // Refresh immediately after a mutation so changes appear without waiting for
-  // the next poll cycle.
+  // Refresh right after a mutation so changes appear before the next poll.
   const refreshIfMutated = useCallback(
     (intent: string) => {
       if (intent === "action_done" || intent === "ingest_done") void refreshAll();
@@ -453,7 +423,6 @@ export default function SleuthPanel() {
   const [inFlight, setInFlight] = useState(false);
   const [unread, setUnread] = useState(0);
 
-  // ----- resizable panel ----------------------------------------------------
   const [size, setSize] = useState<SleuthSize>(readStoredSize);
   const [isNarrow, setIsNarrow] = useState(
     () => typeof window !== "undefined" && window.innerWidth <= SLEUTH_NARROW,
@@ -461,7 +430,7 @@ export default function SleuthPanel() {
   // Drag origin captured on pointerdown; null when not dragging.
   const resizeStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  // Refs for values async/imperative paths need without a re-render.
+  // Refs for values async/imperative paths need without re-rendering.
   const openRef = useRef(false);
   const inFlightRef = useRef(false);
   const renderedAnyUserMsgRef = useRef(false);
@@ -481,7 +450,6 @@ export default function SleuthPanel() {
     renderedAnyUserMsgRef.current = false;
   }, []);
 
-  // ----- network -----------------------------------------------------------
   const sendMessage = useCallback(
     async (raw: string) => {
       const text = (raw || "").trim();
@@ -520,7 +488,6 @@ export default function SleuthPanel() {
     [push, refreshIfMutated],
   );
 
-  // ----- open / close ------------------------------------------------------
   const openPanel = useCallback(() => {
     if (openRef.current) return;
     openRef.current = true;
@@ -541,7 +508,6 @@ export default function SleuthPanel() {
 
   const toggle = () => (openRef.current ? closePanel() : openPanel());
 
-  // ----- resize / expand ---------------------------------------------------
   const onResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -579,8 +545,7 @@ export default function SleuthPanel() {
     );
   };
 
-  // ----- input wiring ------------------------------------------------------
-  // Uncontrolled textarea — reads scrollHeight directly to auto-grow up to 120px.
+  // Uncontrolled textarea — reads scrollHeight to auto-grow up to 120px.
   const autosize = () => {
     const el = inputRef.current;
     if (!el) return;
@@ -588,7 +553,7 @@ export default function SleuthPanel() {
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   };
 
-  // Read, clear, then send — keep all send paths going through one place.
+  // Read, clear, then send — one place for all send paths.
   const sendCurrent = () => {
     const el = inputRef.current;
     if (!el) return;
@@ -606,9 +571,7 @@ export default function SleuthPanel() {
     }
   };
 
-  // ----- admin document import ---------------------------------------------
-  // Admin uploads a file; the server (AI or parser) creates one work item per
-  // entry and replies with a text summary + table of links.
+  // Admin uploads a file; the server creates one work item per entry and replies with a summary + link table.
   const onUploadClick = () => uploadRef.current?.click();
 
   const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -649,8 +612,7 @@ export default function SleuthPanel() {
     }
   };
 
-  // Delegated handler for data-open-bug elements (mdLite anchors + table rows).
-  // Custom event keeps innerHTML free of inline handlers (CSP).
+  // Delegated handler for data-open-bug elements; the custom event keeps innerHTML free of inline handlers (CSP).
   const onPanelClick = (e: React.MouseEvent<HTMLElement>) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>(
       "[data-open-bug]",
@@ -658,8 +620,8 @@ export default function SleuthPanel() {
     if (!target) return;
     e.preventDefault();
     const bugId = Number(target.dataset.openBug);
-    // Reject zero and non-integers.
-    if (!Number.isInteger(bugId) || bugId <= 0) return;
+    if (!Number.isInteger(bugId) || bugId <= 0) return; // reject zero / non-integers
+
     document.dispatchEvent(
       new CustomEvent("sleuth:open-bug", { detail: { bugId } }),
     );
@@ -702,7 +664,6 @@ export default function SleuthPanel() {
     }
   }, [size]);
 
-  // ----- render ------------------------------------------------------------
   return (
     <>
       <button
@@ -737,8 +698,7 @@ export default function SleuthPanel() {
         onKeyDown={onPanelKeyDown}
         onClick={onPanelClick}
       >
-        {/* Drag-to-resize grip, top-left corner (panel grows up-and-left).
-            Hidden from assistive tech — keyboard users have the Expand button. */}
+        {/* Drag-to-resize grip (grows up-and-left); hidden from AT — keyboard users have the Expand button. */}
         <div
           className="sleuth-resize"
           aria-hidden="true"

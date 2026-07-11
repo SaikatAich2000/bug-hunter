@@ -1,13 +1,4 @@
-/**
- * Password input with a toggle button to show/hide the typed value.
- *
- * Forwards all props onto the underlying <input>, making it a drop-in
- * replacement for a bare <input type="password">. The `name` attribute
- * passes through unchanged, which login forms and Playwright selectors depend
- * on. Only `type` is managed internally.
- *
- * No inline styles (strict CSP) — see `.pw-wrap` / `.pw-toggle` in styles.css.
- */
+/** Password input with show/hide toggle. `name` passes through unchanged — Playwright selectors depend on it. */
 import { forwardRef, useState, type InputHTMLAttributes } from "react";
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "type">;

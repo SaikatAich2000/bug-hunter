@@ -1,8 +1,5 @@
-"""Tests for type-based permissions and event-manager notifications.
-
-Covers: type-restricted edits/deletes per role, event-manager email
-delivery (create/update/delete), role validation for event managers,
-and admin-only event deletion.
+"""Type-based permissions and event-manager notifications: type-restricted edits/deletes per role,
+event-manager email delivery, manager-role validation, admin-only event deletion, and tab-aware /api/stats.
 """
 from __future__ import annotations
 
@@ -19,9 +16,7 @@ def _login(client, email, password):
 def _make_user(client, name, role="user", email=None):
     email = email or f"{name.lower()}@x.test"
     body = {"name": name, "email": email, "role": role, "password": "User12345Aa"}
-    # Tag the new user to all existing projects so the permission tests exercise
-    # the type-restriction logic. Without this, an unscoped non-admin gets a 404
-    # before ever reaching the 403 type check.
+    # Tag into every project so the type check (403) is reached, not a scope 404.
     pids = [p["id"] for p in client.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -77,9 +72,7 @@ def test_user_can_edit_bug_but_not_task_or_requirement(admin_client):
 
 
 def test_user_cannot_convert_bug_to_task_via_item_type_overpost(admin_client):
-    """Mass-assignment guard: a regular user may edit a Bug, but must not be
-    able to reclassify it into a Task/Requirement (a type they cannot edit) by
-    over-posting item_type. The PUT is rejected 403 and the row is unchanged."""
+    """Mass-assignment guard: a user editing a Bug can't reclassify it to Task/Requirement by over-posting item_type (403, row unchanged)."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     _make_user(admin_client, "Regular", role="user")
@@ -143,12 +136,9 @@ def test_admin_can_delete_everything(admin_client):
 # 2 + 3 + 5. Event managers — emails, role validation
 # ---------------------------------------------------------------------------
 def test_event_create_emails_only_managers(admin_client, monkeypatch):
-    """Creating an event sends email to its managers — NOT to its items'
-    assignees, NOT to random users."""
-    # Make manager users.
+    """Creating an event emails its managers only — not item assignees or random users."""
     m1 = _make_user(admin_client, "Mgr-a", role="manager", email="mgra@x.test")
     m2 = _make_user(admin_client, "Mgr-b", role="manager", email="mgrb@x.test")
-    # And a regular user to later assign to a task inside the event.
     _make_user(admin_client, "Worker", role="user", email="worker@x.test")
 
     sent = []
@@ -212,8 +202,7 @@ def test_event_delete_emails_managers(admin_client, monkeypatch):
 
 
 def test_task_creation_does_NOT_email_event_managers(admin_client, monkeypatch):
-    """Dropping a task inside an event should not notify the event's managers,
-    only the task's own assignees."""
+    """A task dropped inside an event notifies only the task's assignees, not the event's managers."""
     mgr = _make_user(admin_client, "EvMgr", role="manager", email="evmgr@x.test")
     worker = _make_user(admin_client, "Wkr", role="user", email="wkr@x.test")
     p = _make_project(admin_client)
@@ -305,8 +294,7 @@ def test_stats_filters_kpis_by_item_type(admin_client):
     bug_s = admin_client.get("/api/stats?item_type=Bug").json()
     assert bug_s["bugs"] == 3
     assert bug_s["open"] == 3        # default status is "New"
-    # by_type stays global even when item_type is filtered so tab badges
-    # always reflect the full picture.
+    # by_type stays global under an item_type filter so tab badges show the full picture.
     assert bug_s["by_type"]["Bug"] == 3
     assert bug_s["by_type"]["Requirement"] == 1
     assert bug_s["by_type"]["Task"] == 2
@@ -346,9 +334,7 @@ def test_stats_rejects_unknown_item_type(admin_client):
 # Audit-trail preservation — deleting a bug must NOT wipe its history
 # ---------------------------------------------------------------------------
 def test_audit_history_survives_bug_delete(admin_client):
-    """Regression: cascade deletes used to wipe all audit rows for a bug.
-    After the fix, rows are detached (bug_id set to NULL) before deletion
-    so the global trail stays intact."""
+    """Regression: rows are detached (bug_id set NULL) before a bug delete, so the global audit trail survives."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug", title="Login broken thing")
     admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "In Progress"})
@@ -379,8 +365,7 @@ def test_audit_history_survives_bug_delete(admin_client):
 
 
 def test_audit_search_by_bug_title(admin_client):
-    """Audit search by bug title should match via the live bug.title (LEFT JOIN)
-    and via the title baked into the detail string at write time."""
+    """Audit search by bug title matches via the live bug.title (LEFT JOIN) and the title baked into the detail string."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug", title="Payment gateway timeout")
     admin_client.put(f"/api/bugs/{bug['id']}", json={"priority": "Critical"})
@@ -393,8 +378,7 @@ def test_audit_search_by_bug_title(admin_client):
 
 
 def test_audit_search_by_item_type_word(admin_client):
-    """Searching 'task' should narrow to task-related audit events, matching
-    via the joined Bug.item_type and the detail string."""
+    """Searching 'task' narrows to task-related audit events via the joined Bug.item_type and the detail string."""
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Task", title="Write the spec")
     _make_item(admin_client, p["id"], item_type="Bug",  title="Crash on submit")
@@ -408,8 +392,7 @@ def test_audit_search_by_item_type_word(admin_client):
 
 
 def test_audit_search_by_assignee_name(admin_client):
-    """Assignee names are baked into the audit detail at write time,
-    so searching by name should surface the assignment event."""
+    """Assignee names are baked into the audit detail, so searching by name surfaces the assignment event."""
     user = _make_user(admin_client, "Sandra", role="user", email="sandra@x.test")
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug",

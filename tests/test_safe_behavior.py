@@ -1,7 +1,6 @@
-"""Behavioral safety tests covering cache-control headers, session invalidation,
-attachment serving, search-wildcard escaping, reporter permissions, filter
-case-insensitivity, activity ordering, description updates, and input
-validation."""
+"""Behavioral safety: cache-control headers, session invalidation, attachment serving,
+LIKE-wildcard escaping, reporter permissions, filter case-insensitivity, and input validation.
+"""
 from __future__ import annotations
 
 import io
@@ -11,8 +10,7 @@ from pathlib import Path
 
 def _make_user(c, name="Some User", email="user@x.com", role="user", password="TestUserPwd9X"):
     body = {"name": name, "email": email, "role": role, "password": password}
-    # Tag the new user to every existing project so pre-scoping tests still
-    # exercise the flat "see everything" model.
+    # Tag to every project so non-admins keep the flat "see everything" model.
     pids = [p["id"] for p in c.get("/api/projects").json()]
     if pids:
         body["project_ids"] = pids
@@ -59,10 +57,7 @@ class TestCacheControl:
         assert "no-store" in cc, f"/api/health missing no-store: {cc!r}"
 
     def test_static_assets_are_cached_long(self, client):
-        # After the React/TS migration, long-cached assets are Vite's
-        # content-hashed bundles under /static/assets/. Pull a real URL from
-        # the built index.html and verify the middleware applies an immutable
-        # 1-year cache (the hash changes on each deploy, so this is safe).
+        # Long-cache applies to Vite's content-hashed bundles; pull a real hashed URL from index.html.
         index = (
             Path(__file__).resolve().parents[1] / "app" / "static" / "index.html"
         ).read_text(encoding="utf-8")
@@ -84,17 +79,13 @@ class TestCacheControl:
     def test_html_contains_asset_version_in_static_urls(self, client):
         r = client.get("/login.html")
         body = r.text
-        # The template placeholder must be substituted before the response goes out.
         assert "__ASSET_VERSION__" not in body, "asset version placeholder leaked into HTML"
-        # Cache-busting is twofold: Vite content-hashes JS/CSS bundle filenames,
-        # and the brand favicon carries a server-substituted ?v= query string.
-        # The favicon is the real Bug Hunter icon (icon.png), not a generic favicon.png.
+        # Cache-busting: hashed bundle filenames + a server-substituted ?v= on the favicon.
         assert "/static/assets/login-" in body, "hashed login bundle not referenced"
         assert "/static/icon.png?v=" in body, "favicon asset-version query missing"
 
     def test_html_url_changes_when_asset_version_changes(self, client):
-        # Mutate asset_version between requests and confirm the HTML reflects
-        # the updated value each time.
+        # Mutate asset_version between requests; the HTML must reflect each value.
         from app.main import app
         original_version = app.state.asset_version
         try:
@@ -114,10 +105,8 @@ class TestCacheControl:
 # ===========================================================================
 class TestSessionInvalidation:
     def test_password_change_invalidates_other_sessions(self, admin_client, client):
-        """Two devices share the same account. When device A changes the password,
-        device B must be kicked out on its next request."""
-        # admin_client acts as device A (the fixture-logged-in admin).
-        # Create a fresh TestClient for device B.
+        """Device A's password change kicks device B out on its next request."""
+        # admin_client is device A; device_b gets its own client + cookie.
         from fastapi.testclient import TestClient
         from app.main import app
 
@@ -150,16 +139,14 @@ class TestSessionInvalidation:
         assert r.status_code == 400
 
     def test_password_change_with_empty_current_returns_422(self, admin_client):
-        """An empty current_password is rejected by the schema (min_length=1)
-        before the request ever reaches the bcrypt check."""
+        """Empty current_password is rejected by the schema (min_length=1) before bcrypt."""
         r = admin_client.post("/api/auth/change-password", json={
             "current_password": "", "new_password": "Whatever123",
         })
         assert r.status_code == 422
 
     def test_admin_password_reset_invalidates_target_user_sessions(self, admin_client):
-        """An admin resetting another user's password must invalidate that
-        user's existing sessions."""
+        """Admin resetting another user's password invalidates that user's sessions."""
         from fastapi.testclient import TestClient
         from app.main import app
         u = _make_user(admin_client, "Victim", "victim@x.com", password="OldPass11")
@@ -243,8 +230,7 @@ class TestAttachmentSafety:
     def test_safe_image_still_served_inline(self, admin_client):
         p = _make_project(admin_client, "ATX-4")
         bug = _make_bug(admin_client, p["id"])
-        # 8-byte PNG magic is enough here — we only care that the server
-        # preserves the content-type for non-active formats.
+        # 8-byte PNG magic suffices; we only check the type is preserved for non-active formats.
         png = b"\x89PNG\r\n\x1a\n"
         r = admin_client.post(
             f"/api/bugs/{bug['id']}/attachments",
@@ -257,8 +243,7 @@ class TestAttachmentSafety:
         assert "inline" in (d.headers.get("content-disposition") or "").lower()
 
     def test_filename_with_quotes_does_not_break_header(self, admin_client):
-        """A filename containing a double-quote or CRLF would break the
-        Content-Disposition header. Verify the server sanitizes."""
+        """A double-quote/CRLF in a filename must be sanitised out of Content-Disposition."""
         p = _make_project(admin_client, "ATX-5")
         bug = _make_bug(admin_client, p["id"])
         bad_name = 'inj"ect\r\nX-Evil: 1.txt'
@@ -275,8 +260,7 @@ class TestAttachmentSafety:
         assert d.headers.get("X-Evil") is None
 
     def test_download_advertises_accept_ranges(self, admin_client):
-        """Video seeking needs byte-range support — the full (200) response
-        must advertise Accept-Ranges so the browser will attempt to seek."""
+        """Full (200) response advertises Accept-Ranges so the browser will seek."""
         p = _make_project(admin_client, "ATX-6")
         bug = _make_bug(admin_client, p["id"])
         blob = bytes(range(256)) * 4  # 1024 bytes
@@ -292,8 +276,7 @@ class TestAttachmentSafety:
         assert d.content == blob
 
     def test_download_serves_partial_range(self, admin_client):
-        """A `Range: bytes=start-end` request returns 206 with the exact slice
-        and a correct Content-Range — this is what lets <video> seek."""
+        """A Range request returns 206 with the exact slice and a correct Content-Range."""
         p = _make_project(admin_client, "ATX-7")
         bug = _make_bug(admin_client, p["id"])
         blob = bytes(range(256)) * 4  # 1024 bytes
@@ -324,8 +307,7 @@ class TestAttachmentSafety:
         assert d3.content == blob[-50:]
 
     def test_download_unsatisfiable_or_malformed_range_serves_full(self, admin_client):
-        """A malformed or out-of-bounds Range falls back to the full 200 body
-        rather than erroring."""
+        """A malformed or out-of-bounds Range falls back to the full 200 body."""
         p = _make_project(admin_client, "ATX-8")
         bug = _make_bug(admin_client, p["id"])
         blob = b"0123456789"
@@ -388,8 +370,7 @@ class TestReporterPermissionFix:
         p = _make_project(admin_client, "RP-1")
         owner = _make_user(admin_client, "Owner", "owner@x.com", password="TestUserPwd9X")
         bug = _make_bug(admin_client, p["id"], reporter_id=owner["id"])
-        # The SPA always sends reporter_id back in the payload; the owner
-        # updating their own bug with the same reporter_id must be allowed.
+        # The SPA echoes reporter_id back; the owner re-sending the same value must be allowed.
         admin_client.post("/api/auth/logout")
         admin_client.post("/api/auth/login", json={
             "email": "owner@x.com", "password": "TestUserPwd9X",

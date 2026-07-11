@@ -1,27 +1,7 @@
-"""Sleuth NLU — turn a free-form English message into a structured query.
-
-A small, scoped rule engine. Bug-tracker users ask a narrow set of
-question shapes:
-
-  - "show me all open bugs assigned to John"
-  - "how many critical bugs are in PROD?"
-  - "export all closed bugs in project Mobile to excel"
-  - "bug 42"
-  - "what did Alice change today?"
-  - "list active managers"
-
-So the parser extracts a handful of entities (status, priority,
-environment, assignee/reporter, project, bug id, time window) and a
-handful of intents (list / count / export / lookup / help / about),
-producing a dataclass the executor turns into SQL.
-
-Design rules:
-  * Read-only: it never produces a query that writes.
-  * Canonical values come from the live DB via context, not hard-coded
-    names, so a rename / add / removal is reflected on the next request.
-  * No external dependencies — pure stdlib regex.
-  * Order-independent: "open bugs assigned to john" and "bugs assigned to
-    john that are open" parse to the same query.
+"""Sleuth NLU — turn a free-form English message into a structured, read-only
+query. Extracts entities (status, priority, env, names, project, bug id, time
+window) and an intent into a dataclass the executor turns into SQL. Canonical
+values come from live DB context, so renames reflect on the next request.
 """
 from __future__ import annotations
 
@@ -31,12 +11,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
-# ---------------------------------------------------------------------------
-# Canonical enums (mirrored from app.schemas so this module stays decoupled
-# from Pydantic at parse time; the executor re-validates against live schema
-# constants when it builds the query).
-# ---------------------------------------------------------------------------
-# Individual constants so the synonym table below doesn't repeat each string.
+# Canonical enums, mirrored from app.schemas so parse-time stays decoupled from
+# Pydantic; the executor re-validates against live schema constants.
 _S_NEW = "New"
 _S_IN_PROGRESS = "In Progress"
 _S_RESOLVED = "Resolved"
@@ -53,11 +29,10 @@ PRIORITIES_CANONICAL = ["Low", "Medium", "High", "Critical"]
 ENVIRONMENTS_CANONICAL = ["DEV", "UAT", "PROD"]
 ROLES_CANONICAL = ["admin", "manager", "user"]
 
-# "Open" means work that hasn't been parked or finished.
-# Matches the dashboard KPI definition: New / In Progress / Reopened.
+# "Open" = active work, matching the dashboard KPI: New / In Progress / Reopened.
 OPEN_STATUSES = [_S_NEW, _S_IN_PROGRESS, _S_REOPENED]
 
-# Synonym -> canonical. Accepts casual phrasing.
+# Synonym -> canonical.
 _STATUS_SYNONYMS: dict[str, list[str]] = {
     "open":           OPEN_STATUSES,
     "active":         OPEN_STATUSES,
@@ -78,9 +53,7 @@ _STATUS_SYNONYMS: dict[str, list[str]] = {
     "resolve later":  [_S_RESOLVE_LATER],
     "deferred":       [_S_RESOLVE_LATER],
     "parked":         [_S_RESOLVE_LATER],
-    # Bare "later" is intentionally excluded — "I'll look at this later"
-    # shouldn't inject a Resolve Later filter. Use "resolve later", "deferred",
-    # or "parked" explicitly.
+    # Bare "later" excluded so "I'll look at this later" can't inject a filter.
 }
 
 _PRIORITY_SYNONYMS: dict[str, str] = {
@@ -104,7 +77,6 @@ _PRIORITY_SYNONYMS: dict[str, str] = {
     "p3":           "Low",
 }
 
-# Accept lowercase and common expansions ("staging" -> UAT in most shops).
 _ENVIRONMENT_SYNONYMS: dict[str, str] = {
     "dev":          "DEV",
     "develop":      "DEV",
@@ -122,10 +94,8 @@ _ENVIRONMENT_SYNONYMS: dict[str, str] = {
     "production":   "PROD",
 }
 
-# Common words that double as environment names. Kept separate from the main
-# table so the typo-fallback can't pick them up unqualified. Matched only when
-# an adjacent cue makes the intent clear: "bugs in test" or "live bugs" counts;
-# "test the export" or "local file" does not.
+# Words that double as env names; kept out of the main table so the typo
+# fallback can't grab them unqualified (matched only with an adjacent cue).
 _AMBIGUOUS_ENV_SYNONYMS: dict[str, str] = {
     "test": "UAT",
     "live": "PROD",
@@ -133,10 +103,7 @@ _AMBIGUOUS_ENV_SYNONYMS: dict[str, str] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Stop-words for fuzzy name matching. Prevents common words like "the" from
-# being mistaken for user names.
-# ---------------------------------------------------------------------------
+# Stop-words for fuzzy name matching, so common words aren't read as user names.
 _STOPWORDS = {
     "a", "an", "the", "this", "that", "these", "those", "and", "or", "but",
     "to", "of", "in", "on", "for", "by", "with", "without", "from", "at",
@@ -354,9 +321,7 @@ _NEWEST_RE = re.compile(
     re.IGNORECASE,
 )
 
-# First-person self-references ("my bugs", "assigned to me", "mine", etc.).
-# We match the shape rather than the verb; the executor resolves "me" to the
-# current user and picks assignee vs. reporter from context.
+# First-person self-references; the executor resolves "me" to the current user.
 _ME_ASSIGNEE_RE = re.compile(
     r"\b(?:my\s+(?:bug|bugs|issue|issues|ticket|tickets|stuff|work|"
     r"plate|backlog|queue|assignments?)|"
@@ -378,13 +343,9 @@ _ME_REPORTER_RE = re.compile(
 # "assign … to me/myself" — paired with an assign verb so a bare "to me"
 # elsewhere isn't misread as self-assign.
 _TO_SELF_RE = re.compile(r"\b(?:to|for)\s+(?:me|myself)\b", re.IGNORECASE)
-# --------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Entities the parser produces. Plain dataclass so the executor has no
-# framework dependency.
-# ---------------------------------------------------------------------------
+# Entities the parser produces. Plain dataclasses, no framework dependency.
 @dataclass
 class TimeWindow:
     """A relative time range. start/end may be None for open-ended."""
@@ -418,9 +379,7 @@ class ParsedQuery:
     wants_count: bool = False
     limit: int = 100              # default cap on rows shown in chat
 
-    # All default off; when set, ANDed with the other filters.
-    # ("my unassigned bugs" = assignee=me AND unassigned, which is vacuously
-    # empty and reported as such.)
+    # Default off; when set, ANDed with the other filters.
     unassigned: bool = False
     sort_oldest: bool = False
     sort_newest: bool = False
@@ -428,9 +387,8 @@ class ParsedQuery:
     used_pronoun_me: bool = False
     me_role: Optional[str] = None    # "assignee" or "reporter"
 
-    # ----- ACTION FIELDS (write-side) ------------------------------------
-    # Populated when the user wants Sleuth to act, not just query.
-    # The executor reads these to build an ActionPlan.
+    # Write-side fields, populated when the user wants Sleuth to act; the
+    # executor reads these to build an ActionPlan.
     action_kind: Optional[str] = None   # "assign" | "unassign" | "set_status"
                                          # | "set_priority" | "set_environment"
                                          # | "set_due_date" | "add_comment"
@@ -440,8 +398,7 @@ class ParsedQuery:
     action_title: Optional[str] = None   # title for create_bug
     action_description: Optional[str] = None
     confirmation: Optional[str] = None   # "yes" | "no" | None
-    # Pronoun reference ("it", "that bug") — executor resolves via
-    # conversation memory's last_bug_id.
+    # Pronoun ref ("it", "that bug") — executor resolves via memory's last_bug_id.
     used_pronoun_bug: bool = False
     used_pronoun_user: bool = False
 
@@ -449,9 +406,8 @@ class ParsedQuery:
     notes: list[str] = field(default_factory=list)
     # Names that matched more than one user; the executor asks for clarification.
     ambiguous_names: list[tuple[str, list[str]]] = field(default_factory=list)
-    # Names the user gave that matched nobody. The executor asks for
-    # clarification rather than silently dropping the filter and returning
-    # every bug, which would be misleading.
+    # Names that matched nobody; executor asks rather than dropping the filter
+    # and returning every bug.
     unresolved_assignee_names: list[str] = field(default_factory=list)
     unresolved_reporter_names: list[str] = field(default_factory=list)
 
@@ -461,19 +417,15 @@ class ParsedQuery:
 # ---------------------------------------------------------------------------
 @dataclass
 class Context:
-    """Live data the parser uses to resolve names to IDs.
-
-    Passed fresh per call so renames, new users, and deletions are reflected
-    immediately. Normalized forms are lowercased, single-spaced, and stripped
-    of punctuation for fuzzy matching."""
+    """Live data for resolving names to IDs, passed fresh per call so renames
+    and deletions reflect immediately."""
     users: list[tuple[int, str, str, str]]      # (id, normalized_name, normalized_email_local, display_name)
     projects: list[tuple[int, str, str]]        # (id, normalized_name, display_name)
     user_role_map: dict[int, str] = field(default_factory=dict)
 
 
 def _normalize(s: str) -> str:
-    """Lowercase and collapse whitespace. Internal punctuation is preserved;
-    it gets stripped at name-match time."""
+    """Lowercase and collapse whitespace; internal punctuation is preserved."""
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
@@ -483,8 +435,7 @@ def _strip_punct(s: str) -> str:
 
 
 def _tokenize(s: str) -> list[str]:
-    """Lowercased, punctuation-stripped token list (caller filters stopwords).
-    Deliberately simple — full POS tagging would be overkill here."""
+    """Lowercased, punctuation-stripped token list (caller filters stopwords)."""
     return re.findall(r"[a-zA-Z][a-zA-Z0-9\-']+", s.lower())
 
 
@@ -496,8 +447,7 @@ _WEEKDAY_TO_DOW = {
 
 
 def _named_window(phrase: str, today_start: datetime, now: datetime) -> Optional[TimeWindow]:
-    """Resolve a named time phrase (today, this week, last quarter, etc.).
-    Returns None if the phrase is not recognized."""
+    """Resolve a named time phrase (today, this week, last quarter, etc.), or None."""
     if phrase == "today":
         return TimeWindow(today_start, now, "today")
     if phrase == "yesterday":
@@ -532,8 +482,8 @@ def _named_window(phrase: str, today_start: datetime, now: datetime) -> Optional
 
 
 def _since_weekday_window(weekday_name: str, today_start: datetime, now: datetime) -> TimeWindow:
-    """Resolve "since Monday" relative to today. If today IS Monday, it looks
-    back a full week rather than returning a zero-length window."""
+    """Resolve "since Monday" relative to today; if today IS Monday, look back a
+    full week rather than a zero-length window."""
     target_dow = _WEEKDAY_TO_DOW[weekday_name.lower()]
     delta_days = (today_start.weekday() - target_dow) % 7
     if delta_days == 0:
@@ -581,8 +531,7 @@ def _parse_time_window(message: str, now: Optional[datetime] = None) -> Optional
     m = _TIME_RE.search(message)
     if not m:
         return None
-    # Collapse internal whitespace ("this  week", "this\tweek") so the
-    # exact-equality lookup in _named_window still hits.
+    # Collapse internal whitespace so the exact-equality lookup still hits.
     phrase = re.sub(r"\s+", " ", m.group(0).lower().strip())
 
     named = _named_window(phrase, today_start, now)
@@ -606,11 +555,9 @@ def _extract_statuses(text: str) -> list[str]:
     """Find every status synonym. Order-preserving, deduped."""
     out: list[str] = []
     norm = " " + text.lower() + " "
-    # Longest synonyms first so multi-word phrases ("in progress", "not a bug")
-    # aren't fragmented into single-token matches.
+    # Longest synonyms first so multi-word phrases aren't fragmented.
     for syn in sorted(_STATUS_SYNONYMS.keys(), key=len, reverse=True):
-        # The synonym may contain spaces, so use a char-class boundary rather
-        # than \b (which only works at word edges).
+        # Char-class boundary, not \b, since a synonym may contain spaces.
         pattern = re.compile(rf"(?<![\w-]){re.escape(syn)}(?![\w-])", re.IGNORECASE)
         if pattern.search(norm):
             for canon in _STATUS_SYNONYMS[syn]:
@@ -637,8 +584,7 @@ def _typo_fallback(text: str, synonyms: dict, out: list[str]) -> None:
 def _extract_priorities(text: str) -> list[str]:
     out: list[str] = []
     for syn, canon in _PRIORITY_SYNONYMS.items():
-        # Accept simple plurals ("blockers", "criticals"); the trailing s? is
-        # harmless on synonyms that already end in s.
+        # Accept simple plurals ("blockers", "criticals").
         if re.search(rf"\b{re.escape(syn)}s?\b", text, re.IGNORECASE):
             _append_unique(out, canon)
     _typo_fallback(text, _PRIORITY_SYNONYMS, out)
@@ -646,12 +592,10 @@ def _extract_priorities(text: str) -> list[str]:
 
 
 def _typo_match(token: str, candidates: dict, min_len: int = 4) -> Optional[str]:
-    """Return the best matching key in `candidates` for `token`, or None.
+    """Return the best difflib match for `token` in `candidates`, or None.
 
-    Uses stdlib difflib so there's no extra dependency. Short tokens (< min_len)
-    are skipped to avoid noise like "low" -> "log". The 0.82 cutoff admits
-    "ctitical" -> "critical" and "produciton" -> "production" while rejecting
-    genuinely different words.
+    Short tokens (< min_len) are skipped to avoid noise ("low" -> "log"); the
+    0.82 cutoff admits typos like "ctitical" -> "critical".
     """
     import difflib
     if len(token) < min_len:
@@ -669,9 +613,8 @@ def _extract_environments(text: str) -> list[str]:
     for syn, canon in _ENVIRONMENT_SYNONYMS.items():
         if re.search(rf"\b{re.escape(syn)}\b", text, re.IGNORECASE):
             _append_unique(out, canon)
-    # Ambiguous words (test/live/local) only match with an adjacent env cue:
-    # a locating preposition ("bugs in test") or a modified noun ("live bugs").
-    # Bare prose ("test the export", "go live") is left alone.
+    # Ambiguous words (test/live/local) only match with an adjacent env cue,
+    # so bare prose ("test the export", "go live") is left alone.
     for syn, canon in _AMBIGUOUS_ENV_SYNONYMS.items():
         if canon in out:
             continue
@@ -681,29 +624,19 @@ def _extract_environments(text: str) -> list[str]:
                rf"defect|defects)\b")
         if re.search(pat, text, re.IGNORECASE):
             _append_unique(out, canon)
-    # Typo fallback only runs when the exact extractor found nothing, so an
-    # exact "prod" match can't be blurred by a fuzzy near-collision.
+    # Typo fallback runs only when the exact extractor found nothing.
     _typo_fallback(text, _ENVIRONMENT_SYNONYMS, out)
     return out
 
 
 # ---------- name extraction ---------------------------------------------
 def _candidate_name_phrases(message: str) -> list[tuple[str, str]]:
-    """Pull name-like phrases from the message.
-
-    Returns (role_hint, phrase) tuples where role_hint is 'assignee',
-    'reporter', or '' (caller decides). Recognized cue shapes:
-
-        "assigned to John Smith", "against Mr. X", "owned by Alice"
-        "reporter is Bob", "filed by Bob", "John Smith's bugs"
-    """
+    """Pull name-like phrases as (role_hint, phrase) tuples, where role_hint is
+    'assignee', 'reporter', or '' (e.g. "assigned to John", "filed by Bob")."""
     out: list[tuple[str, str]] = []
 
-    # Assignee cues.
-    # The negated char class excludes `()` so a parenthetical like
-    # "(export to excel)" appended by the UI can't be absorbed into the name.
-    # The lookahead alternation similarly terminates on "export"/"download"/
-    # "to xlsx" to handle common suggestion shapes.
+    # Assignee cues. The negated char class and lookahead exclude parentheticals
+    # and export/download suffixes so the UI's "(export to excel)" isn't absorbed.
     name_terminator_lookahead = (
         r"$|[,.;!?()]|\s+(?:and|or|with|that|which|in|for|on|by|status|"
         r"priority|environment|project|created|updated|reported|filed|"
@@ -721,8 +654,7 @@ def _candidate_name_phrases(message: str) -> list[tuple[str, str]]:
         r"owner\s+is\s+([^,.;!?()]+?)(?=$|[,.;!?()]|\s+(?:and|or|in|for|on|by))",
         r"owned\s+by\s+([^,.;!?()]+?)(?=" + short_terminator_lookahead + r")",
         r"under\s+([^,.;!?()]+?)'s?\s+name",
-        # Action verb patterns ("assign bug 5 to alice", "give bug 5 to alice",
-        # "assign it to alice"). The optional pronoun group lets pronoun-with-
+        # Action verbs ("assign bug 5 to alice"); the optional pronoun group lets
         # memory cases extract the name without first resolving the bug.
         r"(?:assign|reassign|allocate|allot|delegate|hand(?:\s+over)?|give|"
         r"put)\s+(?:the\s+)?(?:bug|issue|ticket|defect|it|this|that)?\s*"
@@ -758,18 +690,9 @@ def _candidate_name_phrases(message: str) -> list[tuple[str, str]]:
 
 
 def _resolve_name(phrase: str, ctx: Context) -> list[tuple[int, str]]:
-    """Match a name phrase against the user list.
-
-    Resolution order (most to least specific):
-      1. Exact normalized name.
-      2. Exact email local-part.
-      3. Exact case-insensitive prefix on full name.
-      4. Last-name match.
-      5. First-name match.
-
-    Returns (id, display_name) pairs. Empty = no match; >1 = caller asks for
-    clarification.
-    """
+    """Match a name phrase against the user list, most to least specific: exact
+    name, email local-part, prefix, last name, first name. Returns (id, display)
+    pairs; empty = no match, >1 = caller asks for clarification."""
     norm = _normalize(_strip_punct(phrase))
     if not norm:
         return []
@@ -787,10 +710,8 @@ def _resolve_name(phrase: str, ctx: Context) -> list[tuple[int, str]]:
     if exact:
         return exact
 
-    # Gather all looser matches and dedupe by id rather than short-circuiting
-    # on the first non-empty tier. Early return would hide genuine ambiguity
-    # (e.g. an email match for "john" shadowing a same-first-name peer).
-    # The caller treats len > 1 as "ask which one".
+    # Dedupe looser matches by id instead of short-circuiting on the first tier,
+    # so genuine ambiguity (len > 1) still reaches the caller.
     found: dict[int, str] = {}
 
     def _add(matches) -> None:
@@ -808,11 +729,8 @@ def _resolve_name(phrase: str, ctx: Context) -> list[tuple[int, str]]:
 
 
 def _resolve_project(phrase: str, ctx: Context) -> list[tuple[int, str]]:
-    """Match a project name phrase (exact, then prefix).
-
-    No fuzzy single-token matching: project names tend to be short ("Mobile",
-    "API") and would clash with ordinary speech.
-    """
+    """Match a project name phrase (exact, then prefix). No fuzzy matching:
+    short project names would clash with ordinary speech."""
     norm = _normalize(_strip_punct(phrase))
     if not norm:
         return []
@@ -824,13 +742,12 @@ def _resolve_project(phrase: str, ctx: Context) -> list[tuple[int, str]]:
 
 
 # ---------- bug id ------------------------------------------------------
-# Postgres int4 max. Anything higher would cause a DataError at the DB layer.
+# Postgres int4 max; anything higher would DataError at the DB layer.
 _MAX_BUG_ID = 2_147_483_647
 
 
 def _coerce_bug_id(raw: str) -> Optional[int]:
-    """Parse and validate a bug id. Rejects zero, negatives, and values
-    exceeding the Postgres int4 ceiling."""
+    """Parse a bug id, rejecting zero, negatives, and values over int4 max."""
     try:
         n = int(raw)
     except (TypeError, ValueError):
@@ -863,10 +780,8 @@ def _extract_bug_id(message: str) -> Optional[int]:
 _QUOTED_RE = re.compile(r'"([^"]{2,})"')
 
 
-# Bare (unquoted) free-text after an explicit topic cue so users don't need
-# quotes: "bugs about login crash" -> search "login crash".
-# Anchored to a non-space first char (\S.*) to keep matching linear and avoid
-# the backtracking risk of \s+(.+) where . also matches whitespace.
+# Bare free-text after a topic cue ("bugs about login crash"). Anchored to \S.*
+# to keep matching linear and avoid backtracking on \s+(.+).
 _FREE_TEXT_CUE_RE = re.compile(
     r"\b(?:about|regarding|mentioning|containing|concerning|related\s+to)\s+(\S.*)$",
     re.IGNORECASE,
@@ -879,12 +794,10 @@ def _extract_text_search(message: str) -> Optional[str]:
         return m.group(1).strip() or None
     m = _FREE_TEXT_CUE_RE.search(message)
     if m:
-        # Strip trailing filter clauses ("in project X", "with priority Y")
-        # the same way the create-bug title capture does.
+        # Strip trailing filter clauses ("in project X", "with priority Y").
         term = _strip_create_bug_tail(m.group(1).strip()).strip(" .?!,")
-        # A short term that resolves entirely to a status or priority word is
-        # a filter, not a search topic ("about high priority" should let the
-        # enum extractors handle it).
+        # A short term that's entirely a status/priority word is a filter, not
+        # a search topic — let the enum extractors handle it.
         only_enum = bool(_extract_statuses(term) or _extract_priorities(term))
         if term and not (only_enum and len(term.split()) <= 2):
             return term or None
@@ -994,12 +907,8 @@ _TAIL_MARKERS = (
 
 
 def _strip_create_bug_tail(title: str) -> str:
-    """Remove trailing filter clauses ("in project X", "with priority Y", etc.)
-    so the bare-title capture doesn't accidentally absorb them.
-
-    Uses literal substring search rather than a regex with overlapping \\s+
-    quantifiers to avoid catastrophic backtracking on chat input.
-    """
+    """Remove trailing filter clauses so the bare-title capture doesn't absorb
+    them. Literal substring search, not regex, to avoid backtracking."""
     if not title:
         return title
     lower = title.lower()
@@ -1027,9 +936,8 @@ def _action_create_bug(msg: str, pq: ParsedQuery) -> Optional[str]:
 
 
 def _action_set_status(msg: str, pq: ParsedQuery) -> Optional[str]:
-    # "list resolved bugs" is a filter, not a write. Bail on list/count verbs,
-    # mirroring _action_assign. Bulk writes ("close all bugs in apollo") carry
-    # no list verb, so they still reach the write path.
+    # "list resolved bugs" is a filter, not a write; bail on list/count verbs.
+    # Bulk writes ("close all bugs") carry no list verb, so they still pass.
     if _LIST_VERB_RE.search(msg):
         return None
     sm = _STATUS_VERB_RE.search(msg)
@@ -1075,16 +983,9 @@ def _action_assign(msg: str, pq: ParsedQuery) -> Optional[str]:
 
 
 def _detect_action(msg: str, pq: ParsedQuery) -> Optional[str]:
-    """Determine whether the user wants Sleuth to write something.
-
-    Returns one of: "assign", "unassign", "set_status", "set_priority",
-    "set_environment", "set_due_date", "add_comment", "create_bug",
-    "create_project", or None. Mutates pq to populate action_value /
-    action_comment / etc.
-
-    Order matters: create_project before create_bug (overlapping verbs);
-    assign/unassign last ("give" overlaps with reads).
-    """
+    """Return the write-intent kind (assign, set_status, create_bug, ...) or None,
+    mutating pq with the action value. Order matters: create_project before
+    create_bug (overlapping verbs); assign/unassign last ("give" overlaps reads)."""
     for detector in (
         _action_add_comment,
         _action_create_project,
@@ -1137,9 +1038,8 @@ _REPORT_KEY_KEYWORDS: list[tuple[str, str]] = [
 
 
 def pick_report_key(message: str) -> Optional[str]:
-    """Return the report key that best matches the message, or None to fall
-    back to the item_detail export. Exposed so the executor can reuse the
-    same mapping."""
+    """Return the best-matching report key, or None to fall back to item_detail.
+    Exposed so the executor can reuse the same mapping."""
     if not message:
         return None
     for key, pat in _REPORT_KEY_KEYWORDS:
@@ -1245,9 +1145,8 @@ def _add_resolved_projects(cand: str, pq: ParsedQuery, ctx: Context, seen: set[i
             seen.add(pid)
 
 
-# Project names that collide with common words ("Open", "New", "Test", "High")
-# can only be matched via an explicit cue ("in project Open"). Without this
-# guard, "show me open bugs" would silently scope to project "Open".
+# Project names colliding with common words ("Open", "Test") need an explicit
+# cue, so "show me open bugs" can't silently scope to a project named "Open".
 _PROJECT_NAME_VOCAB = (
     _STOPWORDS
     | set(_STATUS_SYNONYMS)
@@ -1301,9 +1200,8 @@ _ITEM_TYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def _populate_item_types(msg: str, pq: ParsedQuery) -> None:
-    """Scope the query to specific work-item types when the user names them.
-    Leaves item_types empty for generic requests ("list items") so they stay
-    type-agnostic. Used by both list/count and the reports path."""
+    """Scope to the work-item types the user named, leaving item_types empty for
+    generic requests ("list items") so they stay type-agnostic."""
     low = msg.lower()
     for canonical, needles in _ITEM_TYPE_KEYWORDS:
         if any(re.search(rf"\b{n}\b", low) for n in needles) and canonical not in pq.item_types:

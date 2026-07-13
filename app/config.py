@@ -280,7 +280,12 @@ class Settings:
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
     SMTP_PORT: int = _env_int("SMTP_PORT", 587, minimum=1)
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
-    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    # Gmail (and most providers) display app passwords as 4 space-separated
+    # groups for on-screen readability, but the actual secret has no spaces.
+    # Pasting the display form straight into .env sends the wrong credential
+    # and SMTP AUTH fails silently from the caller's point of view — strip any
+    # spaces so both the raw and display-formatted values work.
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "").replace(" ", "")
     SMTP_USE_TLS: bool = _env_bool("SMTP_USE_TLS", True)
     SMTP_USE_SSL: bool = _env_bool("SMTP_USE_SSL", False)
     SMTP_TIMEOUT: int = _env_int("SMTP_TIMEOUT", 10, minimum=1)

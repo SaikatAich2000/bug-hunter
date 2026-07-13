@@ -92,6 +92,20 @@ def test_env_float_clamps_minimum(monkeypatch):
     assert config._env_float("X_F", 1.0, minimum=0.0) == 0.0
 
 
+# Settings.SMTP_PASSWORD
+def test_smtp_password_strips_gmail_display_spaces(monkeypatch):
+    """Gmail shows app passwords as 4 space-separated groups; the real secret has none."""
+    import importlib
+
+    monkeypatch.setenv("SMTP_PASSWORD", "abcd efgh ijkl mnop")
+    try:
+        reloaded = importlib.reload(config)
+        assert reloaded.get_settings().SMTP_PASSWORD == "abcdefghijklmnop"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
 # Settings.is_production
 def test_is_production_explicit_env():
     s = config.Settings()

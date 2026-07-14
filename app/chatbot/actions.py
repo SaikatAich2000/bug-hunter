@@ -56,6 +56,8 @@ class ActionPlan:
     bug_ids: list[int] = field(default_factory=list)
     target_user_ids: list[int] = field(default_factory=list)
     target_user_names: list[str] = field(default_factory=list)
+    # unassign only: drop EVERY assignee, ignoring target_user_ids.
+    unassign_all: bool = False
     new_value: Optional[str] = None      # status / priority / env / due_date
     comment_body: Optional[str] = None
     new_title: Optional[str] = None
@@ -74,6 +76,7 @@ class ActionPlan:
             "bug_ids": list(self.bug_ids),
             "target_user_ids": list(self.target_user_ids),
             "target_user_names": list(self.target_user_names),
+            "unassign_all": self.unassign_all,
             "new_value": self.new_value,
             "comment_body": self.comment_body,
             "new_title": self.new_title,
@@ -92,6 +95,7 @@ class ActionPlan:
             bug_ids=list(d.get("bug_ids") or []),
             target_user_ids=list(d.get("target_user_ids") or []),
             target_user_names=list(d.get("target_user_names") or []),
+            unassign_all=bool(d.get("unassign_all", False)),
             new_value=d.get("new_value"),
             comment_body=d.get("comment_body"),
             new_title=d.get("new_title"),
@@ -284,21 +288,23 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
     err = _check_can_edit_bug(actor, bug)
     if err:
         return _error_response(err)
-    drop_ids = set(plan.target_user_ids)
+    # unassign_all clears every assignee; otherwise drop just the named targets.
+    drop_ids = ({a.id for a in bug.assignees} if plan.unassign_all
+                else set(plan.target_user_ids))
     before = sorted(a.name for a in bug.assignees)
     bug.assignees = [a for a in bug.assignees if a.id not in drop_ids]
     after = sorted(a.name for a in bug.assignees)
     if before == after:
-        # Those users weren't assigned — signal "skipped" to the bulk caller.
-        return _success_response(
-            "Nothing changed — those users weren't assigned to this bug",
-            intent=_INTENT_NOOP, bug_id=bug.id,
-        )
+        # Nobody to drop — signal "skipped" to the bulk caller.
+        msg = ("Nothing changed — that bug had no assignees" if plan.unassign_all
+               else "Nothing changed — those users weren't assigned to this bug")
+        return _success_response(msg, intent=_INTENT_NOOP, bug_id=bug.id)
     bug.version = (bug.version or 1) + 1
     _audit(db, bug.id, actor, "assignees_changed",
            f"#{bug.id} '{bug.title}' — assignees: {before} -> {after}")
     if notify:
-        names = ", ".join(plan.target_user_names) or _UNKNOWN_USERS
+        names = ("all assignees" if plan.unassign_all
+                 else ", ".join(plan.target_user_names) or _UNKNOWN_USERS)
         _notify_chat_op(
             db, bug, actor, kind="updated",
             title=f"Unassigned from {_itype_of(bug)} #{bug.id}",
@@ -547,7 +553,8 @@ def _dispatch_single(plan: ActionPlan, db: Session, actor: User,
 def _notify_bulk(db: Session, plan: ActionPlan, actor: User, updated: int) -> None:
     """One aggregate notification for a bulk operation instead of N per item."""
     if plan.kind in ("assign", "unassign"):
-        names = ", ".join(plan.target_user_names) or _UNKNOWN_USERS
+        names = ("all assignees" if plan.unassign_all
+                 else ", ".join(plan.target_user_names) or _UNKNOWN_USERS)
         verb = "assigned" if plan.kind == "assign" else "unassigned"
         prep = "to" if plan.kind == "assign" else "from"
         recipients = [actor.id, *plan.target_user_ids]
@@ -574,6 +581,7 @@ def _apply_bulk(plan: ActionPlan, db: Session, actor: User) -> Response:
             kind=plan.kind, actor_user_id=actor.id, bug_id=bid,
             target_user_ids=list(plan.target_user_ids),
             target_user_names=list(plan.target_user_names),
+            unassign_all=plan.unassign_all,
             new_value=plan.new_value, comment_body=plan.comment_body,
             new_title=plan.new_title, new_description=plan.new_description,
             new_project_id=plan.new_project_id, new_project_name=plan.new_project_name,

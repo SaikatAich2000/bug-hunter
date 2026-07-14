@@ -181,6 +181,88 @@ def test_bulk_unassign_all_admin():
         db.close()
 
 
+def test_clear_all_assignees_by_status_filter():
+    """'remove assignees from CLOSED bugs' clears every assignee on the closed
+    set only, behind a Yes/Cancel confirm — the reported 'make it smart' case."""
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        # Assign the 3 seeded (New) bugs, then add 2 Closed bugs with assignees.
+        executor.execute("assign all the bugs to Saikat Aich", db, admin)
+        executor.execute("yes", db, admin)
+        proj = db.query(models.Project).first()
+        closed_ids = []
+        for i in range(2):
+            b = models.Bug(title=f"Closed {i}", description="d", status="Closed",
+                           priority="Medium", environment="DEV",
+                           project_id=proj.id, reporter_id=ids["admin"])
+            db.add(b)
+            db.commit()
+            b.assignees = [_user(db, ids["admin"]), _user(db, ids["usr"])]
+            db.commit()
+            closed_ids.append(b.id)
+
+        staged = executor.execute("remove assignees from 'CLOSED' bugs", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        text = staged.blocks[0].payload["text"].lower()
+        assert "remove all assignees" in text
+        assert "2" in text  # only the 2 closed bugs, not the 3 New ones
+
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+
+        db.expire_all()
+        for cid in closed_ids:
+            assert db.get(models.Bug, cid).assignees == []
+        new_assigned = sum(1 for b in db.query(models.Bug).filter_by(status="New").all()
+                           if b.assignees)
+        assert new_assigned == 3, new_assigned  # untouched
+    finally:
+        db.close()
+
+
+def test_clear_all_assignees_single_bug():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        bug_id = ids["bugs"][0]
+        executor.execute(f"assign bug {bug_id} to Saikat Aich", db, admin)
+        executor.execute("yes", db, admin)
+        staged = executor.execute(f"remove all assignees from bug {bug_id}", db, admin)
+        assert staged.intent == "confirm_action", staged.intent
+        done = executor.execute("yes", db, admin)
+        assert done.intent == "action_done", done.intent
+        db.expire_all()
+        assert db.get(models.Bug, bug_id).assignees == []
+    finally:
+        db.close()
+
+
+def test_clear_all_assignees_needs_a_scope():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        r = executor.execute("remove the assignees", db, admin)
+        assert r.intent == "action_invalid", r.intent
+        assert "which items" in r.blocks[0].payload["text"].lower()
+    finally:
+        db.close()
+
+
+def test_clear_all_assignees_admin_only():
+    ids = seed()
+    db = SessionLocal()
+    try:
+        usr = _user(db, ids["usr"])
+        r = executor.execute("remove assignees from all the bugs", db, usr)
+        assert r.intent == "action_denied", r.intent
+    finally:
+        db.close()
+
+
 def test_bulk_assign_needs_a_user():
     ids = seed()
     db = SessionLocal()

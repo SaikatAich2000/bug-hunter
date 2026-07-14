@@ -1353,6 +1353,90 @@ def _bulk_summary(kind: str, value: Optional[str], names: str, scope: str) -> st
     return f"Set priority of {scope} to {value}"
 
 
+# "Remove/clear the assignees" — an unassign with no named user (clear everyone).
+# The status/priority words that scope it ("...from closed bugs") otherwise
+# misfire the single-action parser into a set-status command, so this is matched
+# and handled ahead of that path.
+_CLEAR_ASSIGNEES_RE = re.compile(
+    r"\b(?:un-?assign|de-?assign|remove|clear|drop|strip|take\s+off|pull\s+off)\b"
+    r".*?\b(?:assignees?|everyone|everybody)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _item_type_hint(message: str) -> Optional[str]:
+    """Restrict a bulk scope to the work-item type named in the message
+    ("...closed bugs" → Bug), or None to sweep every type."""
+    m = re.search(r"\b(bugs?|issues?|tickets?|defects?|requirements?|tasks?)\b",
+                  message, re.IGNORECASE)
+    return _bulk_item_type(m.group(1)) if m else None
+
+
+def _stage_unassign_all(actor: User, *, bug_id: Optional[int] = None,
+                        bug_ids: Optional[list[int]] = None, summary: str) -> Response:
+    """Stage a confirmable 'remove all assignees' plan and return its confirm Response."""
+    from app.chatbot import actions as _actions
+    from app.chatbot.memory import store as _mem
+    plan = _actions.ActionPlan(
+        kind="unassign", actor_user_id=actor.id,
+        bug_id=bug_id, bug_ids=list(bug_ids or []),
+        unassign_all=True, summary_human=summary)
+    _mem.stage_pending(actor.id, plan.to_dict())
+    return _actions.stage_with_confirm(plan)
+
+
+def _clear_assignees_bulk(message: str, db: Session, actor: User, pq) -> Response:
+    """Resolve the filtered set for a clear-all-assignees command and stage it,
+    or return an error Response when the scope is missing, empty, or too large."""
+    has_filter = bool(pq.statuses or pq.priorities or pq.environments or pq.project_ids)
+    if not (has_filter or _BULK_SCOPE_RE.search(message)):
+        return Response(
+            blocks=[Block("text", {"text":
+                "Which items? Name a bug or a filter — e.g. "
+                "*remove assignees from all closed bugs* or "
+                "*clear assignees from #12*."})],
+            summary="Need a scope", intent="action_invalid")
+
+    item_type = _item_type_hint(message)
+    bug_ids = _resolve_bulk_bug_ids(db, pq, item_type)
+    if not bug_ids:
+        scope_word = (item_type + "s") if item_type else "items"
+        return Response(
+            blocks=[Block("text", {"text":
+                f"I couldn't find any matching {scope_word} to update."})],
+            summary="No matching items", intent="action_invalid")
+    if len(bug_ids) > _BULK_ACTION_CAP:
+        return Response(
+            blocks=[Block("text", {"text":
+                f"That would affect more than {_BULK_ACTION_CAP} items, which is "
+                "too many to change in one go. Please narrow it (add a project, "
+                "status, priority, or environment) and try again."})],
+            summary="Bulk scope too large", intent="action_invalid")
+
+    scope = _bulk_scope_phrase(db, bug_ids, item_type)
+    return _stage_unassign_all(actor, bug_ids=bug_ids,
+                               summary=f"Remove all assignees from {scope}")
+
+
+def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq, ctx) -> Optional[Response]:
+    """Stage a 'remove all assignees' unassign for one bug or a filtered set, or
+    None when the message isn't a clear-assignees command."""
+    from app.chatbot import actions as _actions
+    if not _CLEAR_ASSIGNEES_RE.search(message):
+        return None
+    # A named user means a targeted unassign, not a clear-all — let normal flow run.
+    if pq.assignee_ids:
+        return None
+    denied = _actions.sleuth_write_denied(actor)
+    if denied:
+        return Response(blocks=[Block("text", {"text": denied})],
+                        summary="Write not permitted", intent="action_denied")
+    if pq.bug_id is not None:
+        return _stage_unassign_all(actor, bug_id=pq.bug_id,
+                                   summary=f"Remove all assignees from #{pq.bug_id}")
+    return _clear_assignees_bulk(message, db, actor, pq)
+
+
 def _maybe_handle_bulk_action(message: str, db: Session, actor: User, pq, ctx) -> Optional[Response]:
     """Catch bulk write commands and stage them as one confirmable plan, or
     None when the message isn't a bulk write so normal handling continues."""
@@ -1714,6 +1798,12 @@ def execute(message: str, db: Session, actor: User,
         return _handle_confirm_yes(db, actor)
     if pq.intent == "confirm_no":
         return _handle_confirm_no(actor)
+
+    # "Remove all assignees from <bug|filter>" — caught ahead of the single-action
+    # handler, whose set-status detector otherwise hijacks the scoping status word.
+    clear_resp = _maybe_handle_clear_assignees(message, db, actor, pq, ctx)
+    if clear_resp is not None:
+        return clear_resp
 
     # Bulk write commands are caught before the single-action handler and cloud
     # layer, then staged as one confirmable plan.

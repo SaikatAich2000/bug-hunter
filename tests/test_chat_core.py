@@ -1004,8 +1004,7 @@ def test_cov_exec_action_missing_slots(client):
 
 def test_action_misfire_defers_to_cloud_when_available(client, monkeypatch):
     """An over-eager action match that can't fill its slots defers to the cloud
-    layer (when live) instead of dead-ending on the canned 'which bug?' prompt.
-    Reproduces the reported dud: "remove Assignee from 'CLOSED' projects"."""
+    layer (when live) instead of dead-ending on the canned 'which bug?' prompt."""
     ids = _seed(client)
     from app.chatbot import executor
     from app.chatbot.executor import Block, Response
@@ -1016,12 +1015,11 @@ def test_action_misfire_defers_to_cloud_when_available(client, monkeypatch):
         mem.reset(admin.id)
 
         cloud_answer = Response(
-            blocks=[Block("text", {"text": "I can't change assignments myself — "
-                                           "type *unassign bug 5* and confirm."})],
+            blocks=[Block("text", {"text": "Sure — which bug should I close?"})],
             summary="cloud", intent="cloud_answer")
         monkeypatch.setattr(executor, "_cloud_available", lambda: True)
         monkeypatch.setattr(executor, "_try_cloud_llm", lambda *a, **k: cloud_answer)
-        r = executor.execute("remove Assignee from 'CLOSED' projects", db, admin)
+        r = executor.execute("please close the issue right now", db, admin)
         assert r is cloud_answer  # reached the smart layer, not the canned prompt
 
         # A well-formed write must still stage a confirm — never divert to cloud.
@@ -1044,7 +1042,7 @@ def test_action_misfire_keeps_canned_prompt_when_cloud_off(client):
     try:
         admin = _user(db, ids["admin"])
         mem.reset(admin.id)
-        r = executor.execute("remove Assignee from 'CLOSED' projects", db, admin)
+        r = executor.execute("please close the issue right now", db, admin)
         assert r.intent == "action_invalid"
     finally:
         db.close()

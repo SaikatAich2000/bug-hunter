@@ -3724,7 +3724,9 @@ input[type="checkbox"]:checked::after {
 /* Custom date picker: native <input type="date"> is visually hidden via .bh-date-native and replaced by a button + popover; it stays in the DOM so form submission still picks up its value. */
 .bh-date-wrap {
   position: relative;
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
 }
 .bh-date-native {
@@ -3742,6 +3744,7 @@ input[type="checkbox"]:checked::after {
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-width: 0;  /* shrink to leave the clear button room on the same line */
   padding: 9px 12px;
   border-radius: 8px;
   border: 1px solid var(--border-strong);
@@ -3774,6 +3777,7 @@ input[type="checkbox"]:checked::after {
   color: var(--text-muted);
   background: var(--bg-elev-3);
   border: 1px solid transparent;
+  cursor: pointer;
 }
 .bh-date-clear:hover { color: var(--danger, #ef4444); background: rgba(239, 68, 68, 0.15); }
 

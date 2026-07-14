@@ -1661,6 +1661,16 @@ _CLOUD_SKIP_EXACT = frozenset({
 _SKIP_CLOUD_INTENTS = frozenset({"greeting", "thanks", "help", "empty"})
 
 
+def _cloud_available() -> bool:
+    """True when the cloud layer is enabled and usable, so a rule miss can defer
+    to it rather than return a canned prompt. Never raises."""
+    try:
+        from app.chatbot import cloud_llm as _cloud
+        return _cloud.is_available()
+    except Exception:
+        return False
+
+
 def _try_cloud_llm(message: str, db: Session, actor: User,
                    now: Optional[datetime]) -> Optional[Response]:
     """Layer 4 fallback: optional cloud LLM (Groq / OpenRouter), off unless
@@ -1711,8 +1721,18 @@ def execute(message: str, db: Session, actor: User,
     if bulk_resp is not None:
         return bulk_resp
 
+    # A parsed write-intent stages a confirmable plan. But action_invalid means
+    # an action verb matched without enough to act on — often an over-eager match
+    # on a message that isn't really a write ("which bugs are closed?", "remove
+    # the assignee from the closed ones"). When the cloud layer is live, let it
+    # take a turn instead of dead-ending on the canned "which bug?" prompt; keep
+    # that prompt as the last resort if the smarter layers below all pass.
+    action_fallback: Optional[Response] = None
     if pq.intent.startswith("action_"):
-        return _handle_action_request(pq, actor)
+        action_resp = _handle_action_request(pq, actor)
+        if action_resp.intent != "action_invalid" or not _cloud_available():
+            return action_resp
+        action_fallback = action_resp
 
     # When enabled, the cloud layer leads for anything that isn't a confirmation
     # or explicit write: keyword rules misfire on free-form chat ("can you revoke
@@ -1739,7 +1759,7 @@ def execute(message: str, db: Session, actor: User,
     if llm_resp is not None:
         return llm_resp
 
-    return _handle_unknown(message)
+    return action_fallback or _handle_unknown(message)
 
 
 __all__ = ["Block", "Response", "execute", "build_context"]

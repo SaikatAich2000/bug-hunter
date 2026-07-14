@@ -1002,6 +1002,54 @@ def test_cov_exec_action_missing_slots(client):
         db.close()
 
 
+def test_action_misfire_defers_to_cloud_when_available(client, monkeypatch):
+    """An over-eager action match that can't fill its slots defers to the cloud
+    layer (when live) instead of dead-ending on the canned 'which bug?' prompt.
+    Reproduces the reported dud: "remove Assignee from 'CLOSED' projects"."""
+    ids = _seed(client)
+    from app.chatbot import executor
+    from app.chatbot.executor import Block, Response
+    from app.chatbot.memory import store as mem
+    db = _new_db()
+    try:
+        admin = _user(db, ids["admin"])
+        mem.reset(admin.id)
+
+        cloud_answer = Response(
+            blocks=[Block("text", {"text": "I can't change assignments myself — "
+                                           "type *unassign bug 5* and confirm."})],
+            summary="cloud", intent="cloud_answer")
+        monkeypatch.setattr(executor, "_cloud_available", lambda: True)
+        monkeypatch.setattr(executor, "_try_cloud_llm", lambda *a, **k: cloud_answer)
+        r = executor.execute("remove Assignee from 'CLOSED' projects", db, admin)
+        assert r is cloud_answer  # reached the smart layer, not the canned prompt
+
+        # A well-formed write must still stage a confirm — never divert to cloud.
+        mem.reset(admin.id)
+        monkeypatch.setattr(executor, "_try_cloud_llm",
+                            lambda *a, **k: pytest.fail("valid action must not reach cloud"))
+        r2 = executor.execute("close bug 5", db, admin)
+        assert r2.intent == "confirm_action"
+    finally:
+        db.close()
+
+
+def test_action_misfire_keeps_canned_prompt_when_cloud_off(client):
+    """Cloud unavailable (the CI default): the same mis-fire preserves the old
+    deterministic action_invalid prompt with no cloud round-trip."""
+    ids = _seed(client)
+    from app.chatbot import executor
+    from app.chatbot.memory import store as mem
+    db = _new_db()
+    try:
+        admin = _user(db, ids["admin"])
+        mem.reset(admin.id)
+        r = executor.execute("remove Assignee from 'CLOSED' projects", db, admin)
+        assert r.intent == "action_invalid"
+    finally:
+        db.close()
+
+
 def test_cov_exec_action_plan_each_kind(client):
     ids = _seed(client)
     from app.chatbot import executor, nlu

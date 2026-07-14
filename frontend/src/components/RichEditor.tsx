@@ -756,7 +756,6 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
       let active = false;
       // For manual-wrapped inline styles, check the DOM ancestor; fall back
       // to queryCommandState (unreliable for the wrapped path but fine otherwise).
-      // Manual-wrapped inline styles: check DOM ancestor, fall back to queryCommandState.
       const inlineTag = INLINE_TOGGLE[c];
       if (inlineTag !== undefined) {
         active = inAncestor([inlineTag]);

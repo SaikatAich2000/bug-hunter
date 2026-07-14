@@ -111,9 +111,6 @@ def seed():
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 1. Read operations must not write to the database.
-# ---------------------------------------------------------------------------
 def test_reads_are_pure() -> None:
     section("Read operations don't mutate the database")
     admin_id, alice_id, bob_id = seed()
@@ -170,9 +167,6 @@ def test_reads_are_pure() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 2. Schema is not altered by Sleuth.
-# ---------------------------------------------------------------------------
 def test_schema_unchanged() -> None:
     section("Schema introspection: Sleuth adds no tables")
     db = SessionLocal()
@@ -198,9 +192,7 @@ def test_schema_unchanged() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 3. Failed writes roll back fully — no half-state, no partial audit row.
-# ---------------------------------------------------------------------------
+# No half-state, no partial audit row.
 def test_atomic_rollback() -> None:
     section("Atomicity: failed actions don't leave partial state")
     admin_id, _, _ = seed()
@@ -263,9 +255,6 @@ def test_atomic_rollback() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 4. Permission denial does NOT write anything.
-# ---------------------------------------------------------------------------
 def test_permission_denial_no_writes() -> None:
     section("Permission denial: regular user blocked AND no audit row")
     _, _, bob_id = seed()
@@ -294,9 +283,6 @@ def test_permission_denial_no_writes() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 5. Concurrent users — pending actions are isolated per-user.
-# ---------------------------------------------------------------------------
 def test_concurrent_users_isolated() -> None:
     section("Concurrent users: Bob's 'yes' doesn't fire Alice's plan")
     admin_id, _, bob_id = seed()
@@ -343,9 +329,6 @@ def test_concurrent_users_isolated() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 6. Memory edge cases.
-# ---------------------------------------------------------------------------
 def test_memory_edge_cases() -> None:
     section("Memory: TTL eviction, max sessions, reset")
     memstore._clear_all_for_test()
@@ -384,9 +367,6 @@ def test_memory_edge_cases() -> None:
           pending3 is None)
 
 
-# ---------------------------------------------------------------------------
-# 7. New action overrides old pending.
-# ---------------------------------------------------------------------------
 def test_new_action_overrides_pending() -> None:
     section("Staging a 2nd action replaces the 1st pending")
     admin_id, _, _ = seed()
@@ -412,9 +392,6 @@ def test_new_action_overrides_pending() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 8. Concurrent 'execute' calls — light stress test.
-# ---------------------------------------------------------------------------
 def test_concurrent_executes() -> None:
     section("Concurrent execute() calls — no race conditions")
     admin_id, alice_id, bob_id = seed()
@@ -446,9 +423,6 @@ def test_concurrent_executes() -> None:
           not errors, f"errors={errors[:3]}")
 
 
-# ---------------------------------------------------------------------------
-# 9. SQL injection through chat — never touches the schema.
-# ---------------------------------------------------------------------------
 def test_sql_injection_safety() -> None:
     section("SQL injection inputs: parameterised queries hold")
     admin_id, _, _ = seed()
@@ -482,9 +456,6 @@ def test_sql_injection_safety() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# 10. Verify Excel cache lives in process memory only — no DB writes.
-# ---------------------------------------------------------------------------
 def test_excel_in_memory_only() -> None:
     section("Excel cache: in-process only, no DB persistence")
     admin_id, _, _ = seed()

@@ -1160,9 +1160,7 @@ def _percentile(values: list[float], pct: float) -> float:
     return d0 + d1
 
 
-# ---------------------------------------------------------------------------
-# Public dispatcher
-# ---------------------------------------------------------------------------
+# --- Public dispatcher ---
 _DISPATCH = {
     "item_detail":             _report_item_detail,
     "pending_snapshot":        _report_pending_snapshot,

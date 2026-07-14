@@ -34,9 +34,7 @@ def _make_bug(c, project_id, title="A bug for tests", **extra):
     return r.json()
 
 
-# ===========================================================================
-# Cache-Control middleware
-# ===========================================================================
+# --- Cache-Control middleware ---
 class TestCacheControl:
     def test_html_pages_are_never_cached(self, client):
         r = client.get("/login.html")
@@ -100,9 +98,7 @@ class TestCacheControl:
             app.state.asset_version = original_version
 
 
-# ===========================================================================
-# Session invalidation on password change / reset
-# ===========================================================================
+# --- Session invalidation on password change / reset ---
 class TestSessionInvalidation:
     def test_password_change_invalidates_other_sessions(self, admin_client, client):
         """Device A's password change kicks device B out on its next request."""
@@ -175,9 +171,7 @@ class TestSessionInvalidation:
         assert sleepy.get("/api/auth/me").status_code == 401
 
 
-# ===========================================================================
-# XSS-safe attachment serving
-# ===========================================================================
+# --- XSS-safe attachment serving ---
 class TestAttachmentSafety:
     def test_html_attachment_forced_to_octet_stream(self, admin_client):
         p = _make_project(admin_client, "ATX-1")
@@ -325,9 +319,7 @@ class TestAttachmentSafety:
             assert d.headers.get("Accept-Ranges") == "bytes"
 
 
-# ===========================================================================
-# LIKE-wildcard escape
-# ===========================================================================
+# --- LIKE-wildcard escape ---
 class TestLikeWildcardEscape:
     def test_user_search_with_percent_does_not_match_everyone(self, admin_client):
         _make_user(admin_client, "Alpha", "alpha@x.com")
@@ -362,9 +354,7 @@ class TestLikeWildcardEscape:
         assert len(items) == 0, "LIKE wildcard not escaped in bug search"
 
 
-# ===========================================================================
-# Owner can save their own bug
-# ===========================================================================
+# --- Owner can save their own bug ---
 class TestReporterPermissionFix:
     def test_user_can_save_own_bug_with_unchanged_reporter_id(self, admin_client):
         p = _make_project(admin_client, "RP-1")
@@ -397,9 +387,7 @@ class TestReporterPermissionFix:
         assert r.status_code == 403
 
 
-# ===========================================================================
-# Case-insensitive filters
-# ===========================================================================
+# --- Case-insensitive filters ---
 class TestFilterCaseInsensitive:
     def test_status_filter_matches_lowercase(self, admin_client):
         p = _make_project(admin_client, "CF-1")
@@ -420,9 +408,7 @@ class TestFilterCaseInsensitive:
         assert r.status_code == 400
 
 
-# ===========================================================================
-# Activity ordering consistent
-# ===========================================================================
+# --- Activity ordering consistent ---
 class TestActivityOrderingFix:
     def test_activity_order_consistent_between_endpoints(self, admin_client):
         p = _make_project(admin_client, "AO-1")
@@ -436,9 +422,7 @@ class TestActivityOrderingFix:
         assert d_ids == a_ids, f"detail={d_ids} vs activity={a_ids}"
 
 
-# ===========================================================================
-# Description-only update persists
-# ===========================================================================
+# --- Description-only update persists ---
 class TestDescriptionOnlyUpdate:
     def test_description_only_update_persists(self, admin_client):
         p = _make_project(admin_client, "DO-1")
@@ -463,9 +447,7 @@ class TestDescriptionOnlyUpdate:
         assert len(descs) == 1
 
 
-# ===========================================================================
-# Search with whitespace
-# ===========================================================================
+# --- Search with whitespace ---
 class TestSearchWhitespace:
     def test_search_strips_whitespace(self, admin_client):
         p = _make_project(admin_client, "SW-1")
@@ -476,9 +458,7 @@ class TestSearchWhitespace:
         assert any("findable" in b["title"] for b in items)
 
 
-# ===========================================================================
-# Title min-length after strip
-# ===========================================================================
+# --- Title min-length after strip ---
 class TestTitleStripMinLength:
     def test_title_with_padded_whitespace_below_min_length_rejected(self, admin_client):
         p = _make_project(admin_client, "TS-1")
@@ -499,9 +479,7 @@ class TestTitleStripMinLength:
         assert r.status_code == 422
 
 
-# ===========================================================================
-# Reset-token invalidation on password change
-# ===========================================================================
+# --- Reset-token invalidation on password change ---
 class TestResetTokenInvalidation:
     def test_password_change_audits_token_invalidation(self, admin_client):
         admin_client.post("/api/auth/forgot-password", json={"email": "admin@test.local"})

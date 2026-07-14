@@ -54,9 +54,7 @@ const COL_HEAD_LABEL: Record<DetailCol, string> = {
   att: "📎",
 };
 
-// ---------------------------------------------------------------------------
 // Pure helpers — filter / summary functions
-// ---------------------------------------------------------------------------
 
 function matchesEventFilter(ev: EventOut, q: string, date: string): boolean {
   if (date && (ev.scheduled_for || "") !== date) return false;
@@ -204,9 +202,7 @@ function renderCell(col: DetailCol, b: BugOut): ReactElement {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Presentational pieces
-// ---------------------------------------------------------------------------
 
 /** One card in the list-mode grid. */
 function EventCard({ ev, onOpen }: Readonly<{ ev: EventOut; onOpen: (id: number) => void }>) {
@@ -315,9 +311,7 @@ function EventItemsTable({
   );
 }
 
-// ---------------------------------------------------------------------------
 // View
-// ---------------------------------------------------------------------------
 
 interface EventModalLocalState {
   open: boolean;
@@ -329,21 +323,21 @@ export default function EventsView() {
   const { view, meta, canManage, isAdmin, openBugForm, openBugDetail, bugModal, refreshAll } =
     useApp();
 
-  // ----- list-mode state ---------------------------------------------------
+  // list-mode state
   const [events, setEvents] = useState<EventOut[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState(""); // applied (debounced) search
   const [date, setDate] = useState("");
 
-  // ----- detail-mode state -------------------------------------------------
+  // detail-mode state
   const [mode, setMode] = useState<"list" | "detail">("list");
   const [detail, setDetail] = useState<EventDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailQInput, setDetailQInput] = useState("");
   const [detailFilters, setDetailFilters] = useState<EventDetailFilter>(EMPTY_DETAIL_FILTER);
 
-  // ----- event create/edit modal (local, mounted by this view) ------------
+  // event create/edit modal (local, mounted by this view)
   const [modal, setModal] = useState<EventModalLocalState>({ open: false, event: null });
 
   // Debounced search appliers (200ms).
@@ -353,7 +347,7 @@ export default function EventsView() {
     [],
   );
 
-  // ----- data loaders ------------------------------------------------------
+  // data loaders
   const refreshEvents = useCallback(async () => {
     setLoading(true);
     try {
@@ -443,7 +437,7 @@ export default function EventsView() {
     }
   }, [bugModal.open, mode, detail, openEventDetail]);
 
-  // ----- delete ------------------------------------------------------------
+  // delete
   const handleDeleteEvent = useCallback(
     async (event: EventOut) => {
       const ok = await confirmDialog(
@@ -464,7 +458,7 @@ export default function EventsView() {
     [refreshEvents, showListMode],
   );
 
-  // ----- post-save ---------------------------------------------------------
+  // post-save
   const handleSaved = useCallback(
     async (saved: EventOut, isEdit: boolean) => {
       await refreshEvents();
@@ -479,7 +473,7 @@ export default function EventsView() {
     [refreshEvents, openEventDetail, mode, detail, refreshAll],
   );
 
-  // ----- derived list-mode data --------------------------------------------
+  // derived list-mode data
   const all = events ?? [];
   const qNorm = q.trim().toLowerCase();
   const dateNorm = date.trim();
@@ -516,7 +510,7 @@ export default function EventsView() {
     gridContent = rows.map((ev) => <EventCard key={ev.id} ev={ev} onOpen={openDetail} />);
   }
 
-  // ----- derived detail-mode data ------------------------------------------
+  // derived detail-mode data
   const allItems = detail?.items ?? [];
   const filteredItems = filterEventItems(allItems, detailFilters);
 

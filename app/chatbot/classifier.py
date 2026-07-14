@@ -11,9 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 
-# ---------------------------------------------------------------------------
-# Training corpus
-# ---------------------------------------------------------------------------
+# --- Training corpus ---
 # (intent_label, example_phrasings); labels match nlu.parse() intents.
 _CORPUS: list[tuple[str, list[str]]] = [
     ("greeting", [
@@ -107,9 +105,7 @@ _CORPUS: list[tuple[str, list[str]]] = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Tokenization
-# ---------------------------------------------------------------------------
+# --- Tokenization ---
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _STOPWORDS = {
     "a", "an", "the", "is", "are", "be", "to", "of", "for", "and", "or",
@@ -136,9 +132,7 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
-# ---------------------------------------------------------------------------
-# Model: IDF weights computed once at import time.
-# ---------------------------------------------------------------------------
+# --- Model: IDF weights computed once at import time. ---
 @dataclass
 class _TrainedModel:
     docs: list[tuple[str, Counter[str]]]   # [(intent, term_counts), ...]
@@ -180,9 +174,7 @@ def _train(corpus: list[tuple[str, list[str]]]) -> _TrainedModel:
 _MODEL = _train(_CORPUS)
 
 
-# ---------------------------------------------------------------------------
-# Predict
-# ---------------------------------------------------------------------------
+# --- Predict ---
 @dataclass
 class Prediction:
     intent: str
@@ -256,9 +248,7 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Debug helper: show per-doc scores for a message.
-# ---------------------------------------------------------------------------
+# --- Debug helper: show per-doc scores for a message. ---
 def explain(message: str, top_k: int = 5) -> list[tuple[str, float]]:
     tokens = _tokenize(message)
     if not tokens:

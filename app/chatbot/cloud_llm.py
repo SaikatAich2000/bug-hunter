@@ -32,9 +32,7 @@ from app.chatbot.redaction import redact
 logger = logging.getLogger("bug_hunter.sleuth.cloud")
 
 
-# ---------------------------------------------------------------------------
-# Availability
-# ---------------------------------------------------------------------------
+# --- Availability ---
 def is_available() -> bool:
     """Return True if the layer is enabled, at least one API key is present, and httpx is importable."""
     s = get_settings()
@@ -49,10 +47,8 @@ def is_available() -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
 # System prompt — one JSON object: mode="data" routes to SQL handlers,
 # mode="answer" is free-form. The model never produces counts or writes.
-# ---------------------------------------------------------------------------
 SYSTEM_PROMPT = (
     "You are Sleuth, the assistant built into the Bug Hunter issue tracker. "
     "Talk like a helpful teammate: natural and varied. Keep chat replies "
@@ -126,9 +122,7 @@ SYSTEM_PROMPT = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Provider calls (httpx REST — no SDK dependency)
-# ---------------------------------------------------------------------------
+# --- Provider calls (httpx REST — no SDK dependency) ---
 def _call_groq(system: str, user: str, *, temperature: float = 0.0,
                frequency_penalty: float = 0.0,
                presence_penalty: float = 0.0) -> Optional[str]:
@@ -200,10 +194,8 @@ def _call_openrouter(system: str, user: str, *, temperature: float = 0.0,
         return None
 
 
-# ---------------------------------------------------------------------------
 # In-process observability counters. Unlocked on purpose — an off-by-one under
 # a race is fine for diagnostics.
-# ---------------------------------------------------------------------------
 _metrics: dict[str, int] = {}
 
 
@@ -471,9 +463,7 @@ def _truncate_answer(text: str, settings) -> str:
     return text
 
 
-# ---------------------------------------------------------------------------
-# Public entry
-# ---------------------------------------------------------------------------
+# --- Public entry ---
 def try_understand(
     message: str,
     db: Session,

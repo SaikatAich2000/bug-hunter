@@ -56,9 +56,6 @@ def _create_bug(c, project_id, title="A Bug Title", **extra):
     return r.json()
 
 
-# ===========================================================================
-# 1. AUTH
-# ===========================================================================
 class TestAuth:
     def test_logout_when_already_logged_out_is_204(self, client):
         """Logout from a fresh client (no cookie) must still return 204."""
@@ -146,9 +143,6 @@ class TestAuth:
         assert r.status_code == 400
 
 
-# ===========================================================================
-# 2. USERS
-# ===========================================================================
 class TestUsers:
     def test_create_user_with_duplicate_email_is_409(self, admin_client):
         _create_user(admin_client, "U1", "dup@x.com")
@@ -239,9 +233,6 @@ class TestUsers:
         assert r.status_code == 409, r.text
 
 
-# ===========================================================================
-# 3. PROJECTS
-# ===========================================================================
 class TestProjects:
     def test_create_project_with_invalid_color(self, admin_client):
         """Color must match #RRGGBB."""
@@ -291,9 +282,6 @@ class TestProjects:
         assert r.status_code == 422
 
 
-# ===========================================================================
-# 4. BUGS
-# ===========================================================================
 class TestBugs:
     def test_create_bug_with_nonexistent_project(self, admin_client):
         r = admin_client.post("/api/bugs", json={
@@ -493,9 +481,6 @@ class TestBugs:
         assert "csv-test" in text
 
 
-# ===========================================================================
-# 5. COMMENTS AND ATTACHMENTS
-# ===========================================================================
 class TestCommentsAttachments:
     def test_comment_on_nonexistent_bug(self, admin_client):
         r = admin_client.post("/api/bugs/999999/comments", json={"body": "hi"})
@@ -597,9 +582,6 @@ class TestCommentsAttachments:
         assert r.json()["attachment_count"] == 2
 
 
-# ===========================================================================
-# 6. STATS AND AUDIT
-# ===========================================================================
 class TestStatsAudit:
     def test_stats_includes_recent_bugs_in_timeline(self, admin_client):
         p = _create_project(admin_client, name="ST1")
@@ -635,9 +617,6 @@ class TestStatsAudit:
             "Bug delete didn't create a non-bug audit record"
 
 
-# ===========================================================================
-# 7. EDGE CASES
-# ===========================================================================
 class TestEdgeCases:
     def test_title_with_only_whitespace_rejected(self, admin_client):
         """A title that is whitespace-only should be rejected as empty."""
@@ -721,9 +700,6 @@ class TestEdgeCases:
             f"created with 'new'/found 'New' but filter ?status=new yields {n_lower} vs {n_canonical}"
 
 
-# ===========================================================================
-# 8. SECURITY
-# ===========================================================================
 class TestSecurity:
     def test_login_does_not_leak_user_existence(self, client):
         """'No such user' and 'wrong password' must produce identical responses."""
@@ -771,9 +747,6 @@ class TestSecurity:
         assert r.json()["title"] == "<script>alert(1)</script>"  # stored verbatim
 
 
-# ===========================================================================
-# 8b. CSRF, UPLOAD RATE LIMIT, RESPONSE HEADERS
-# ===========================================================================
 class TestV321Security:
     """CSRF origin checks, upload rate limit (20/60s/user), hardened response headers."""
 
@@ -901,14 +874,9 @@ class TestV321Security:
         assert "frame-ancestors 'none'" in csp
 
 
-# ===========================================================================
-# 8c. PERFORMANCE
-#
-# These tests don't assert wall-clock speed (flaky on shared CI). Instead
-# they lock in structural behavior: query-count collapse on the dashboard,
-# deferred BLOB loading on Attachment, and correct attachment counts in
-# list responses.
-# ===========================================================================
+# Not wall-clock timing (flaky on shared CI) — locks in query-count collapse
+# on the dashboard, deferred BLOB loading on Attachment, and correct
+# attachment counts in list responses.
 class TestV321Performance:
     def test_stats_endpoint_returns_expected_kpis(self, admin_client):
         """Stats was refactored from 5 individual queries to a single GROUP BY.
@@ -972,9 +940,6 @@ class TestV321Performance:
         assert by_id[bugs[2]["id"]]["attachment_count"] == 2
 
 
-# ===========================================================================
-# 9. DATA INTEGRITY
-# ===========================================================================
 class TestCascades:
     def test_delete_user_who_is_reporter_sets_reporter_null(self, admin_client):
         p = _create_project(admin_client, name="CA1")
@@ -1004,9 +969,6 @@ class TestCascades:
         assert r.status_code == 404
 
 
-# ===========================================================================
-# 8d. SLEUTH CHATBOT
-# ===========================================================================
 class TestV321Chatbot:
     """NLU behavior tests:
       - "me" / "mine" / "my bugs" pronoun resolution

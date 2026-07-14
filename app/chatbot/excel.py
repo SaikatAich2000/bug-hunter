@@ -47,9 +47,7 @@ def _evict_oldest_locked() -> None:
     _cache.pop(oldest[0], None)
 
 
-# ---------------------------------------------------------------------------
-# Workbook builder
-# ---------------------------------------------------------------------------
+# --- Workbook builder ---
 _HEADER_STYLE_FILL = "1F2A44"   # Bug Hunter dark accent
 _HEADER_STYLE_FG = "FFFFFF"
 
@@ -128,9 +126,7 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+# --- Public API ---
 def stage_workbook(rows: list[dict[str, Any]], filename: str,
                    owner_id: int, description: str = "") -> tuple[str, int]:
     """Build the workbook and stage it under a fresh token bound to ``owner_id``.

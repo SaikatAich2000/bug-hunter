@@ -324,9 +324,7 @@ def test_cov_userin_changeme_password_passes():
     assert u.password == "changeme"
 
 
-# ---------------------------------------------------------------------------
-# UserUpdate  (Optional fields: None -> early-return branches)
-# ---------------------------------------------------------------------------
+# --- UserUpdate  (Optional fields: None -> early-return branches) ---
 def test_cov_userupdate_all_none_passes():
     # Pydantic only runs a field validator when a value is explicitly supplied,
     # so we pass None explicitly to exercise each optional validator's early-return.
@@ -370,9 +368,7 @@ def test_cov_userupdate_bad_password_raises():
         s.UserUpdate(password="short")
 
 
-# ---------------------------------------------------------------------------
-# Auth schemas
-# ---------------------------------------------------------------------------
+# --- Auth schemas ---
 def test_cov_loginin_email_validated():
     s = _S()
     assert s.LoginIn(email="A@B.com", password="x").email == "a@b.com"
@@ -405,9 +401,7 @@ def test_cov_resetpassword_validates_new():
         s.ResetPasswordIn(token="t", new_password="short")
 
 
-# ---------------------------------------------------------------------------
-# ProjectIn
-# ---------------------------------------------------------------------------
+# --- ProjectIn ---
 def test_cov_projectin_valid_and_trims():
     s = _S()
     p = s.ProjectIn(name="  Proj ", description="  d  ", color="#aabbcc")
@@ -437,9 +431,7 @@ def test_cov_projectin_bad_color_raises():
         s.ProjectIn(name="Proj", color="#fff")  # 3 hex not 6
 
 
-# ---------------------------------------------------------------------------
-# BugCreate — field + model validators
-# ---------------------------------------------------------------------------
+# --- BugCreate — field + model validators ---
 def test_cov_bugcreate_valid_defaults():
     s = _S()
     b = s.BugCreate(project_id=1, title="  A valid title ")
@@ -542,9 +534,7 @@ def test_cov_bugcreate_strip_desc_non_string_passthrough():
     assert s.BugCreate._strip_desc(None) is None
 
 
-# ---------------------------------------------------------------------------
-# BugUpdate — Optional everything (None early-returns)
-# ---------------------------------------------------------------------------
+# --- BugUpdate — Optional everything (None early-returns) ---
 def test_cov_bugupdate_all_none_passes():
     # Explicit None exercises each optional validator's early-return branch.
     s = _S()
@@ -627,9 +617,7 @@ def test_cov_bugupdate_strip_desc_non_string_passthrough():
     assert s.BugUpdate._strip_desc(123) == 123
 
 
-# ---------------------------------------------------------------------------
-# CommentIn
-# ---------------------------------------------------------------------------
+# --- CommentIn ---
 def test_cov_commentin_valid_sanitized():
     s = _S()
     c = s.CommentIn(body="  <b>hello</b><script>x</script> ")
@@ -666,9 +654,7 @@ def test_cov_commentin_non_string_body_raises():
         s.CommentIn._strip(123)
 
 
-# ---------------------------------------------------------------------------
-# EventCreate
-# ---------------------------------------------------------------------------
+# --- EventCreate ---
 def test_cov_eventcreate_valid_trims_desc():
     # Name and description are stripped; manager_ids are deduplicated.
     s = _S()
@@ -705,9 +691,7 @@ def test_cov_eventcreate_strip_desc_non_string_passthrough():
     assert s.EventCreate._strip_desc(None) is None
 
 
-# ---------------------------------------------------------------------------
-# EventUpdate  (Optional: None early-returns + dedup)
-# ---------------------------------------------------------------------------
+# --- EventUpdate  (Optional: None early-returns + dedup) ---
 def test_cov_eventupdate_all_none_passes():
     # Explicit None exercises the None-return branch in each optional validator.
     s = _S()
@@ -755,9 +739,7 @@ def test_cov_eventupdate_strip_desc_non_string_passthrough():
     assert s.EventUpdate._strip_desc(123) == 123
 
 
-# ---------------------------------------------------------------------------
-# Push schemas (simple Field constraints)
-# ---------------------------------------------------------------------------
+# --- Push schemas (simple Field constraints) ---
 def test_cov_push_subscribe_valid_and_invalid():
     s = _S()
     ok = s.PushSubscribeIn(token="abc")
@@ -773,9 +755,7 @@ def test_cov_push_unsubscribe_valid_and_invalid():
         s.PushUnsubscribeIn(token="")
 
 
-# ---------------------------------------------------------------------------
-# statuses_for_type helper
-# ---------------------------------------------------------------------------
+# --- statuses_for_type helper ---
 def test_cov_statuses_for_type_known_and_unknown():
     s = _S()
     assert s.statuses_for_type("Task") == s.STATUSES_BY_TYPE["Task"]

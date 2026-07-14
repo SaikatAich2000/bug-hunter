@@ -9,9 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
 
-# ---------------------------------------------------------------------------
-# Trajectory — score the read-only agent's tool-use path.
-# ---------------------------------------------------------------------------
+# --- Trajectory — score the read-only agent's tool-use path. ---
 _TOOL_ACTIONS = frozenset({"query", "retrieve"})
 _TERMINAL_ACTIONS = frozenset({"final", "answer_data"})
 _KNOWN_ACTIONS = _TOOL_ACTIONS | _TERMINAL_ACTIONS
@@ -81,9 +79,7 @@ def run_and_trace(message: str, *, call_model: Callable, run_query: Callable,
     return result, actions
 
 
-# ---------------------------------------------------------------------------
-# Outcome — did the final Response achieve the goal?
-# ---------------------------------------------------------------------------
+# --- Outcome — did the final Response achieve the goal? ---
 @dataclass
 class OutcomeResult:
     """Whether a Response matched an expected-goal spec."""
@@ -119,9 +115,7 @@ def check_outcome(resp: Any, spec: dict) -> OutcomeResult:
     return OutcomeResult(ok=not reasons, reasons=reasons)
 
 
-# ---------------------------------------------------------------------------
-# Confidence — is the judge's 0..1 score calibrated against actual correctness?
-# ---------------------------------------------------------------------------
+# --- Confidence — is the judge's 0..1 score calibrated against actual correctness? ---
 def brier_score(pairs: Sequence["tuple[float, bool]"]) -> float:
     """MSE of confidence vs binary outcome (0.0 = perfect). Empty -> 0.0."""
     items = list(pairs)
@@ -131,9 +125,7 @@ def brier_score(pairs: Sequence["tuple[float, bool]"]) -> float:
     return round(total / len(items), 4)
 
 
-# ---------------------------------------------------------------------------
-# Reliability — stability of answers / routes across reruns.
-# ---------------------------------------------------------------------------
+# --- Reliability — stability of answers / routes across reruns. ---
 def answer_variance(answers: Sequence[str]) -> float:
     """Fraction of distinct normalised replies across reruns (0.0 = identical)."""
     norm = [" ".join((a or "").lower().split()) for a in answers]
@@ -154,9 +146,7 @@ def self_consistency(values: Sequence[Any]) -> float:
     return route_stability(values)
 
 
-# ---------------------------------------------------------------------------
-# Agreement — judge decision vs a hand-labelled golden set.
-# ---------------------------------------------------------------------------
+# --- Agreement — judge decision vs a hand-labelled golden set. ---
 def agreement(predicted: Sequence[bool], expected: Sequence[bool]) -> float:
     """Fraction of predicted == expected (zipped to shorter). Empty -> 1.0."""
     pairs = list(zip(predicted, expected))
@@ -165,9 +155,7 @@ def agreement(predicted: Sequence[bool], expected: Sequence[bool]) -> float:
     return round(sum(1 for p, e in pairs if p == e) / len(pairs), 4)
 
 
-# ---------------------------------------------------------------------------
-# pass@k — fraction of tasks where at least one of K attempts passed.
-# ---------------------------------------------------------------------------
+# --- pass@k — fraction of tasks where at least one of K attempts passed. ---
 def pass_at_k(samples: Sequence[bool]) -> float:
     """Per-task pass@k: 1.0 if ANY of the K attempts passed, else 0.0."""
     return 1.0 if any(samples) else 0.0

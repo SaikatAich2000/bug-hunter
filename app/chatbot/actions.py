@@ -40,9 +40,7 @@ _BULK_KINDS = frozenset({
 })
 
 
-# ---------------------------------------------------------------------------
-# ActionPlan — a fully-resolved write request awaiting execution
-# ---------------------------------------------------------------------------
+# --- ActionPlan — a fully-resolved write request awaiting execution ---
 @dataclass
 class ActionPlan:
     """A concrete change built at parse time and executed on confirm.
@@ -104,9 +102,7 @@ class ActionPlan:
         )
 
 
-# ---------------------------------------------------------------------------
-# Permission helpers
-# ---------------------------------------------------------------------------
+# --- Permission helpers ---
 def _check_can_edit_bug(actor: User, bug: Bug) -> Optional[str]:
     """Return None if the actor may edit this item, otherwise an error string.
     Passes the item's real type so per-type rules match PUT /api/bugs/{id}."""
@@ -133,9 +129,7 @@ def _check_can_create_bug(actor: User) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Audit helper
-# ---------------------------------------------------------------------------
+# --- Audit helper ---
 def _audit(db: Session, bug_id: Optional[int], actor: User,
            action: str, detail: str,
            entity_type: str = "bug", entity_id: Optional[int] = None) -> None:
@@ -150,9 +144,7 @@ def _audit(db: Session, bug_id: Optional[int], actor: User,
     ))
 
 
-# ---------------------------------------------------------------------------
-# Block helpers
-# ---------------------------------------------------------------------------
+# --- Block helpers ---
 def _confirm_response(plan: ActionPlan, prompt: str) -> Response:
     """Confirm response: frontend renders Yes/No buttons; Yes dispatches the plan."""
     return Response(
@@ -194,9 +186,7 @@ def _error_response(message: str, intent: str = "action_error") -> Response:
     )
 
 
-# ---------------------------------------------------------------------------
-# Plan execution — the actual writes
-# ---------------------------------------------------------------------------
+# --- Plan execution — the actual writes ---
 def _load_bug(db: Session, bug_id: int) -> Optional[Bug]:
     return db.scalar(
         select(Bug)
@@ -516,9 +506,7 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
     )
 
 
-# ---------------------------------------------------------------------------
-# Public dispatch
-# ---------------------------------------------------------------------------
+# --- Public dispatch ---
 def sleuth_write_denied(actor: User) -> Optional[str]:
     """Return a refusal string if the actor may not write via Sleuth, else None.
     Chat writes are admin-only; everyone else is read-only here."""
@@ -632,9 +620,7 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
         return _error_response(f"Action failed: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Confirmation-prompt builder
-# ---------------------------------------------------------------------------
+# --- Confirmation-prompt builder ---
 def stage_with_confirm(plan: ActionPlan) -> Response:
     """Return a confirm Response for a plan the caller already staged in memory.store."""
     prompt = (

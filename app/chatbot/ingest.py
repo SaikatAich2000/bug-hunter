@@ -121,9 +121,7 @@ def _clean_all(rows: list[Any]) -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Format detection + per-format parsers (deterministic path)
-# ---------------------------------------------------------------------------
+# --- Format detection + per-format parsers (deterministic path) ---
 def _specs_from_json(text: str) -> Optional[list[dict]]:
     try:
         data = json.loads(text)
@@ -270,9 +268,7 @@ def parse_document(filename: str, raw: bytes) -> list[dict]:
     return _specs_from_lines(text)
 
 
-# ---------------------------------------------------------------------------
-# AI extraction (optional, isolated, mockable)
-# ---------------------------------------------------------------------------
+# --- AI extraction (optional, isolated, mockable) ---
 _AI_SYSTEM = (
     "You read a document an admin uploaded (it may be a spreadsheet rendered as "
     "a pipe-delimited table, CSV, JSON, or free prose) and extract the software "
@@ -335,9 +331,7 @@ def resolve_project_for_preview(db: Session, project_id: Optional[int]) -> Optio
     return _resolve_project(db, project_id)
 
 
-# ---------------------------------------------------------------------------
-# Creation
-# ---------------------------------------------------------------------------
+# --- Creation ---
 def _resolve_project(db: Session, project_id: Optional[int]) -> Optional[Project]:
     if project_id is not None:
         return db.get(Project, project_id)

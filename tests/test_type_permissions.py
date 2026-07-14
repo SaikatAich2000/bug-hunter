@@ -45,9 +45,6 @@ def _make_item(client, project_id, item_type="Bug", **extra):
     return r.json()
 
 
-# ---------------------------------------------------------------------------
-# 1. Type-based permission tightening
-# ---------------------------------------------------------------------------
 def test_user_can_edit_bug_but_not_task_or_requirement(admin_client):
     # Admin creates the three flavors of items under their own session.
     p = _make_project(admin_client)
@@ -132,9 +129,7 @@ def test_admin_can_delete_everything(admin_client):
     assert r.status_code == 200, r.text
 
 
-# ---------------------------------------------------------------------------
-# 2 + 3 + 5. Event managers — emails, role validation
-# ---------------------------------------------------------------------------
+# Event managers — emails, role validation.
 def test_event_create_emails_only_managers(admin_client, monkeypatch):
     """Creating an event emails its managers only — not item assignees or random users."""
     m1 = _make_user(admin_client, "Mgr-a", role="manager", email="mgra@x.test")
@@ -239,9 +234,7 @@ def test_event_managers_must_be_admin_or_manager(admin_client):
     assert "manager" in r.json()["detail"].lower()
 
 
-# ---------------------------------------------------------------------------
-# 4. Event delete is admin-only (also exercised in test_manager_cannot_delete_anything).
-# ---------------------------------------------------------------------------
+# Event delete is admin-only (also exercised in test_manager_cannot_delete_anything).
 def test_regular_user_cannot_delete_event(admin_client):
     ev = admin_client.post("/api/events", json={"name": "user-delete-test"}).json()
     _make_user(admin_client, "User9", role="user", email="u9@x.test")
@@ -257,9 +250,6 @@ def test_regular_user_cannot_create_event(admin_client):
     assert r.status_code == 403
 
 
-# ---------------------------------------------------------------------------
-# Event detail still works after managers added
-# ---------------------------------------------------------------------------
 def test_event_out_includes_managers(admin_client):
     mgr = _make_user(admin_client, "Mgr5", role="manager", email="m5@x.test")
     ev = admin_client.post("/api/events", json={
@@ -273,10 +263,8 @@ def test_event_out_includes_managers(admin_client):
     assert detail["managers"][0]["email"] == "m5@x.test"
 
 
-# ---------------------------------------------------------------------------
-# Tab-aware /api/stats — every aggregation filters on item_type when set,
-# but by_type stays global so the tab badges stay correct.
-# ---------------------------------------------------------------------------
+# Tab-aware /api/stats: every KPI filters by item_type, except by_type,
+# which stays global so the tab badges stay correct.
 def test_stats_filters_kpis_by_item_type(admin_client):
     p = _make_project(admin_client)
     for i in range(3):
@@ -330,9 +318,6 @@ def test_stats_rejects_unknown_item_type(admin_client):
     assert "item_type" in r.json()["detail"].lower()
 
 
-# ---------------------------------------------------------------------------
-# Audit-trail preservation — deleting a bug must NOT wipe its history
-# ---------------------------------------------------------------------------
 def test_audit_history_survives_bug_delete(admin_client):
     """Regression: rows are detached (bug_id set NULL) before a bug delete, so the global audit trail survives."""
     p = _make_project(admin_client)

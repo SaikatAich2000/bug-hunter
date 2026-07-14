@@ -69,9 +69,7 @@ def _styles_css():
     return _read_frontend("styles/styles.css")
 
 
-# ===========================================================================
-# 1. Rich-text editor markers (Bold / Italic / Underline / format-toggle)
-# ===========================================================================
+# Bold / Italic / Underline / format-toggle.
 class TestRichTextFixMarkers:
     """Verify that expected rich-text behavior markers are present in source."""
 
@@ -158,9 +156,6 @@ class TestRichTextFixMarkers:
         )
 
 
-# ===========================================================================
-# 2. Calendar prev / next stays open
-# ===========================================================================
 class TestCalendarNavStaysOpen:
     """Nav clicks stopPropagation so the rebuilt DOM isn't mistaken for an outside click that closes the popover."""
 
@@ -177,9 +172,6 @@ class TestCalendarNavStaysOpen:
         )
 
 
-# ===========================================================================
-# 3. Reporter dropdown has no caret when disabled
-# ===========================================================================
 class TestReporterDropdownNoCaret:
     def test_index_html_reporter_select_is_disabled(self):
         # Pin `disabled` so a refactor can't silently bypass caret-suppression.
@@ -212,9 +204,6 @@ class TestReporterDropdownNoCaret:
         )
 
 
-# ===========================================================================
-# 4. Inserted image goes through attachment flow (no inline embed)
-# ===========================================================================
 class TestImageInsertionAsAttachment:
     def test_app_js_no_legacy_pickimage_helper(self):
         js = _rich_editor()
@@ -240,9 +229,6 @@ class TestImageInsertionAsAttachment:
         assert m, "bh-image branch must call pickFileAsAttachment"
 
 
-# ===========================================================================
-# 5. Rich HTML in description / comment survives the round-trip
-# ===========================================================================
 class TestRichHtmlRoundtrip:
     """Rich formatting in descriptions/comments survives the sanitiser round-trip."""
 
@@ -291,9 +277,6 @@ class TestRichHtmlRoundtrip:
         assert "<i>before</i>" in got
 
 
-# ===========================================================================
-# 6. XSS / unsafe payloads are still scrubbed
-# ===========================================================================
 class TestSanitiserStillBlocksUnsafe:
     """Rich-text support must not weaken the sanitiser."""
 
@@ -332,9 +315,7 @@ class TestSanitiserStillBlocksUnsafe:
         assert "x</p>" in got  # text outside the iframe survives
 
 
-# ===========================================================================
-# 7. Re-cover the admin-only rules (so this suite stands alone)
-# ===========================================================================
+# Re-covers the admin-only rules so this suite stands alone.
 class TestAdminOnlyMutations:
 
     def _make_user(self, client, name, role="user"):
@@ -410,9 +391,6 @@ class TestAdminOnlyMutations:
         )
 
 
-# ===========================================================================
-# 8. Database safety: schema is unchanged across reboot (idempotent init)
-# ===========================================================================
 class TestInitDbIsIdempotent:
     """init_db (create/add-column/add-index) run twice leaves the schema identical — no destructive DDL on redeploy."""
 
@@ -472,9 +450,6 @@ class TestInitDbIsIdempotent:
             assert required in names, f"missing canonical table {required!r}"
 
 
-# ===========================================================================
-# Hardening
-# ===========================================================================
 class TestHardening:
     """Pin security hardening so an accidental revert is caught early."""
 

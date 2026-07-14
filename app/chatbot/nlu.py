@@ -138,9 +138,7 @@ _STOPWORDS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Time-window patterns
-# ---------------------------------------------------------------------------
+# --- Time-window patterns ---
 _TIME_RE = re.compile(
     r"\b("
     r"today|yesterday|"
@@ -155,9 +153,7 @@ _TIME_RE = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# Action-verb patterns (intent detection)
-# ---------------------------------------------------------------------------
+# --- Action-verb patterns (intent detection) ---
 _EXPORT_RE = re.compile(
     r"\b(export(?:\s+to)?|download(?:\s+as)?|save(?:\s+as)?|to\s+excel|"
     r"as\s+excel|excel\s+(?:file|export|sheet|spreadsheet)?|"
@@ -197,10 +193,8 @@ _BARE_ID_HINT = re.compile(
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
 # Write-intent verbs. Checked after entity extraction so the parser already
 # has bug ids, names, projects, statuses, etc. available.
-# ---------------------------------------------------------------------------
 # Yes / no answers to a previously staged action.
 _CONFIRM_YES_RE = re.compile(
     r"^\s*(?:y|yes|yeah|yep|yup|sure|ok|okay|confirm(?:ed)?|"
@@ -412,9 +406,7 @@ class ParsedQuery:
     unresolved_reporter_names: list[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Parser
-# ---------------------------------------------------------------------------
+# --- Parser ---
 @dataclass
 class Context:
     """Live data for resolving names to IDs, passed fresh per call so renames
@@ -804,9 +796,7 @@ def _extract_text_search(message: str) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Action verb detection
-# ---------------------------------------------------------------------------
+# --- Action verb detection ---
 # Maps status verbs (including past tense) to their canonical status value.
 _STATUS_VERB_MAP: dict[str, str] = {
     "close":      "Closed",
@@ -1359,10 +1349,8 @@ def parse(message: str, ctx: Context, now: Optional[datetime] = None) -> ParsedQ
     return pq
 
 
-# ---------------------------------------------------------------------------
 # Helpers shared with the executor for building human-readable filter summaries
 # used in chat replies and error messages.
-# ---------------------------------------------------------------------------
 def describe_filters(pq: ParsedQuery) -> str:
     parts: list[str] = []
     if pq.statuses:

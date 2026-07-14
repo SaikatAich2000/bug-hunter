@@ -232,9 +232,7 @@ def _strip_and_check_min_length(v: str, min_len: int, label: str) -> str:
     return v
 
 
-# ---------------------------------------------------------------------------
-# User
-# ---------------------------------------------------------------------------
+# --- User ---
 def _normalize_role(v: str) -> str:
     if not isinstance(v, str):
         raise ValueError("role must be a string")
@@ -372,9 +370,7 @@ class UserOut(BaseModel):
     project_ids: list[int] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
+# --- Auth ---
 class LoginIn(BaseModel):
     # Bounded so an unauthenticated caller can't burn bcrypt CPU on a huge body.
     email: str = Field(max_length=254)
@@ -436,9 +432,7 @@ class UserBrief(BaseModel):
     role: str
 
 
-# ---------------------------------------------------------------------------
-# Project
-# ---------------------------------------------------------------------------
+# --- Project ---
 class ProjectIn(BaseModel):
     name: str = Field(max_length=120)
     description: str = Field(default="", max_length=1000)
@@ -465,9 +459,7 @@ class ProjectOut(BaseModel):
     updated_at: datetime
 
 
-# ---------------------------------------------------------------------------
-# Bug
-# ---------------------------------------------------------------------------
+# --- Bug ---
 class BugCreate(BaseModel):
     project_id: int
     title: str = Field(max_length=200)
@@ -668,9 +660,7 @@ class BugListResponse(BaseModel):
     pages: int
 
 
-# ---------------------------------------------------------------------------
-# Comment / Activity / Detail
-# ---------------------------------------------------------------------------
+# --- Comment / Activity / Detail ---
 class CommentIn(BaseModel):
     # 200 KB ceiling fits a pasted screenshot; sanitizer strips dangerous payloads.
     body: str = Field(min_length=1, max_length=200_000)
@@ -715,9 +705,7 @@ class ActivityOut(BaseModel):
     created_at: datetime
 
 
-# ---------------------------------------------------------------------------
-# Item linking
-# ---------------------------------------------------------------------------
+# --- Item linking ---
 class BugLinkIn(BaseModel):
     target_bug_id: int
     link_type: str = "relates"
@@ -785,9 +773,7 @@ class BugDetail(BugOut):
     links: list[BugLinkOut] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Sessions (admin only)
-# ---------------------------------------------------------------------------
+# --- Sessions (admin only) ---
 class SessionOut(BaseModel):
     """One row in the admin "active sessions" panel; `is_current` marks the
     admin's own session (self-revocation is rejected in routes/sessions.py)."""
@@ -804,9 +790,7 @@ class SessionOut(BaseModel):
     is_current: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Stats
-# ---------------------------------------------------------------------------
+# --- Stats ---
 class StatsOut(BaseModel):
     # Total excluding "Not a Bug".
     bugs: int
@@ -827,9 +811,7 @@ class StatsOut(BaseModel):
     timeline: list[dict[str, Any]]
 
 
-# ---------------------------------------------------------------------------
-# Events — container for a group of work items (standup / sprint meeting).
-# ---------------------------------------------------------------------------
+# --- Events — container for a group of work items (standup / sprint meeting). ---
 class EventCreate(BaseModel):
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=10000)
@@ -934,9 +916,7 @@ class EventDetail(EventOut):
     items_truncated: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Notification — per-user in-app notification row.
-# ---------------------------------------------------------------------------
+# --- Notification — per-user in-app notification row. ---
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -954,9 +934,7 @@ class UnreadCountOut(BaseModel):
     unread: int
 
 
-# ---------------------------------------------------------------------------
-# Web push (Firebase Cloud Messaging)
-# ---------------------------------------------------------------------------
+# --- Web push (Firebase Cloud Messaging) ---
 class PushSubscribeIn(BaseModel):
     """A browser/device registering its FCM token for push."""
     token: str = Field(min_length=1, max_length=512)

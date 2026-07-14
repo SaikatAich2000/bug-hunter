@@ -26,9 +26,7 @@ from app.chatbot.executor import Response
 logger = logging.getLogger("bug_hunter.sleuth.llm")
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+# --- Configuration ---
 # Env-overridable; default matches the README path.
 _MODEL_PATH = Path(
     os.getenv("SLEUTH_LLM_MODEL_PATH",
@@ -57,9 +55,7 @@ _RAM_HEADROOM_MULT = float(os.getenv("SLEUTH_LLM_RAM_HEADROOM", "1.4"))
 _RAM_MIN_FLOOR_MB = 200
 
 
-# ---------------------------------------------------------------------------
-# Memory budget check
-# ---------------------------------------------------------------------------
+# --- Memory budget check ---
 @dataclass
 class _MemoryBudget:
     """Snapshot of memory availability vs model requirements. All sizes in MB."""
@@ -204,9 +200,7 @@ def is_available() -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Lazy load state
-# ---------------------------------------------------------------------------
+# --- Lazy load state ---
 _lock = threading.Lock()
 # Held across a full decode: the shared Llama KV-cache isn't thread-safe and
 # concurrent threadpool requests would interleave and corrupt it. Kept distinct
@@ -322,9 +316,7 @@ def _reset_caches_for_test() -> None:
     _budget_cache = None
 
 
-# ---------------------------------------------------------------------------
-# Prompt (kept short to minimise prefill cost on CPU)
-# ---------------------------------------------------------------------------
+# --- Prompt (kept short to minimise prefill cost on CPU) ---
 _SYSTEM_PROMPT = (
     "You are Sleuth, an assistant for a bug tracker. Read the user's "
     "request and respond ONLY with a single JSON object describing the "
@@ -357,9 +349,7 @@ def _build_prompt(user_message: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Inference + JSON extraction
-# ---------------------------------------------------------------------------
+# --- Inference + JSON extraction ---
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     """Extract the first JSON object from the reply, tolerating markdown fences
     and prose. raw_decode is string-aware, so a brace inside a string value
@@ -426,9 +416,7 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
     return _extract_json(text)
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+# --- Public entry point ---
 _LLM_STATUSES = frozenset({
     "New", "In Progress", "Resolved", "Closed",
     "Reopened", "Not a Bug", "Resolve Later",

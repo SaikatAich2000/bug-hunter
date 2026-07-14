@@ -48,10 +48,8 @@ logger = logging.getLogger("bug_hunter")
 logging.basicConfig(level=get_settings().LOG_LEVEL)
 
 
-# ---------------------------------------------------------------------------
 # Asset version hash, recomputed on every server start.
 # Injected into HTML so asset URLs change on redeploy (cache busting).
-# ---------------------------------------------------------------------------
 ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
 APP_VERSION_PLACEHOLDER = "__APP_VERSION__"
 
@@ -205,11 +203,9 @@ app = FastAPI(
 app.state.asset_version = _compute_asset_version(settings.STATIC_DIR)
 
 
-# ---------------------------------------------------------------------------
 # CORS
 # The SPA uses cookies, so responses must echo a concrete allowlisted Origin —
 # the spec forbids "*" with credentials.
-# ---------------------------------------------------------------------------
 _origins = list(settings.CORS_ORIGINS)
 _allow_credentials = True
 if not _origins:
@@ -227,17 +223,13 @@ elif "*" in _origins:
 # CORSMiddleware is registered last: Starlette stacks middleware in reverse,
 # and CORS must be outermost to intercept OPTIONS before other middleware.
 
-# ---------------------------------------------------------------------------
 # Gzip compression — skips bodies under 1 KB and already-compressed types.
-# ---------------------------------------------------------------------------
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
-# ---------------------------------------------------------------------------
 # Request body size limit
 # Rejects an oversized Content-Length with 413 before the body buffers into
 # RAM. Chunked requests are covered by StreamingBodyLimitMiddleware.
-# ---------------------------------------------------------------------------
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         cl_header = request.headers.get("content-length")
@@ -324,11 +316,9 @@ class StreamingBodyLimitMiddleware:
 app.add_middleware(StreamingBodyLimitMiddleware)
 
 
-# ---------------------------------------------------------------------------
 # Cache-Control middleware — prevents stale HTML after redeploy.
 #   HTML / api -> no-store; /static/assets/ -> immutable 1y (content-hashed);
 #   /static/ -> 1h.
-# ---------------------------------------------------------------------------
 class CacheControlMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
@@ -354,11 +344,9 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
 app.add_middleware(CacheControlMiddleware)
 
 
-# ---------------------------------------------------------------------------
 # Security headers — applied to every response.
 # style-src needs 'unsafe-inline' (app sets .style.x); HSTS is gated on
 # COOKIE_SECURE so a dev/HTTP deploy isn't locked into HTTPS.
-# ---------------------------------------------------------------------------
 # Endpoints the Firebase SDK needs for token mint/refresh; added to
 # connect-src only when web push is enabled. Firebase scripts are vendored,
 # so script-src stays 'self'.
@@ -422,11 +410,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
-# ---------------------------------------------------------------------------
 # Rate limiting on auth-sensitive endpoints
 # In-memory per-IP sliding window (per-worker buckets; add nginx limit_req
 # for a strict global limit). Tuned to absorb typos, slow credential stuffing.
-# ---------------------------------------------------------------------------
 _RATE_RULES: dict[str, tuple[int, int]] = {
     # (max_requests, window_seconds)
     "/api/auth/login": (8, 60),
@@ -515,11 +501,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RateLimitMiddleware)
 
 
-# ---------------------------------------------------------------------------
 # CSRF defense in depth — SameSite=Lax has gaps (subdomains, older browsers),
 # so mutating /api/ requests must present a matching Origin/Referer. Clients
 # sending neither (curl, httpx) pass: CSRF needs a browser as deputy.
-# ---------------------------------------------------------------------------
 def _allowed_origins() -> set[str]:
     """Origins allowed by the CSRF check (CORS_ORIGINS minus "*"); the request
     Host is added separately so SPA usage needs no CORS config."""

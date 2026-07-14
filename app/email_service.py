@@ -28,9 +28,7 @@ def _redact_secrets_for_log(text: str) -> str:
 _DESC_LABEL = "Description:"
 
 
-# ---------------------------------------------------------------------------
-# Snapshot dataclasses (no SQLAlchemy objects past this point)
-# ---------------------------------------------------------------------------
+# --- Snapshot dataclasses (no SQLAlchemy objects past this point) ---
 @dataclass(frozen=True)
 class UserSnapshot:
     id: int
@@ -61,9 +59,7 @@ class BugSnapshot:
     event_name: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Low-level transport
-# ---------------------------------------------------------------------------
+# --- Low-level transport ---
 def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
     """Synchronous SMTP send. Called from a worker thread by FastAPI."""
     if not settings.SMTP_HOST:
@@ -161,9 +157,7 @@ def _digest_owns_work_item_email() -> bool:
     return get_settings().EMAIL_DIGEST_ENABLED
 
 
-# ---------------------------------------------------------------------------
-# Recipient selection
-# ---------------------------------------------------------------------------
+# --- Recipient selection ---
 def _recipients(bug: BugSnapshot, exclude_user_id: int | None) -> list[str]:
     """Reporter + all assignees, deduped, optionally minus the actor."""
     seen: dict[str, None] = {}
@@ -185,10 +179,8 @@ def _recipients(bug: BugSnapshot, exclude_user_id: int | None) -> list[str]:
     return out
 
 
-# ---------------------------------------------------------------------------
 # Notification helpers — these are what routes call.
 # Each takes only primitive data (no DB session, no ORM objects).
-# ---------------------------------------------------------------------------
 def _bug_link(bug_id: int) -> str:
     base = get_settings().APP_BASE_URL.rstrip("/")
     return f"{base}/#bug={bug_id}"
@@ -312,9 +304,7 @@ def notify_comment_added(
     deliver(subject, to, "\n".join(lines))
 
 
-# ---------------------------------------------------------------------------
-# Event notifications (separate channel from per-item assignment emails)
-# ---------------------------------------------------------------------------
+# --- Event notifications (separate channel from per-item assignment emails) ---
 @dataclass(frozen=True)
 class EventSnapshot:
     """Event snapshot for emails; ORM-free so BackgroundTasks can use it."""

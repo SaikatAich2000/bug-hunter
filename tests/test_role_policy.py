@@ -45,9 +45,6 @@ def _logout(client):
     client.post("/api/auth/logout")
 
 
-# ===========================================================================
-# 1. Bug deletion — admin-only
-# ===========================================================================
 class TestBugDeletePermissions:
     def test_admin_can_delete_bug(self, admin_client):
         p = _make_project(admin_client, name="DelProj1")
@@ -90,9 +87,7 @@ class TestBugDeletePermissions:
         assert r.status_code == 403
 
 
-# ===========================================================================
-# 2. Bug edit / reassign — every user can edit any bug
-# ===========================================================================
+# Every user can edit any bug — edit/reassign is unrestricted.
 class TestBugEditPermissions:
     def test_user_can_edit_someone_elses_bug(self, admin_client):
         p = _make_project(admin_client, name="EditProj1")
@@ -140,9 +135,6 @@ class TestBugEditPermissions:
         assert r.json()["can_edit"] is True
 
 
-# ===========================================================================
-# 3. Projects — admin-only delete
-# ===========================================================================
 class TestProjectDeletePermissions:
     def test_manager_cannot_delete_project(self, admin_client):
         """Project delete is admin-only; a manager is blocked."""
@@ -180,9 +172,7 @@ class TestProjectDeletePermissions:
         assert r.status_code == 403
 
 
-# ===========================================================================
-# 4. Users — manager can manage but not delete; no admin role for managers
-# ===========================================================================
+# Manager can manage users but not delete, and cannot grant the admin role.
 class TestUserManagementPermissions:
     def test_manager_can_create_and_edit_user(self, admin_client):
         _make_user(admin_client, name="Mgr4", email="mgr4@x.com",
@@ -248,9 +238,6 @@ class TestUserManagementPermissions:
         assert r.status_code == 403
 
 
-# ===========================================================================
-# 5. Audit — hidden from regular users
-# ===========================================================================
 class TestAuditVisibility:
     def test_audit_403_for_user(self, user_client):
         r = user_client.get("/api/audit")
@@ -269,9 +256,6 @@ class TestAuditVisibility:
         assert r.status_code == 200
 
 
-# ===========================================================================
-# 6. Sessions — admin-only list + revoke
-# ===========================================================================
 def _new_client():
     """Fresh TestClient with its own cookie jar — session tests needing independent cookies spin up their own."""
     from fastapi.testclient import TestClient
@@ -396,9 +380,6 @@ class TestSessionsAdmin:
             f"expected exactly 1 admin session after logout/login, got {len(admin_sessions)}"
 
 
-# ===========================================================================
-# 7. Password change — should re-establish session cleanly
-# ===========================================================================
 class TestPasswordChangeKeepsCurrentDevice:
     def test_change_password_keeps_current_session_works(self, admin_client):
         """After change-password the current cookie still authenticates (re-issued jti); other devices die on the session_version bump."""

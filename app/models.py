@@ -37,9 +37,7 @@ _CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
 _ONDELETE_SET_NULL = "SET NULL"
 
 
-# ---------------------------------------------------------------------------
-# Junctions
-# ---------------------------------------------------------------------------
+# --- Junctions ---
 bug_assignees = Table(
     "bug_assignees",
     Base.metadata,

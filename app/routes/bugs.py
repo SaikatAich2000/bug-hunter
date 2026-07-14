@@ -173,9 +173,7 @@ def _safe_filename_for_header(name: str) -> str:
     return ascii_only or "file"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# --- Helpers ---
 def _item_type(bug: Bug) -> str:
     """Return the work-item type, defaulting to 'Bug' for rows with no item_type."""
     return getattr(bug, "item_type", None) or "Bug"
@@ -341,12 +339,10 @@ def _attachment_count(db: Session, bug_id: int) -> int:
     ) or 0
 
 
-# ---------------------------------------------------------------------------
 # Project-scoped access. Managers and regular users can only act on items in
 # their projects; admins (accessible is None) are unrestricted. Items outside
 # scope are surfaced as 404 so the response never leaks whether a bug or
 # project exists.
-# ---------------------------------------------------------------------------
 def _assert_bug_accessible(accessible, bug: Bug) -> None:
     """Raise 404 when the bug is outside the actor's project scope."""
     if not can_access_project(accessible, bug.project_id):
@@ -400,9 +396,7 @@ def _like_escape(needle: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# List
-# ---------------------------------------------------------------------------
+# --- List ---
 def _normalize_choice_list(values: Optional[list[str]], allowed: list[str], label: str) -> list[str]:
     """Normalize a multi-valued enum query param; strip empties, reject unknowns with 400."""
     if not values:
@@ -579,9 +573,7 @@ def list_bugs(
     })
 
 
-# ---------------------------------------------------------------------------
-# Detail
-# ---------------------------------------------------------------------------
+# --- Detail ---
 # Caps for the detail view. Older history is still reachable via the dedicated
 # /activity and /comments endpoints.
 _DETAIL_COMMENTS_MAX = 500
@@ -658,9 +650,7 @@ def get_bug(
     return BugDetail.model_validate(payload)
 
 
-# ---------------------------------------------------------------------------
-# Create
-# ---------------------------------------------------------------------------
+# --- Create ---
 @router.post("", response_model=BugOut, status_code=status.HTTP_201_CREATED)
 def create_bug(
     payload: BugCreate,
@@ -759,9 +749,7 @@ def create_bug(
     ))
 
 
-# ---------------------------------------------------------------------------
-# Update
-# ---------------------------------------------------------------------------
+# --- Update ---
 _UPDATE_TRACKED_FIELDS = [
     "item_type", "status", "priority", "environment", "project_id",
     "due_date", "title", "description", "event_id",
@@ -1165,12 +1153,10 @@ def update_bug(
     ))
 
 
-# ---------------------------------------------------------------------------
 # Shared stakeholder notification for delete, attachments, comment edits, and
 # links. The create/update paths build their own tailored notifications; these
 # secondary operations all go through one helper so every mutation reaches the
 # reporter + assignees and feeds the email digest.
-# ---------------------------------------------------------------------------
 def _notify_item_stakeholders(
     db: Session, bug: Bug, actor: User, *, kind: str, title: str, body: str,
     background: "BackgroundTasks | None" = None, link_bug: bool = True,
@@ -1191,9 +1177,7 @@ def _notify_item_stakeholders(
     )
 
 
-# ---------------------------------------------------------------------------
-# Delete
-# ---------------------------------------------------------------------------
+# --- Delete ---
 @router.delete("/{bug_id}")
 def delete_bug(
     bug_id: int,
@@ -1240,9 +1224,7 @@ def delete_bug(
     return {"message": f"{itype} deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Comments (with optional attachments)
-# ---------------------------------------------------------------------------
+# --- Comments (with optional attachments) ---
 @router.get("/{bug_id}/comments", response_model=list[CommentOut])
 def list_comments(
     bug_id: int,
@@ -1322,9 +1304,7 @@ def add_comment(
     }
 
 
-# ---------------------------------------------------------------------------
-# Attachments — upload, list, download, delete
-# ---------------------------------------------------------------------------
+# --- Attachments — upload, list, download, delete ---
 async def _read_upload_with_limit(file: UploadFile, limit: int) -> bytes:
     """Stream the upload in chunks, aborting early if the size limit is
     exceeded so the body is never fully buffered."""
@@ -1574,9 +1554,7 @@ def delete_attachment(
     return {"message": "Attachment deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Comment edit / delete — admin only
-# ---------------------------------------------------------------------------
+# --- Comment edit / delete — admin only ---
 @router.put("/{bug_id}/comments/{comment_id}", response_model=CommentOut)
 def update_comment(
     bug_id: int, comment_id: int,
@@ -1659,9 +1637,7 @@ def delete_comment(
     return {"message": "Comment deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Activity
-# ---------------------------------------------------------------------------
+# --- Activity ---
 @router.get("/{bug_id}/activity", response_model=list[ActivityOut])
 def list_activity(
     bug_id: int,
@@ -1676,9 +1652,7 @@ def list_activity(
     ).all())
 
 
-# ---------------------------------------------------------------------------
-# Item links
-# ---------------------------------------------------------------------------
+# --- Item links ---
 @router.get("/{bug_id}/links", response_model=list[BugLinkOut])
 def list_links(
     bug_id: int,
@@ -1861,11 +1835,9 @@ def remove_link(
     return {"message": "Link removed"}
 
 
-# ---------------------------------------------------------------------------
 # Bulk actions. Each item goes through the same permission, audit, and
 # notification path as its single-item endpoint. Items the caller can't touch
 # are skipped so a mixed selection partially succeeds.
-# ---------------------------------------------------------------------------
 def _norm_or_400(value: Optional[str], allowed: list[str], label: str) -> str:
     try:
         return normalize_choice(value or "", allowed, label)

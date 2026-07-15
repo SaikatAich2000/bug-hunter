@@ -41,7 +41,6 @@ class _Store:
         self._lock = threading.Lock()
         self._sessions: dict[int, _Session] = {}
 
-    # -- internal --------------------------------------------------------
     def _evict_expired_locked(self, now: float) -> None:
         # Caller must hold the lock.
         dead = [uid for uid, s in self._sessions.items()
@@ -66,7 +65,6 @@ class _Store:
             self._sessions[user_id] = s
         return s
 
-    # -- public ----------------------------------------------------------
     def touch(self, user_id: int) -> _Session:
         """Return (or create) a session and update last_seen."""
         now = time.time()
@@ -184,7 +182,6 @@ class _Store:
         with self._lock:
             self._sessions.pop(user_id, None)
 
-    # -- test helpers ----------------------------------------------------
     def _all_sessions_for_test(self) -> dict[int, _Session]:
         with self._lock:
             return dict(self._sessions)

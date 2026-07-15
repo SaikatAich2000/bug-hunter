@@ -96,14 +96,17 @@ def test_env_float_clamps_minimum(monkeypatch):
 def test_smtp_password_strips_gmail_display_spaces(monkeypatch):
     """Gmail shows app passwords as 4 space-separated groups; the real secret has none."""
     import importlib
+    # Re-import fresh: the module-level `config` binding can go stale if another
+    # test's `client` fixture already dropped app.config from sys.modules.
+    import app.config as fresh_config
 
     monkeypatch.setenv("SMTP_PASSWORD", "abcd efgh ijkl mnop")
     try:
-        reloaded = importlib.reload(config)
+        reloaded = importlib.reload(fresh_config)
         assert reloaded.get_settings().SMTP_PASSWORD == "abcdefghijklmnop"
     finally:
         monkeypatch.undo()
-        importlib.reload(config)
+        importlib.reload(fresh_config)
 
 
 # Settings.is_production

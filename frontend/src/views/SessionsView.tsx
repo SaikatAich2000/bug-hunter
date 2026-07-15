@@ -28,10 +28,10 @@ function shortenUserAgent(ua: string): string {
   else if (lower.includes("postman")) browser = "Postman";
   let os = "";
   if (lower.includes("windows")) os = "Windows";
+  else if (lower.includes("iphone") || lower.includes("ios")) os = "iOS";
+  else if (lower.includes("android")) os = "Android";
   else if (lower.includes("mac os") || lower.includes("macintosh")) os = "macOS";
   else if (lower.includes("linux")) os = "Linux";
-  else if (lower.includes("android")) os = "Android";
-  else if (lower.includes("iphone") || lower.includes("ios")) os = "iOS";
   return os ? `${browser} on ${os}` : browser;
 }
 

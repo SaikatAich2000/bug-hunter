@@ -161,9 +161,10 @@ def upsert_bug(db: Session, bug_id: int) -> None:
         bug = db.get(Bug, bug_id)
         if bug is None:
             return
-        vecs = _embed([_doc_text(bug)])
+        doc = _doc_text(bug)
+        vecs = _embed([doc])
         if vecs:
-            col.upsert(ids=[f"bug:{bug.id}"], documents=[_doc_text(bug)],
+            col.upsert(ids=[f"bug:{bug.id}"], documents=[doc],
                        embeddings=vecs,
                        metadatas=[{"kind": "bug", "bug_id": bug.id}])
     except Exception:  # noqa: BLE001

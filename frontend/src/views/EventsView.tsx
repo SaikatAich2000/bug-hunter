@@ -54,8 +54,6 @@ const COL_HEAD_LABEL: Record<DetailCol, string> = {
   att: "📎",
 };
 
-// Pure helpers — filter / summary functions
-
 function matchesEventFilter(ev: EventOut, q: string, date: string): boolean {
   if (date && (ev.scheduled_for || "") !== date) return false;
   if (q) {
@@ -202,8 +200,6 @@ function renderCell(col: DetailCol, b: BugOut): ReactElement {
   }
 }
 
-// Presentational pieces
-
 /** One card in the list-mode grid. */
 function EventCard({ ev, onOpen }: Readonly<{ ev: EventOut; onOpen: (id: number) => void }>) {
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
@@ -311,8 +307,6 @@ function EventItemsTable({
   );
 }
 
-// View
-
 interface EventModalLocalState {
   open: boolean;
   /** Event being edited; null = create mode. */
@@ -347,7 +341,6 @@ export default function EventsView() {
     [],
   );
 
-  // data loaders
   const refreshEvents = useCallback(async () => {
     setLoading(true);
     try {

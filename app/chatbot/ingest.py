@@ -331,7 +331,6 @@ def resolve_project_for_preview(db: Session, project_id: Optional[int]) -> Optio
     return _resolve_project(db, project_id)
 
 
-# --- Creation ---
 def _resolve_project(db: Session, project_id: Optional[int]) -> Optional[Project]:
     if project_id is not None:
         return db.get(Project, project_id)

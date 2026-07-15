@@ -44,7 +44,6 @@ logger = logging.getLogger("bug_hunter.reports")
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
-# --- I/O models ---
 class FilterIn(BaseModel):
     """Inbound filter blob; omitted fields mean no filter."""
     date_from: Optional[str] = None
@@ -87,7 +86,6 @@ class ReportRunIn(BaseModel):
     filters: FilterIn = Field(default_factory=FilterIn)
 
 
-# --- Endpoints ---
 @router.get("/types")
 def list_report_types(
     _user: User = Depends(require_manager_or_admin),

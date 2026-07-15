@@ -32,7 +32,6 @@ from app.chatbot.redaction import redact
 logger = logging.getLogger("bug_hunter.sleuth.cloud")
 
 
-# --- Availability ---
 def is_available() -> bool:
     """Return True if the layer is enabled, at least one API key is present, and httpx is importable."""
     s = get_settings()
@@ -463,7 +462,6 @@ def _truncate_answer(text: str, settings) -> str:
     return text
 
 
-# --- Public entry ---
 def try_understand(
     message: str,
     db: Session,

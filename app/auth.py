@@ -52,7 +52,6 @@ def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
 _FALLBACK_SECRET = secrets.token_hex(32)
 
 
-# --- Password hashing ---
 def hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt."""
     if not plain:
@@ -73,7 +72,6 @@ def verify_password(plain: str, hashed: Optional[str]) -> bool:
         return False
 
 
-# --- Session cookie ---
 def _signer() -> TimestampSigner:
     s = get_settings().SESSION_SECRET or _FALLBACK_SECRET
     return TimestampSigner(s, salt="bh-session-v2")
@@ -150,7 +148,6 @@ def clear_session_cookie(response: Response) -> None:
     )
 
 
-# --- Password-reset tokens ---
 PASSWORD_RESET_TTL = timedelta(hours=2)
 
 
@@ -192,7 +189,6 @@ def purge_consumed_reset_tokens(db: Session) -> int:
     )
 
 
-# --- FastAPI dependencies ---
 # Throttle last_seen_at writes; per-request updates would be a hot write.
 _LAST_SEEN_THROTTLE_SECONDS = 60
 

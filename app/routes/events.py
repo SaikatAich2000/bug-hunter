@@ -34,7 +34,6 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 
 _DETAIL_EVENT_NOT_FOUND = "Event not found"
 
-# --- Helpers ---
 def _log(
     db: Session, event_id: int | None, actor: User | None,
     action: str, detail: str,
@@ -194,7 +193,6 @@ def _validate_event_project(db: Session, accessible, project_id: int) -> None:
         raise HTTPException(status_code=400, detail="Project does not exist")
 
 
-# --- List ---
 @router.get("", response_model=list[EventOut])
 def list_events(
     scheduled_for: Optional[str] = Query(default=None),
@@ -236,7 +234,6 @@ def list_events(
     ]
 
 
-# --- Detail (event + its items) ---
 # Caps a detail payload; the true count is still returned for "N of M".
 _EVENT_ITEMS_MAX = 1000
 
@@ -287,7 +284,6 @@ def get_event(
     return payload
 
 
-# --- Create ---
 @router.post("", response_model=EventOut, status_code=status.HTTP_201_CREATED)
 def create_event(
     payload: EventCreate,
@@ -331,7 +327,6 @@ def create_event(
     return _event_brief(db, ev)
 
 
-# --- Update ---
 _EVENT_TRACKED_FIELDS = ["name", "description", "scheduled_for"]
 
 
@@ -430,7 +425,6 @@ def update_event(
     return _event_brief(db, ev)
 
 
-# --- Delete ---
 @router.delete("/{event_id}")
 def delete_event(
     event_id: int,

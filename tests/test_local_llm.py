@@ -454,13 +454,15 @@ def _stub_handlers(monkeypatch):
 
 def test_dispatch_each_intent(_stub_handlers):
     pq = types.SimpleNamespace(bug_id=5)
-    assert llm._dispatch_llm_intent("help", None, pq, None, None) is _stub_handlers["_handle_help"]
-    assert llm._dispatch_llm_intent("stats", None, pq, None, None) is _stub_handlers["_handle_stats"]
-    assert llm._dispatch_llm_intent("recent_activity", None, pq, None, None) is _stub_handlers["_handle_recent_activity"]
-    assert llm._dispatch_llm_intent("list_users", None, pq, None, None) is _stub_handlers["_handle_list_users"]
-    assert llm._dispatch_llm_intent("list_projects", None, pq, None, None) is _stub_handlers["_handle_list_projects"]
-    assert llm._dispatch_llm_intent("bug_detail", None, pq, None, None) is _stub_handlers["_handle_bug_detail"]
-    assert llm._dispatch_llm_intent("list_bugs", None, pq, None, None) is _stub_handlers["_handle_list_bugs"]
+    # Admin role: accessible_project_ids short-circuits to None without touching db.
+    actor = types.SimpleNamespace(role="admin", id=1)
+    assert llm._dispatch_llm_intent("help", None, pq, None, actor) is _stub_handlers["_handle_help"]
+    assert llm._dispatch_llm_intent("stats", None, pq, None, actor) is _stub_handlers["_handle_stats"]
+    assert llm._dispatch_llm_intent("recent_activity", None, pq, None, actor) is _stub_handlers["_handle_recent_activity"]
+    assert llm._dispatch_llm_intent("list_users", None, pq, None, actor) is _stub_handlers["_handle_list_users"]
+    assert llm._dispatch_llm_intent("list_projects", None, pq, None, actor) is _stub_handlers["_handle_list_projects"]
+    assert llm._dispatch_llm_intent("bug_detail", None, pq, None, actor) is _stub_handlers["_handle_bug_detail"]
+    assert llm._dispatch_llm_intent("list_bugs", None, pq, None, actor) is _stub_handlers["_handle_list_bugs"]
 
 
 def test_dispatch_bug_detail_without_id_returns_none(_stub_handlers):

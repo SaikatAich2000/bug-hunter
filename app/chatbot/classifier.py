@@ -11,7 +11,6 @@ from collections import Counter
 from dataclasses import dataclass
 
 
-# --- Training corpus ---
 # (intent_label, example_phrasings); labels match nlu.parse() intents.
 _CORPUS: list[tuple[str, list[str]]] = [
     ("greeting", [
@@ -63,7 +62,6 @@ _CORPUS: list[tuple[str, list[str]]] = [
         "bug 5", "show bug 12", "details of #42", "tell me about bug 7",
         "info on issue 3", "what is bug 99", "look up bug #1",
     ]),
-    # ----- ACTION INTENTS -----
     ("action_assign", [
         "assign bug 5 to alice", "give bug 5 to bob", "assign #12 to carol",
         "delegate bug 3 to alice", "hand bug 7 over to bob",
@@ -105,7 +103,6 @@ _CORPUS: list[tuple[str, list[str]]] = [
 ]
 
 
-# --- Tokenization ---
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _STOPWORDS = {
     "a", "an", "the", "is", "are", "be", "to", "of", "for", "and", "or",
@@ -132,7 +129,7 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
-# --- Model: IDF weights computed once at import time. ---
+# IDF weights computed once at import time.
 @dataclass
 class _TrainedModel:
     docs: list[tuple[str, Counter[str]]]   # [(intent, term_counts), ...]
@@ -174,7 +171,6 @@ def _train(corpus: list[tuple[str, list[str]]]) -> _TrainedModel:
 _MODEL = _train(_CORPUS)
 
 
-# --- Predict ---
 @dataclass
 class Prediction:
     intent: str
@@ -248,7 +244,7 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
     )
 
 
-# --- Debug helper: show per-doc scores for a message. ---
+# Debug helper: per-doc scores for a message.
 def explain(message: str, top_k: int = 5) -> list[tuple[str, float]]:
     tokens = _tokenize(message)
     if not tokens:

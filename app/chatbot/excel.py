@@ -47,7 +47,6 @@ def _evict_oldest_locked() -> None:
     _cache.pop(oldest[0], None)
 
 
-# --- Workbook builder ---
 _HEADER_STYLE_FILL = "1F2A44"   # Bug Hunter dark accent
 _HEADER_STYLE_FG = "FFFFFF"
 
@@ -99,7 +98,6 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     ws.cell(row=1, column=1, value=banner).font = Font(bold=True, size=12)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_COLUMNS))
 
-    # Header row.
     header_fill = PatternFill("solid", fgColor=_HEADER_STYLE_FILL)
     header_font = Font(bold=True, color=_HEADER_STYLE_FG)
     for idx, (_key, header, width) in enumerate(_COLUMNS, start=1):
@@ -109,7 +107,6 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
         cell.alignment = Alignment(horizontal="left", vertical="center")
         ws.column_dimensions[get_column_letter(idx)].width = width
 
-    # Data rows.
     for r, row in enumerate(rows, start=3):
         for c, (key, _h, _w) in enumerate(_COLUMNS, start=1):
             val = row.get(key, "")
@@ -126,7 +123,6 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     return buf.getvalue()
 
 
-# --- Public API ---
 def stage_workbook(rows: list[dict[str, Any]], filename: str,
                    owner_id: int, description: str = "") -> tuple[str, int]:
     """Build the workbook and stage it under a fresh token bound to ``owner_id``.

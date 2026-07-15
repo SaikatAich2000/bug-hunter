@@ -52,12 +52,16 @@ def strip_image_metadata(data: bytes, content_type: str | None) -> bytes:
             fmt = img.format
             if fmt is None:
                 return data
-            # img.info holds EXIF/ICC/XMP/text chunks; clear before save.
+            # img.info holds EXIF/ICC/XMP/text chunks; clear before save. Preserve
+            # palette transparency (tRNS) first, or GIFs/palette PNGs turn opaque.
+            transparency = img.info.get("transparency")
             img.info = {}
             out = io.BytesIO()
             # exif=b"" guards against a future Pillow reading EXIF back from info.
             if fmt == "JPEG":
                 img.save(out, format=fmt, exif=b"")
+            elif transparency is not None:
+                img.save(out, format=fmt, transparency=transparency)
             else:
                 img.save(out, format=fmt)
             return out.getvalue()

@@ -90,4 +90,4 @@ docker run --rm \
   -v "${MOUNT_SRC}:/usr/src" \
   sonarsource/sonar-scanner-cli:latest
 
-info "Done. Browse results at ${SONAR_HOST_URL}/dashboard?id=Bug_Hunter"
+info "Done. Browse results at ${SONAR_HOST_URL}/dashboard?id=Bug-Hunter"

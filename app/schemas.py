@@ -131,9 +131,13 @@ class _HTMLAllowlistSanitizer(HTMLParser):
         )
 
     def handle_entityref(self, name: str) -> None:
+        if self._drop_text_depth > 0:
+            return
         self.out.append(f"&{name};")
 
     def handle_charref(self, name: str) -> None:
+        if self._drop_text_depth > 0:
+            return
         self.out.append(f"&#{name};")
 
 

@@ -1,5 +1,3 @@
-/** Formatting helpers. */
-
 /** "MMM D, YYYY, HH:MM" */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";

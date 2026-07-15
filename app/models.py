@@ -1,4 +1,4 @@
-"""ORM models for Bug Hunter (users, projects, bugs, comments, attachments,
+"""ORM models for Bug Hunter (users, projects, events, bugs, comments, attachments,
 audit log, reset tokens, sessions, notifications, push, chat, links)."""
 from __future__ import annotations
 
@@ -280,7 +280,7 @@ class Comment(Base):
     __table_args__ = (Index("idx_comments_bug_id", "bug_id"),)
 
 
-# Files stored as BLOBs in the DB (uploads capped at 50 MB, config-driven).
+# Files stored as BLOBs in the DB (uploads capped at 50 MB).
 # Belongs to a bug directly (comment_id NULL) or to a comment (both set; the
 # bug FK keeps it findable by bug-level queries).
 class Attachment(Base):

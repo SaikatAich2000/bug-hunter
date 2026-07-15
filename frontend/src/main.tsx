@@ -8,12 +8,19 @@ import type { MeOut } from "./types";
 import "./styles/styles.css";
 import "./styles/chatbot.css";
 
-// Theme set before first render (CSP blocks inline scripts) — no wrong-theme flash.
-document.documentElement.dataset.theme =
-  localStorage.getItem("theme") || "dark";
-
-// Restore collapsed sidebar before first paint to avoid a collapse animation on reload.
-if (localStorage.getItem("sidebarCollapsed") === "1") {
+// Theme + collapsed-sidebar state read before first render (CSP blocks inline
+// scripts) — no wrong-theme flash / collapse animation on reload. Guarded:
+// blocked storage (e.g. SecurityError) must not abort SPA boot.
+let storedTheme: string | null = null;
+let collapsed = false;
+try {
+  storedTheme = localStorage.getItem("theme");
+  collapsed = localStorage.getItem("sidebarCollapsed") === "1";
+} catch {
+  /* storage blocked */
+}
+document.documentElement.dataset.theme = storedTheme || "dark";
+if (collapsed) {
   document.body.classList.add("sidebar-collapsed");
 }
 

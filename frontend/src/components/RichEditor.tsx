@@ -152,12 +152,6 @@ const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
     const hasImg = editor.querySelector("img") !== null;
     const text = (editor.textContent ?? "").replace(/​/g, "").trim();
     if (!hasImg && text === "") return "";
-    const stripped = html
-      .replace(/​/g, "")
-      .replace(/<br\s*\/?>/gi, "")
-      .replace(/<\/?(?:div|p)>/gi, "")
-      .trim();
-    if (!hasImg && stripped === "") return "";
     return html.replace(/​/g, ""); // strip transient ZWSP before persisting
   };
 

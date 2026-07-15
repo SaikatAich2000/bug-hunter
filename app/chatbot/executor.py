@@ -40,13 +40,10 @@ from .nlu import (
 _LOGGER = logging.getLogger("bug_hunter.sleuth")
 
 
-# ---------------------------------------------------------------------------
-# Response model
-# ---------------------------------------------------------------------------
 @dataclass
 class Block:
     """One renderable chunk of the assistant's reply."""
-    kind: str   # "text" | "table" | "file" | "suggestions"
+    kind: str   # "text" | "table" | "file" | "suggestions" | "confirm"
     payload: dict
 
 
@@ -62,15 +59,13 @@ class Response:
     fallback_eligible: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Context loader
-# ---------------------------------------------------------------------------
 # No caching: user/project tables are small, and stale name resolution would
 # be a confusing bug. Caps mirror the REST list caps.
 _CHAT_LIST_CAP = 500
 _CHAT_CONTEXT_CAP = 2000
 # Above this, bulk actions are refused rather than staged behind one "yes".
 _BULK_ACTION_CAP = 500
+_WRITE_DENIED_SUMMARY = "Write not permitted"
 
 
 def build_context(db: Session) -> Context:
@@ -93,9 +88,6 @@ def build_context(db: Session) -> Context:
     return Context(users=user_tuples, projects=proj_tuples, user_role_map=role_map)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def _bug_row(b: Bug) -> dict[str, Any]:
     """Flat row dict for the chat table or Excel export. Minimal by design;
     heavy fields are available via the bug-detail intent."""
@@ -189,9 +181,6 @@ def _apply_bug_filters(stmt, count_stmt, pq: ParsedQuery):
     return stmt, count_stmt
 
 
-# ---------------------------------------------------------------------------
-# Intent handlers
-# ---------------------------------------------------------------------------
 def _handle_greeting(actor: User) -> Response:
     name_part = f", {actor.name.split()[0]}" if actor and actor.name else ""
     text = (
@@ -1107,11 +1096,6 @@ def _handle_report(db: Session, pq: ParsedQuery, actor: User, accessible=None) -
     )
 
 
-# ---------------------------------------------------------------------------
-# Public entry
-# ---------------------------------------------------------------------------
-
-
 def _resolve_pronouns(pq, actor: User) -> None:
     """Fill in pq.bug_id from conversation memory when the parser flagged a
     pronoun reference but couldn't resolve the id directly."""
@@ -1418,7 +1402,7 @@ def _clear_assignees_bulk(message: str, db: Session, actor: User, pq) -> Respons
                                summary=f"Remove all assignees from {scope}")
 
 
-def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq, ctx) -> Optional[Response]:
+def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq) -> Optional[Response]:
     """Stage a 'remove all assignees' unassign for one bug or a filtered set, or
     None when the message isn't a clear-assignees command."""
     from app.chatbot import actions as _actions
@@ -1430,7 +1414,7 @@ def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq, ct
     denied = _actions.sleuth_write_denied(actor)
     if denied:
         return Response(blocks=[Block("text", {"text": denied})],
-                        summary="Write not permitted", intent="action_denied")
+                        summary=_WRITE_DENIED_SUMMARY, intent="action_denied")
     if pq.bug_id is not None:
         return _stage_unassign_all(actor, bug_id=pq.bug_id,
                                    summary=f"Remove all assignees from #{pq.bug_id}")
@@ -1457,7 +1441,7 @@ def _maybe_handle_bulk_action(message: str, db: Session, actor: User, pq, ctx) -
     denied = _actions.sleuth_write_denied(actor)
     if denied:
         return Response(blocks=[Block("text", {"text": denied})],
-                        summary="Write not permitted", intent="action_denied")
+                        summary=_WRITE_DENIED_SUMMARY, intent="action_denied")
 
     assignee_ids = list(pq.assignee_ids)
     assignee_names = list(pq.assignee_names)
@@ -1508,7 +1492,7 @@ def _handle_action_request(pq, actor: User) -> Response:
     denied = _actions.sleuth_write_denied(actor)
     if denied:
         return Response(blocks=[Block("text", {"text": denied})],
-                        summary="Write not permitted", intent="action_denied")
+                        summary=_WRITE_DENIED_SUMMARY, intent="action_denied")
     plan, err = _build_action_plan(pq, actor)
     if plan is None:
         return Response(
@@ -1771,6 +1755,26 @@ def _try_cloud_llm(message: str, db: Session, actor: User,
     return None
 
 
+def _action_intent_step(pq, actor: User) -> tuple[Optional[Response], Optional[Response]]:
+    """Route an action_* intent. Returns (response_to_return_now, deferred_fallback):
+    the fallback is only set when the intent misfired and the cloud layer is live
+    to take a smarter pass before the canned "which bug?" prompt is used."""
+    if not pq.intent.startswith("action_"):
+        return None, None
+    action_resp = _handle_action_request(pq, actor)
+    if action_resp.intent != "action_invalid" or not _cloud_available():
+        return action_resp, None
+    return None, action_resp
+
+
+def _maybe_cloud_response(message: str, db: Session, actor: User, pq, now: datetime) -> Optional[Response]:
+    """Route to the cloud LLM layer unless the intent/message opts out of that hop."""
+    msg_norm = message.strip().lower()
+    if not msg_norm or pq.intent in _SKIP_CLOUD_INTENTS or msg_norm in _CLOUD_SKIP_EXACT:
+        return None
+    return _try_cloud_llm(message, db, actor, now)
+
+
 def execute(message: str, db: Session, actor: User,
             now: Optional[datetime] = None) -> Response:
     """Parse the message and dispatch to the right handler.
@@ -1801,7 +1805,7 @@ def execute(message: str, db: Session, actor: User,
 
     # "Remove all assignees from <bug|filter>" — caught ahead of the single-action
     # handler, whose set-status detector otherwise hijacks the scoping status word.
-    clear_resp = _maybe_handle_clear_assignees(message, db, actor, pq, ctx)
+    clear_resp = _maybe_handle_clear_assignees(message, db, actor, pq)
     if clear_resp is not None:
         return clear_resp
 
@@ -1817,25 +1821,18 @@ def execute(message: str, db: Session, actor: User,
     # the assignee from the closed ones"). When the cloud layer is live, let it
     # take a turn instead of dead-ending on the canned "which bug?" prompt; keep
     # that prompt as the last resort if the smarter layers below all pass.
-    action_fallback: Optional[Response] = None
-    if pq.intent.startswith("action_"):
-        action_resp = _handle_action_request(pq, actor)
-        if action_resp.intent != "action_invalid" or not _cloud_available():
-            return action_resp
-        action_fallback = action_resp
+    action_now, action_fallback = _action_intent_step(pq, actor)
+    if action_now is not None:
+        return action_now
 
     # When enabled, the cloud layer leads for anything that isn't a confirmation
     # or explicit write: keyword rules misfire on free-form chat ("can you revoke
     # someone's session?" would return an admins table), so it routes data
     # questions into canonical queries through the same SQL handlers. Pleasantries
     # skip the hop (gated on pq.intent); cloud faults fall back to the chain below.
-    msg_norm = message.strip().lower()
-    if (msg_norm
-            and pq.intent not in _SKIP_CLOUD_INTENTS
-            and msg_norm not in _CLOUD_SKIP_EXACT):
-        cloud_resp = _try_cloud_llm(message, db, actor, now)
-        if cloud_resp is not None:
-            return cloud_resp
+    cloud_resp = _maybe_cloud_response(message, db, actor, pq, now)
+    if cloud_resp is not None:
+        return cloud_resp
 
     read_resp = _dispatch_read_intent(pq.intent, db, pq, actor, ctx, accessible=accessible)
     if read_resp is not None:

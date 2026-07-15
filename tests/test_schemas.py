@@ -150,6 +150,14 @@ def test_cov_sanitize_entityref_and_charref_preserved():
     assert "&#169;" in out
 
 
+def test_cov_sanitize_entityref_and_charref_dropped_inside_rcdata():
+    # Inside an RCDATA-drop tag, entity/char refs must be dropped along with
+    # the rest of the text content, not just plain text (handle_data).
+    s = _S()
+    assert s.sanitize_html("<xmp>&amp;x</xmp>") == ""
+    assert s.sanitize_html("<title>&#65;</title>") == ""
+
+
 # normalize_choice (public helper)
 def test_cov_normalize_choice_canonicalizes():
     s = _S()

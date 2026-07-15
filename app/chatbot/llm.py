@@ -26,7 +26,6 @@ from app.chatbot.executor import Response
 logger = logging.getLogger("bug_hunter.sleuth.llm")
 
 
-# --- Configuration ---
 # Env-overridable; default matches the README path.
 _MODEL_PATH = Path(
     os.getenv("SLEUTH_LLM_MODEL_PATH",
@@ -55,7 +54,6 @@ _RAM_HEADROOM_MULT = float(os.getenv("SLEUTH_LLM_RAM_HEADROOM", "1.4"))
 _RAM_MIN_FLOOR_MB = 200
 
 
-# --- Memory budget check ---
 @dataclass
 class _MemoryBudget:
     """Snapshot of memory availability vs model requirements. All sizes in MB."""
@@ -200,7 +198,6 @@ def is_available() -> bool:
     return True
 
 
-# --- Lazy load state ---
 _lock = threading.Lock()
 # Held across a full decode: the shared Llama KV-cache isn't thread-safe and
 # concurrent threadpool requests would interleave and corrupt it. Kept distinct
@@ -349,7 +346,6 @@ def _build_prompt(user_message: str) -> str:
     )
 
 
-# --- Inference + JSON extraction ---
 def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     """Extract the first JSON object from the reply, tolerating markdown fences
     and prose. raw_decode is string-aware, so a brace inside a string value
@@ -416,7 +412,6 @@ def _run_inference(message: str) -> Optional[dict[str, Any]]:
     return _extract_json(text)
 
 
-# --- Public entry point ---
 _LLM_STATUSES = frozenset({
     "New", "In Progress", "Resolved", "Closed",
     "Reopened", "Not a Bug", "Resolve Later",
@@ -446,25 +441,30 @@ def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
 
 def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Optional[Response]:
     """Route a predicted intent to its rule-based handler. Read-only."""
+    from app.access import accessible_project_ids
     from app.chatbot.executor import (
         _handle_help, _handle_stats, _handle_recent_activity,
         _handle_list_users, _handle_list_projects, _handle_bug_detail,
         _handle_list_bugs,
     )
+    # Computed lazily per branch (not once up front) so intents that need no DB/actor
+    # (help, an id-less bug_detail, unknown) stay callable with db=actor=None, as the
+    # dispatch-routing unit tests do.
     if intent == "help":
         return _handle_help()
     if intent == "stats":
-        return _handle_stats(db)
+        return _handle_stats(db, accessible_project_ids(db, actor))
     if intent == "recent_activity":
-        return _handle_recent_activity(db, pq, actor)
+        return _handle_recent_activity(db, pq, actor, accessible_project_ids(db, actor))
     if intent == "list_users":
         return _handle_list_users(db, pq)
     if intent == "list_projects":
-        return _handle_list_projects(db)
+        return _handle_list_projects(db, accessible_project_ids(db, actor))
     if intent == "bug_detail" and pq.bug_id is not None:
-        return _handle_bug_detail(db, pq)
+        return _handle_bug_detail(db, pq, accessible_project_ids(db, actor))
     if intent == "list_bugs":
-        return _handle_list_bugs(db, pq, ctx)
+        return _handle_list_bugs(db, pq, ctx, owner_id=actor.id,
+                                 accessible=accessible_project_ids(db, actor))
     return None
 
 

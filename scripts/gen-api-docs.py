@@ -144,9 +144,6 @@ def dump_spec() -> dict:
     return spec
 
 
-# ---------------------------------------------------------------------------
-# Postman v2.1 collection
-# ---------------------------------------------------------------------------
 def _resolve_ref(schema: dict, components: dict[str, dict]) -> dict:
     """Follow a single $ref into the components map. Returns the schema
     unchanged if it isn't a $ref."""
@@ -289,9 +286,6 @@ def build_postman(spec: dict) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# curl.md - human-readable reference
-# ---------------------------------------------------------------------------
 CURL_HEADER = """# Bug Hunter - API curl reference
 
 Generated from `docs/api/openapi.json` by `scripts/gen-api-docs.py`.
@@ -438,9 +432,6 @@ def build_curl_md(spec: dict) -> str:
     return "\n".join(out)
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
 def main() -> None:
     spec = dump_spec()
     paths_count = len(spec.get("paths", {}))

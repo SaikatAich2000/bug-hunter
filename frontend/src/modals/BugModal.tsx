@@ -168,7 +168,7 @@ export default function BugModal() {
       setDueDate(bug.due_date || "");
       setAssigneeIds(bug.assignees ? bug.assignees.map((a) => a.id) : []);
       descRef.current?.setHtml(bug.description || "");
-      expectedVersionRef.current = bug.version ?? null; // frozen at open
+      expectedVersionRef.current = bug.version ?? null;
     } else {
       // create
       setTitle("");
@@ -762,7 +762,6 @@ export default function BugModal() {
           data-read-only={readOnly ? "1" : ""}
           onSubmit={(e) => void onSubmit(e)}
         >
-          {/* Read-only banner */}
           {readOnly && (
             <div className="bug-readonly-banner">
               {`Read-only — only admins and managers can edit ${(bug?.item_type || "item").toLowerCase()}s.`}

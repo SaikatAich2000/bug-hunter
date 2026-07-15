@@ -67,9 +67,10 @@ def _compute_asset_version(static_dir: Path) -> str:
             try:
                 h.update(path.relative_to(static_dir).as_posix().encode("utf-8"))
                 h.update(b"|")
-                if path.stat().st_size > _MAX_ASSET_FILE_BYTES:
+                st = path.stat()
+                if st.st_size > _MAX_ASSET_FILE_BYTES:
                     # Path + size still shifts the version if the file is replaced.
-                    h.update(f"size={path.stat().st_size}".encode("utf-8"))
+                    h.update(f"size={st.st_size}".encode("utf-8"))
                 else:
                     h.update(path.read_bytes())
             except OSError:
@@ -223,7 +224,7 @@ elif "*" in _origins:
 # CORSMiddleware is registered last: Starlette stacks middleware in reverse,
 # and CORS must be outermost to intercept OPTIONS before other middleware.
 
-# Gzip compression — skips bodies under 1 KB and already-compressed types.
+# Gzip compression — skips bodies under 1 KB.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 

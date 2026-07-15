@@ -16,7 +16,7 @@ if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9000" }
 if (-not $env:SONAR_TOKEN) {
     Abort "SONAR_TOKEN is not set. Generate a USER token (sqa_*) at $env:SONAR_HOST_URL/account/security/ then run: `$env:SONAR_TOKEN = 'sqa_xxxx'"
 }
-$ProjectKey = "Bug_Hunter"
+$ProjectKey = "Bug-Hunter"
 $Base = $env:SONAR_HOST_URL.TrimEnd("/")
 $Resolution = "SAFE"
 $Comment = "Reviewed: false positive. Regex patterns operate on bounded chat input; placeholder strings are UI hints not credentials; same-origin URLs are for CSRF comparison only."

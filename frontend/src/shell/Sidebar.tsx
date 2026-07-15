@@ -107,6 +107,11 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     try {
       await withLoader(async () => {
         await api(`/users/${id}`, { method: "DELETE" });
+        // Remove the deleted user from any active assignee filter.
+        setFilters((prev) => ({
+          ...prev,
+          assignee_id: prev.assignee_id.filter((v) => v !== id),
+        }));
         await loadUsers();
         await refreshAll();
       }, "Deleting user…");

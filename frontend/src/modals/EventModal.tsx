@@ -10,6 +10,7 @@ import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
 import { useApp } from "../state/AppContext";
+import { isoToday } from "./bug/helpers";
 import type { EventOut } from "../types";
 
 interface Props {
@@ -43,7 +44,7 @@ export default function EventModal({ open, event, onClose, onSaved }: Readonly<P
     } else {
       setName("");
       setDescription("");
-      setScheduledFor(new Date().toISOString().slice(0, 10)); // default to today
+      setScheduledFor(isoToday()); // default to today (local calendar date)
       setManagerIds([]);
       setProjectId(projects[0]?.id ?? ""); // projects loaded at app boot
 

@@ -594,7 +594,6 @@ def _apply_bulk(plan: ActionPlan, db: Session, actor: User) -> Response:
             skipped += 1
     if updated:
         _notify_bulk(db, plan, actor, updated)
-    if updated:
         db.commit()
     else:
         db.rollback()

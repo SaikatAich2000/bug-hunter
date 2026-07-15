@@ -133,7 +133,6 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
         <span className={`bh-sel-label${isPlaceholder ? " bh-sel-placeholder" : ""}`}>
           {labelText || "—"}
         </span>
-        {/* no caret when disabled */}
         {!disabled && <span className="bh-sel-caret" aria-hidden="true">▾</span>}
       </button>
       {/* portal to <body>; popRef still points at the real node */}

@@ -306,8 +306,6 @@ export default function ListView() {
             </div>
           </td>
         );
-      default:
-        return <td key={col}></td>;
     }
   };
 

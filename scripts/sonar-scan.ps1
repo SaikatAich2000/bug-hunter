@@ -13,7 +13,8 @@ function Abort { param([string]$msg) Write-Host "[ERROR] $msg" -ForegroundColor 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Abort "Docker is not on PATH. Install Docker Desktop and re-open this shell."
 }
-try { docker info *> $null } catch { Abort "Docker daemon is not running. Start Docker Desktop." }
+docker info *> $null
+if ($LASTEXITCODE -ne 0) { Abort "Docker daemon is not running. Start Docker Desktop." }
 
 $python = $null
 foreach ($cmd in @("python", "py", "python3")) {
@@ -83,4 +84,4 @@ $scannerArgs += @(
 & docker @scannerArgs
 if ($LASTEXITCODE -ne 0) { Abort "sonar-scanner failed (exit $LASTEXITCODE)" }
 
-Info "Done. Browse results at $($env:SONAR_HOST_URL)/dashboard?id=Bug_Hunter"
+Info "Done. Browse results at $($env:SONAR_HOST_URL)/dashboard?id=Bug-Hunter"

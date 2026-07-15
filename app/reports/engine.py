@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
@@ -47,11 +47,6 @@ FINAL_STATUSES_BY_TYPE: dict[str, list[str]] = {
     "Requirement": ["Implemented", "Rejected"],
     "Task": ["Done", "Cancelled"],
 }
-
-# Union of all per-type resolved statuses, for when item_type isn't known.
-ALL_RESOLVED_STATUSES = sorted({
-    s for sts in RESOLVED_STATUSES_BY_TYPE.values() for s in sts
-})
 
 # Captures the new status after the arrow in a "status: 'x' → 'y'" detail line;
 # accepts straight and curly quotes.
@@ -243,7 +238,6 @@ class ReportResult:
         }
 
 
-# Shared filter application — every report's "from bugs where ..." starts here.
 def _start_of_day(d: date) -> datetime:
     return datetime.combine(d, time.min, tzinfo=timezone.utc)
 
@@ -339,7 +333,6 @@ def _eager_bug():
     )
 
 
-# Helpers — bug → row dict.
 def _days_open_value(created_at: Optional[datetime],
                      resolved_at: Optional[datetime]) -> Optional[int]:
     """Days open, creation to resolution (or now); None without a creation time."""
@@ -401,7 +394,6 @@ def _fmt_dt(dt: Optional[datetime]) -> str:
     return dt.isoformat(timespec="seconds")
 
 
-# Resolution-event helpers.
 def _is_resolved_status(status: str, item_type: str) -> bool:
     return status in RESOLVED_STATUSES_BY_TYPE.get(item_type or "Bug", [])
 
@@ -483,7 +475,6 @@ def _attachments_by_bug(db: Session, bug_ids: list[int]) -> dict[int, int]:
     return {bug_id: int(cnt) for bug_id, cnt in rows}
 
 
-# Column catalogs — functions so reports can share / extend.
 def _detail_columns() -> list[ReportColumn]:
     return [
         ReportColumn("id", "ID", 8, kind="number"),
@@ -957,6 +948,27 @@ def _utc_day_key(value) -> str:
     return value.isoformat()
 
 
+def _bucket_resolved_by_day(res_rows) -> dict[str, int]:
+    """Fold throughput rows into per-day resolved counts for _report_timeline."""
+    resolved_by_day: dict[str, int] = {}
+    for (_bug_id, _actor_id, _actor_name, created_at, detail,
+         item_type, *_rest) in res_rows:
+        it = item_type or "Bug"
+        ns = _parse_resolution_status(detail or "")
+        if ns and _is_resolved_status(ns, it):
+            # Skip resolved→resolved (e.g. Resolved→Closed) to avoid double-counting,
+            # same guard _fold_throughput_row uses for the identical purpose.
+            old = _parse_prior_status(detail or "")
+            if old and _is_resolved_status(old, it):
+                continue
+            # Bucket on the UTC day to match the created side (_utc_date) and
+            # the window keys below; without this, a non-UTC session would bucket
+            # created and resolved onto different days.
+            key = _utc_day_key(created_at)
+            resolved_by_day[key] = resolved_by_day.get(key, 0) + 1
+    return resolved_by_day
+
+
 def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     """Per-day created vs resolved counts; defaults to the last 30 days."""
     today = datetime.now(timezone.utc).date()
@@ -967,41 +979,18 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
         start = end
     if (end - start).days > _MAX_TIMELINE_DAYS:
         start = end - timedelta(days=_MAX_TIMELINE_DAYS)
-    # Created side: bugs with created_at in [start, end].
+    # Created side: bugs with created_at in [start, end]. statuses=[] so the
+    # created side isn't status-filtered; restrict_project_ids carries through
+    # unchanged, or the timeline leaks other projects.
+    created_filters: Filters = replace(filters, date_from=start, date_to=end, statuses=[])
     created_stmt = _apply_bug_filters(
         select(_utc_date(db, Bug.created_at), func.count(Bug.id)),
-        Filters(
-            date_from=start, date_to=end,
-            item_types=filters.item_types, statuses=[],   # don't filter status
-            priorities=filters.priorities,
-            environments=filters.environments,
-            project_ids=filters.project_ids,
-            assignee_ids=filters.assignee_ids,
-            reporter_ids=filters.reporter_ids,
-            event_id=filters.event_id,
-            include_not_a_bug=filters.include_not_a_bug,
-            text_search=filters.text_search,
-            # Carry the route-set scope through, or the timeline leaks other projects.
-            restrict_project_ids=filters.restrict_project_ids,
-        ),
+        created_filters,
     ).group_by(_utc_date(db, Bug.created_at))
     created_by_day = {str(d): int(c) for d, c in db.execute(created_stmt).all()}
-    # Resolved side: reuse the throughput query and bucket by day.
-    res_filters = Filters(
-        date_from=start, date_to=end,
-        item_types=filters.item_types,
-        priorities=filters.priorities,
-        environments=filters.environments,
-        project_ids=filters.project_ids,
-        assignee_ids=filters.assignee_ids,
-        reporter_ids=filters.reporter_ids,
-        event_id=filters.event_id,
-        include_not_a_bug=filters.include_not_a_bug,
-        text_search=filters.text_search,
-        # Same restriction on the resolved side, for the same reason.
-        restrict_project_ids=filters.restrict_project_ids,
-    )
-    resolved_by_day: dict[str, int] = {}
+    # Resolved side: reuse the throughput query and bucket by day. statuses is
+    # left as-is since _build_throughput_query never reads Filters.statuses.
+    res_filters: Filters = replace(filters, date_from=start, date_to=end)
     # The 366-day window clamps the date span but not the number of
     # status-change rows within it, so an unbounded query here could stream the
     # entire activity history into memory on a busy instance.
@@ -1009,15 +998,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
         _build_throughput_query(res_filters).limit(_detail_cap())
     ).all()
     truncated = len(res_rows) >= _detail_cap()
-    for (_bug_id, _actor_id, _actor_name, created_at, detail,
-         item_type, *_rest) in res_rows:
-        ns = _parse_resolution_status(detail or "")
-        if ns and _is_resolved_status(ns, item_type or "Bug"):
-            # Bucket on the UTC day to match the created side (_utc_date) and
-            # the window keys below; without this, a non-UTC session would bucket
-            # created and resolved onto different days.
-            key = _utc_day_key(created_at)
-            resolved_by_day[key] = resolved_by_day.get(key, 0) + 1
+    resolved_by_day = _bucket_resolved_by_day(res_rows)
     rows: list[dict[str, Any]] = []
     day = start
     total_created = 0
@@ -1160,7 +1141,6 @@ def _percentile(values: list[float], pct: float) -> float:
     return d0 + d1
 
 
-# --- Public dispatcher ---
 _DISPATCH = {
     "item_detail":             _report_item_detail,
     "pending_snapshot":        _report_pending_snapshot,

@@ -1,4 +1,4 @@
-"""XLSX writer for reports: Summary sheet, optional Items drill-down, Filters
+"""XLSX writer for reports: main report sheet, optional Items drill-down, Filters
 Applied sheet. Used by routes/reports.py and chatbot/excel.py."""
 from __future__ import annotations
 

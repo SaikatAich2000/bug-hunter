@@ -1,5 +1,5 @@
-"""Sleuth NLU — turn a free-form English message into a structured, read-only
-query. Extracts entities (status, priority, env, names, project, bug id, time
+"""Sleuth NLU — turn a free-form English message into a structured query or
+action. Extracts entities (status, priority, env, names, project, bug id, time
 window) and an intent into a dataclass the executor turns into SQL. Canonical
 values come from live DB context, so renames reflect on the next request.
 """
@@ -138,7 +138,6 @@ _STOPWORDS = {
 }
 
 
-# --- Time-window patterns ---
 _TIME_RE = re.compile(
     r"\b("
     r"today|yesterday|"
@@ -153,7 +152,6 @@ _TIME_RE = re.compile(
 )
 
 
-# --- Action-verb patterns (intent detection) ---
 _EXPORT_RE = re.compile(
     r"\b(export(?:\s+to)?|download(?:\s+as)?|save(?:\s+as)?|to\s+excel|"
     r"as\s+excel|excel\s+(?:file|export|sheet|spreadsheet)?|"
@@ -187,14 +185,12 @@ _THANKS_RE = re.compile(
     re.IGNORECASE,
 )
 _BUG_ID_RE = re.compile(r"(?:bug\s*#?|issue\s*#?|ticket\s*#?|#)(\d+)\b", re.IGNORECASE)
-# Also catch bare integers when the message is essentially just an id ("42", "show 42").
+# Cue word + number ("bug 42", "details of 42", "info on 7").
 _BARE_ID_HINT = re.compile(
     r"\b(?:bug|issue|ticket|details?\s+of|info\s+(?:on|about))\s+(\d+)\b",
     re.IGNORECASE,
 )
 
-# Write-intent verbs. Checked after entity extraction so the parser already
-# has bug ids, names, projects, statuses, etc. available.
 # Yes / no answers to a previously staged action.
 _CONFIRM_YES_RE = re.compile(
     r"^\s*(?:y|yes|yeah|yep|yup|sure|ok|okay|confirm(?:ed)?|"
@@ -406,7 +402,6 @@ class ParsedQuery:
     unresolved_reporter_names: list[str] = field(default_factory=list)
 
 
-# --- Parser ---
 @dataclass
 class Context:
     """Live data for resolving names to IDs, passed fresh per call so renames
@@ -431,7 +426,6 @@ def _tokenize(s: str) -> list[str]:
     return re.findall(r"[a-zA-Z][a-zA-Z0-9\-']+", s.lower())
 
 
-# ---------- time parsing -------------------------------------------------
 _WEEKDAY_TO_DOW = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
     "friday": 4, "saturday": 5, "sunday": 6,
@@ -542,7 +536,6 @@ def _parse_time_window(message: str, now: Optional[datetime] = None) -> Optional
     return None
 
 
-# ---------- enum extraction ---------------------------------------------
 def _extract_statuses(text: str) -> list[str]:
     """Find every status synonym. Order-preserving, deduped."""
     out: list[str] = []
@@ -621,7 +614,6 @@ def _extract_environments(text: str) -> list[str]:
     return out
 
 
-# ---------- name extraction ---------------------------------------------
 def _candidate_name_phrases(message: str) -> list[tuple[str, str]]:
     """Pull name-like phrases as (role_hint, phrase) tuples, where role_hint is
     'assignee', 'reporter', or '' (e.g. "assigned to John", "filed by Bob")."""
@@ -733,7 +725,6 @@ def _resolve_project(phrase: str, ctx: Context) -> list[tuple[int, str]]:
     return prefix
 
 
-# ---------- bug id ------------------------------------------------------
 # Postgres int4 max; anything higher would DataError at the DB layer.
 _MAX_BUG_ID = 2_147_483_647
 
@@ -767,7 +758,6 @@ def _extract_bug_id(message: str) -> Optional[int]:
     return None
 
 
-# ---------- Free-text search -------------------------------------------
 # Quoted strings become a free-text search clause, e.g. bugs about "login crash".
 _QUOTED_RE = re.compile(r'"([^"]{2,})"')
 
@@ -796,7 +786,6 @@ def _extract_text_search(message: str) -> Optional[str]:
     return None
 
 
-# --- Action verb detection ---
 # Maps status verbs (including past tense) to their canonical status value.
 _STATUS_VERB_MAP: dict[str, str] = {
     "close":      "Closed",
@@ -1289,7 +1278,9 @@ def _classify_final_intent(msg: str, pq: ParsedQuery, ctx: Context) -> str:
         return "list_users"
     if _is_list_projects(msg_lower, pq):
         return "list_projects"
-    # Report beats stats and list_bugs — it's a more specific signal.
+    # Report beats stats and list_bugs — it's a more specific signal. parse()
+    # already short-circuits on this via _REPORT_RE, but this function is also
+    # unit-tested as an independent classifier, so it must not depend on that.
     if _REPORT_RE.search(msg):
         return "report"
     if _STATS_RE.search(msg):
@@ -1305,7 +1296,6 @@ def _classify_final_intent(msg: str, pq: ParsedQuery, ctx: Context) -> str:
     return "unknown"
 
 
-# ---------- Main entry --------------------------------------------------
 def parse(message: str, ctx: Context, now: Optional[datetime] = None) -> ParsedQuery:
     """Parse a chat message and return a ParsedQuery for the executor.
 

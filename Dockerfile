@@ -14,6 +14,7 @@
 # and install with a hash-locked requirements file (pip-compile --generate-hashes
 # then `pip install --require-hashes`). Left as a floating tag by default so the
 # out-of-the-box build doesn't break when the upstream digest rotates.
+ARG BASE_IMAGE=python:3.12-slim
 
 # ---------------------------------------------------------------------------
 # Stage: frontend-build
@@ -32,7 +33,6 @@ WORKDIR /repo/frontend
 RUN npm ci
 RUN npm run build
 
-ARG BASE_IMAGE=python:3.12-slim
 FROM ${BASE_IMAGE} AS base
 
 # Don't write .pyc files, flush logs immediately, no pip version-check chatter.

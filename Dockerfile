@@ -14,6 +14,24 @@
 # and install with a hash-locked requirements file (pip-compile --generate-hashes
 # then `pip install --require-hashes`). Left as a floating tag by default so the
 # out-of-the-box build doesn't break when the upstream digest rotates.
+
+# ---------------------------------------------------------------------------
+# Stage: frontend-build
+# Compiles frontend/src into app/static using a throwaway Node image. This
+# means app/static is rebuilt fresh from source on every image build — the
+# server itself never needs npm/node installed. Vite's outDir already points
+# at ../app/static (see frontend/vite.config.ts), so we hand it a copy of the
+# committed app/static (favicon, icon, fonts, vendor/) and let the build
+# overwrite index.html/login.html/reset.html/assets/ in place.
+# ---------------------------------------------------------------------------
+FROM node:20-slim AS frontend-build
+WORKDIR /repo
+COPY frontend ./frontend
+COPY app/static ./app/static
+WORKDIR /repo/frontend
+RUN npm ci
+RUN npm run build
+
 ARG BASE_IMAGE=python:3.12-slim
 FROM ${BASE_IMAGE} AS base
 
@@ -37,6 +55,10 @@ RUN pip install -r requirements.txt
 
 # Copy application code
 COPY app ./app
+
+# Overwrite app/static with the freshly-built frontend from the
+# frontend-build stage, so the image never ships a stale bundle.
+COPY --from=frontend-build /repo/app/static ./app/static
 
 # Run as a non-root user
 RUN useradd --create-home --shell /bin/bash appuser \

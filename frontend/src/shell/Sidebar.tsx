@@ -134,7 +134,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
       <div className="sidebar-brand">
         <img className="logo" src="/static/icon.png" alt="Issue Tracker" />
         <div className="wm">
-          <b>BUG<span>HUNTER</span></b>
+          <b>ISSUE<span>TRACKER</span></b>
           <small>{health ? `Version ${health.version}` : "Version 3.1"}</small>
         </div>
       </div>

@@ -132,7 +132,7 @@ export default function Sidebar({ mobileOpen, onNavigate }: Props) {
     >
       {/* Mobile-only brand header (desktop brand is in TopChrome). */}
       <div className="sidebar-brand">
-        <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
+        <img className="logo" src="/static/icon.png" alt="Issue Tracker" />
         <div className="wm">
           <b>BUG<span>HUNTER</span></b>
           <small>{health ? `Version ${health.version}` : "Version 3.1"}</small>

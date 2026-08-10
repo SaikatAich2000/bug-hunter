@@ -142,9 +142,9 @@ export default function LoginPage() {
       <div className="auth-card">
         <div className="auth-brand">
           <div className="auth-logo">
-            <img src="/static/icon.png?v=__ASSET_VERSION__" alt="Bug Hunter" />
+            <img src="/static/icon.png?v=__ASSET_VERSION__" alt="Issue Tracker" />
           </div>
-          <h1>Bug Hunter</h1>
+          <h1>Issue Tracker</h1>
           <p className="auth-tagline">Sign in to continue</p>
         </div>
 
@@ -252,7 +252,7 @@ export default function LoginPage() {
             {forgotAlert?.msg}
           </div>
           <p className="auth-help">
-            Enter the email tied to your Bug Hunter account and we'll send a reset link
+            Enter the email tied to your Issue Tracker account and we'll send a reset link
           </p>
           <label className="field">
             <span>

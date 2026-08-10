@@ -470,7 +470,7 @@ export function AppProvider({
         const h = await api<HealthOut>("/health");
         if (!warned && h.asset_version && h.asset_version !== boot) {
           warned = true;
-          toast("A new version of Bug Hunter is available — refresh to update", "info");
+          toast("A new version of Issue Tracker is available — refresh to update", "info");
         }
       } catch {
         /* ignore */

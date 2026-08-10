@@ -154,7 +154,7 @@ function mdLite(escaped: string): string {
 
 // Escape before mdLite, same as server-supplied text.
 const WELCOME_HTML = mdLite(escapeHtml(
-  "Hi! I'm your **Bug Hunter AI Assistant**.\n\n" +
+  "Hi! I'm your **Issue Tracker AI Assistant**.\n\n" +
     "I can **answer questions** like:\n" +
     "- *show open bugs assigned to alice*\n" +
     "- *how many critical bugs in PROD?*\n" +
@@ -671,7 +671,7 @@ export default function SleuthPanel() {
         className="sleuth-fab"
         id="sleuthFab"
         ref={fabRef}
-        aria-label="Open Bug Hunter AI Assistant"
+        aria-label="Open Issue Tracker AI Assistant"
         aria-expanded={open}
         title={open ? "Hide AI Assistant" : "Ask the AI Assistant"}
         data-unread={unread}
@@ -693,7 +693,7 @@ export default function SleuthPanel() {
         id="sleuthPanel"
         hidden={!open}
         role="dialog"
-        aria-label="Bug Hunter AI Assistant"
+        aria-label="Issue Tracker AI Assistant"
         style={isNarrow ? undefined : { width: `${size.w}px`, height: `${size.h}px` }}
         onKeyDown={onPanelKeyDown}
         onClick={onPanelClick}
@@ -712,7 +712,7 @@ export default function SleuthPanel() {
             <img src="/static/sleuth.svg" alt="" className="sleuth-avatar-icon" />
           </div>
           <div className="sleuth-title-block">
-            <div className="sleuth-title">Bug Hunter AI Assistant</div>
+            <div className="sleuth-title">Issue Tracker AI Assistant</div>
             <div className="sleuth-status">Online</div>
           </div>
           <div className="sleuth-header-actions">

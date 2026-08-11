@@ -18,7 +18,7 @@ const VIEW_SUBTITLES: Partial<Record<ViewName, string>> = {
     "Group work items into an event — a standup, a sprint meeting, a release — and track them together",
   analytics: "Visual breakdown of your work by status, priority, environment, project and assignee",
   audit:
-    "Every create, update, delete, login and session event across Issue Tracker — for incident review and compliance",
+    "Every create, update, delete, login and session event across Bug Hunter — for incident review and compliance",
   sessions:
     "Every device currently signed in. Revoke a session to log that device out without touching anything else",
   reports:

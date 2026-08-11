@@ -1,4 +1,4 @@
-"""FastAPI application entry point for Issue Tracker"""
+"""FastAPI application entry point for Bug Hunter"""
 from __future__ import annotations
 
 import hashlib
@@ -182,10 +182,10 @@ async def lifespan(app: FastAPI):
     from app import scheduler
     scheduler.start()
 
-    logger.info("Issue Tracker started. asset_version=%s", app.state.asset_version)
+    logger.info("Bug Hunter started. asset_version=%s", app.state.asset_version)
     yield
     await scheduler.stop()
-    logger.info("Issue Tracker shutting down.")
+    logger.info("Bug Hunter shutting down.")
 
 
 settings = get_settings()
@@ -671,7 +671,7 @@ const messaging = firebase.messaging();
 messaging.onBackgroundMessage(function (payload) {
   const n = payload.notification || {};
   const d = payload.data || {};
-  self.registration.showNotification(n.title || 'Issue Tracker', {
+  self.registration.showNotification(n.title || 'Bug Hunter', {
     body: n.body || '',
     icon: '/static/icon.png',
     badge: '/static/icon.png',

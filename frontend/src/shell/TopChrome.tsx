@@ -26,9 +26,9 @@ export default function TopChrome({ onOpenMobile }: Props) {
       </button>
 
       <div className="brandmark" id="brandMark">
-        <img className="logo" src="/static/icon.png" alt="Issue Tracker" />
+        <img className="logo" src="/static/icon.png" alt="Bug Hunter" />
         <div className="wm">
-          <b>ISSUE<span>TRACKER</span></b>
+          <b>BUG<span>HUNTER</span></b>
           <small id="brandVersion">{health ? `Version ${health.version}` : "Version 3.1"}</small>
         </div>
       </div>

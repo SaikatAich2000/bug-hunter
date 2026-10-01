@@ -13,11 +13,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.access import (
-    accessible_project_ids, project_ids_for_user, set_user_projects,
+    accessible_project_ids,
+    project_ids_for_user,
+    set_user_projects,
 )
+from app.api_docs import BAD_REQUEST_FORBIDDEN_CONFLICT_NOT_FOUND_404 as _CREATE_RESPONSES
+from app.api_docs import BAD_REQUEST_FORBIDDEN_CONFLICT_NOT_FOUND_404 as _UPDATE_RESPONSES
+from app.api_docs import BAD_REQUEST_NOT_FOUND_404 as _DELETE_RESPONSES
+from app.api_docs import NOT_FOUND_404 as _GET_RESPONSES
 from app.auth import (
-    get_current_user, hash_password, invalidate_outstanding_reset_tokens,
-    require_admin, require_manager_or_admin,
+    get_current_user,
+    hash_password,
+    invalidate_outstanding_reset_tokens,
+    require_admin,
+    require_manager_or_admin,
 )
 from app.database import get_db
 from app.models import Activity, Project, User, user_projects
@@ -142,7 +151,8 @@ def list_users(
     ]
 
 
-@router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED,
+             responses=_CREATE_RESPONSES)
 def create_user(
     payload: UserIn,
     db: Session = Depends(get_db),
@@ -183,7 +193,7 @@ def create_user(
     return _user_out(db, user)
 
 
-@router.get("/{user_id}", response_model=UserOut)
+@router.get("/{user_id}", response_model=UserOut, responses=_GET_RESPONSES)
 def get_user(
     user_id: int,
     db: Session = Depends(get_db),
@@ -278,7 +288,7 @@ def _apply_admin_password_reset(user: User, db: Session, new_password: str,
     changes.append("password reset by admin")
 
 
-@router.put("/{user_id}", response_model=UserOut)
+@router.put("/{user_id}", response_model=UserOut, responses=_UPDATE_RESPONSES)
 def update_user(
     user_id: int,
     payload: UserUpdate,
@@ -329,7 +339,7 @@ def update_user(
     return _user_out(db, user)
 
 
-@router.delete("/{user_id}")
+@router.delete("/{user_id}", responses=_DELETE_RESPONSES)
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),

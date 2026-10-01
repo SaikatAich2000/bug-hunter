@@ -8,41 +8,39 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Pin fix-markers in the readable React source (the built bundle is hashed/minified).
 FRONTEND = REPO_ROOT / "frontend" / "src"
-RICH_EDITOR = FRONTEND / "components" / "RichEditor.tsx"
-BUG_MODAL = FRONTEND / "modals" / "BugModal.tsx"
-BUG_HELPERS = FRONTEND / "modals" / "bug" / "helpers.tsx"
-REPORTS_VIEW = FRONTEND / "views" / "ReportsView.tsx"
-SIDEBAR = FRONTEND / "shell" / "Sidebar.tsx"
+RICH_EDITOR = FRONTEND / "components" / "RichEditor.jsx"
+BUG_MODAL = FRONTEND / "modals" / "BugModal.jsx"
+BUG_HELPERS = FRONTEND / "modals" / "bug" / "helpers.jsx"
+REPORTS_VIEW = FRONTEND / "views" / "ReportsView.jsx"
+SIDEBAR = FRONTEND / "shell" / "Sidebar.jsx"
 # NAV_ITEMS is shared by TopChrome and Sidebar so the two nav surfaces can't drift.
-TOPCHROME = FRONTEND / "shell" / "TopChrome.tsx"
-NAVITEMS = FRONTEND / "shell" / "navItems.ts"
-TYPES = FRONTEND / "types.ts"
-FORMAT_TS = FRONTEND / "lib" / "format.ts"
+TOPCHROME = FRONTEND / "shell" / "TopChrome.jsx"
+NAVITEMS = FRONTEND / "shell" / "navItems.js"
+TYPES = FRONTEND / "types.js"
+FORMAT_TS = FRONTEND / "lib" / "format.js"
 STYLES_CSS = FRONTEND / "styles" / "styles.css"
 
 
-# Application version
-def test_app_version_is_3_1():
-    from app import __version__
-    assert __version__ == "3.1"
-
-
-def test_config_default_app_version_is_3_1(monkeypatch):
-    """Baked-in APP_VERSION default must match the release; reads the literal default with dotenv stubbed."""
+# Application branding
+def test_config_app_branding_comes_from_environment(monkeypatch):
+    """Product name and version have no code-level fallback values."""
     import importlib
+
     import dotenv
+
     import app.config as config
 
     monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
-    monkeypatch.delenv("APP_VERSION", raising=False)
+    monkeypatch.setenv("APP_NAME", "Test Tracker")
+    monkeypatch.setenv("APP_VERSION", "9.9")
     try:
         reloaded = importlib.reload(config)
-        assert reloaded.get_settings().APP_VERSION == "3.1"
+        assert reloaded.get_settings().APP_NAME == "Test Tracker"
+        assert reloaded.get_settings().APP_VERSION == "9.9"
     finally:
         monkeypatch.undo()
         importlib.reload(config)
@@ -165,10 +163,11 @@ def test_login_page_shows_version(client):
 # Snapshot-based undo/redo: native contenteditable undo skips toolbar DOM mutations.
 def test_rich_editor_has_snapshot_history():
     src = RICH_EDITOR.read_text(encoding="utf-8")
-    # History structure (stack + index, typed HistoryState) must exist per instance.
-    assert "HistoryState" in src and "stack:" in src and "idx:" in src, (
-        "snapshot history state missing from RichEditor"
-    )
+    # History structure (stack + index) must exist per instance. The TS-only
+    # "HistoryState" interface name is gone post TS->JS migration (Slice J);
+    # the behavior itself (stack/idx on historyRef) is what's actually guarded.
+    assert "stack:" in src, "snapshot history state missing from RichEditor"
+    assert "idx:" in src, "snapshot history state missing from RichEditor"
     # Ctrl+Z / Ctrl+Y must call our undo/redo, not the browser's native undo.
     assert "undoEdit()" in src
     assert "redoEdit()" in src

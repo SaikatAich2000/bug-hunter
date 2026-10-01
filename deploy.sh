@@ -30,17 +30,12 @@ if [[ ! -f "$ENV_FILE" ]]; then
   fi
 fi
 
-# ── Safety: confirm we are NOT touching the pmis-postgres container ───────────
-if docker ps --format '{{.Names}}' | grep -q '^pmis-postgres$'; then
-  info "Detected running pmis-postgres — Bug Hunter uses its OWN isolated db (bugtracker_db). No conflict."
-fi
-
 # ── Live-data safety ──────────────────────────────────────────────────────────
 # This script does NOT touch the named volume `bugtracker_pgdata` that holds
 # your Postgres data. The schema migration on startup is additive only:
-# init_db() -> Base.metadata.create_all() creates any tables that don't yet
-# exist and leaves everything else alone.
-# Existing rows are not modified. Existing session cookies stay valid.
+# init_db() adds missing tables, columns and indexes and leaves everything else
+# alone. Existing rows are not deleted. Sessions stay valid as long as
+# SESSION_SECRET is unchanged.
 info "Live-data safety: bugtracker_pgdata volume will NOT be touched by this script."
 
 # ── Base-image pre-pull (resilient to transient Docker Hub timeouts) ─────────
@@ -115,14 +110,18 @@ until docker inspect --format='{{.State.Health.Status}}' bugtracker_db 2>/dev/nu
   sleep 3
 done
 
-info "Waiting for bugtracker_app to be running..."
-RETRIES=20
-# -qx again: a crash-looping container momentarily shows "restarting"; plain
-# `grep running` could also match unexpected substrings. Require exactly "running".
-until docker inspect --format='{{.State.Status}}' bugtracker_app 2>/dev/null \
-      | grep -qx "running"; do
+info "Waiting for bugtracker_app to be healthy..."
+# The image HEALTHCHECK calls /api/health, which returns 503 while the database
+# is unreachable, so "healthy" means the app is actually serving. Allow for the
+# 30 s start period plus a few check intervals. -qx: "unhealthy" must not match.
+RETRIES=60
+until docker inspect --format='{{.State.Health.Status}}' bugtracker_app 2>/dev/null \
+      | grep -qx "healthy"; do
   RETRIES=$((RETRIES - 1))
-  [[ $RETRIES -le 0 ]] && abort "bugtracker_app did not start in time."
+  if [[ $RETRIES -le 0 ]]; then
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs --tail=40 app || true
+    abort "bugtracker_app did not become healthy in time (last log lines above)."
+  fi
   sleep 3
 done
 
@@ -132,10 +131,9 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║        Bug Hunter deployed successfully!     ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
-info "App  →  http://$(hostname -I | awk '{print $1}'):8765"
-info "DB   →  localhost:55432  (isolated, NOT shared with pmis-postgres)"
+info "App  →  http://localhost:8765  (or this host's address, port 8765)"
+info "DB   →  127.0.0.1:55432  (host-local admin access only)"
 echo ""
 info "To view logs:   docker compose -f $COMPOSE_FILE logs -f"
 info "To stop:        ./down.sh"
 echo ""
-

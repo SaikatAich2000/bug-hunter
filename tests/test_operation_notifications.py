@@ -15,12 +15,14 @@ def _session():
 
 def _user_id(db, email: str) -> int:
     from sqlalchemy import select
+
     from app.models import User
     return db.scalar(select(User).where(User.email == email)).id
 
 
 def _notifs_for(db, user_id: int):
     from sqlalchemy import select
+
     from app.models import Notification
     return list(db.scalars(
         select(Notification).where(Notification.user_id == user_id)

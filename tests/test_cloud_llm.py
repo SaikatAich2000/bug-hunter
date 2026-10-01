@@ -48,7 +48,6 @@ def _reset_cooldown(monkeypatch):
     global cloud_llm
     cloud_llm = importlib.import_module("app.chatbot.cloud_llm")
     monkeypatch.setattr(cloud_llm, "_cooldown_until", 0.0)
-    yield
 
 
 def _install_httpx(monkeypatch, *, payload=None, raise_status=False, post_raises=False):
@@ -230,13 +229,14 @@ def test_extract_json_bare_fence():
 
 # _grounding
 def test_grounding_retrieval_and_rag(monkeypatch):
-    from app.chatbot import retrieval, rag
+    from app.chatbot import rag, retrieval
     hit = types.SimpleNamespace(id=7)
     monkeypatch.setattr(retrieval, "retrieve_bugs", lambda db, msg, **kw: [hit])
     monkeypatch.setattr(retrieval, "format_context", lambda hits: "KEYWORD CTX")
     monkeypatch.setattr(rag, "retrieve_text", lambda msg: "RAG CTX")
     text, ids = cloud_llm._grounding("q", None, _actor(), _settings())
-    assert "KEYWORD CTX" in text and "RAG CTX" in text
+    assert "KEYWORD CTX" in text
+    assert "RAG CTX" in text
     assert ids == {7}
 
 
@@ -244,11 +244,12 @@ def test_grounding_disabled_and_no_rag(monkeypatch):
     from app.chatbot import rag
     monkeypatch.setattr(rag, "retrieve_text", lambda msg: "")
     text, ids = cloud_llm._grounding("q", None, _actor(), _settings(SLEUTH_RETRIEVAL_ENABLED=False))
-    assert text == "" and ids == set()
+    assert text == ""
+    assert ids == set()
 
 
 def test_grounding_retrieval_raises(monkeypatch):
-    from app.chatbot import retrieval, rag
+    from app.chatbot import rag, retrieval
 
     def _boom(db, msg, **kw):
         raise RuntimeError("retrieval down")
@@ -256,11 +257,12 @@ def test_grounding_retrieval_raises(monkeypatch):
     monkeypatch.setattr(retrieval, "retrieve_bugs", _boom)
     monkeypatch.setattr(rag, "retrieve_text", lambda msg: "")
     text, ids = cloud_llm._grounding("q", None, _actor(), _settings())
-    assert text == "" and ids == set()
+    assert text == ""
+    assert ids == set()
 
 
 def test_grounding_rag_raises(monkeypatch):
-    from app.chatbot import retrieval, rag
+    from app.chatbot import rag, retrieval
     monkeypatch.setattr(retrieval, "retrieve_bugs", lambda db, msg, **kw: [])
     monkeypatch.setattr(retrieval, "format_context", lambda hits: "")
 
@@ -662,7 +664,8 @@ def test_truncate_answer():
     s = types.SimpleNamespace(SLEUTH_ANSWER_MAX_CHARS=10)
     assert cloud_llm._truncate_answer("short", s) == "short"
     out = cloud_llm._truncate_answer("x" * 50, s)
-    assert out.startswith("xxxx") and out.endswith("…[truncated]")
+    assert out.startswith("xxxx")
+    assert out.endswith("…[truncated]")
 
 
 def test_answer_response_flags_write_claim_and_scrubs_controls():
@@ -675,8 +678,8 @@ def test_answer_response_flags_write_claim_and_scrubs_controls():
 
 
 def test_system_and_agent_prompts_carry_guardrail_lines():
-    from app.chatbot.cloud_llm import SYSTEM_PROMPT
     from app.chatbot.agent import AGENT_SYSTEM
+    from app.chatbot.cloud_llm import SYSTEM_PROMPT
     low = SYSTEM_PROMPT.lower()
     assert "do not reveal or restate" in low
     assert "different user, role, or admin" in low

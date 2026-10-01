@@ -146,6 +146,7 @@ class TestFrontendContract:
     def test_xlsx_export_preserves_commas_and_newlines_in_description(self, admin_client):
         """Commas and newlines in a description survive the openpyxl round-trip as one cell."""
         import io
+
         from openpyxl import load_workbook
         p = _make_project(admin_client, "FE2")
         admin_client.post("/api/bugs", json={
@@ -163,7 +164,8 @@ class TestFrontendContract:
             str(v) for row in wb[wb.sheetnames[0]].iter_rows(values_only=True)
             for v in row if v is not None
         )
-        assert "line1" in text and "still line2" in text
+        assert "line1" in text
+        assert "still line2" in text
         assert "row, has, commas" in text
 
 
@@ -258,4 +260,4 @@ class TestTransactional:
         n0 = len(admin_client.get(f"/api/bugs/{bug['id']}/activity").json())
         admin_client.put(f"/api/bugs/{bug['id']}", json={"assignee_ids": [u["id"]]})
         n1 = len(admin_client.get(f"/api/bugs/{bug['id']}/activity").json())
-        assert n0 == n1, f"BUG: same-assignee update created a phantom activity row"
+        assert n0 == n1, "BUG: same-assignee update created a phantom activity row"

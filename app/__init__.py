@@ -1,3 +1,1 @@
-"""Bug Hunter — internal-use bug tracking service."""
-
-__version__ = "3.1"
+"""Bug Hunter — self-hosted bug, requirement and sprint tracker."""

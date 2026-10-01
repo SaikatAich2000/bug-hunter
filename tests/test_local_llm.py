@@ -9,8 +9,7 @@ import types
 
 import pytest
 
-from app.chatbot import llm
-from app.chatbot import executor
+from app.chatbot import executor, llm
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +25,6 @@ def _reset_module_state(monkeypatch):
     monkeypatch.setattr(llm, "_shortfall_warned", False)
     monkeypatch.setattr(llm, "_reaper_started", False)
     monkeypatch.setattr(llm, "_budget_cache", None)  # don't leak a cached budget
-    yield
 
 
 # _read_int
@@ -436,7 +434,8 @@ def test_build_pq_recovers_role_and_time_from_message():
     # Compact LLM JSON omits role/time; they must be recovered from the raw message.
     pq = llm._build_pq_from_llm("show admins active today", {})
     assert pq.role_filter == "admin"
-    assert pq.time_window is not None and pq.time_window.label == "today"
+    assert pq.time_window is not None
+    assert pq.time_window.label == "today"
 
 
 # _dispatch_llm_intent

@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
-
 from openpyxl import load_workbook
 
 from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
-
 
 # Test-only credentials; hermetic to the temp SQLite DB the fixtures spin up.
 _MANAGER_LOGIN = ("mona@test.local", "Mana123456")
@@ -17,7 +15,7 @@ _DEFAULT_USER_SECRET = ("UserPass99",)
 
 
 # --- Fixtures ---
-@pytest.fixture()
+@pytest.fixture
 def manager_client(client):
     """Return a TestClient logged in as a newly-created manager."""
     email, secret = _MANAGER_LOGIN
@@ -131,7 +129,7 @@ def test_item_detail_returns_every_matching_item(admin_client):
     assert body["report_key"] == "item_detail"
     assert body["total"] == 3
     titles = {row["title"] for row in body["rows"]}
-    assert {"alpha", "beta", "gamma"} == titles
+    assert titles == {"alpha", "beta", "gamma"}
     # Check that the standard columns, including computed resolved/days_open, are present.
     keys = set(body["rows"][0].keys())
     for must in ("id", "item_type", "title", "project", "status",
@@ -316,7 +314,7 @@ def test_pending_snapshot_includes_only_open_items(admin_client):
     })
     body = r.json()
     titles = {row["title"] for row in body["rows"]}
-    assert {"still-open-1", "still-open-2"} == titles
+    assert titles == {"still-open-1", "still-open-2"}
 
 
 # --- Distributions ---
@@ -526,7 +524,8 @@ def test_sleuth_report_intent_returns_report_with_file(admin_client):
     file_blocks = [b for b in body["blocks"] if b["kind"] == "file"]
     assert len(file_blocks) == 1, body
     token = file_blocks[0]["payload"]["download_token"]
-    assert token and isinstance(token, str)
+    assert token
+    assert isinstance(token, str)
     r2 = admin_client.get(f"/api/chat/download/{token}")
     assert r2.status_code == 200
     assert r2.headers["content-type"].startswith("application/vnd.openxmlformats")

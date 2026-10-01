@@ -237,14 +237,14 @@ def test_cov_validate_email_invalid_raises():
         s._validate_email("not-an-email")
 
 
-# _check_password_strength  (incl. the permanent 'changeme' exception)
-def test_cov_password_changeme_exception_always_passes(monkeypatch):
-    # 'changeme' bypasses normal strength checks regardless of the configured minimum.
+# _check_password_strength (including the legacy exception)
+def test_cov_password_legacy_default_exception_always_passes(monkeypatch):
+    # The legacy value bypasses normal strength checks regardless of the configured minimum.
     import app.config as config
     monkeypatch.setattr(config.Settings, "PASSWORD_MIN_LENGTH", 24)
     s = _S()
-    assert s._check_password_strength("changeme") == "changeme"
-    assert s._check_password_strength("CHANGEME") == "CHANGEME"
+    assert s._check_password_strength("legacy-default") == "legacy-default"
+    assert s._check_password_strength("LEGACY-DEFAULT") == "LEGACY-DEFAULT"
 
 
 def test_cov_password_valid_default():
@@ -325,11 +325,11 @@ def test_cov_userin_weak_password_raises():
         s.UserIn(name="Alice", email="a@b.com", password="short")
 
 
-def test_cov_userin_changeme_password_passes():
-    # 'changeme' must pass the model-level check as well.
+def test_cov_userin_legacy_default_password_passes():
+    # The legacy value must pass the model-level check as well.
     s = _S()
-    u = s.UserIn(name="Alice", email="a@b.com", password="changeme")
-    assert u.password == "changeme"
+    u = s.UserIn(name="Alice", email="a@b.com", password="legacy-default")
+    assert u.password == "legacy-default"
 
 
 # --- UserUpdate  (Optional fields: None -> early-return branches) ---
@@ -338,9 +338,19 @@ def test_cov_userupdate_all_none_passes():
     # so we pass None explicitly to exercise each optional validator's early-return.
     s = _S()
     u = s.UserUpdate(name=None, email=None, role=None, password=None,
-                     is_active=None)
-    assert u.name is None and u.email is None and u.role is None
-    assert u.password is None and u.is_active is None
+                     is_active=None, project_ids=None)
+    assert u.name is None
+    assert u.email is None
+    assert u.role is None
+    assert u.password is None
+    assert u.is_active is None
+    assert u.project_ids is None
+
+
+def test_cov_userupdate_project_ids_dedup():
+    s = _S()
+    u = s.UserUpdate(project_ids=[3, 1, 3, 2, 1])
+    assert u.project_ids == [3, 1, 2]
 
 
 def test_cov_userupdate_values_validated():
@@ -467,18 +477,18 @@ def test_cov_bugcreate_short_title_raises():
 
 
 def test_cov_bugcreate_description_sanitized():
-    # Description is stripped and HTML-sanitized on creation.
+    # Description is stripped and flattened to plain text on creation.
     s = _S()
     b = s.BugCreate(project_id=1, title="Title here",
                     description="  <b>x</b><script>bad</script>  ")
-    assert "<b>x</b>" in b.description
+    assert b.description == "x"
     assert "<script>" not in b.description
 
 
 def test_cov_bugcreate_bad_item_type_raises():
     s = _S()
     with pytest.raises(ValidationError):
-        s.BugCreate(project_id=1, title="Title here", item_type="Epic")
+        s.BugCreate(project_id=1, title="Title here", item_type="NotARealType")
 
 
 def test_cov_bugcreate_bad_status_raises():
@@ -521,11 +531,12 @@ def test_cov_bugcreate_assignee_dedup():
 
 
 def test_cov_bugcreate_status_invalid_for_type_raises():
-    # 'Done' belongs to Task statuses, not Bug; the model_validator rejects the combination.
+    # With the universal status vocabulary, all statuses are valid for all
+    # types. A status that is not in CANONICAL_STATUSES at all is still rejected.
     s = _S()
     with pytest.raises(ValidationError):
         s.BugCreate(project_id=1, title="Title here", item_type="Bug",
-                    status="Done")
+                    status="Not A Real Status At All")
 
 
 def test_cov_bugcreate_status_valid_for_type_passes():
@@ -585,7 +596,7 @@ def test_cov_bugupdate_short_title_raises():
 def test_cov_bugupdate_bad_item_type_raises():
     s = _S()
     with pytest.raises(ValidationError):
-        s.BugUpdate(item_type="Epic")
+        s.BugUpdate(item_type="NotARealType")
 
 
 def test_cov_bugupdate_bad_status_raises():

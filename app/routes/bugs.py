@@ -1,4 +1,5 @@
 """Bugs API + comments + attachments + activity + links + bulk actions (per-bug)."""
+
 from __future__ import annotations
 
 import re
@@ -10,36 +11,104 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import (
-    APIRouter, BackgroundTasks, Depends, File, Form, HTTPException,
-    Query, Request, UploadFile, status,
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
 )
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select, update
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app import bulk_import, notification_service
 from app.access import (
-    accessible_project_ids, can_access_project, scope_bug_query,
+    accessible_project_ids,
+    can_access_project,
+    scope_bug_query,
+)
+from app.agile import sprints as sprints_svc
+from app.agile.itemtypes import is_epic, is_subtask
+from app.agile.permissions import MANAGE_BACKLOG, require_permission
+from app.agile.workflow import record_status_change
+from app.api_docs import (
+    ATTACHMENT_FILE_200,
+    BAD_REQUEST_400,
+    BAD_REQUEST_413,
+    BAD_REQUEST_422,
+    BAD_REQUEST_FORBIDDEN_422,
+    BAD_REQUEST_FORBIDDEN_CONFLICT_NOT_FOUND_404,
+    BAD_REQUEST_FORBIDDEN_NOT_FOUND_422,
+    BAD_REQUEST_FORBIDDEN_NOT_FOUND_PAYLOAD_TOO_LARGE_429,
+    FORBIDDEN_NOT_FOUND_429,
+    NOT_FOUND_404,
+    NOT_FOUND_FORBIDDEN_403,
+    SERVER_ERROR_500,
+    XLSX_FILE_200,
 )
 from app.auth import (
-    can_delete_attachment, can_delete_bug, can_delete_comment, can_edit_bug,
-    can_edit_comment, get_current_user,
+    can_delete_attachment,
+    can_delete_bug,
+    can_delete_comment,
+    can_edit_bug,
+    can_edit_comment,
+    get_current_user,
+    require_manager_or_admin,
 )
 from app.database import get_db
 from app.email_service import (
-    BugSnapshot, UserSnapshot,
-    notify_assignment, notify_bug_created, notify_bug_updated, notify_comment_added,
+    BugSnapshot,
+    UserSnapshot,
+    notify_assignment,
+    notify_bug_created,
+    notify_bug_updated,
+    notify_comment_added,
 )
-from app import notification_service
 from app.image_strip import strip_image_metadata
 from app.models import (
-    Activity, Attachment, Bug, BugLink, Comment, Event, Project, User,
+    Activity,
+    Attachment,
+    Bug,
+    BugLink,
+    Comment,
+    Event,
+    Project,
+    Sprint,
+    User,
+    WorkItemBranch,
 )
 from app.schemas import (
-    ALLOWED_ENVIRONMENTS, ALLOWED_ITEM_TYPES, ALLOWED_PRIORITIES,
-    ALLOWED_STATUSES, ActivityOut, AttachmentBrief, BugCreate, BugDetail,
-    BugLinkIn, BugLinkOut, BugListResponse, BugOut, BugUpdate, BulkActionIn,
-    BulkActionResult, CommentIn, CommentOut, normalize_choice,
+    ALLOWED_ENVIRONMENTS,
+    ALLOWED_ITEM_TYPES,
+    ALLOWED_PRIORITIES,
+    ALLOWED_STATUSES,
+    LEGACY_ITEM_TYPES,
+    ActivityOut,
+    AttachmentBrief,
+    BugCreate,
+    BugDetail,
+    BugLinkIn,
+    BugLinkOut,
+    BugListResponse,
+    BugOut,
+    BugUpdate,
+    BulkActionIn,
+    BulkActionResult,
+    BulkImportResult,
+    BulkImportRowIssue,
+    BulkImportRowWarning,
+    CommentIn,
+    CommentOut,
+    display_id_for,
+    normalize_choice,
+    rich_text_to_plain,
     statuses_for_type,
 )
 
@@ -48,6 +117,22 @@ router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 _DETAIL_BUG_NOT_FOUND = "Bug not found"
 _DETAIL_ATTACHMENT_NOT_FOUND = "Attachment not found"
 _DEFAULT_MIME = "application/octet-stream"
+
+# Item-type conversion errors (Phase 7 contract): stable codes carried in the
+# X-Error-Code header and message fragments kept human-readable.
+_CONVERSION_NOT_SUPPORTED_CODE = "item_conversion_not_supported"
+_CONVERSION_BLOCKED_CODE = "item_conversion_blocked_by_active_branch"
+_VERSION_CONFLICT_CODE = "version_conflict"
+
+# Same-row conversions supported through PUT /api/bugs/{id}. Story is included
+# because a Story created through /api/agile/work-items lives in the same bugs
+# table and must be able to move to/from the legacy types handled here.
+_CONVERTIBLE_ITEM_TYPES = ("Bug", "Requirement", "Task", "Story")
+
+
+def _conversion_refused(status_code: int, code: str, detail: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=detail, headers={"X-Error-Code": code})
+
 
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per attachment
 
@@ -62,6 +147,7 @@ _UPLOAD_RATE_WINDOW_SECONDS = 60
 _UPLOAD_RATE_MAX = 20
 _upload_buckets: dict[int, deque] = {}
 _upload_rate_lock = threading.Lock()
+
 # Bound the dict size to avoid unbounded growth under high user churn.
 _UPLOAD_BUCKETS_MAX = 5_000
 
@@ -112,6 +198,7 @@ def _check_comment_rate(user_id: int) -> None:
         max_req=_COMMENT_RATE_MAX, window=_COMMENT_RATE_WINDOW_SECONDS,
         detail="Too many comments, slow down a moment.",
     )
+
 
 # Browser-executable types (same-origin risk); downgraded to octet-stream attachments.
 _ACTIVE_CONTENT_TYPES = {
@@ -178,6 +265,17 @@ def _item_type(bug: Bug) -> str:
     return getattr(bug, "item_type", None) or "Bug"
 
 
+def _display_id(bug: Bug) -> str:
+    """The stable user-facing reference for a work item ("USRSTR-12").
+
+    A stored value always wins: once an item has been created the id people
+    reference must not drift, even when the item is reclassified from Story to
+    Task. Rows that predate the column fall back to ``<PREFIX>-<id>``.
+    """
+    stored = (getattr(bug, "display_id", None) or "").strip()
+    return stored or display_id_for(_item_type(bug), bug.id)
+
+
 def _user_brief(u: User) -> dict:
     return {"id": u.id, "name": u.name, "email": u.email, "role": u.role}
 
@@ -194,10 +292,13 @@ def _attachment_brief(a: Attachment) -> dict:
 def _bug_to_out_dict(bug: Bug, attachment_count: int = 0, can_edit: bool = False) -> dict:
     return {
         "id": bug.id,
+        "display_id": _display_id(bug),
         "project_id": bug.project_id,
         "project_name": bug.project.name if bug.project else None,
         "title": bug.title,
-        "description": bug.description,
+        # Flatten legacy editor HTML so every consumer reads plain text,
+        # even rows stored before the plain-text switch.
+        "description": rich_text_to_plain(bug.description or ""),
         "reporter": _user_brief(bug.reporter) if bug.reporter else None,
         "assignees": [_user_brief(a) for a in bug.assignees],
         "item_type": _item_type(bug),
@@ -212,6 +313,15 @@ def _bug_to_out_dict(bug: Bug, attachment_count: int = 0, can_edit: bool = False
         "version": getattr(bug, "version", 1),
         "attachment_count": attachment_count,
         "can_edit": can_edit,
+        "epic_id": getattr(bug, "epic_id", None),
+        "parent_id": getattr(bug, "parent_id", None),
+        "story_points": float(bug.story_points) if getattr(bug, "story_points", None) is not None else None,
+        "owner_id": getattr(bug, "owner_id", None),
+        "mandatory": getattr(bug, "mandatory", False),
+        "blocked": getattr(bug, "blocked", False),
+        "blocked_reason": getattr(bug, "blocked_reason", ""),
+        "sprint_id": getattr(bug, "sprint_id", None),
+        "sprint_name": bug.sprint.name if getattr(bug, "sprint", None) else None,
     }
 
 
@@ -220,7 +330,8 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
         id=bug.id, title=bug.title,
         project_name=bug.project.name if bug.project else "",
         status=bug.status, priority=bug.priority, environment=bug.environment,
-        description=bug.description,
+        # Notification snapshot also reads plain text (legacy HTML flattened).
+        description=rich_text_to_plain(bug.description or ""),
         reporter=(UserSnapshot(id=bug.reporter.id, name=bug.reporter.name, email=bug.reporter.email)
                   if bug.reporter else None),
         assignees=tuple(UserSnapshot(id=a.id, name=a.name, email=a.email) for a in bug.assignees),
@@ -485,7 +596,7 @@ def _apply_list_filters(stmt, count_stmt, *, statuses, priorities, environments,
     return stmt, count_stmt
 
 
-@router.get("", response_model=BugListResponse)
+@router.get("", responses=BAD_REQUEST_422)
 def list_bugs(
     project_id: Optional[list[int]] = Query(default=None),
     status_filter: Optional[list[str]] = Query(default=None, alias="status"),
@@ -571,6 +682,53 @@ def list_bugs(
     })
 
 
+@router.get("/import/template.xlsx", response_class=Response,
+            responses={**XLSX_FILE_200, **SERVER_ERROR_500})
+def download_import_template(
+    _user: User = Depends(require_manager_or_admin),
+) -> Response:
+    """Blank spreadsheet with the exact bulk-import columns (same layout as
+    the Item Detail Export report), plus an Instructions sheet."""
+    try:
+        payload = bulk_import.build_template_workbook()
+    except bulk_import.BulkImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="bug-hunter-bulk-import-template.xlsx"',
+            "Cache-Control": "private, no-store, max-age=0",
+        },
+    )
+
+
+@router.post("/import", responses=BAD_REQUEST_413)
+async def bulk_import_bugs(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_manager_or_admin),
+) -> BulkImportResult:
+    """Create many bugs/requirements/tasks from an uploaded .xlsx or .csv
+    file. Notifications are in-app only — see app/bulk_import.py for why a
+    large import must not fan out into an email/push storm."""
+    data = await _read_upload_with_limit(file, bulk_import.MAX_IMPORT_FILE_BYTES)
+    try:
+        outcome = bulk_import.run_import(db, actor, file.filename or "", data)
+    except bulk_import.BulkImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BulkImportResult(
+        created=outcome.created,
+        failed=outcome.failed,
+        created_ids=outcome.created_ids,
+        errors=[BulkImportRowIssue(**e) for e in outcome.errors],
+        warnings=[BulkImportRowWarning(**w) for w in outcome.warnings],
+        errors_truncated=outcome.errors_truncated,
+        warnings_truncated=outcome.warnings_truncated,
+        message=outcome.message,
+    )
+
+
 # Caps for the detail view. Older history is still reachable via the dedicated
 # /activity and /comments endpoints.
 _DETAIL_COMMENTS_MAX = 500
@@ -578,7 +736,7 @@ _DETAIL_ACTIVITIES_MAX = 500
 _DETAIL_ATTACHMENTS_MAX = 500
 
 
-@router.get("/{bug_id}", response_model=BugDetail)
+@router.get("/{bug_id}", responses=NOT_FOUND_404)
 def get_bug(
     bug_id: int,
     db: Session = Depends(get_db),
@@ -647,7 +805,7 @@ def get_bug(
     return BugDetail.model_validate(payload)
 
 
-@router.post("", response_model=BugOut, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_422)
 def create_bug(
     payload: BugCreate,
     background: BackgroundTasks,
@@ -656,7 +814,14 @@ def create_bug(
 ) -> BugOut:
     accessible = accessible_project_ids(db, actor)
     _assert_project_accessible(db, accessible, payload.project_id)
-
+    # Agile hierarchy types (Epic/Story/Sub-task) are only creatable through
+    # /api/agile/work-items, which runs hierarchy validation and rank
+    # assignment; this keeps the legacy Bug/Requirement/Task path unchanged.
+    if payload.item_type not in LEGACY_ITEM_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{payload.item_type} items must be created via /api/agile/work-items",
+        )
     # Only admins/managers may create Tasks/Requirements. This mirrors the
     # can_edit_bug rule so a user can't create an item they couldn't edit.
     if not can_edit_bug(actor, actor.id, [], item_type=payload.item_type):
@@ -695,6 +860,8 @@ def create_bug(
         due_date=payload.due_date,
         event_id=payload.event_id,
     )
+    # The flush ranks it at the bottom of its project's backlog
+    # (app/agile/integrity.py), so it is in the Agile backlog straight away.
     bug.assignees = list(assignees)
     db.add(bug)
     db.flush()
@@ -747,7 +914,7 @@ def create_bug(
 
 _UPDATE_TRACKED_FIELDS = [
     "item_type", "status", "priority", "environment", "project_id",
-    "due_date", "title", "description", "event_id",
+    "due_date", "title", "description", "event_id", "sprint_id",
 ]
 
 
@@ -833,10 +1000,21 @@ def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
     """Guard against over-posting an item_type change. The earlier auth check
     only saw the current type, so without this a regular user could PUT
     {"item_type": "Task"} to convert a Bug into a type they can't edit.
+    Same-table conversions among Bug/Requirement/Task/Story keep the row id and
+    common fields, validate the status against the target type, and never delete
+    a remote branch. A Story with an Active feature branch cannot convert away
+    from Story (Deleted history does not block); converting a non-Story into a
+    Story never touches existing branch rows.
     """
     new_type = fields.get("item_type")
     if new_type is None or new_type == _item_type(bug):
         return
+    if new_type not in _CONVERTIBLE_ITEM_TYPES or _item_type(bug) not in _CONVERTIBLE_ITEM_TYPES:
+        raise _conversion_refused(
+            422,
+            _CONVERSION_NOT_SUPPORTED_CODE,
+            f"Cannot convert {_item_type(bug)} to {new_type} via /api/bugs; use /api/agile/work-items",
+        )
     if not can_edit_bug(actor, bug.reporter_id,
                         [a.id for a in bug.assignees], item_type=new_type):
         raise HTTPException(
@@ -846,6 +1024,78 @@ def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
                 f"{new_type.lower()}."
             ),
         )
+
+
+def _assert_no_active_branch_for_conversion(db: Session, bug: Bug) -> None:
+    """An Active feature branch blocks moving a Story to another type.
+
+    Deleted branch history never blocks. Nothing is deleted remotely: the
+    operator removes the branch through the branch endpoint first.
+    """
+    row = db.scalar(
+        select(WorkItemBranch.id)
+        .where(
+            WorkItemBranch.work_item_type == _item_type(bug),
+            WorkItemBranch.work_item_id == bug.id,
+            WorkItemBranch.status == "Active",
+        )
+        .limit(1)
+    )
+    if row is not None:
+        raise _conversion_refused(
+            409,
+            _CONVERSION_BLOCKED_CODE,
+            "This User Story has an Active feature branch and cannot be converted "
+            "to another type. Delete the branch first.",
+        )
+
+
+def _conversion_change(fields: dict, bug: Bug) -> tuple[str, str] | None:
+    """(from_type, to_type) when this payload reclassifies the item, else None."""
+    new_type = fields.get("item_type")
+    if new_type is None or new_type == _item_type(bug):
+        return None
+    return _item_type(bug), new_type
+
+
+def _audit_conversion(db: Session, bug: Bug, actor: User, conversion: tuple[str, str], action: str, detail: str = "") -> None:
+    """Append one conversion audit row on the caller's session (caller commits)."""
+    old_type, new_type = conversion
+    suffix = f" — {detail}" if detail else ""
+    _log(
+        db, bug.id, actor, action,
+        f"#{bug.id} '{bug.title}' — item_type: '{old_type}' → '{new_type}'{suffix}",
+    )
+
+
+def _audit_conversion_failure(db: Session, bug: Bug, actor: User, conversion: tuple[str, str], exc: Exception) -> None:
+    """Record a refused/failed conversion on a fresh transaction.
+
+    The request's own work has been rolled back, so this is committed
+    separately; a failure to audit must never mask the original error. Only the
+    human-readable refusal message is stored — never a credential or payload.
+    """
+    detail = str(getattr(exc, "detail", "") or exc)[:300]
+    try:
+        db.rollback()
+        _audit_conversion(db, bug, actor, conversion, "conversion_failed", detail)
+        db.commit()
+    except Exception:  # pragma: no cover - audit must never break the response
+        db.rollback()
+
+
+def _preserve_display_id_on_type_change(fields: dict, bug: Bug) -> None:
+    """Freeze the current user-facing id before a reclassification.
+
+    The display id is assigned once. Converting a Story into a Task keeps
+    "USRSTR-<id>", so existing references and the branch rows keyed to the
+    original type + numeric id stay valid.
+    """
+    new_type = fields.get("item_type")
+    if new_type is None or new_type == _item_type(bug):
+        return
+    if not (getattr(bug, "display_id", None) or "").strip():
+        bug.display_id = display_id_for(_item_type(bug), bug.id)
 
 
 def _normalize_update_event_id(fields: dict, db: Session, accessible) -> None:
@@ -892,6 +1142,64 @@ def _validate_update_payload(fields: dict, bug: Bug, db: Session, accessible) ->
         _assert_project_accessible(db, accessible, fields["project_id"])
     _normalize_update_event_id(fields, db, accessible)
     _validate_update_status(fields, bug)
+    if "sprint_id" in fields and fields["sprint_id"] is not None:
+        # Validate against the project the item will end up in.
+        target_project_id = fields.get("project_id") or bug.project_id
+        sprint = db.get(Sprint, fields["sprint_id"])
+        if sprint is None or sprint.project_id != target_project_id or sprint.state in ("closed", "cancelled"):
+            raise HTTPException(status_code=422, detail="sprint_id must reference an open Sprint in this project")
+
+
+def _is_project_move(fields: dict, bug: Bug) -> bool:
+    new_pid = fields.get("project_id")
+    return new_pid is not None and new_pid != bug.project_id
+
+
+def _detach_for_project_move(db: Session, bug: Bug, fields: dict, actor: User) -> None:
+    """Sprints, backlog ranks, epic links, components and labels are
+    project-scoped, so an issue moving to another project leaves them behind;
+    its Sub-tasks move with it
+    (app/agile/integrity.py). An Epic that still has issues, or a Sub-task
+    (which belongs to its parent's project), cannot move on its own."""
+    if not _is_project_move(fields, bug):
+        return
+    if is_subtask(bug.item_type):
+        raise HTTPException(
+            status_code=409,
+            detail="A Sub-task stays in its parent's project; move the parent issue instead.",
+        )
+    if is_epic(bug.item_type) and db.scalar(select(Bug.id).where(Bug.epic_id == bug.id).limit(1)):
+        raise HTTPException(
+            status_code=409,
+            detail="This Epic still has issues; move or unlink them before changing its project.",
+        )
+    if bug.sprint_id is not None:
+        sprint = db.get(Sprint, bug.sprint_id)
+        if sprint is not None and sprint.state in ("future", "active"):
+            # Taking an issue out of a planned or running sprint is backlog
+            # management, whichever field the request changes.
+            require_permission(actor, MANAGE_BACKLOG)
+            sprints_svc.remove_item_from_sprint(db, sprint, bug.id, actor)
+        bug.sprint_id = None
+    bug.parent_id = bug.epic_id = None
+    # Components and labels are per project: they stay behind too.
+    from app.agile.taxonomy import detach_project_taxonomy
+
+    subtask_ids = list(db.scalars(select(Bug.id).where(Bug.parent_id == bug.id)).all())
+    detach_project_taxonomy(db, [bug.id, *subtask_ids])
+
+
+def _apply_sprint_change(db: Session, bug: Bug, new_sprint_id, actor: User) -> None:
+    """Move the issue between sprints through the sprint service, so its rank
+    follows it into the right list and an active sprint records the change.
+    Sub-tasks follow their parent and Epics are never planned: both refused."""
+    if new_sprint_id == bug.sprint_id:
+        return
+    target = db.get(Sprint, new_sprint_id) if new_sprint_id is not None else None
+    try:
+        sprints_svc.move_items(db, bug.project_id, [bug.id], target, actor)
+    except sprints_svc.SprintLifecycleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _stale_edit_conflict() -> HTTPException:
@@ -899,6 +1207,7 @@ def _stale_edit_conflict() -> HTTPException:
         status_code=409,
         detail=("This item was changed by someone else since you opened it. "
                 "Reload to see the latest, then reapply your change."),
+        headers={"X-Error-Code": _VERSION_CONFLICT_CODE},
     )
 
 
@@ -966,9 +1275,16 @@ def _compute_tracked_changes(bug: Bug, fields: dict) -> list[tuple[str, str, str
 
 def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int],
                            changes: list[tuple[str, str, str]]) -> None:
-    """Swap the reporter and record the change. Permission is checked by the
-    caller."""
-    old_reporter_label = bug.reporter.name if bug.reporter else "—"
+    """Swap the reporter and record the change.
+    Only called when the reporter id actually changed (see
+    reporter_actually_changes), so this must always append to `changes` — even
+    when two different users share a display name — or _persist_update treats
+    an empty `changes` list as a no-op and rolls back the FK write along with it.
+    Permission is checked by the caller.
+    """
+    old_reporter = bug.reporter
+    old_reporter_label = old_reporter.name if old_reporter else "—"
+    new_reporter = None
     if new_reporter_id is None:
         bug.reporter_id = None
         new_reporter_label = "—"
@@ -977,8 +1293,12 @@ def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int]
         _reject_inactive([new_reporter], "reporter")
         bug.reporter_id = new_reporter.id
         new_reporter_label = new_reporter.name if new_reporter else "—"
-    if old_reporter_label != new_reporter_label:
-        changes.append(("reporter", old_reporter_label, new_reporter_label))
+    if old_reporter_label == new_reporter_label and old_reporter_label != "—":
+        # Same display name, different person: disambiguate with email so the
+        # audit entry still shows a real change.
+        old_reporter_label += f" ({old_reporter.email})" if old_reporter else ""
+        new_reporter_label += f" ({new_reporter.email})" if new_reporter else ""
+    changes.append(("reporter", old_reporter_label, new_reporter_label))
 
 
 def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]],
@@ -1039,7 +1359,10 @@ def _stage_update_notifications(
     between two commits cannot persist the change without its notifications."""
     new_ids = {u.id for u in newly_assigned}
     itype = _item_type(bug).lower()
-    if changes:
+    # _apply_reporter_change and _apply_assignee_diff always append to `changes`
+    # whenever they return a non-empty diff, so given the caller's guard (`if
+    # changes or newly_assigned or newly_removed`), changes is never empty here.
+    if changes:  # pragma: no branch
         recipients = [
             uid for uid in [bug.reporter_id, *[a.id for a in bug.assignees]]
             if uid not in new_ids
@@ -1082,7 +1405,7 @@ def _schedule_update_notifications(background: BackgroundTasks, snap: BugSnapsho
         )
 
 
-@router.put("/{bug_id}", response_model=BugOut)
+@router.put("/{bug_id}", responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_422)
 def update_bug(
     bug_id: int,
     payload: BugUpdate,
@@ -1107,8 +1430,21 @@ def update_bug(
     _validate_update_authorization(bug, actor)
     _enforce_optimistic_concurrency(db, bug_id, expected_version, expected_updated_at)
     _validate_update_payload(fields, bug, db, accessible)
-    _authorize_item_type_change(fields, bug, actor)
-
+    # Reclassification: same table, same row id, common fields and relations
+    # preserved. The guards run before any attribute is applied so a refused
+    # conversion leaves the item completely untouched.
+    conversion = _conversion_change(fields, bug)
+    if conversion is not None:
+        try:
+            _assert_no_active_branch_for_conversion(db, bug)
+            _authorize_item_type_change(fields, bug, actor)
+        except HTTPException as exc:
+            _audit_conversion_failure(db, bug, actor, conversion, exc)
+            raise
+    else:
+        _authorize_item_type_change(fields, bug, actor)
+    if conversion is not None:
+        _audit_conversion(db, bug, actor, conversion, "conversion_requested")
     assignee_ids = fields.pop("assignee_ids", None)
     has_reporter_in_payload = "reporter_id" in fields
     new_reporter_id = fields.pop("reporter_id", None)
@@ -1121,10 +1457,25 @@ def update_bug(
             status_code=403,
             detail="Only admins or managers can change the reporter",
         )
-
+    # A reclassification must not rename an item people already reference, so
+    # freeze the pre-conversion id before the new item_type is applied.
+    _preserve_display_id_on_type_change(fields, bug)
     changes = _compute_tracked_changes(bug, fields)
+    old_status = bug.status
+    if "sprint_id" in fields and fields["sprint_id"] != bug.sprint_id:
+        # Planning work into or out of a sprint is backlog management, the
+        # same permission the board's move endpoint requires.
+        require_permission(actor, MANAGE_BACKLOG)
+    _detach_for_project_move(db, bug, fields, actor)
+    sprint_requested = "sprint_id" in fields
+    new_sprint_id = fields.pop("sprint_id", None)
     for key, value in fields.items():
         setattr(bug, key, value)
+    # A project move re-ranks the issue at the bottom of its new project's
+    # backlog at flush (app/agile/integrity.py).
+    if sprint_requested:
+        _apply_sprint_change(db, bug, new_sprint_id, actor)
+    record_status_change(db, bug, actor, old_status)
 
     if reporter_actually_changes:
         _apply_reporter_change(bug, db, new_reporter_id, changes)
@@ -1134,9 +1485,16 @@ def update_bug(
         _stage_update_notifications(
             db, bug, changes, newly_assigned, newly_removed, actor, background,
         )
-
-    _persist_update(db, bug, actor, changes)
-
+    if conversion is not None:
+        _audit_conversion(db, bug, actor, conversion, "conversion_succeeded")
+    try:
+        _persist_update(db, bug, actor, changes)
+    except Exception as exc:
+        # Transaction rollback: the item keeps its original type and the
+        # refusal is audited on its own transaction.
+        if conversion is not None:
+            _audit_conversion_failure(db, bug, actor, conversion, exc)
+        raise
     fresh = db.scalar(_eager_bug().where(Bug.id == bug_id))
     snap = _bug_snapshot(fresh)
     _schedule_update_notifications(background, snap, changes, newly_assigned, actor)
@@ -1172,7 +1530,7 @@ def _notify_item_stakeholders(
     )
 
 
-@router.delete("/{bug_id}")
+@router.delete("/{bug_id}", responses=NOT_FOUND_FORBIDDEN_403)
 def delete_bug(
     bug_id: int,
     background: BackgroundTasks,
@@ -1197,28 +1555,13 @@ def delete_bug(
         title=f"{itype} #{bug_id} deleted",
         body=f"{actor.name} deleted “{title}”.",
     )
-    # Detach audit history before deleting, so the trail survives. Setting
-    # bug_id = NULL first works whether the FK is SET NULL or CASCADE: by the
-    # time the DELETE fires no activity row references this bug. entity_id and
-    # detail still carry the bug id and title, so audit search keeps working.
-    db.execute(
-        update(Activity)
-        .where(Activity.bug_id == bug_id)
-        .values(bug_id=None)
-    )
-    db.flush()
-    db.delete(bug)
-    db.add(Activity(
-        bug_id=None, entity_type="bug", entity_id=bug_id,
-        actor_user_id=actor.id, actor_name=actor.name,
-        action="bug_deleted",
-        detail=f"Deleted {itype.lower()} #{bug_id}: {title}",
-    ))
+    subtasks = _delete_item(db, bug, actor)
     db.commit()
-    return {"message": f"{itype} deleted"}
+    suffix = f" with {subtasks} sub-task(s)" if subtasks else ""
+    return {"message": f"{itype} deleted{suffix}"}
 
 
-@router.get("/{bug_id}/comments", response_model=list[CommentOut])
+@router.get("/{bug_id}/comments", response_model=list[CommentOut], responses=NOT_FOUND_404)
 def list_comments(
     bug_id: int,
     db: Session = Depends(get_db),
@@ -1248,7 +1591,7 @@ def list_comments(
     ]
 
 
-@router.post("/{bug_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED)
+@router.post("/{bug_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED, responses=FORBIDDEN_NOT_FOUND_429)
 def add_comment(
     bug_id: int,
     payload: CommentIn,
@@ -1317,7 +1660,7 @@ async def _read_upload_with_limit(file: UploadFile, limit: int) -> bytes:
     return bytes(buf)
 
 
-@router.post("/{bug_id}/attachments", response_model=AttachmentBrief, status_code=status.HTTP_201_CREATED)
+@router.post("/{bug_id}/attachments", response_model=AttachmentBrief, status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_PAYLOAD_TOO_LARGE_429)
 async def upload_attachment(
     bug_id: int,
     background: BackgroundTasks,
@@ -1427,7 +1770,8 @@ def _parse_range(header: str | None, size: int) -> Optional[tuple[int, int]]:
     return start, end
 
 
-@router.get("/{bug_id}/attachments/{att_id}/download")
+@router.get("/{bug_id}/attachments/{att_id}/download", response_class=Response,
+            responses={**ATTACHMENT_FILE_200, **NOT_FOUND_404})
 def download_attachment(
     bug_id: int, att_id: int,
     request: Request,
@@ -1512,7 +1856,7 @@ def download_attachment(
                     media_type=safe_ct, headers=headers)
 
 
-@router.delete("/{bug_id}/attachments/{att_id}")
+@router.delete("/{bug_id}/attachments/{att_id}", responses=NOT_FOUND_FORBIDDEN_403)
 def delete_attachment(
     bug_id: int, att_id: int,
     background: BackgroundTasks,
@@ -1546,7 +1890,7 @@ def delete_attachment(
     return {"message": "Attachment deleted"}
 
 
-@router.put("/{bug_id}/comments/{comment_id}", response_model=CommentOut)
+@router.put("/{bug_id}/comments/{comment_id}", response_model=CommentOut, responses=NOT_FOUND_FORBIDDEN_403)
 def update_comment(
     bug_id: int, comment_id: int,
     payload: CommentIn,
@@ -1592,7 +1936,7 @@ def update_comment(
     }
 
 
-@router.delete("/{bug_id}/comments/{comment_id}")
+@router.delete("/{bug_id}/comments/{comment_id}", responses=NOT_FOUND_FORBIDDEN_403)
 def delete_comment(
     bug_id: int, comment_id: int,
     background: BackgroundTasks,
@@ -1628,7 +1972,7 @@ def delete_comment(
     return {"message": "Comment deleted"}
 
 
-@router.get("/{bug_id}/activity", response_model=list[ActivityOut])
+@router.get("/{bug_id}/activity", response_model=list[ActivityOut], responses=NOT_FOUND_404)
 def list_activity(
     bug_id: int,
     db: Session = Depends(get_db),
@@ -1642,7 +1986,7 @@ def list_activity(
     ).all())
 
 
-@router.get("/{bug_id}/links", response_model=list[BugLinkOut])
+@router.get("/{bug_id}/links", response_model=list[BugLinkOut], responses=NOT_FOUND_404)
 def list_links(
     bug_id: int,
     db: Session = Depends(get_db),
@@ -1705,7 +2049,7 @@ def _notify_link_endpoints(
     )
 
 
-@router.post("/{bug_id}/links", response_model=BugLinkOut, status_code=status.HTTP_201_CREATED)
+@router.post("/{bug_id}/links", response_model=BugLinkOut, status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_CONFLICT_NOT_FOUND_404)
 def add_link(
     bug_id: int,
     payload: BugLinkIn,
@@ -1789,7 +2133,7 @@ def add_link(
     return _serialize_link(_reload_link(db, link.id), bug_id)
 
 
-@router.delete("/{bug_id}/links/{link_id}")
+@router.delete("/{bug_id}/links/{link_id}", responses=NOT_FOUND_FORBIDDEN_403)
 def remove_link(
     bug_id: int, link_id: int,
     background: BackgroundTasks,
@@ -1868,6 +2212,7 @@ def _bulk_set_status(db: Session, bug: Bug, actor: User, value: str,
         return "skipped"
     old = bug.status
     bug.status = value
+    record_status_change(db, bug, actor, old)
     # Bump the version so a later expected_version PUT can detect this change.
     bug.version = (bug.version or 1) + 1
     _log(db, bug.id, actor, "status_changed",
@@ -1889,25 +2234,58 @@ def _bulk_set_field(db: Session, bug: Bug, actor: User, field_name: str,
     return "updated"
 
 
-def _bulk_delete(db: Session, bug: Bug, actor: User, background: BackgroundTasks) -> str:
+def _delete_item(db: Session, bug: Bug, actor: User, note: str = "") -> int:
+    """Delete ``bug`` the way Jira does and record it in the audit trail.
+
+    Its Sub-tasks go with it (a Sub-task cannot exist without its parent; the
+    FK alone would leave them parentless), and an Epic's issues are unlinked
+    through the ORM so the change log records it. Audit history is detached
+    first so the trail survives: entity_id and detail still carry the id and
+    title. Returns how many Sub-tasks were deleted with it.
+    """
+    bug_id = bug.id
+    subtasks = list(db.scalars(
+        select(Bug).where(Bug.parent_id == bug_id, Bug.item_type == "Sub-task")
+    ).all())
+    if bug.item_type == "Epic":
+        for issue in db.scalars(select(Bug).where(Bug.epic_id == bug_id, Bug.item_type != "Sub-task")).all():
+            issue.epic_id = None
+    doomed = [*subtasks, bug]
+    db.execute(
+        update(Activity)
+        .where(Activity.bug_id.in_([d.id for d in doomed]))
+        .values(bug_id=None)
+    )
+    db.flush()
+    for item in doomed:
+        db.delete(item)
+        db.add(Activity(
+            bug_id=None, entity_type="bug", entity_id=item.id,
+            actor_user_id=actor.id, actor_name=actor.name,
+            action="bug_deleted",
+            detail=(
+                f"Deleted {_item_type(item).lower()} #{item.id}: {item.title}"
+                + (f" (sub-task of #{bug_id})" if item is not bug else "")
+                + note
+            ),
+        ))
+    return len(subtasks)
+
+
+def _bulk_delete(db: Session, bug: Bug, actor: User, background: BackgroundTasks) -> None:
     # Same pattern as delete_bug: notify first (link_bug=False, since the FK
     # would cascade the notification away), detach audit history, delete, then
     # record the delete in the trail.
     title, itype, bug_id = bug.title, _item_type(bug), bug.id
+    if bug in db.deleted or sa_inspect(bug).was_deleted:
+        # Already removed with its parent earlier in this selection.
+        return
     _notify_item_stakeholders(
         db, bug, actor, kind="updated", background=background, link_bug=False,
         title=f"{itype} #{bug_id} deleted",
         body=f"{actor.name} deleted “{title}”.",
     )
-    db.execute(update(Activity).where(Activity.bug_id == bug_id).values(bug_id=None))
-    db.flush()
-    db.delete(bug)
-    db.add(Activity(
-        bug_id=None, entity_type="bug", entity_id=bug_id,
-        actor_user_id=actor.id, actor_name=actor.name, action="bug_deleted",
-        detail=f"Deleted {itype.lower()} #{bug_id}: {title} (bulk)",
-    ))
-    return "updated"
+    _delete_item(db, bug, actor, note=" (bulk)")
 
 
 def _bulk_version_conflict(bug: Bug, payload: BulkActionIn) -> bool:
@@ -1930,7 +2308,8 @@ def _apply_bulk_to_bug(db: Session, bug: Bug, actor: User, payload: BulkActionIn
     if action == "delete":
         if not can_delete_bug(actor, item_type=_item_type(bug)):
             return "skipped"
-        return _bulk_delete(db, bug, actor, background)
+        _bulk_delete(db, bug, actor, background)
+        return "updated"
     if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
                         item_type=_item_type(bug)):
         return "skipped"
@@ -1941,7 +2320,7 @@ def _apply_bulk_to_bug(db: Session, bug: Bug, actor: User, payload: BulkActionIn
     return _bulk_set_field(db, bug, actor, "environment", resolved, background)
 
 
-@router.post("/bulk", response_model=BulkActionResult)
+@router.post("/bulk", responses=BAD_REQUEST_400)
 def bulk_action(
     payload: BulkActionIn,
     background: BackgroundTasks,

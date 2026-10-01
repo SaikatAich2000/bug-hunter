@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.api_docs import NOT_FOUND_404
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Notification, User
@@ -62,7 +63,7 @@ def _owned_or_404(db: Session, notif_id: int, user: User) -> Notification:
     return notif
 
 
-@router.post("/{notif_id}/read")
+@router.post("/{notif_id}/read", responses=NOT_FOUND_404)
 def mark_read(
     notif_id: int,
     db: Session = Depends(get_db),
@@ -89,7 +90,7 @@ def mark_all_read(
     return {"ok": True}
 
 
-@router.delete("/{notif_id}")
+@router.delete("/{notif_id}", responses=NOT_FOUND_404)
 def delete_notification(
     notif_id: int,
     db: Session = Depends(get_db),

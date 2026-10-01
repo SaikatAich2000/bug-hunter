@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-
 # Canonical enums, mirrored from app.schemas so parse-time stays decoupled from
 # Pydantic; the executor re-validates against live schema constants.
 _S_NEW = "New"
@@ -122,10 +121,8 @@ _STOPWORDS = {
     "open", "closed", "resolved", "active", "new", "reopened", "fixed",
     "high", "low", "medium", "critical", "priority", "status", "environment",
     "project", "projects", "assigned", "assignee", "assignees", "reporter",
-    "reported", "filed", "raised", "owned", "owner", "against", "for", "by",
-    "to", "on", "in", "into", "under", "over", "above", "below", "between",
-    "regarding", "about", "during", "before", "after", "around", "into",
-    "many", "much", "count", "total", "summary", "overview", "stats",
+    "reported", "filed", "raised", "owned", "owner", "against", "into", "under", "over", "above", "below", "between",
+    "regarding", "about", "during", "before", "after", "around", "count", "total", "summary", "overview", "stats",
     "statistics", "dashboard", "report", "reports", "analytics", "kpi",
     "user", "users", "team", "member", "members", "name", "names",
     "excel", "xlsx", "csv", "spreadsheet", "sheet", "file", "files",
@@ -134,7 +131,7 @@ _STOPWORDS = {
     "week", "weeks", "day", "days", "month", "months", "year", "years",
     "hour", "hours", "minute", "minutes",
     "dev", "uat", "prod", "production", "staging", "qa", "test", "testing",
-    "could", "would", "kindly", "really", "actually", "maybe", "perhaps",
+    "kindly", "really", "actually", "maybe", "perhaps",
 }
 
 
@@ -271,7 +268,7 @@ _PROJECT_CUE_RE = re.compile(
     r"assigned|reported|owned|status|priority|environment|created|updated))",
     re.IGNORECASE,
 )
-# Looser fallback for "project MobileApp" style. Less precise; only fires if
+# Looser fallback for "project WebPortal" style. Less precise; only fires if
 # the strict pattern misses and the candidate is a single token.
 _PROJECT_LOOSE_CUE_RE = re.compile(
     r"\bproject\s+([a-z0-9_-]+)\b",
@@ -533,7 +530,7 @@ def _parse_time_window(message: str, now: Optional[datetime] = None) -> Optional
     unit = _first_str_match((m.group(4), m.group(6), m.group(8)))
     if qty is not None and unit:
         return _relative_window(qty, unit, now)
-    return None
+    return None  # pragma: no cover - unreachable while every _TIME_RE branch is handled above
 
 
 def _extract_statuses(text: str) -> list[str]:

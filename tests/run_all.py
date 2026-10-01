@@ -2,7 +2,6 @@
 """Run every test file in sequence (python3 tests/run_all.py); exits non-zero on any failure."""
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path

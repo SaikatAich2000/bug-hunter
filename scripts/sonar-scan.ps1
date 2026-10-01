@@ -22,7 +22,7 @@ foreach ($cmd in @("python", "py", "python3")) {
 }
 if (-not $python) { Abort "Python is not on PATH. Install Python 3.12 and re-open this shell." }
 
-if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9000" }
+if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9090" }
 
 try {
     $resp = Invoke-WebRequest -Uri "$($env:SONAR_HOST_URL)/api/system/status" -TimeoutSec 5 -UseBasicParsing

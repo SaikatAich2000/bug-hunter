@@ -71,7 +71,8 @@ def test_classifier_rejects_num_only_input():
 
 def test_classifier_still_classifies_real_queries():
     pred = classifier.predict("show me all the open bugs")
-    assert pred is not None and pred.intent
+    assert pred is not None
+    assert pred.intent
 
 
 # Item-type scoping via noun detection.
@@ -93,9 +94,9 @@ def _texts(resp):
 
 
 def test_chat_count_scopes_to_item_type(client):
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import executor
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -120,9 +121,9 @@ def test_chat_count_scopes_to_item_type(client):
 
 # Priority normalization via normalize_choice, consistent with the REST layer.
 def test_create_bug_normalizes_lowercase_priority(client):
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -143,9 +144,9 @@ def test_create_bug_normalizes_lowercase_priority(client):
 
 
 def test_create_bug_rejects_bogus_priority(client):
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -167,8 +168,8 @@ def test_create_bug_rejects_bogus_priority(client):
 # get_event sets items_truncated when the result is capped by _EVENT_ITEMS_MAX.
 def test_get_event_items_truncated(admin_client, monkeypatch):
     import app.routes.events as ev_mod
-    from app.database import SessionLocal
     from app import models
+    from app.database import SessionLocal
 
     monkeypatch.setattr(ev_mod, "_EVENT_ITEMS_MAX", 1)
     db = SessionLocal()
@@ -195,8 +196,8 @@ def test_get_event_items_truncated(admin_client, monkeypatch):
 
 
 def test_get_event_not_truncated_for_small_event(admin_client):
-    from app.database import SessionLocal
     from app import models
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:

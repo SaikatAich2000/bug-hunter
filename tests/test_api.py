@@ -40,7 +40,8 @@ def _make_bug(client, project_id, **extra):
 def test_health_and_meta_no_auth(client):
     """/api/health and /api/meta are intentionally unauthenticated."""
     r = client.get("/api/health")
-    assert r.status_code == 200 and r.json()["status"] == "ok"
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
     body = client.get("/api/meta").json()
     assert "New" in body["statuses"]
     assert "Critical" in body["priorities"]
@@ -125,7 +126,8 @@ def test_user_crud_admin(admin_client):
     assert "password_hash" not in u  # must never be serialized
 
     r = admin_client.put(f"/api/users/{u['id']}", json={"role": "manager"})
-    assert r.status_code == 200 and r.json()["role"] == "manager"
+    assert r.status_code == 200
+    assert r.json()["role"] == "manager"
 
     r = admin_client.delete(f"/api/users/{u['id']}")
     assert r.status_code == 200

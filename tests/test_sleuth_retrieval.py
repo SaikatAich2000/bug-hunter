@@ -46,14 +46,15 @@ def test_snippet_empty_unmatched_and_centered():
     # term deep in the text -> centered excerpt with an ellipsis prefix
     long = ("word " * 80) + "TARGETkw tail"
     out = _snippet(long, ["targetkw"])
-    assert out.startswith("…") and "TARGETkw" in out
+    assert out.startswith("…")
+    assert "TARGETkw" in out
 
 
 # --- retrieve_bugs (DB-backed) ---------------------------------------------
 
 def test_retrieve_ranks_by_keyword_hits(admin_client):
-    from app.database import SessionLocal
     from app.chatbot import retrieval
+    from app.database import SessionLocal
     pid = _project(admin_client)
     _bug(admin_client, pid, "Login crash on Safari", "Safari 17 login button does nothing")
     _bug(admin_client, pid, "Landing page typo", "welcome spelled wrong")
@@ -69,8 +70,8 @@ def test_retrieve_ranks_by_keyword_hits(admin_client):
 
 
 def test_retrieve_empty_when_no_keywords_or_no_match(admin_client):
-    from app.database import SessionLocal
     from app.chatbot import retrieval
+    from app.database import SessionLocal
     pid = _project(admin_client)
     _bug(admin_client, pid, "Login crash", "boom")
     db = SessionLocal()
@@ -82,8 +83,8 @@ def test_retrieve_empty_when_no_keywords_or_no_match(admin_client):
 
 
 def test_retrieve_respects_limit(admin_client):
-    from app.database import SessionLocal
     from app.chatbot import retrieval
+    from app.database import SessionLocal
     pid = _project(admin_client)
     for i in range(4):
         _bug(admin_client, pid, f"Payment failure {i}", "payment gateway timeout")
@@ -97,8 +98,8 @@ def test_retrieve_respects_limit(admin_client):
 
 def test_retrieve_bugs_scoped_to_accessible_projects(admin_client):
     """Regression: retrieval honours the actor's project scope, so out-of-scope bug text can't reach the model context."""
-    from app.database import SessionLocal
     from app.chatbot import retrieval
+    from app.database import SessionLocal
     pa = _project(admin_client, "Alpha")
     pb = _project(admin_client, "Beta")
     a_id = _bug(admin_client, pa, "Checkout latency Alpha", "shared keyword zephyr here")
@@ -110,7 +111,8 @@ def test_retrieve_bugs_scoped_to_accessible_projects(admin_client):
         assert {a_id, b_id} <= ids
         # restricted to Alpha; Beta's bug must not appear
         scoped = {r.id for r in retrieval.retrieve_bugs(db, "zephyr", accessible={pa})}
-        assert a_id in scoped and b_id not in scoped
+        assert a_id in scoped
+        assert b_id not in scoped
         # empty scope retrieves nothing
         assert retrieval.retrieve_bugs(db, "zephyr", accessible=set()) == []
     finally:
@@ -120,7 +122,7 @@ def test_retrieve_bugs_scoped_to_accessible_projects(admin_client):
 # --- format_context ---------------------------------------------------------
 
 def test_format_context_empty_and_records():
-    from app.chatbot.retrieval import format_context, RetrievedBug
+    from app.chatbot.retrieval import RetrievedBug, format_context
     assert format_context([]) == ""
     out = format_context([
         RetrievedBug(id=4, title="Login crash", snippet="boom", score=2),
@@ -154,16 +156,20 @@ def test_annotate_appends_caveat_only_when_ungrounded():
     from app.chatbot.verify import annotate
     assert annotate("all grounded #4", {4}) == "all grounded #4"
     one = annotate("see #9", {4})
-    assert "#9" in one and "could not ground" in one and " it " in one
+    assert "#9" in one
+    assert "could not ground" in one
+    assert " it " in one
     many = annotate("see #9 and #10", {4})
-    assert "#9, #10" in many and "them" in many
+    assert "#9, #10" in many
+    assert "them" in many
 
 
 def test_flag_write_claims_appends_only_for_self_attributed_writes():
     from app.chatbot.verify import flag_write_claims
     # an answer that claims the model itself performed a change gets a correction appended
     claim = flag_write_claims("Sure — I closed bug #5 and assigned it to Alice.")
-    assert claim.startswith("Sure — I closed") and "can't change anything" in claim
+    assert claim.startswith("Sure — I closed")
+    assert "can't change anything" in claim
     # text that doesn't claim a self-performed write passes through unchanged
     assert flag_write_claims("You can close it from the panel.") == \
         "You can close it from the panel."
@@ -173,10 +179,10 @@ def test_flag_write_claims_appends_only_for_self_attributed_writes():
 # --- end-to-end: grounded retrieval + answer verification in the cloud path --
 
 def test_cloud_answer_is_grounded_and_verified(admin_client, monkeypatch):
-    from app.database import SessionLocal
-    from app.config import get_settings
     from app import models
     from app.chatbot import cloud_llm
+    from app.config import get_settings
+    from app.database import SessionLocal
     pid = _project(admin_client)
     bid = _bug(admin_client, pid, "Login crash on Safari", "safari login fails badly")
     s = get_settings()
@@ -194,7 +200,8 @@ def test_cloud_answer_is_grounded_and_verified(admin_client, monkeypatch):
     try:
         actor = db.query(models.User).first()
         resp = cloud_llm.try_understand("safari login crash", db, actor)
-        assert resp is not None and resp.intent == "cloud_answer"
+        assert resp is not None
+        assert resp.intent == "cloud_answer"
         text = resp.blocks[0].payload["text"]
         assert f"#{bid}" in text             # grounded citation kept
         assert "#99999" in text              # fabricated citation named in caveat

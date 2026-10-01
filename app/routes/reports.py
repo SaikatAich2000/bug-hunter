@@ -10,22 +10,27 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.access import accessible_project_ids
+from app.api_docs import BAD_REQUEST_400, EXPORT_ERRORS, XLSX_FILE_200
 from app.auth import require_manager_or_admin
 from app.config import get_settings
 from app.database import get_db
 from app.models import User
 from app.reports import (
-    Filters,
     REPORT_CATALOG,
     REPORT_TYPES,
+    Filters,
     UnknownReportError,
     build_workbook_bytes,
     run_report,
+)
+from app.reports.engine import (
+    OPEN_STATUSES_BY_TYPE,
+    RESOLVED_STATUSES_BY_TYPE,
 )
 from app.reports.xlsx import XlsxBuildError
 from app.schemas import (
@@ -33,10 +38,6 @@ from app.schemas import (
     ALLOWED_ITEM_TYPES,
     ALLOWED_PRIORITIES,
     ALLOWED_STATUSES,
-)
-from app.reports.engine import (
-    OPEN_STATUSES_BY_TYPE,
-    RESOLVED_STATUSES_BY_TYPE,
 )
 
 logger = logging.getLogger("bug_hunter.reports")
@@ -126,7 +127,7 @@ def _run_or_400(payload: ReportRunIn, db: Session, user: User):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/run")
+@router.post("/run", responses=BAD_REQUEST_400)
 def run(
     payload: ReportRunIn,
     db: Session = Depends(get_db),
@@ -158,7 +159,7 @@ def _safe_filename(report_key: str, label: str) -> str:
     return f"bug-hunter-report-{base}-{stamp}.xlsx"
 
 
-@router.post("/export.xlsx")
+@router.post("/export.xlsx", response_class=Response, responses={**XLSX_FILE_200, **EXPORT_ERRORS})
 def export_xlsx(
     payload: ReportRunIn,
     db: Session = Depends(get_db),

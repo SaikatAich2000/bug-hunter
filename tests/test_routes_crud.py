@@ -116,7 +116,8 @@ def test_cov_list_users_exclude_inactive(admin_client):
     """GET /api/users?include_inactive=false omits deactivated users."""
     dormant = _mk_user(admin_client, "Cov Dormant", "cov.dormant@example.com")
     r = admin_client.put(f"/api/users/{dormant['id']}", json={"is_active": False})
-    assert r.status_code == 200 and r.json()["is_active"] is False
+    assert r.status_code == 200
+    assert r.json()["is_active"] is False
 
     active_ids = {u["id"] for u in admin_client.get(
         "/api/users?include_inactive=false").json()}
@@ -147,6 +148,14 @@ def test_cov_update_user_cannot_deactivate_self(admin_client):
     r = admin_client.put(f"/api/users/{me['id']}", json={"is_active": False})
     assert r.status_code == 400
     assert "deactivate yourself" in r.json()["detail"].lower()
+
+
+def test_cov_update_user_self_edit_name_only_succeeds(admin_client):
+    """Self-editing a non-guarded field (name) must not trip any self-edit guardrail."""
+    me = admin_client.get("/api/auth/me").json()
+    r = admin_client.put(f"/api/users/{me['id']}", json={"name": "Renamed Self"})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Renamed Self"
 
 
 def test_cov_update_user_last_admin_demote_self_blocked(admin_client):
@@ -184,16 +193,16 @@ def test_cov_update_user_duplicate_email_409(admin_client):
 
 
 def test_cov_update_user_role_change_and_password_reset(admin_client):
-    """Promote to manager + reset password in one PUT; 'changeme' stays accepted (legacy exception)."""
+    """Promote to manager + reset password in one PUT; legacy value stays accepted."""
     u = _mk_user(admin_client, "Cov Promote", "cov.promote@example.com")
     r = admin_client.put(f"/api/users/{u['id']}",
-                         json={"role": "manager", "password": "changeme"})
+                         json={"role": "manager", "password": "legacy-default"})
     assert r.status_code == 200
     assert r.json()["role"] == "manager"
     # Confirm the new password actually works.
     other_c = _new_client()
     rl = other_c.post("/api/auth/login",
-                      json={"email": "cov.promote@example.com", "password": "changeme"})
+                      json={"email": "cov.promote@example.com", "password": "legacy-default"})
     assert rl.status_code == 200
 
 
@@ -231,7 +240,8 @@ def test_cov_sessions_list_and_is_current(admin_client):
     _login(other_c, "cov.sessu@example.com", "User12345")
 
     rows = admin_client.get("/api/sessions").json()
-    assert isinstance(rows, list) and len(rows) >= 2
+    assert isinstance(rows, list)
+    assert len(rows) >= 2
     current = [r for r in rows if r["is_current"]]
     assert len(current) == 1, "exactly one row should be the admin's own session"
     assert current[0]["user_email"] == _BOOTSTRAP_EMAIL
@@ -239,7 +249,8 @@ def test_cov_sessions_list_and_is_current(admin_client):
 
 def test_cov_sessions_sweep_expired_rows(admin_client):
     """Listing sessions sweeps rows whose expires_at is past (back-dated directly, then confirmed gone)."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
     from app.database import SessionLocal
     from app.models import Session as SessionRow
 
@@ -349,11 +360,13 @@ def test_cov_mark_read_already_read_skips_commit(admin_client):
     nid = notifs[0]["id"]
 
     r1 = bob_c.post(f"/api/notifications/{nid}/read")
-    assert r1.status_code == 200 and r1.json() == {"ok": True}
+    assert r1.status_code == 200
+    assert r1.json() == {"ok": True}
 
     # Second call hits the skip branch (read_at already set).
     r2 = bob_c.post(f"/api/notifications/{nid}/read")
-    assert r2.status_code == 200 and r2.json() == {"ok": True}
+    assert r2.status_code == 200
+    assert r2.json() == {"ok": True}
 
     # Still exactly one row, still marked read.
     row = next(n for n in bob_c.get("/api/notifications").json() if n["id"] == nid)

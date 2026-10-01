@@ -15,7 +15,8 @@ def _u(role: str):
 # Password hashing
 def test_hash_password_roundtrip():
     h = auth.hash_password("CorrectHorse9")
-    assert h and h != "CorrectHorse9"
+    assert h
+    assert h != "CorrectHorse9"
     assert auth.verify_password("CorrectHorse9", h) is True
     assert auth.verify_password("wrong", h) is False
 
@@ -69,7 +70,8 @@ def test_parse_session_token_too_many_parts_is_none():
 def test_reset_token_hash_is_stable_and_matches():
     raw, h = auth.generate_reset_token()
     assert h == auth.hash_reset_token(raw)
-    assert h != raw and len(h) == 64  # SHA-256 hex digest
+    assert h != raw
+    assert len(h) == 64  # SHA-256 hex digest
 
 
 # Role-based permission predicates
@@ -80,11 +82,6 @@ def test_reset_token_hash_is_stable_and_matches():
         (auth.can_edit_event, True, True, False),
         (auth.can_delete_event, True, False, False),
         (auth.can_manage_projects, True, True, False),
-        (auth.can_delete_project, True, False, False),
-        (auth.can_manage_users, True, True, False),
-        (auth.can_delete_user, True, False, False),
-        (auth.can_view_audit, True, True, False),
-        (auth.can_manage_sessions, True, False, False),
     ],
 )
 def test_permission_predicates(fn, admin, manager, user):

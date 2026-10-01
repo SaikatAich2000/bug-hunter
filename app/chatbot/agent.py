@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from app.config import get_settings
+
 # Text produced by a read-only DB query, fed back to the model as an observation.
 RunQuery = Callable[[str], str]
 # Returns (context_block, grounded_bug_ids); the block is already injection-wrapped.
@@ -28,7 +30,7 @@ def _fence_safe(text: str) -> str:
 
 
 AGENT_SYSTEM = (
-    "You are Sleuth, the assistant inside the Bug Hunter issue tracker. You "
+    f"You are Sleuth, the assistant inside the {get_settings().APP_NAME} work tracker. You "
     "work through a question step by step using read-only tools. You cannot "
     "change any data; you only look things up and explain. Never claim you "
     "performed or will perform a change.\n"

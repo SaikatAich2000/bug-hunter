@@ -8,10 +8,7 @@ import io
 from datetime import datetime, timezone
 
 import pytest
-
 from openpyxl import load_workbook
-
-from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
 
 
 def _make_project(client, name="CovProj"):
@@ -61,8 +58,9 @@ def test_cov_parse_resolution_status_edge_cases():
 
 def test_cov_run_report_unknown_key_raises():
     from app.reports.engine import Filters, UnknownReportError, run_report
+    empty_filters = Filters()
     with pytest.raises(UnknownReportError):
-        run_report("definitely_not_a_report", Filters(), db=None)
+        run_report("definitely_not_a_report", empty_filters, db=None)
 
 
 def test_cov_run_route_maps_unknown_report_error_to_400(admin_client, monkeypatch):
@@ -85,7 +83,8 @@ def test_cov_run_route_maps_unknown_report_error_to_400(admin_client, monkeypatc
 def test_cov_catalog_get_report_meta():
     from app.reports.catalog import get_report_meta
     meta = get_report_meta("item_detail")            # hit
-    assert meta is not None and meta["key"] == "item_detail"
+    assert meta is not None
+    assert meta["key"] == "item_detail"
     assert get_report_meta("nope_not_real") is None  # miss
 
 

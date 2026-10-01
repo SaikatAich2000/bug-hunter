@@ -1,12 +1,12 @@
 """End-to-end UI smoke tests: boots the FastAPI app on a random port and
 drives a real Chromium via Playwright through the main user flows."""
+import contextlib
 import os
 import socket
+import sys
 import tempfile
 import threading
 import time
-import sys
-import contextlib
 
 import pytest
 
@@ -41,6 +41,7 @@ def live_server():
             del sys.modules[m]
 
     import uvicorn
+
     from app.main import app
 
     port = _free_port()
@@ -226,7 +227,8 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
     page.wait_for_selector("#viewEvents, .view", timeout=3000)
     box = page.locator("#notifBtn").bounding_box()
     vw = page.evaluate("() => window.innerWidth")
-    assert box and box["x"] > vw / 2, \
+    assert box, f"Bell should be right-aligned on the Events view (x={box and box['x']}, vw={vw})"
+    assert box["x"] > vw / 2, \
         f"Bell should be right-aligned on the Events view (x={box and box['x']}, vw={vw})"
 
     # Bell click opens the notification panel.
@@ -257,7 +259,7 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
       The periodic /me poll handles the idle case.
     - Backend: _has_valid_session() must check the sessions table, not just the
       cookie signature. If it doesn't, /login.html bounces back to / in a loop
-      (the v3.1.0 redirect-loop bug).
+      (a known redirect-loop regression).
     """
     import httpx
     admin = httpx.Client(base_url=live_server)
@@ -293,7 +295,7 @@ def test_session_revoke_kicks_user_out_promptly(live_server, browser):
         pass
     assert "/login.html" in victim_page.url, \
         f"Victim was not redirected after reload. URL: {victim_page.url}\n" \
-        f"This means the redirect-loop bug from v3.1.0 is back: the " \
+        f"This means the known redirect-loop regression is back: the " \
         f"_has_valid_session() function in app/main.py is treating a " \
         f"revoked cookie as valid and bouncing /login.html back to /."
 
@@ -551,7 +553,8 @@ def test_reports_type_dropdown_anchors_to_trigger(nav_page):
 
     tb = trigger.bounding_box()
     pb = page.locator(".bh-sel-pop").bounding_box()
-    assert tb and pb
+    assert tb
+    assert pb
     # Left edges must align within 8px (the bug shifted it ~sidebar-width right).
     assert abs(pb["x"] - tb["x"]) <= 8, f"dropdown not left-aligned: trigger={tb}, pop={pb}"
     # Must sit directly below the trigger, or just above if the popover flips.

@@ -3,7 +3,6 @@ Lockout bucket reclamation, XFF empty-input guard, animated-image preservation, 
 """
 from __future__ import annotations
 
-import io
 from collections import deque
 
 from app import account_lockout, image_strip, scheduler

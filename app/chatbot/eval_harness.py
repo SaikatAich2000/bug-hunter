@@ -8,7 +8,6 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
-
 # --- Trajectory — score the read-only agent's tool-use path. ---
 _TOOL_ACTIONS = frozenset({"query", "retrieve"})
 _TERMINAL_ACTIONS = frozenset({"final", "answer_data"})

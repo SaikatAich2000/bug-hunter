@@ -3,7 +3,6 @@ CRUD, item linking, email metadata, audit, delete-preserves-items, migration saf
 """
 from __future__ import annotations
 
-
 # -- Helpers -----------------------------------------------------------------
 
 def _make_project(client, name="Eng"):
@@ -170,7 +169,9 @@ def test_event_detail_includes_multi_assignee_item(admin_client):
 
 def test_assignment_email_includes_event_name(monkeypatch):
     from app.email_service import (
-        BugSnapshot, UserSnapshot, notify_assignment,
+        BugSnapshot,
+        UserSnapshot,
+        notify_assignment,
     )
     sent = []
     monkeypatch.setattr(
@@ -288,10 +289,10 @@ def test_legacy_db_gets_event_id_column(tmp_path, monkeypatch):
                     '2026-01-01', '2026-01-01');
         """
     )
-    con.commit(); con.close()
+    con.commit()
+    con.close()
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
-    monkeypatch.setenv("API_KEY", "")
     monkeypatch.setenv("EMAIL_BACKEND", "disabled")
     monkeypatch.setenv("SESSION_SECRET", "legacy_event_secret")
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
@@ -306,6 +307,7 @@ def test_legacy_db_gets_event_id_column(tmp_path, monkeypatch):
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     from fastapi.testclient import TestClient
+
     from app.main import app
     with TestClient(app) as c:
         r = c.post("/api/auth/login", json={
@@ -355,10 +357,10 @@ def test_legacy_events_table_gets_project_id_column(tmp_path, monkeypatch):
             VALUES ('pre-project event', '2026-01-01', '2026-01-01');
         """
     )
-    con.commit(); con.close()
+    con.commit()
+    con.close()
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
-    monkeypatch.setenv("API_KEY", "")
     monkeypatch.setenv("EMAIL_BACKEND", "disabled")
     monkeypatch.setenv("SESSION_SECRET", "legacy_proj_secret")
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
@@ -373,6 +375,7 @@ def test_legacy_events_table_gets_project_id_column(tmp_path, monkeypatch):
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     from fastapi.testclient import TestClient
+
     from app.main import app
     with TestClient(app) as c:
         r = c.post("/api/auth/login", json={

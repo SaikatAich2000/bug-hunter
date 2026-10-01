@@ -175,7 +175,8 @@ def test_cov_bugs_rate_guard_cap_eviction_and_expiry(client):
         buckets, lock, user_id=1, max_req=5, window=60,
         detail="x", cap=1,
     )
-    assert 1 in buckets and len(buckets) == 1
+    assert 1 in buckets
+    assert len(buckets) == 1
     # At cap: user 1 is evicted when user 2 is inserted.
     bugs._check_user_rate(
         buckets, lock, user_id=2, max_req=5, window=60,
@@ -346,13 +347,24 @@ def test_cov_bugs_status_transitions_per_item_type(admin_client):
     req = _make_item(admin_client, p["id"], item_type="Requirement")
 
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Resolved"})
-    assert r.status_code == 200 and r.json()["status"] == "Resolved"
+    assert r.status_code == 200
+    assert r.json()["status"] == "Resolved"
     r = admin_client.put(f"/api/bugs/{task['id']}", json={"status": "Done"})
-    assert r.status_code == 200 and r.json()["status"] == "Done"
+    assert r.status_code == 200
+    assert r.json()["status"] == "Done"
     r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "Approved"})
-    assert r.status_code == 200 and r.json()["status"] == "Approved"
+    assert r.status_code == 200
+    assert r.json()["status"] == "Approved"
 
-    # A status from the wrong type is rejected (Task can't be "Resolved").
+    # Universal status vocabulary: every configured status is valid for every
+    # item type, so Task may also carry "Resolved" (and Bug may reach "Done").
     r = admin_client.put(f"/api/bugs/{task['id']}", json={"status": "Resolved"})
-    assert r.status_code == 400, r.text
-    assert "not valid for task" in r.json()["detail"].lower()
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "Resolved"
+
+    # A genuinely unknown status is rejected by schema validation (422).
+    r = admin_client.put(
+        f"/api/bugs/{task['id']}", json={"status": "Bogus Status"},
+    )
+    assert r.status_code == 422, r.text
+    assert "invalid status" in str(r.json()["detail"]).lower()

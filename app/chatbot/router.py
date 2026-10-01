@@ -5,15 +5,15 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import timedelta
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from datetime import timedelta
-
+from app.api_docs import XLSX_FILE_200
 from app.auth import get_current_user, require_admin
 from app.config import get_settings
 from app.database import get_db
@@ -254,8 +254,11 @@ async def ingest_document(
 
 @router.get(
     "/download/{token}",
+    response_class=Response,
     responses={
+        **XLSX_FILE_200,
         404: {"description": "Download link has expired or is no longer valid."},
+        429: {"description": "Rate limit exceeded — too many requests."},
     },
 )
 def download_staged(

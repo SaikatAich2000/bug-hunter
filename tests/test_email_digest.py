@@ -26,6 +26,7 @@ def _session():
 
 def _user_id(db, email: str) -> int:
     from sqlalchemy import select
+
     from app.models import User
     return db.scalar(select(User).where(User.email == email)).id
 
@@ -65,8 +66,8 @@ def test_one_grouped_email_per_user_then_idempotent(admin_client, monkeypatch):
     uid2 = _mk_user(admin_client, "Dev Two", "dev2@test.local")
 
     db = _session()
-    from app.models import _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import _utcnow
     admin_id = _user_id(db, BOOTSTRAP_EMAIL)
     _add_notif(db, admin_id, "assigned", "Assigned to Bug #1", body="x assigned you")
     _add_notif(db, admin_id, "comment", "New comment on Bug #1", body="x commented")
@@ -94,8 +95,8 @@ def test_one_grouped_email_per_user_then_idempotent(admin_client, monkeypatch):
 def test_lookback_window_excludes_old_operations(admin_client, monkeypatch):
     sent = _capture_deliver(monkeypatch)
     db = _session()
-    from app.models import _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import _utcnow
     admin_id = _user_id(db, BOOTSTRAP_EMAIL)
     _add_notif(db, admin_id, "updated", "recent op", age_hours=1)
     _add_notif(db, admin_id, "updated", "ancient op", age_hours=48)
@@ -114,8 +115,8 @@ def test_inactive_user_is_skipped_unstamped(admin_client, monkeypatch):
     uid = _mk_user(admin_client, "Gone Dev", "gone@test.local")
 
     db = _session()
-    from app.models import User, _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import User, _utcnow
     # Deactivated accounts must not receive a digest.
     user = db.get(User, uid)
     user.is_active = False
@@ -139,14 +140,15 @@ def test_failed_send_releases_rows_for_retry(admin_client, monkeypatch):
     monkeypatch.setattr("app.email_service.deliver", lambda s, t, b: False)
 
     db = _session()
-    from app.models import _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import _utcnow
     admin_id = _user_id(db, BOOTSTRAP_EMAIL)
     row = _add_notif(db, admin_id, "updated", "smtp was down for this one")
     db.commit()
 
     stats = run_digest(db, now=_utcnow())
-    assert stats["emails_sent"] == 1 and stats["failed"] == 1
+    assert stats["emails_sent"] == 1
+    assert stats["failed"] == 1
     db.refresh(row)
     assert row.emailed_at is None  # released, not lost
 
@@ -157,8 +159,10 @@ def test_failed_send_releases_rows_for_retry(admin_client, monkeypatch):
         lambda s, t, b: (sent.append((s, t, b)), True)[1],
     )
     stats2 = run_digest(db, now=_utcnow())
-    assert stats2["emails_sent"] == 1 and stats2["failed"] == 0
-    assert len(sent) == 1 and "smtp was down for this one" in sent[0][2]
+    assert stats2["emails_sent"] == 1
+    assert stats2["failed"] == 0
+    assert len(sent) == 1
+    assert "smtp was down for this one" in sent[0][2]
     db.refresh(row)
     assert row.emailed_at is not None
     db.close()
@@ -167,15 +171,16 @@ def test_failed_send_releases_rows_for_retry(admin_client, monkeypatch):
 def test_disabled_backend_keeps_rows_stamped(admin_client):
     """EMAIL_BACKEND=disabled is an operator choice, not a failure: rows stay stamped, never replayed."""
     db = _session()
-    from app.models import _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import _utcnow
     admin_id = _user_id(db, BOOTSTRAP_EMAIL)
     row = _add_notif(db, admin_id, "updated", "backend is off")
     db.commit()
 
     # conftest pins EMAIL_BACKEND=disabled; use the real deliver() here.
     stats = run_digest(db, now=_utcnow())
-    assert stats["emails_sent"] == 1 and stats["failed"] == 0
+    assert stats["emails_sent"] == 1
+    assert stats["failed"] == 0
     db.refresh(row)
     assert row.emailed_at is not None
     db.close()
@@ -239,8 +244,8 @@ def test_immediate_era_operations_are_never_later_digested(admin_client, monkeyp
     """Immediate-era operations are born already-emailed, so enabling the digest never re-sends them."""
     _enable_digest(monkeypatch, on=False)  # immediate mode when the op happens
     from app import notification_service
-    from app.models import _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import _utcnow
 
     db = _session()
     admin_id = _user_id(db, BOOTSTRAP_EMAIL)
@@ -261,8 +266,8 @@ def test_digest_era_operations_are_picked_up(admin_client, monkeypatch):
     """Digest-era operations keep emailed_at NULL so the daily job picks them up."""
     _enable_digest(monkeypatch, on=True)
     from app import notification_service
-    from app.models import _utcnow
     from app.jobs.email_digest import run_digest
+    from app.models import _utcnow
 
     db = _session()
     admin_id = _user_id(db, BOOTSTRAP_EMAIL)

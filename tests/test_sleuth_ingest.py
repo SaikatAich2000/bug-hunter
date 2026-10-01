@@ -281,7 +281,8 @@ def test_parser_json_scalar_falls_through(admin_client):
 def test_parser_invalid_json_falls_through_to_lines(admin_client):
     from app.chatbot import ingest
     specs = ingest.parse_document("x.txt", b"{not valid json but a sentence")
-    assert specs and specs[0]["title"].startswith("{not valid")
+    assert specs
+    assert specs[0]["title"].startswith("{not valid")
 
 
 def test_parser_csv_single_column_no_header(admin_client):
@@ -349,7 +350,8 @@ def test_parser_skips_short_titles(admin_client):
 def test_parser_xlsx_bad_bytes_falls_through(admin_client):
     from app.chatbot import ingest
     specs = ingest.parse_document("fake.xlsx", b"this is not really a workbook file")
-    assert specs and "not really a workbook" in specs[0]["title"]
+    assert specs
+    assert "not really a workbook" in specs[0]["title"]
 
 
 def test_parser_xlsx_single_column_list(admin_client):
@@ -423,15 +425,15 @@ def test_create_from_specs_no_project_raises(admin_client):
 
 
 def test_ai_extract_returns_none_when_unavailable(admin_client, monkeypatch):
-    from app.chatbot import ingest
     import app.chatbot.cloud_llm as cloud
+    from app.chatbot import ingest
     monkeypatch.setattr(cloud, "is_available", lambda: False)
     assert ingest.ai_extract_specs("some text") is None
 
 
 def test_ai_extract_returns_none_on_missing_bugs_key(admin_client, monkeypatch):
-    from app.chatbot import ingest
     import app.chatbot.cloud_llm as cloud
+    from app.chatbot import ingest
     monkeypatch.setattr(cloud, "is_available", lambda: True)
     monkeypatch.setattr(cloud, "complete_json", lambda system, user: {"note": "no bugs"})
     assert ingest.ai_extract_specs("text") is None
@@ -439,9 +441,20 @@ def test_ai_extract_returns_none_on_missing_bugs_key(admin_client, monkeypatch):
     assert ingest.ai_extract_specs("text") is None
 
 
-def test_ai_extract_swallows_errors(admin_client, monkeypatch):
+def test_extract_specs_skips_ai_when_document_text_is_blank(admin_client, monkeypatch):
+    # A blank/whitespace-only document has nothing for the AI reader to read;
+    # extract_specs must go straight to the deterministic parser fallback.
     from app.chatbot import ingest
+    called = []
+    monkeypatch.setattr(ingest, "ai_extract_specs", lambda text: called.append(text) or None)
+    specs, method = ingest.extract_specs("empty.txt", b"   \n\t  ")
+    assert method == "parser"
+    assert called == []
+
+
+def test_ai_extract_swallows_errors(admin_client, monkeypatch):
     import app.chatbot.cloud_llm as cloud
+    from app.chatbot import ingest
     monkeypatch.setattr(cloud, "is_available", lambda: True)
 
     def _boom(system, user):

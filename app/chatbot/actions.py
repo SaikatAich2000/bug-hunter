@@ -15,18 +15,20 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import notification_service
 from app.auth import (
-    can_manage_projects, can_edit_bug, ROLE_ADMIN,
+    ROLE_ADMIN,
+    can_edit_bug,
+    can_manage_projects,
 )
+from app.chatbot.executor import Block, Response
 from app.models import Activity, Bug, Comment, Project, User
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
     ALLOWED_PRIORITIES,
     normalize_choice,
+    rich_text_to_plain,
     sanitize_html,
     statuses_for_type,
 )
-
-from app.chatbot.executor import Block, Response
 
 # Fallback label when an assign/unassign plan carries ids but no display names.
 _UNKNOWN_USERS = "user(s)"
@@ -360,6 +362,11 @@ def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
         )
     setattr(bug, field_name, new)
     bug.version = (bug.version or 1) + 1
+    if field_name == "status":
+        # Same sprint-history / resolved_at bookkeeping as the REST paths.
+        from app.agile.workflow import record_status_change
+
+        record_status_change(db, bug, actor, old)
     # REST audit verb/format so resolution reports pick up chat-driven changes.
     _audit(db, bug.id, actor, f"{field_name}_changed",
            f"#{bug.id} '{bug.title}' — {field_name}: {old!r} -> {new!r}")
@@ -449,14 +456,16 @@ def _apply_create_bug(db: Session, plan: ActionPlan, actor: User) -> Response:
             return _error_response(terr)
     bug = Bug(
         title=title,
-        # Descriptions render as HTML; sanitize like the REST BugCreate validator.
-        description=sanitize_html((plan.new_description or "").strip()),
+        # Plain-text description, same as the REST BugCreate validator.
+        description=rich_text_to_plain(sanitize_html((plan.new_description or "").strip())),
         status="New",
         priority=priority,
         environment="DEV",
         project_id=project_id,
         reporter_id=actor.id,
     )
+    # Ranked at the bottom of the project's backlog at flush, like a
+    # REST-created item (app/agile/integrity.py).
     db.add(bug)
     db.flush()
     if assignees:

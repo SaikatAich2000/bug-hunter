@@ -77,9 +77,12 @@ def test_comments_list_endpoint_capped(admin_client, monkeypatch):
 # Console email: body suppressed at INFO (live token leak); CRLF stripped from headers.
 def test_console_email_suppresses_body_at_info(caplog):
     from email.message import EmailMessage
+
     from app import email_service
     msg = EmailMessage()
-    msg["From"] = "a@b.c"; msg["To"] = "x@y.z"; msg["Subject"] = "Reset link"
+    msg["From"] = "a@b.c"
+    msg["To"] = "x@y.z"
+    msg["Subject"] = "Reset link"
     msg.set_content("http://app/reset?token=SUPERSECRET")
     with caplog.at_level(logging.INFO, logger=email_service.logger.name):
         email_service._send_console(msg)
@@ -89,9 +92,12 @@ def test_console_email_suppresses_body_at_info(caplog):
 
 def test_console_email_logs_body_only_at_debug(caplog):
     from email.message import EmailMessage
+
     from app import email_service
     msg = EmailMessage()
-    msg["From"] = "a@b.c"; msg["To"] = "x@y.z"; msg["Subject"] = "Hi"
+    msg["From"] = "a@b.c"
+    msg["To"] = "x@y.z"
+    msg["Subject"] = "Hi"
     msg.set_content("BODYTOKEN123")
     with caplog.at_level(logging.DEBUG, logger=email_service.logger.name):
         email_service._send_console(msg)
@@ -103,7 +109,8 @@ def test_email_header_safe_strips_crlf():
     from app.email_service import _build, _header_safe
     assert "\n" not in _header_safe("Subject\r\nBcc: evil@x.com")
     msg = _build("S\r\nInjected: y", ["ok\n@x.com"], "body", get_settings())
-    assert "\n" not in str(msg["Subject"]) and "\r" not in str(msg["Subject"])
+    assert "\n" not in str(msg["Subject"])
+    assert "\r" not in str(msg["Subject"])
 
 
 # Project PATCH is a true partial update; omitted fields must not be cleared.
@@ -116,12 +123,28 @@ def test_project_partial_update_keeps_unsent_fields(admin_client):
     assert r2.json()["description"] == "keep me"   # not reset to ""
 
 
+# Re-sending the same values is a no-op: no audit row, no field mutation.
+def test_project_update_with_no_actual_changes_skips_audit(admin_client):
+    r = admin_client.post("/api/projects", json={
+        "name": "NoOpProject", "description": "same", "color": "#111111"})
+    pid = r.json()["id"]
+    before = admin_client.get("/api/audit").json()
+    r2 = admin_client.put(f"/api/projects/{pid}", json={
+        "name": "NoOpProject", "description": "same", "color": "#111111"})
+    assert r2.status_code == 200, r2.text
+    after = admin_client.get("/api/audit").json()
+    assert len(after) == len(before), "identical PUT must not write an audit row"
+
+
 # Oversized images must be returned unchanged without being decoded.
 def test_image_oversized_skipped_before_decode(monkeypatch):
     from PIL import Image
+
     from app import image_strip
     img = Image.new("RGB", (8, 8), (0, 0, 255))
-    buf = io.BytesIO(); img.save(buf, format="PNG"); data = buf.getvalue()
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    data = buf.getvalue()
     monkeypatch.setattr(image_strip, "_MAX_IMAGE_PIXELS", 10)   # force the oversized path
     out = image_strip.strip_image_metadata(data, "image/png")
     assert out == data   # returned as-is, not decoded
@@ -133,6 +156,7 @@ def test_unhandled_exception_clean_500_with_headers(client):
     from sqlalchemy import text as sqltext
     from sqlalchemy.orm import Session
     from starlette.testclient import TestClient
+
     from app.database import get_db
     from app.main import app
 
@@ -161,25 +185,46 @@ def test_docs_open_in_dev(client):
     assert client.get("/openapi.json").status_code == 200
 
 
-def test_docs_disabled_when_cookie_secure(monkeypatch):
-    monkeypatch.setenv("COOKIE_SECURE", "true")
-    monkeypatch.setenv("SESSION_SECRET", "x" * 40)
-    monkeypatch.setenv("ENABLE_API_DOCS", "false")
+def _reload_main(monkeypatch, **env):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     for mod in [m for m in sys.modules if m == "app" or m.startswith("app.")]:
         del sys.modules[mod]
     from app.config import get_settings
     get_settings.cache_clear()  # type: ignore[attr-defined]
     import app.main as main_mod
+    return main_mod, {getattr(route, "path", None) for route in main_mod.app.routes}
+
+
+# Production (COOKIE_SECURE) hides the endpoint map unless explicitly opted in.
+def test_docs_disabled_when_cookie_secure(monkeypatch):
+    main_mod, paths = _reload_main(
+        monkeypatch, COOKIE_SECURE="true", SESSION_SECRET="x" * 40, ENABLE_API_DOCS="false",
+    )
     assert main_mod.app.docs_url is None
     assert main_mod.app.openapi_url is None
+    assert "/docs" not in paths
+    assert "/redoc" not in paths
+
+
+# ENABLE_API_DOCS=true keeps the self-hosted (CSP-safe) docs in production.
+def test_docs_opt_in_in_production(monkeypatch):
+    main_mod, paths = _reload_main(
+        monkeypatch, COOKIE_SECURE="true", SESSION_SECRET="x" * 40, ENABLE_API_DOCS="true",
+    )
+    assert main_mod.app.docs_url is None  # FastAPI's CDN/inline page stays off
+    assert main_mod.app.openapi_url == "/openapi.json"
+    assert "/docs" in paths
+    assert "/redoc" in paths
 
 
 # DB down at boot degrades gracefully; /health reflects the degraded state.
 def test_safe_init_db_degrades_on_failure(client):
-    import app.main as main_mod
     from sqlalchemy.exc import SQLAlchemyError
 
-    def boom():
+    import app.main as main_mod
+
+    def boom(**_):
         raise SQLAlchemyError("init failed")
 
     orig = main_mod.init_db
@@ -191,10 +236,11 @@ def test_safe_init_db_degrades_on_failure(client):
 
 
 def test_check_db_health_false_on_error(client, monkeypatch):
-    import app.main as main_mod
     from sqlalchemy.exc import SQLAlchemyError
 
-    def boom():
+    import app.main as main_mod
+
+    def boom(**_):
         raise SQLAlchemyError("down")
 
     monkeypatch.setattr(main_mod, "SessionLocal", boom)
@@ -221,9 +267,10 @@ def test_extract_json_scans_past_leading_prose_brace():
 # Sleuth writes validate like REST; drive execute_plan to cover _apply_set_field.
 def test_sleuth_set_invalid_value_rejected_via_execute(admin_client):
     from sqlalchemy import select
+
+    from app.chatbot.actions import ActionPlan, execute_plan
     from app.database import SessionLocal
     from app.models import User
-    from app.chatbot.actions import ActionPlan, execute_plan
     p = _make_project(admin_client)
     item = _make_item(admin_client, p["id"])
     db = SessionLocal()
@@ -240,9 +287,9 @@ def test_sleuth_set_invalid_value_rejected_via_execute(admin_client):
 
 # _validate_field_value covers every enum and date field.
 def test_sleuth_field_validation(admin_client):
+    from app.chatbot.actions import _validate_field_value
     from app.database import SessionLocal
     from app.models import Bug
-    from app.chatbot.actions import _validate_field_value
     p = _make_project(admin_client)
     item = _make_item(admin_client, p["id"])
     db = SessionLocal()
@@ -295,13 +342,19 @@ def test_redaction_covers_more_secret_shapes():
 # xlsx row count is bounded as a decompression-bomb guard.
 def test_xlsx_rows_capped(monkeypatch):
     import openpyxl
+
     from app.chatbot import ingest
-    wb = openpyxl.Workbook(); ws = wb.active
-    ws.append(["row one"]); ws.append(["row two"]); ws.append(["row three"])
-    buf = io.BytesIO(); wb.save(buf)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["row one"])
+    ws.append(["row two"])
+    ws.append(["row three"])
+    buf = io.BytesIO()
+    wb.save(buf)
     monkeypatch.setattr(ingest, "_MAX_XLSX_ROWS", 1)
     rows = ingest._xlsx_rows(buf.getvalue())
-    assert rows is not None and len(rows) == 1
+    assert rows is not None
+    assert len(rows) == 1
 
 
 # Over-range numeric q must fall back to a text search rather than raising.
@@ -347,7 +400,8 @@ def test_update_stale_version_409_and_bump(admin_client):
     # A matching version succeeds and bumps the counter.
     r = admin_client.put(f"/api/bugs/{item['id']}", json={
         "title": "first edit here", "expected_version": 1})
-    assert r.status_code == 200 and r.json()["version"] == 2
+    assert r.status_code == 200
+    assert r.json()["version"] == 2
     # Re-using the now-stale version is rejected.
     r2 = admin_client.put(f"/api/bugs/{item['id']}", json={
         "title": "second edit here", "expected_version": 1})

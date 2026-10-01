@@ -52,7 +52,7 @@ def test_password_reset_delivery_failure_logs_error(monkeypatch, caplog):
 
     monkeypatch.setattr(es, "deliver", lambda subject, to, body: False)
     monkeypatch.setattr(es, "get_settings",
-                        lambda: types.SimpleNamespace(EMAIL_BACKEND="smtp"))
+                        lambda: types.SimpleNamespace(EMAIL_BACKEND="smtp", APP_NAME="Bug Hunter"))
     with caplog.at_level("ERROR"):
         es.notify_password_reset("user@bh.local", "User", "http://bh.local/reset?t=x")
     assert any("not delivered" in r.message.lower() for r in caplog.records)

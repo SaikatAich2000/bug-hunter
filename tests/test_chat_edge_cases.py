@@ -9,9 +9,9 @@ import pytest
 # Seeding helpers for actions tests, run against the live re-imported modules.
 def _seed_basic():
     """Create alice (manager), bob (user), a project, and a bug (reporter alice, assignee bob); returns ids."""
-    from app.database import SessionLocal
     from app import models
     from app.auth import hash_password
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -51,9 +51,9 @@ def _seed_basic():
 def test_cov_create_bug_inactive_account(client):
     """actions.py:144+332 - inactive actor rejected by _check_can_create_bug; _apply_create_bug surfaces the error."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -88,9 +88,9 @@ def test_cov_success_response_without_bug_id(client):
 def test_cov_assign_bug_not_found_and_perm_denied(client):
     """actions.py:228 (bug missing) + 231 (permission denied) for assign."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -130,9 +130,9 @@ def test_cov_assign_bug_not_found_and_perm_denied(client):
 def test_cov_unassign_branches(client):
     """actions.py:256 (bug missing) + 259 (perm denied) + 265 (no-op)."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -193,9 +193,9 @@ def test_cov_unassign_branches(client):
 def test_cov_set_field_permission_denied(client):
     """actions.py:285 — _apply_set_field permission-denied branch."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -222,9 +222,9 @@ def test_cov_set_field_permission_denied(client):
 def test_cov_add_comment_empty_and_too_long(client):
     """actions.py:309 (no body) + 314 (body > 4000 chars)."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -256,9 +256,9 @@ def test_cov_add_comment_empty_and_too_long(client):
 def test_cov_create_bug_title_validation_and_targets(client):
     """actions.py:335 (no title) + 340 (too long) + 352 (bad project) + 365-368 (assign targets on create)."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -315,9 +315,9 @@ def test_cov_create_bug_title_validation_and_targets(client):
 
 def test_cov_create_bug_no_projects_exist(client):
     """actions.py:347 - create with no project id when no projects exist errors (bugs deleted first for the FK)."""
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -340,9 +340,9 @@ def test_cov_create_bug_no_projects_exist(client):
 def test_cov_create_project_validation(client):
     """actions.py:384 (no name) + 386 (name > 120) + 392 (duplicate name)."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -383,9 +383,9 @@ def test_cov_create_project_validation(client):
 def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
     """actions.py:417 (actor mismatch) + 429/431 (env + due-date dispatch) + 438 (unknown kind) + 439-446 (rollback handler)."""
     ids = _seed_basic()
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import actions
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -447,10 +447,11 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
 def test_cov_execute_plan_rollback_itself_fails(client, monkeypatch):
     """actions.py:444-445 - rollback() raising SQLAlchemyError is swallowed; still 'Action failed'."""
     ids = _seed_basic()
-    from app.database import SessionLocal
+    from sqlalchemy.exc import SQLAlchemyError
+
     from app import models
     from app.chatbot import actions
-    from sqlalchemy.exc import SQLAlchemyError
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -487,8 +488,8 @@ def test_cov_persist_turn_disabled(client, monkeypatch):
     })
     assert res.status_code == 200
 
-    from app.database import SessionLocal
     from app import models
+    from app.database import SessionLocal
     db = SessionLocal()
     try:
         before = db.query(models.ChatMessage).count()
@@ -508,9 +509,9 @@ def test_cov_persist_turn_disabled(client, monkeypatch):
 
 def test_cov_persist_turn_cloud_engine_label(admin_client):
     """router.py:77 - assistant row tagged engine='cloud' when intent starts with 'cloud_'."""
-    from app.database import SessionLocal
     from app import models
-    from app.chatbot import router, executor
+    from app.chatbot import executor, router
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -531,9 +532,9 @@ def test_cov_persist_turn_cloud_engine_label(admin_client):
 
 def test_cov_persist_turn_swallows_exception(admin_client, monkeypatch):
     """router.py:93-95 - _persist_turn failures are caught and rolled back, never propagate."""
-    from app.database import SessionLocal
     from app import models
-    from app.chatbot import router, executor
+    from app.chatbot import executor, router
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -573,6 +574,7 @@ def test_cov_check_rate_evicts_stale_then_allows(client):
 def test_cov_ask_passes_through_httpexception(admin_client, monkeypatch):
     """router.py:171 - executor HTTPException propagates, not swallowed into a 200."""
     from fastapi import HTTPException
+
     from app.chatbot import executor
 
     def raise_http(*a, **k):

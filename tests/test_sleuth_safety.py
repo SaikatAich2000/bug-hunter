@@ -3,7 +3,9 @@ pending actions are isolated per user, memory edge cases don't crash, and the sc
 """
 from __future__ import annotations
 
-import os as _os, sys as _sys
+import os as _os
+import sys as _sys
+
 # Make the repo root importable when this file is run directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
@@ -11,9 +13,7 @@ import os
 import sys
 import tempfile
 import threading
-import time
 import traceback
-from datetime import datetime, timedelta, timezone
 
 _tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp.close()
@@ -25,21 +25,22 @@ os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin"
 os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
 os.environ["SLEUTH_CLOUD_ENABLED"] = "0"   # never call the cloud in tests
 
-from sqlalchemy import inspect, text
-
 # Force a fresh app import bound to this file's DB (a stale shared engine causes "no such table").
 import sys as _sys_purge
+
+from sqlalchemy import inspect
+
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
         del _sys_purge.modules[_m]
 
-from app.database import Base, engine, SessionLocal
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
 from app import models
 from app.auth import hash_password
-from app.chatbot import executor, actions
+from app.chatbot import actions, executor
 from app.chatbot.memory import store as memstore
-
-import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+from app.database import Base, SessionLocal, engine
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +57,6 @@ def _rebind_app_modules():
     g["executor"] = importlib.import_module("app.chatbot.executor")
     g["actions"] = importlib.import_module("app.chatbot.actions")
     g["memstore"] = importlib.import_module("app.chatbot.memory").store
-    yield
 
 
 PASSED: list[str] = []
@@ -95,7 +95,8 @@ def seed():
         db.add_all([admin, alice, bob])
         db.commit()
         proj = models.Project(name="Apollo")
-        db.add(proj); db.commit()
+        db.add(proj)
+        db.commit()
         bugs = [
             models.Bug(title="b1", description="d", status="New",
                        priority="High", environment="PROD",
@@ -375,7 +376,7 @@ def test_new_action_overrides_pending() -> None:
         admin = db.get(models.User, admin_id)
         executor.execute("close bug 1", db, admin)
         # User changes their mind before confirming.
-        executor.execute(f"set bug 1 priority to low", db, admin)
+        executor.execute("set bug 1 priority to low", db, admin)
         # The staged action should now be the priority change, not the close.
         sess = memstore.get(admin_id)
         check("override: latest pending is set_priority",
@@ -401,7 +402,7 @@ def test_concurrent_executes() -> None:
         local_db = SessionLocal()
         try:
             user = local_db.get(models.User, uid)
-            for i in range(n):
+            for _i in range(n):
                 try:
                     executor.execute("list bugs", local_db, user)
                     executor.execute("summary", local_db, user)
@@ -497,7 +498,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         FAILED.append(("HARNESS", "uncaught"))
 
-    print(f"\n=== RESULTS ===")
+    print("\n=== RESULTS ===")
     print(f"Passed: {len(PASSED)}")
     print(f"Failed: {len(FAILED)}")
     if FAILED:

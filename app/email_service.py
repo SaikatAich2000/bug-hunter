@@ -220,7 +220,7 @@ def notify_bug_created(bug: BugSnapshot, actor_user_id: int | None) -> None:
     if not to:
         return
     label = _item_label(bug)
-    subject = f"[Bug Hunter] New {label} #{bug.id}: {bug.title}"
+    subject = f"[{get_settings().APP_NAME}] New {label} #{bug.id}: {bug.title}"
     lines = [f"A new {label} has been created.", ""]
     lines += _bug_meta_lines(bug)
     if bug.description:
@@ -244,7 +244,7 @@ def notify_bug_updated(
         return
     label = _item_label(bug)
     label_cap = (bug.item_type or "Bug").capitalize()
-    subject = f"[Bug Hunter] {label_cap} #{bug.id} updated: {bug.title}"
+    subject = f"[{get_settings().APP_NAME}] {label_cap} #{bug.id} updated: {bug.title}"
     lines = [f"{actor_name} updated {label} #{bug.id}.", "", "Changes:"]
     for field, old, new in changes:
         lines.append(f"  • {field}: {old or '(empty)'} → {new or '(empty)'}")
@@ -265,7 +265,7 @@ def notify_assignment(
     for user in newly_assigned:
         if not user.email:
             continue
-        subject = f"[Bug Hunter] You've been assigned to {label} #{bug.id}: {bug.title}"
+        subject = f"[{get_settings().APP_NAME}] You've been assigned to {label} #{bug.id}: {bug.title}"
         lines = [
             f"Hi {user.name},",
             "",
@@ -291,7 +291,7 @@ def notify_comment_added(
     if not to:
         return
     label = _item_label(bug)
-    subject = f"[Bug Hunter] New comment on {label} #{bug.id}: {bug.title}"
+    subject = f"[{get_settings().APP_NAME}] New comment on {label} #{bug.id}: {bug.title}"
     lines = [
         f"{comment_author_name} commented on {label} #{bug.id}:",
         "",
@@ -357,7 +357,7 @@ def notify_event_created(
     to = _event_recipients(ev, exclude_user_id=actor_user_id)
     if not to:
         return
-    subject = f"[Bug Hunter] New event #{ev.id}: {ev.name}"
+    subject = f"[{get_settings().APP_NAME}] New event #{ev.id}: {ev.name}"
     lines = [
         f"{actor_name} created a new event you're managing.",
         "",
@@ -382,7 +382,7 @@ def notify_event_updated(
     to = _event_recipients(ev, exclude_user_id=actor_user_id)
     if not to:
         return
-    subject = f"[Bug Hunter] Event #{ev.id} updated: {ev.name}"
+    subject = f"[{get_settings().APP_NAME}] Event #{ev.id} updated: {ev.name}"
     lines = [f"{actor_name} updated event #{ev.id}.", "", "Changes:"]
     for field, old, new in changes:
         lines.append(f"  • {field}: {old or '(empty)'} → {new or '(empty)'}")
@@ -401,7 +401,7 @@ def notify_event_deleted(
     to = _event_recipients(ev, exclude_user_id=actor_user_id)
     if not to:
         return
-    subject = f"[Bug Hunter] Event #{ev.id} deleted: {ev.name}"
+    subject = f"[{get_settings().APP_NAME}] Event #{ev.id} deleted: {ev.name}"
     lines = [
         f"{actor_name} deleted event #{ev.id}: {ev.name}.",
         "",
@@ -414,11 +414,12 @@ def notify_password_reset(email: str, name: str, reset_url: str) -> None:
     """Send the user a password-reset link."""
     if not email:
         return
-    subject = "[Bug Hunter] Reset your password"
+    app_name = get_settings().APP_NAME
+    subject = f"[{app_name}] Reset your password"
     body = "\n".join([
         f"Hi {name or 'there'},",
         "",
-        "We received a request to reset your Bug Hunter password.",
+        f"We received a request to reset your {app_name} password.",
         "Click the link below to choose a new one. The link is valid for 2 hours.",
         "",
         reset_url,
@@ -426,7 +427,7 @@ def notify_password_reset(email: str, name: str, reset_url: str) -> None:
         "If you didn't request this, you can ignore this email — your password "
         "won't change unless someone uses the link.",
         "",
-        "— Bug Hunter",
+        f"— {app_name}",
     ])
     # Transactional: log a clear error on failure — the user only sees the
     # generic "if an account exists" response.

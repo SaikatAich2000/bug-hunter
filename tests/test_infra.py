@@ -18,6 +18,7 @@ def _session():
 
 def _uid(db, email: str) -> int:
     from sqlalchemy import select
+
     from app.models import User
     return db.scalar(select(User).where(User.email == email)).id
 
@@ -26,7 +27,6 @@ def _fresh_app(monkeypatch, tmp_path, **env):
     """Reimport app.main hermetically with env overrides, for module-import-time branches."""
     db_file = tmp_path / "fresh.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
-    monkeypatch.setenv("API_KEY", "")
     monkeypatch.setenv("EMAIL_BACKEND", "disabled")
     monkeypatch.setenv("SESSION_SECRET", "test_secret_for_tests_only")
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
@@ -34,8 +34,15 @@ def _fresh_app(monkeypatch, tmp_path, **env):
     monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "Test Admin")
     monkeypatch.setenv("PASSWORD_BREACH_CHECK_ENABLED", "false")
     monkeypatch.setenv("WEB_PUSH_ENABLED", "false")
+    # Production-mode helpers (COOKIE_SECURE=true) must present the https base
+    # URL the fail-closed lifespan guard requires; tests may override it.
+    monkeypatch.setenv("APP_BASE_URL", "https://test.local")
     for k, v in env.items():
         monkeypatch.setenv(k, v)
+
+    old_database = sys.modules.get("app.database")
+    if old_database is not None:
+        old_database.engine.dispose()
 
     for mod in list(sys.modules):
         if mod == "app" or mod.startswith("app."):
@@ -51,8 +58,9 @@ def _fresh_app(monkeypatch, tmp_path, **env):
 # app/main.py — asset version hashing
 def test_cov_main_asset_version_missing_dir_is_dev():
     # Non-existent static dir returns the sentinel "dev".
-    from app.main import _compute_asset_version
     from pathlib import Path
+
+    from app.main import _compute_asset_version
     assert _compute_asset_version(Path("c:/no/such/static/dir/xyz")) == "dev"
 
 
@@ -61,7 +69,8 @@ def test_cov_main_asset_version_hashes_files(tmp_path):
     (tmp_path / ".hidden").write_text("ignored", encoding="utf-8")
     from app.main import _compute_asset_version
     v = _compute_asset_version(tmp_path)
-    assert isinstance(v, str) and len(v) == 12
+    assert isinstance(v, str)
+    assert len(v) == 12
 
 
 def test_cov_main_asset_version_skips_unreadable_dir_entry(tmp_path, monkeypatch):
@@ -81,7 +90,8 @@ def test_cov_main_asset_version_skips_unreadable_dir_entry(tmp_path, monkeypatch
     monkeypatch.setattr(Path, "read_bytes", flaky_read)
     from app.main import _compute_asset_version
     v = _compute_asset_version(tmp_path)
-    assert isinstance(v, str) and len(v) == 12
+    assert isinstance(v, str)
+    assert len(v) == 12
 
 
 # app/main.py — health / meta endpoints
@@ -90,7 +100,8 @@ def test_cov_main_health(client):
     assert r.status_code == 200
     j = r.json()
     assert j["status"] == "ok"
-    assert "version" in j and "asset_version" in j
+    assert "version" in j
+    assert "asset_version" in j
 
 
 def test_cov_main_meta(client):
@@ -142,6 +153,61 @@ def test_cov_main_login_redirects_to_home_when_authed(admin_client):
     r = admin_client.get("/login.html", follow_redirects=False)
     assert r.status_code == 302
     assert r.headers["location"] == "/"
+
+
+# app/main.py — _auto_login (AUTO_LOGIN_ENABLED convenience switch)
+def test_cov_main_home_auto_login_when_enabled(client, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main.settings, "AUTO_LOGIN_ENABLED", True)
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 200
+    assert "set-cookie" in {k.lower() for k in r.headers.keys()}
+    db = _session()
+    try:
+        from sqlalchemy import select
+
+        from app.models import Activity
+        assert db.scalar(
+            select(Activity).where(Activity.action == "login")
+        ) is not None
+    finally:
+        db.close()
+
+
+def test_cov_main_login_page_auto_login_when_enabled(client, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main.settings, "AUTO_LOGIN_ENABLED", True)
+    r = client.get("/login.html", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/"
+    assert "set-cookie" in {k.lower() for k in r.headers.keys()}
+
+
+def test_cov_main_auto_login_noop_when_bootstrap_missing(client, monkeypatch):
+    # Flag on but the configured account doesn't exist: falls back to the normal flow.
+    import app.main as main
+    monkeypatch.setattr(main.settings, "AUTO_LOGIN_ENABLED", True)
+    monkeypatch.setattr(main.settings, "BOOTSTRAP_ADMIN_EMAIL", "nobody@test.local")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login.html"
+
+
+def test_cov_main_auto_login_noop_when_bootstrap_inactive(client, monkeypatch):
+    from sqlalchemy import update
+
+    import app.main as main
+    from app.models import User
+    db = _session()
+    try:
+        db.execute(update(User).where(User.email == "admin@test.local").values(is_active=False))
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr(main.settings, "AUTO_LOGIN_ENABLED", True)
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login.html"
 
 
 def test_cov_main_html_cache_reuse(client):
@@ -226,8 +292,9 @@ def test_cov_main_has_valid_session_naive_expiry_is_valid(admin_client, monkeypa
 
 def test_cov_main_has_valid_session_db_error_returns_false(client, monkeypatch):
     # SQLAlchemyError during lookup is swallowed → False, not a 500.
-    import app.main as main
     from sqlalchemy.exc import SQLAlchemyError
+
+    import app.main as main
 
     class _DB:
         def scalar(self, *_a, **_k):
@@ -285,7 +352,8 @@ def test_cov_main_rate_limit_trusts_xff_when_configured(monkeypatch, tmp_path):
                     headers={"X-Forwarded-For": "10.0.0.1, 192.168.0.1"})
         r2 = c.post("/api/auth/forgot-password", json={"email": "a@b.local"},
                     headers={"X-Forwarded-For": "10.0.0.2"})
-        assert r1.status_code != 429 and r2.status_code != 429
+        assert r1.status_code != 429
+        assert r2.status_code != 429
 
 
 def test_cov_main_csrf_blocks_foreign_origin(admin_client):
@@ -453,8 +521,9 @@ def test_cov_scheduler_loop_invokes_tick_once(monkeypatch):
     monkeypatch.setattr(scheduler.asyncio, "sleep", fake_sleep)
 
     c = scheduler.CronSchedule("* * * * *")
+    coro = scheduler._loop(c, timezone.utc)
     with pytest.raises(_StopLoop):
-        asyncio.run(scheduler._loop(c, timezone.utc))
+        asyncio.run(coro)
     assert ticked["n"] == 1
 
 
@@ -560,6 +629,7 @@ def test_cov_push_register_new_then_refresh_and_cross_user_conflict(admin_client
     # then verify that a different user claiming the same token raises
     # PushTokenConflict (hijack defense).
     import pytest
+
     from app import push_service
     from app.push_service import PushTokenConflict
     db = _session()
@@ -567,11 +637,13 @@ def test_cov_push_register_new_then_refresh_and_cross_user_conflict(admin_client
     sub = push_service.register(db, user_id=admin_id, token="reg-tok",
                                 platform="web", user_agent="UA")
     db.commit()
-    assert sub.user_id == admin_id and sub.platform == "web"
+    assert sub.user_id == admin_id
+    assert sub.platform == "web"
     sub_again = push_service.register(db, user_id=admin_id, token="reg-tok",
                                       platform="android", user_agent="UA2")
     db.commit()
-    assert sub_again.user_id == admin_id and sub_again.platform == "android"
+    assert sub_again.user_id == admin_id
+    assert sub_again.platform == "android"
 
     db.close()
     r = admin_client.post("/api/users", json={
@@ -586,6 +658,7 @@ def test_cov_push_register_new_then_refresh_and_cross_user_conflict(admin_client
         push_service.register(db, user_id=other_id, token="reg-tok")
     db.rollback()
     from sqlalchemy import func, select
+
     from app.models import PushSubscription
     row = db.scalar(select(PushSubscription).where(PushSubscription.token == "reg-tok"))
     n = db.scalar(select(func.count()).select_from(PushSubscription)
@@ -658,6 +731,7 @@ def test_cov_push_push_to_users_prunes_dead_tokens(admin_client, monkeypatch):
     assert delivered == 1
 
     from sqlalchemy import select
+
     from app.models import PushSubscription
     db = _session()
     assert db.scalar(select(PushSubscription).where(
@@ -671,6 +745,7 @@ def test_cov_push_push_to_users_swallows_transport_exception(admin_client, monke
     # A transport exception is caught and rolled back; push must never break the
     # request flow.
     import logging
+
     from app.config import get_settings
     monkeypatch.setattr(get_settings(), "WEB_PUSH_ENABLED", True)
 
@@ -711,18 +786,24 @@ def test_cov_database_get_db_yields_and_closes(client, monkeypatch):
             return getattr(self._s, name)
 
     monkeypatch.setattr(database, "SessionLocal", _Tracked)
-    gen = database.get_db()
-    s = next(gen)
-    assert s is not None
-    with pytest.raises(StopIteration):
-        next(gen)
+    import asyncio
+
+    async def _drive():
+        gen = database.get_db()
+        s = await gen.__anext__()
+        assert s is not None
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+    asyncio.run(_drive())
     assert closed["v"] is True
 
 
 def test_cov_database_column_names_missing_table(client):
     # _column_names on a non-existent table returns an empty set.
-    import app.database as database
     from sqlalchemy import inspect
+
+    import app.database as database
     insp = inspect(database.engine)
     assert database._column_names(insp, "no_such_table_xyz") == set()
 
@@ -755,10 +836,11 @@ def test_cov_notification_emailed_at_branch(admin_client, monkeypatch):
     # When the digest is on, new notifications are born un-emailed (emailed_at
     # is None) so the digest job can pick them up. When the digest is off, rows
     # are stamped immediately so they're never re-sent.
+    from sqlalchemy import select
+
     from app import notification_service
     from app.config import get_settings
     from app.models import Notification
-    from sqlalchemy import select
 
     db = _session()
     admin_id = _uid(db, "admin@test.local")
@@ -786,7 +868,8 @@ from types import SimpleNamespace  # noqa: E402  (test-local helper imports)
 def _email_cfg(backend="smtp", **over):
     cfg = SimpleNamespace(
         EMAIL_BACKEND=backend,
-        EMAIL_FROM="Bug Hunter <bot@bh.local>",
+        EMAIL_FROM="Test Tracker <bot@bh.local>",
+        APP_NAME="Test Tracker",
         APP_BASE_URL="http://bh.local:8765",
         SMTP_HOST="mail.bh.local",
         SMTP_PORT=587,
@@ -874,6 +957,7 @@ def test_cov_email_smtp_ssl_no_auth(monkeypatch):
 
 def test_cov_email_smtp_missing_host_dropped(monkeypatch, caplog):
     import logging
+
     from app import email_service as es
     monkeypatch.setattr(es, "get_settings", lambda: _email_cfg(SMTP_HOST=""))
     with caplog.at_level(logging.WARNING, logger="bug_hunter.email"):
@@ -884,6 +968,7 @@ def test_cov_email_smtp_missing_host_dropped(monkeypatch, caplog):
 def test_cov_email_smtp_swallows_transport_error(monkeypatch, caplog):
     import logging
     import smtplib
+
     from app import email_service as es
 
     def boom(*a, **k):
@@ -1069,7 +1154,7 @@ def test_cov_digest_main_returns_one_on_failure(admin_client, monkeypatch):
 
 def test_cov_digest_render_links_and_other_category(admin_client):
     # Bug and event deep-links must appear, and an unknown kind falls into "Other".
-    from app.jobs.email_digest import render_digest, _link
+    from app.jobs.email_digest import _link, render_digest
     from app.models import Notification, User
 
     db = _session()
@@ -1135,8 +1220,9 @@ async def _passthrough(_request):
 
 
 def test_cov_main_security_headers_strip_server(client):
-    import app.main as main
     from starlette.responses import Response
+
+    import app.main as main
 
     async def call_next_with_server(_request):
         resp = Response("ok")
@@ -1163,8 +1249,9 @@ def test_cov_main_client_ip_trust_proxy_without_xff(monkeypatch):
 def test_cov_main_rate_limit_evicts_oldest_bucket_at_cap(monkeypatch):
     # When the bucket dict is at capacity, the oldest entry is evicted before
     # inserting the new one so the dict stays bounded.
-    import app.main as main
     import time as _time
+
+    import app.main as main
 
     monkeypatch.setattr(main, "_RATE_BUCKETS_MAX", 1)
     main._rate_buckets.clear()
@@ -1182,8 +1269,9 @@ def test_cov_main_rate_limit_evicts_oldest_bucket_at_cap(monkeypatch):
 def test_cov_main_rate_limit_popleft_expired(monkeypatch):
     # A stale timestamp in a reused bucket is popped by the eviction loop so
     # only the current request remains.
-    import app.main as main
     import time as _time
+
+    import app.main as main
 
     main._rate_buckets.clear()
     stale = _time.monotonic() - 10_000
@@ -1254,6 +1342,7 @@ def test_cov_main_bootstrap_idempotent_when_users_exist(admin_client):
     import app.main as main
     main._bootstrap()
     from sqlalchemy import func, select
+
     from app.models import User
     db = _session()
     n = db.scalar(select(func.count()).select_from(User))
@@ -1262,16 +1351,20 @@ def test_cov_main_bootstrap_idempotent_when_users_exist(admin_client):
 
 
 def test_cov_main_bootstrap_refuses_default_admin_in_prod(monkeypatch, tmp_path):
-    # COOKIE_SECURE + the built-in default password on an empty DB → _bootstrap
-    # raises. Called directly to avoid also triggering the lifespan secret check.
+    # An empty production database must refuse bootstrap without explicit admin
+    # credentials. Called directly to avoid also triggering the lifespan check.
     main = _fresh_app(
         monkeypatch, tmp_path,
         COOKIE_SECURE="true",
-        BOOTSTRAP_ADMIN_PASSWORD="ChangeMe123!",
+        BOOTSTRAP_ADMIN_EMAIL="",
+        BOOTSTRAP_ADMIN_PASSWORD="",
         SESSION_SECRET="x" * 40,
     )
+    settings = main.get_settings()
+    settings.BOOTSTRAP_ADMIN_EMAIL = ""
+    settings.BOOTSTRAP_ADMIN_PASSWORD = ""
     main.init_db()  # create the (empty) schema
-    with pytest.raises(RuntimeError, match="default admin"):
+    with pytest.raises(RuntimeError, match="Bootstrap admin not configured"):
         main._bootstrap()
 
 
@@ -1353,8 +1446,9 @@ def test_cov_database_build_engine_postgres_branch(monkeypatch):
 def test_cov_database_add_missing_columns_alters_legacy_db(monkeypatch, tmp_path):
     # Build a minimal SQLite DB that lacks the new columns, then verify
     # _add_missing_columns adds them via ALTER TABLE.
-    import app.database as database
     from sqlalchemy import create_engine, inspect, text
+
+    import app.database as database
 
     legacy = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}", future=True)
     with legacy.begin() as conn:
@@ -1370,7 +1464,8 @@ def test_cov_database_add_missing_columns_alters_legacy_db(monkeypatch, tmp_path
     insp = inspect(legacy)
     bug_cols = {c["name"] for c in insp.get_columns("bugs")}
     notif_cols = {c["name"] for c in insp.get_columns("notifications")}
-    assert "item_type" in bug_cols and "event_id" in bug_cols
+    assert "item_type" in bug_cols
+    assert "event_id" in bug_cols
     assert "emailed_at" in notif_cols
     legacy.dispose()
 
@@ -1380,8 +1475,9 @@ def test_cov_database_add_missing_indexes_handles_introspection_error(monkeypatc
     # the helper must complete without propagating. Patched on the sqlalchemy
     # package because _add_missing_indexes imports inspect locally.
     import sqlalchemy
-    import app.database as database
     from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
 
     class _BoomInspector:
         def get_indexes(self, _table):

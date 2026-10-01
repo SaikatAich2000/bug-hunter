@@ -50,19 +50,19 @@ def _read_frontend(relpath):
 
 
 def _rich_editor():
-    return _read_frontend("components/RichEditor.tsx")
+    return _read_frontend("components/RichEditor.jsx")
 
 
 def _bh_select():
-    return _read_frontend("components/BhSelect.tsx")
+    return _read_frontend("components/BhSelect.jsx")
 
 
 def _bh_date():
-    return _read_frontend("components/BhDateInput.tsx")
+    return _read_frontend("components/BhDateInput.jsx")
 
 
 def _bug_modal():
-    return _read_frontend("modals/BugModal.tsx")
+    return _read_frontend("modals/BugModal.jsx")
 
 
 def _styles_css():
@@ -232,7 +232,7 @@ class TestImageInsertionAsAttachment:
 class TestRichHtmlRoundtrip:
     """Rich formatting in descriptions/comments survives the sanitiser round-trip."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def bug(self, admin_client):
         proj = _make_project(admin_client)
         return _make_bug(admin_client, proj["id"])
@@ -245,28 +245,26 @@ class TestRichHtmlRoundtrip:
     def test_bold_italic_underline_survive(self, admin_client, bug):
         html = "<p>This is <b>bold</b>, <i>italic</i> and <u>underline</u>.</p>"
         got = self._post_description(admin_client, bug["id"], html)["description"]
-        assert "<b>bold</b>" in got
-        assert "<i>italic</i>" in got
-        assert "<u>underline</u>" in got
+        # Stored as plain text now: all words survive, formatting is gone.
+        assert got == "This is bold, italic and underline."
+        assert "<" not in got
+        assert ">" not in got
 
     def test_lists_survive(self, admin_client, bug):
         html = "<ul><li>one</li><li>two</li></ul><ol><li>a</li><li>b</li></ol>"
         got = self._post_description(admin_client, bug["id"], html)["description"]
-        assert "<ul>" in got and "<li>one</li>" in got
-        assert "<ol>" in got and "<li>a</li>" in got
+        assert got == "one\ntwo\na\nb"
 
     def test_blockquote_pre_code_survive(self, admin_client, bug):
         html = "<blockquote>quoted</blockquote><pre>code block</pre>" \
                "<p><code>inline</code></p>"
         got = self._post_description(admin_client, bug["id"], html)["description"]
-        assert "<blockquote>quoted</blockquote>" in got
-        assert "<pre>code block</pre>" in got
-        assert "<code>inline</code>" in got
+        assert got == "quoted\ncode block\ninline"
 
     def test_strikethrough_survives(self, admin_client, bug):
         html = "<p>see <s>obsolete</s></p>"
         got = self._post_description(admin_client, bug["id"], html)["description"]
-        assert "<s>obsolete</s>" in got
+        assert got == "see obsolete"
 
     def test_comment_body_keeps_rich_formatting(self, admin_client, bug):
         body = "<p><b>Note:</b> please verify <i>before</i> ship.</p>"
@@ -280,7 +278,7 @@ class TestRichHtmlRoundtrip:
 class TestSanitiserStillBlocksUnsafe:
     """Rich-text support must not weaken the sanitiser."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def bug(self, admin_client):
         proj = _make_project(admin_client, name="Sec v2.6")
         return _make_bug(admin_client, proj["id"])
@@ -293,7 +291,8 @@ class TestSanitiserStillBlocksUnsafe:
         # Tag dropped; inert text content may remain (no executable wrapper = no XSS).
         assert "<script" not in got.lower()
         assert "</script" not in got.lower()
-        assert "before" in got and "after" in got
+        assert "before" in got
+        assert "after" in got
 
     def test_javascript_url_in_anchor_is_stripped(self, admin_client, bug):
         html = '<p><a href="javascript:alert(1)">x</a></p>'
@@ -312,7 +311,7 @@ class TestSanitiserStillBlocksUnsafe:
         r = admin_client.put(f"/api/bugs/{bug['id']}", json={"description": html})
         got = r.json()["description"]
         assert "<iframe" not in got.lower()
-        assert "x</p>" in got  # text outside the iframe survives
+        assert got == "x"  # plain text now; only surviving text remains
 
 
 # Re-covers the admin-only rules so this suite stands alone.
@@ -398,7 +397,6 @@ class TestInitDbIsIdempotent:
         import sys
         db_file = tmp_path / "smoke.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
-        monkeypatch.setenv("API_KEY", "")
         monkeypatch.setenv("EMAIL_BACKEND", "disabled")
         monkeypatch.setenv("SESSION_SECRET", "x" * 32)
         monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "a@a.local")
@@ -410,8 +408,9 @@ class TestInitDbIsIdempotent:
         from app.config import get_settings
         get_settings.cache_clear()  # type: ignore[attr-defined]
 
-        from app.database import init_db, engine
         from sqlalchemy import inspect
+
+        from app.database import engine, init_db
 
         init_db()
         snap1 = sorted(inspect(engine).get_table_names())
@@ -427,7 +426,6 @@ class TestInitDbIsIdempotent:
         import sys
         db_file = tmp_path / "schema.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
-        monkeypatch.setenv("API_KEY", "")
         monkeypatch.setenv("EMAIL_BACKEND", "disabled")
         monkeypatch.setenv("SESSION_SECRET", "x" * 32)
         monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "a@a.local")
@@ -439,8 +437,11 @@ class TestInitDbIsIdempotent:
         from app.config import get_settings
         get_settings.cache_clear()  # type: ignore[attr-defined]
 
-        from app.database import init_db, engine
+
+
         from sqlalchemy import inspect
+
+        from app.database import engine, init_db
 
         init_db()
         names = set(inspect(engine).get_table_names())
@@ -466,7 +467,8 @@ class TestHardening:
 
     def test_cors_default_is_empty_not_wildcard(self):
         """Default CORS_ORIGINS must be empty so the wildcard policy is opt-in."""
-        import importlib, os
+        import importlib
+        import os
         os.environ.pop("CORS_ORIGINS", None)
         import app.config as cfg
         importlib.reload(cfg)
@@ -476,8 +478,11 @@ class TestHardening:
 
     def test_cors_middleware_not_registered_when_no_origins(self):
         """No CORS_ORIGINS configured → CORSMiddleware must not be added."""
+        import importlib
+        import os
+        import sys
+
         from starlette.middleware.cors import CORSMiddleware
-        import importlib, os, sys
         os.environ.pop("CORS_ORIGINS", None)
         for m in list(sys.modules):
             if m == "app" or m.startswith("app."):
@@ -521,3 +526,39 @@ class TestHardening:
         from pathlib import Path
         text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
         assert "relative_files = true" in text
+
+
+# ===========================================================================
+# Plain-text descriptions in the API (no HTML storage, no *_text twin)
+# ===========================================================================
+
+def test_bug_stores_and_returns_plain_text_description(admin_client):
+    """Legacy editor HTML in -> plain text out; description is the only field."""
+    project = _make_project(admin_client, "Plain text story")
+    rich = (
+        "<div>As a user, I want a readable API.</div><div><br></div>"
+        "<div>Acceptance Criteria:</div><div><br></div>"
+        "<div>GET / returns <b>HTTP 200</b> &amp; docs.</div>"
+        "<div>The endpoint does not require authentication.</div>"
+    )
+    bug = _make_bug(admin_client, project["id"], description=rich)
+    detail = admin_client.get(f"/api/bugs/{bug['id']}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    # Exactly one description field, readable plain text, no tags anywhere.
+    assert "description_text" not in body
+    assert body["description"] == (
+        "As a user, I want a readable API.\n\n"
+        "Acceptance Criteria:\n\n"
+        "GET / returns HTTP 200 & docs.\n"
+        "The endpoint does not require authentication."
+    )
+    assert "<" not in body["description"]
+    assert ">" not in body["description"]
+    # Round trip: PUT with plain text keeps the exact same string.
+    put = admin_client.put(
+        f"/api/bugs/{bug['id']}",
+        json={"description": body["description"], "expected_version": body["version"]},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["description"] == body["description"]

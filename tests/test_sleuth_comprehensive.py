@@ -2,7 +2,9 @@
 synonyms, time windows, verbs, permissions, HTTP edges, robustness."""
 from __future__ import annotations
 
-import os as _os, sys as _sys
+import os as _os
+import sys as _sys
+
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
@@ -22,18 +24,19 @@ os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__no_model__.gguf"
 
 # Purge cached app.* so imports bind to this file's private DB, not a torn-down one.
 import sys as _sys_purge
+
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
         del _sys_purge.modules[_m]
 
-from app.database import Base, engine, SessionLocal
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
 from app import models
 from app.auth import hash_password
-from app.chatbot import nlu, executor
+from app.chatbot import executor, nlu
 from app.chatbot.executor import build_context
 from app.chatbot.memory import store as memstore
-
-import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+from app.database import Base, SessionLocal, engine
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +54,6 @@ def _rebind_app_modules():
     g["executor"] = importlib.import_module("app.chatbot.executor")
     g["build_context"] = g["executor"].build_context
     g["memstore"] = importlib.import_module("app.chatbot.memory").store
-    yield
 
 
 PASSED: list[str] = []
@@ -99,7 +101,7 @@ def seed():
         db.commit()
         now = datetime.now(timezone.utc)
         bugs = []
-        for i, (status, prio, env, proj, age_days, title) in enumerate([
+        for _i, (status, prio, env, proj, age_days, title) in enumerate([
             ("New",         "Critical", "PROD", proj_a,  1, "Service down"),
             ("New",         "High",     "PROD", proj_b,  2, "Login broken"),
             ("In Progress", "Medium",   "UAT",  proj_a,  3, "Date filter off"),
@@ -521,8 +523,9 @@ def test_confirm_flow_edges() -> None:
 # ---------------------------------------------------------------------------
 def test_http_edges() -> None:
     section("HTTP edge cases")
-    ids = seed()
+    seed()
     from fastapi.testclient import TestClient
+
     from app.main import app
     client = TestClient(app)
 
@@ -631,7 +634,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         FAILED.append(("HARNESS", "uncaught"))
 
-    print(f"\n=== RESULTS ===")
+    print("\n=== RESULTS ===")
     print(f"Passed: {len(PASSED)}")
     print(f"Failed: {len(FAILED)}")
     if FAILED:

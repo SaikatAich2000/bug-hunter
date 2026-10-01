@@ -21,9 +21,9 @@ CASES = [
 
 
 def test_sleuth_understanding_battery(client):
-    from app.database import SessionLocal
     from app.chatbot.executor import build_context
     from app.chatbot.nlu import parse
+    from app.database import SessionLocal
     db = SessionLocal()
     try:
         ctx = build_context(db)

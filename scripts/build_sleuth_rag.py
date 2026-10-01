@@ -9,8 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.database import SessionLocal  # noqa: E402
 from app.chatbot import rag  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
 
 
 def _misconfig_reasons() -> list[str]:

@@ -3,7 +3,9 @@ freshly-seeded SQLite DB. Read-only by design; write actions are covered separat
 """
 from __future__ import annotations
 
-import os as _os, sys as _sys
+import os as _os
+import sys as _sys
+
 # Ensure the repo root is on the path when running this file directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
@@ -25,17 +27,18 @@ os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
 # Purge cached app.* so the import below binds to this file's DB, not a torn-down shared engine.
 import sys as _sys_purge
+
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
         del _sys_purge.modules[_m]
 
-from app.database import Base, engine, SessionLocal
-from app import models
 import pytest
 
+from app import models
 from app.auth import hash_password
-from app.chatbot import nlu, executor, excel
+from app.chatbot import excel, executor, nlu
 from app.chatbot.executor import build_context
+from app.database import Base, SessionLocal, engine
 
 PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
@@ -57,7 +60,6 @@ def _rebind_and_seed():
     g["excel"] = importlib.import_module("app.chatbot.excel")
     g["build_context"] = g["executor"].build_context
     seed()
-    yield
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -406,6 +408,7 @@ def test_excel() -> None:
     check("excel — cross-user fetch denied", excel.fetch_staged(token, 999) is None)
     if fetched:
         import io
+
         import openpyxl as _opx
         wb = _opx.load_workbook(io.BytesIO(fetched[0]))
         ws = wb.active
@@ -417,6 +420,7 @@ def test_excel() -> None:
 def test_router() -> None:
     section("HTTP route /api/chat")
     from fastapi.testclient import TestClient
+
     from app.main import app
     client = TestClient(app)
     r = client.post("/api/auth/login",
@@ -495,7 +499,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         FAILED.append(("HARNESS", "uncaught crash"))
 
-    print(f"\n=== RESULTS ===")
+    print("\n=== RESULTS ===")
     print(f"Passed: {len(PASSED)}")
     print(f"Failed: {len(FAILED)}")
     if FAILED:

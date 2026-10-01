@@ -78,7 +78,7 @@ class TestCacheControl:
         r = client.get("/login.html")
         body = r.text
         assert "__ASSET_VERSION__" not in body, "asset version placeholder leaked into HTML"
-        # Cache-busting: hashed bundle filenames + a server-substituted ?v= on the favicon.
+        # Cache-busting: hashed bundle filenames + server-substituted ?v= on the favicon.
         assert "/static/assets/login-" in body, "hashed login bundle not referenced"
         assert "/static/icon.png?v=" in body, "favicon asset-version query missing"
 
@@ -104,6 +104,7 @@ class TestSessionInvalidation:
         """Device A's password change kicks device B out on its next request."""
         # admin_client is device A; device_b gets its own client + cookie.
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         device_b = TestClient(app)
@@ -144,6 +145,7 @@ class TestSessionInvalidation:
     def test_admin_password_reset_invalidates_target_user_sessions(self, admin_client):
         """Admin resetting another user's password invalidates that user's sessions."""
         from fastapi.testclient import TestClient
+
         from app.main import app
         u = _make_user(admin_client, "Victim", "victim@x.com", password="OldPass11")
         victim = TestClient(app)
@@ -159,6 +161,7 @@ class TestSessionInvalidation:
 
     def test_admin_deactivation_invalidates_user_sessions(self, admin_client):
         from fastapi.testclient import TestClient
+
         from app.main import app
         u = _make_user(admin_client, "Sleepy", "sleepy@x.com", password="ZzzPass11")
         sleepy = TestClient(app)
@@ -250,7 +253,8 @@ class TestAttachmentSafety:
         assert d.status_code == 200
         cd = d.headers.get("content-disposition", "")
         # CR, LF, and quotes must be stripped to prevent header injection.
-        assert "\r" not in cd and "\n" not in cd
+        assert "\r" not in cd
+        assert "\n" not in cd
         assert d.headers.get("X-Evil") is None
 
     def test_download_advertises_accept_ranges(self, admin_client):

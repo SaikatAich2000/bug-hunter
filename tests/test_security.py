@@ -52,11 +52,11 @@ class TestLoginTimingEquality:
         )
         # Verifies against the dummy hash, not None/"".
         args, _ = spy.call_args
-        assert args[1] == auth_routes._DUMMY_PASSWORD_HASH
+        assert args[1] == auth_routes._dummy_password_hash()
 
     def test_wrong_password_branch_unchanged(self, client):
-        from tests.conftest import BOOTSTRAP_EMAIL
         from app.routes import auth as auth_routes
+        from tests.conftest import BOOTSTRAP_EMAIL
         with mock.patch.object(auth_routes, "verify_password",
                                wraps=auth_routes.verify_password) as spy:
             res = client.post("/api/auth/login", json={
@@ -98,6 +98,7 @@ class TestXlsxFormulaInjectionGuard:
     def test_export_xlsx_prefixes_malicious_title(self, admin_client):
         """A formula-shaped title lands in the XLSX prefixed with a single-quote (treated as text)."""
         import io
+
         from openpyxl import load_workbook
         bug_id = _make_bug(admin_client, "=cmd|'calc.exe'!A1")
         assert bug_id  # sanity
@@ -147,6 +148,7 @@ class TestBodySizeMiddleware:
         from app.config import get_settings
         get_settings.cache_clear()  # type: ignore[attr-defined]
         from fastapi.testclient import TestClient
+
         from app.main import app
         with TestClient(app) as c:
             c.post("/api/auth/login", json={
@@ -163,7 +165,9 @@ class TestBodySizeMiddleware:
     def test_malformed_content_length_returns_400(self):
         """A non-integer Content-Length yields 400, not an uncaught ValueError (dispatched directly; the wire enforces numeric)."""
         import asyncio
+
         from starlette.requests import Request
+
         from app.main import BodySizeLimitMiddleware
 
         middleware = BodySizeLimitMiddleware(None)
@@ -200,6 +204,7 @@ class TestAccountLockoutEdgeCases:
     def test_old_failures_get_evicted(self, monkeypatch):
         """Failures outside the rolling window are evicted so an infrequent typo never locks out."""
         import time
+
         from app import account_lockout
         monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_WINDOW_SECONDS", 0.05)
         monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_LIMIT", 3)
@@ -271,6 +276,7 @@ class TestPasswordBreachFetchRange:
 
     def test_fetch_range_returns_none_on_httperror(self, monkeypatch):
         import httpx
+
         from app import password_breach
         self._patch_httpx_client(
             monkeypatch, raise_on_get=httpx.HTTPError("simulated")
@@ -290,6 +296,7 @@ class TestImageStripEdgeCases:
     def test_pillow_missing_returns_original(self, monkeypatch):
         """With Pillow absent the helper fails open and returns the original bytes."""
         import sys
+
         from app.image_strip import strip_image_metadata
         monkeypatch.setitem(sys.modules, "PIL", None)
         raw = b"fake-jpeg-bytes"
@@ -298,6 +305,7 @@ class TestImageStripEdgeCases:
     def test_format_none_returns_original(self, monkeypatch):
         """An image whose .format is None is returned unchanged."""
         from PIL import Image as PILImage
+
         from app.image_strip import strip_image_metadata
 
         class _FakeImg:
@@ -314,6 +322,7 @@ class TestImageStripEdgeCases:
     def test_save_oserror_returns_original(self, monkeypatch):
         """An OSError from Pillow's save() is swallowed; the original bytes are returned."""
         from PIL import Image as PILImage
+
         from app.image_strip import strip_image_metadata
 
         class _BoomImg:
@@ -370,6 +379,7 @@ class TestXffTrustGate:
         from app.config import get_settings
         get_settings.cache_clear()  # type: ignore[attr-defined]
         from fastapi.testclient import TestClient
+
         from app.main import app
         with TestClient(app) as c:
             res = c.post(
@@ -436,11 +446,13 @@ class TestAccountLockout:
         account_lockout.check_locked("never-seen@example.com")
 
     def test_unit_threshold_triggers_lockout(self):
+        from fastapi import HTTPException
+
         from app import account_lockout
         email = "victim@example.com"
         for _ in range(account_lockout._LOGIN_FAIL_LIMIT):
             account_lockout.record_failure(email)
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(HTTPException) as excinfo:
             account_lockout.check_locked(email)
         assert getattr(excinfo.value, "status_code", None) == 429
         assert "Retry-After" in (excinfo.value.headers or {})
@@ -455,11 +467,13 @@ class TestAccountLockout:
 
     def test_unit_unknown_email_also_counts(self):
         """Ticking only known emails would leak account existence."""
+        from fastapi import HTTPException
+
         from app import account_lockout
         ghost = "definitely-not-a-real-user@example.com"
         for _ in range(account_lockout._LOGIN_FAIL_LIMIT):
             account_lockout.record_failure(ghost)
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(HTTPException) as excinfo:
             account_lockout.check_locked(ghost)
         assert getattr(excinfo.value, "status_code", None) == 429
 
@@ -484,8 +498,8 @@ class TestAccountLockout:
 
     def test_successful_login_clears_lockout(self, client):
         """A successful login clears the bucket so sub-threshold failures don't carry over."""
-        from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
         from app import account_lockout
+        from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
         for _ in range(3):
             account_lockout.record_failure(BOOTSTRAP_EMAIL)
         res = client.post("/api/auth/login", json={
@@ -538,13 +552,13 @@ class TestPasswordBreachCheck:
         digest = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()  # NOSONAR
         return f"{digest[5:]}:9999\n"
 
-    def test_unit_changeme_allowlisted_despite_breach_match(self):
-        """'changeme' is allowlisted case-insensitively and short-circuits before any network call."""
+    def test_unit_legacy_default_allowlisted_despite_breach_match(self):
+        """The legacy value is allowlisted and short-circuits before any network call."""
         from app import password_breach
-        body = self._force_match("changeme")
+        body = self._force_match("legacy-default")
         with mock.patch.object(password_breach, "_fetch_range", return_value=body) as m:
-            assert password_breach.is_password_breached("changeme") is False
-            assert password_breach.is_password_breached("CHANGEME") is False
+            assert password_breach.is_password_breached("legacy-default") is False
+            assert password_breach.is_password_breached("LEGACY-DEFAULT") is False
         m.assert_not_called()
 
     def test_change_password_rejects_breached(self, admin_client, monkeypatch):
@@ -634,6 +648,21 @@ class TestExifStrip:
         assert marker.encode() in raw
         clean = strip_image_metadata(raw, "image/png")
         assert marker.encode() not in clean
+
+    def test_unit_palette_png_transparency_preserved(self):
+        """A palette PNG's tRNS chunk must survive the strip, or it turns opaque."""
+        from PIL import Image
+
+        from app.image_strip import strip_image_metadata
+        img = Image.new("P", (8, 8))
+        img.putpalette([0, 0, 0, 255, 255, 255] + [0, 0, 0] * 254)
+        img.info["transparency"] = 0
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        raw = out.getvalue()
+        clean = strip_image_metadata(raw, "image/png")
+        reloaded = Image.open(io.BytesIO(clean))
+        assert reloaded.info.get("transparency") == 0
 
     def test_unit_non_image_passes_through(self):
         from app.image_strip import strip_image_metadata

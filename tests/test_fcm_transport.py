@@ -79,13 +79,12 @@ def _install_fake_firebase(monkeypatch, *, init_raises=False, messaging=None):
 def _reset_state(monkeypatch):
     """Reset the module's init-latch before each test."""
     monkeypatch.setattr(fcm_transport, "_state", {"app": None, "init_failed": False})
-    yield
 
 
-def _fake_settings(monkeypatch, cred="/path/sa.json"):
+def _fake_settings(monkeypatch, cred="/path/sa.json", cred_json=""):
     monkeypatch.setattr(
         fcm_transport, "get_settings",
-        lambda: types.SimpleNamespace(FCM_CREDENTIALS_FILE=cred),
+        lambda: types.SimpleNamespace(FCM_CREDENTIALS_FILE=cred, FCM_CREDENTIALS_JSON=cred_json),
     )
 
 
@@ -138,6 +137,37 @@ def test_ensure_app_double_check_app_inside_lock(monkeypatch):
     assert fcm_transport._ensure_app() is sentinel
 
 
+# FCM_CREDENTIALS_JSON (env-var credential, no file mount)
+def test_load_credential_json_raw(monkeypatch):
+    assert fcm_transport._load_credential_json('{"project_id": "p"}') == {"project_id": "p"}
+
+
+def test_load_credential_json_base64(monkeypatch):
+    import base64
+    encoded = base64.b64encode(b'{"project_id": "p"}').decode()
+    assert fcm_transport._load_credential_json(encoded) == {"project_id": "p"}
+
+
+def test_load_credential_json_invalid(monkeypatch):
+    assert fcm_transport._load_credential_json("not json, not base64 either!!") is None
+
+
+def test_ensure_app_uses_json_over_file(monkeypatch):
+    """FCM_CREDENTIALS_JSON takes priority over FCM_CREDENTIALS_FILE when both are set."""
+    _fake_settings(monkeypatch, cred="/path/sa.json", cred_json='{"project_id": "p"}')
+    fa, sentinel_app = _install_fake_firebase(monkeypatch)
+    seen = {}
+    fa.credentials.Certificate = lambda src: seen.setdefault("source", src)
+    assert fcm_transport._ensure_app() is sentinel_app
+    assert seen["source"] == {"project_id": "p"}
+
+
+def test_ensure_app_json_invalid_latches(monkeypatch):
+    _fake_settings(monkeypatch, cred="", cred_json="not valid")
+    assert fcm_transport._ensure_app() is None
+    assert fcm_transport._state["init_failed"] is True
+
+
 def test_ensure_app_double_check_init_failed_inside_lock(monkeypatch):
     _fake_settings(monkeypatch)
 
@@ -171,11 +201,58 @@ def test_is_dead_token_other():
     assert fcm_transport._is_dead_token(RuntimeError("quota exceeded")) is False
 
 
+@pytest.mark.parametrize("message", [
+    "registration-token-not-registered",
+    "invalid-registration-token",
+    "invalid-argument: bad token",
+])
+def test_is_dead_token_by_marker(message):
+    assert fcm_transport._is_dead_token(RuntimeError(message)) is True
+
+
+# _absolute_link
+def test_absolute_link_resolves_relative(monkeypatch):
+    monkeypatch.setattr(
+        fcm_transport, "get_settings",
+        lambda: types.SimpleNamespace(APP_BASE_URL="https://app.example/"),
+    )
+    assert fcm_transport._absolute_link("/#bug=5") == "https://app.example/#bug=5"
+
+
+def test_absolute_link_leaves_absolute_and_empty(monkeypatch):
+    monkeypatch.setattr(
+        fcm_transport, "get_settings",
+        lambda: types.SimpleNamespace(APP_BASE_URL="https://app.example"),
+    )
+    assert fcm_transport._absolute_link("https://other/x") == "https://other/x"
+    assert fcm_transport._absolute_link("") == ""
+
+
+def test_absolute_link_without_base_url(monkeypatch):
+    monkeypatch.setattr(
+        fcm_transport, "get_settings",
+        lambda: types.SimpleNamespace(APP_BASE_URL=""),
+    )
+    assert fcm_transport._absolute_link("/#bug=5") == "/#bug=5"
+
+
 # _webpush_config
 def test_webpush_config_https():
     m = _make_messaging()
     cfg = fcm_transport._webpush_config(m, "https://app.example/bug/1")
     assert cfg[0] == "WebpushConfig"
+
+
+def test_webpush_config_relative_link_resolved(monkeypatch):
+    """A relative deep link must become an absolute https link, not be dropped."""
+    monkeypatch.setattr(
+        fcm_transport, "get_settings",
+        lambda: types.SimpleNamespace(APP_BASE_URL="https://app.example"),
+    )
+    m = _make_messaging()
+    cfg = fcm_transport._webpush_config(m, "/#bug=7")
+    assert cfg[0] == "WebpushConfig"
+    assert cfg[1]["fcm_options"][1]["link"] == "https://app.example/#bug=7"
 
 
 def test_webpush_config_non_https():
@@ -238,6 +315,69 @@ def test_send_none_url_normalized(monkeypatch):
     # url=None would cause AttributeError on startswith if not guarded first.
     fcm_transport.send(["tok1"], title="t", body="b", url=None)
     assert messaging._captured["message"][1]["data"]["url"] == "/"
+
+
+def test_send_batches_above_fcm_token_limit(monkeypatch):
+    """FCM rejects >500 tokens per call, so send() must split into batches."""
+    sentinel = object()
+    monkeypatch.setattr(fcm_transport, "_ensure_app", lambda: sentinel)
+    m = types.ModuleType("firebase_admin.messaging")
+    m.WebpushConfig = lambda **kw: ("WebpushConfig", kw)
+    m.WebpushFCMOptions = lambda **kw: ("WebpushFCMOptions", kw)
+    m.Notification = lambda **kw: ("Notification", kw)
+    m.MulticastMessage = lambda **kw: ("MulticastMessage", kw)
+    batch_sizes = []
+
+    def send_each_for_multicast(message, app=None):
+        sent = message[1]["tokens"]
+        batch_sizes.append(len(sent))
+        return _Multicast([_Resp(True) for _ in sent])
+
+    m.send_each_for_multicast = send_each_for_multicast
+    _install_fake_firebase(monkeypatch, messaging=m)
+
+    tokens = [f"tok{i}" for i in range(1200)]
+    assert fcm_transport.send(tokens, title="t", body="b") == []
+    assert batch_sizes == [500, 500, 200]
+
+
+def test_send_defaults_empty_title_and_truncates(monkeypatch):
+    """FCM rejects an empty title, and over-long text risks the 4KB payload cap."""
+    sentinel = object()
+    monkeypatch.setattr(fcm_transport, "_ensure_app", lambda: sentinel)
+    messaging = _make_messaging(multicast=_Multicast([_Resp(True)]))
+    _install_fake_firebase(monkeypatch, messaging=messaging)
+    fcm_transport.send(["tok1"], title="", body="x" * 5000)
+    notification = messaging._captured["message"][1]["notification"][1]
+    assert notification["title"] == fcm_transport.get_settings().APP_NAME
+    assert len(notification["body"]) == fcm_transport._MAX_BODY_CHARS
+
+
+def test_send_batch_failure_continues_other_batches(monkeypatch):
+    """One failing batch must not abort delivery to the remaining tokens."""
+    sentinel = object()
+    monkeypatch.setattr(fcm_transport, "_ensure_app", lambda: sentinel)
+    m = types.ModuleType("firebase_admin.messaging")
+    m.WebpushConfig = lambda **kw: ("WebpushConfig", kw)
+    m.WebpushFCMOptions = lambda **kw: ("WebpushFCMOptions", kw)
+    m.Notification = lambda **kw: ("Notification", kw)
+    m.MulticastMessage = lambda **kw: ("MulticastMessage", kw)
+    calls = []
+
+    def send_each_for_multicast(message, app=None):
+        sent = message[1]["tokens"]
+        calls.append(len(sent))
+        if len(calls) == 1:
+            raise RuntimeError("transient FCM outage")
+        return _Multicast([_Resp(False, UnregisteredError()) for _ in sent])
+
+    m.send_each_for_multicast = send_each_for_multicast
+    _install_fake_firebase(monkeypatch, messaging=m)
+
+    tokens = [f"tok{i}" for i in range(600)]
+    dead = fcm_transport.send(tokens, title="t", body="b")
+    assert len(calls) == 2                 # second batch still attempted
+    assert dead == tokens[500:]            # only the reachable batch reported dead
 
 
 def test_send_prunes_dead_tokens(monkeypatch):

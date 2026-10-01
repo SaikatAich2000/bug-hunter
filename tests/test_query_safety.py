@@ -47,12 +47,11 @@ class TestActivityOrderingDeep:
         # Same set, same order
         assert {a["id"] for a in detail_acts} == {a["id"] for a in list_acts}
         d = [a["id"] for a in detail_acts]
-        l = [a["id"] for a in list_acts]
-        assert d == l, \
+        listed = [a["id"] for a in list_acts]
+        assert d == listed, \
             f"BUG-4 confirmed: activity ordering inconsistent.\n" \
             f"  /bugs/{{id}}        (detail.activities): {d}\n" \
-            f"  /bugs/{{id}}/activity (list_activity):    {l}"
-
+            f"  /bugs/{{id}}/activity (list_activity):    {listed}"
 
 
 # Moving a bug to a different project

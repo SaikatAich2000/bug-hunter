@@ -1,16 +1,18 @@
 /* Bug Hunter UI styles ("Spectrum Tide" theme) — 5-colour system (cerulean/gold/steel/walnut/brick-red) driving KPI + badge coding; every selector/id/class/token NAME is retained, only token VALUES changed, so JS hooks + backend token tests stay green. */
 
-/* Self-hosted Plus Jakarta Sans (UI) + JetBrains Mono (IDs/code), CSP-safe, served from /static/fonts/. */
+/* Self-hosted Plus Jakarta Sans (UI) + JetBrains Mono (IDs/code) + Asap (fallback), CSP-safe.
+   Paths are base-relative ("/fonts/…"): Vite resolves them against frontend/public/fonts and
+   rewrites them to the served /static/fonts/… URLs at build time. */
 @font-face {
   font-family: "Plus Jakarta Sans";
-  src: url("/static/fonts/PlusJakartaSans.woff2") format("woff2");
+  src: url("/fonts/PlusJakartaSans.woff2") format("woff2");
   font-weight: 200 800;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "JetBrains Mono";
-  src: url("/static/fonts/JetBrainsMono.woff2") format("woff2");
+  src: url("/fonts/JetBrainsMono.woff2") format("woff2");
   font-weight: 400 700;
   font-style: normal;
   font-display: swap;
@@ -18,7 +20,7 @@
 /* Asap (OFL-licensed) is our free stand-in for Steam's proprietary Motiva Sans in the font stack fallback. */
 @font-face {
   font-family: "Asap";
-  src: url("/static/fonts/Asap.woff2") format("woff2");
+  src: url("/fonts/Asap.woff2") format("woff2");
   font-weight: 300 800;
   font-style: normal;
   font-display: swap;
@@ -52,6 +54,13 @@ html, body {
   /* Clips decorative aurora blobs + wide children that bleed past the edge; .table-scroll and fixed overlays are unaffected. */
   overflow-x: hidden;
   max-width: 100%;
+  font-variant-emoji: normal;
+}
+
+#root {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .kpi-num, .col-id, .att-count, .session-line3,
@@ -80,8 +89,9 @@ html, body {
   --border-soft: rgba(103,193,245,0.10);
 
   --text: #c6d4df;              /* Steam body text */
-  --text-muted: #8f98a0;        /* Steam meta / labels */
-  --text-faint: #66707a;
+  /* Steam steel greys, lifted just enough for WCAG AA (4.5:1) on every surface. */
+  --text-muted: #9aa2aa;        /* Steam meta / labels */
+  --text-faint: #949ba2;
 
   --accent: #67c1f5;            /* iconic Steam blue */
   --accent-strong: #1a9fff;     /* bright interactive blue */
@@ -89,6 +99,9 @@ html, body {
   --accent-soft: rgba(103,193,245,0.12);
   --accent-glow: rgba(103,193,245,0.30);
   --accent-text: #ffffff;
+  /* Solid accent fills (badges, active tab): dark text, since white on #67c1f5 is only 2:1. */
+  --accent-fill: var(--accent);
+  --on-accent-fill: #0f1924;
   --accent-grad: linear-gradient(135deg, #1a9fff 0%, #67c1f5 60%, #2a8fd0 100%);
   --accent-grad-hover: linear-gradient(135deg, #1488e6 0%, #4fb4ea 60%, #2378b3 100%);
 
@@ -181,13 +194,15 @@ html, body {
   --text-muted: #4d5e6e;
   --text-faint: #5e6a78;
 
-  /* Steam iconic blue darkened to hit WCAG-AA (~4.7:1) for accent text and white-on-accent buttons on white. */
-  --accent: #1a7fb8;
+  /* Steam iconic blue darkened for WCAG AA: 5.65:1 on white, >=4.5:1 on every light surface. */
+  --accent: #166d9e;
   --accent-strong: #0f5e8f;
   --accent-2: #8a6010;
-  --accent-soft: rgba(26, 127, 184, 0.13);
-  --accent-glow: rgba(26, 127, 184, 0.26);
+  --accent-soft: rgba(22, 109, 158, 0.13);
+  --accent-glow: rgba(22, 109, 158, 0.26);
   --accent-text: #ffffff;
+  --accent-fill: var(--accent);
+  --on-accent-fill: #ffffff;
   --accent-grad: linear-gradient(135deg, #1a7fb8 0%, #2f9fd6 60%, #1c7fb0 100%);
   --accent-grad-hover: linear-gradient(135deg, #0f5e8f 0%, #1a7fb8 60%, #155f86 100%);
 
@@ -253,6 +268,56 @@ body {
   color: var(--text);
 }
 
+/* Global form-control theme baseline — every native <select>/date-textsearch-
+   number <input>/<textarea> in the app gets the same dark/light theme look
+   even outside a .field wrapper or a page-specific scoped rule. Anything more
+   specific (e.g. .field select, .hierarchy-toolbar select) still wins on
+   specificity, this is purely the fallback so nothing ships unstyled. */
+select:not(.bh-sel-native),
+input[type="date"], input[type="text"], input[type="search"],
+input[type="number"], input[type="email"], input[type="password"],
+input[type="tel"], input[type="url"],
+textarea {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+  padding: 8px 12px;
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+select:not(.bh-sel-native) { cursor: pointer; }
+select:not(.bh-sel-native):hover:not(:disabled),
+input[type="date"]:hover:not(:disabled), input[type="text"]:hover:not(:disabled),
+input[type="search"]:hover:not(:disabled), input[type="number"]:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-elev-3);
+}
+select:not(.bh-sel-native):focus,
+input[type="date"]:focus, input[type="text"]:focus, input[type="search"]:focus,
+input[type="number"]:focus, input[type="email"]:focus, input[type="password"]:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-elev-3);
+}
+select:not(.bh-sel-native):disabled,
+input[type="date"]:disabled, input[type="text"]:disabled, input[type="search"]:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* Dark theme: invert the browser's native calendar-picker glyph so it's
+   visible against the dark input background (light theme keeps it as-is). */
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+body:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
+}
+
 ::selection { background: var(--accent-soft); color: var(--text); }
 
 @media (prefers-reduced-motion: reduce) {
@@ -274,7 +339,7 @@ body {
 }
 .chrome .menu-btn { display: none; }
 
-/* Brand mark — wordmark ("BUG" + accent "HUNTER") + version; never truncated. */
+/* Brand mark — wordmark (first word + accent remainder, e.g. "BUG" + "HUNTER") + version; never truncated. */
 .brandmark { display: flex; align-items: center; gap: 11px; flex: none; }
 .brandmark .logo {
   width: 36px;
@@ -401,7 +466,8 @@ body {
   z-index: 5;
   display: grid;
   grid-template-columns: 236px 1fr;
-  height: calc(100vh - 98px);
+  flex: 1 1 auto;
+  min-height: 0;
   /* Animates the rail column width on collapse/expand; global reduced-motion guard above disables this. */
   transition: grid-template-columns 0.26s var(--ease-out);
 }
@@ -1334,6 +1400,46 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .col-att       { text-align: center; }
 .col-actions   { text-align: right; }
 
+/* Sprints/Planning/Taxonomy data grid (Capacity table, Releases, Components, Collections).
+   This class had no rules at all before — it rendered with bare browser table
+   defaults instead of the app's theme. */
+.sprints-backlog-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+.sprints-backlog-table th, .sprints-backlog-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.sprints-backlog-table th {
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.sprints-backlog-table tbody tr:last-child td { border-bottom: none; }
+.sprints-backlog-table tbody tr:hover { background: var(--bg-elev-2); }
+/* Capacity/notes inputs inside the table need the same themed look as .field
+   inputs elsewhere — plain unstyled <input> looked out of place. */
+.sprints-backlog-table input[type="number"],
+.sprints-backlog-table input[type="text"],
+.sprints-backlog-table input:not([type]) {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.sprints-backlog-table input:hover:not(:disabled):not(:focus) { background: var(--bg-elev-3); }
+.sprints-backlog-table input:focus { border-color: var(--accent); box-shadow: var(--shadow-focus); background: var(--bg-elev-3); }
+.sprints-backlog-table input:disabled { opacity: 0.55; cursor: not-allowed; }
+.planning-capacity-input { width: 100px; }
+
 .title-cell {
   display: flex;
   flex-direction: column;
@@ -1368,6 +1474,394 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   border-radius: 10px;
   margin-top: 8px;
 }
+
+/* Sprints view (Jira-style Backlog + Board) */
+#viewSprints { padding: 20px; }
+.sprints-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.sprints-controls { display: flex; align-items: center; gap: 8px; }
+.sprints-loading { text-align: center; color: var(--text-muted); padding: 20px; }
+
+/* Shared select theme for the Sprints feature — matches .field select elsewhere
+   in the app (same border/hover/focus/cursor) instead of the unstyled native look. */
+.sprints-controls select,
+.board-toolbar select,
+.sprint-quick-add select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.sprints-controls select:hover:not(:disabled),
+.board-toolbar select:hover:not(:disabled),
+.sprint-quick-add select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-elev-3);
+}
+.sprints-controls select:focus,
+.board-toolbar select:focus,
+.sprint-quick-add select:focus {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-elev-3);
+  outline: none;
+}
+.sprints-controls select:disabled,
+.board-toolbar select:disabled,
+.sprint-quick-add select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Action-button groups in table cells (Releases/Components/Collections tabs) —
+   without this the buttons render flush against each other with no gap. */
+.table-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Backlog / Board tab switcher */
+.agile-tabs { display: flex; gap: 4px; background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
+.agile-tab {
+  border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+  padding: 6px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out);
+  font-variant-emoji: normal;
+}
+.agile-tab:hover { color: var(--text); }
+.agile-tab.active { background: var(--accent-fill); color: var(--on-accent-fill); box-shadow: var(--shadow-sm); }
+/* Custom web font (Motiva Sans/Asap) ships placeholder glyphs for these code points,
+   which blocks the browser's automatic fallback to the system emoji font — force it explicitly. */
+.tab-icon {
+  font-family: "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Twemoji Mozilla", sans-serif;
+}
+
+/* Hierarchy tab: Collection > Epic > Feature > Story > Task tree */
+.hierarchy-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.hierarchy-search { flex: 1; min-width: 160px; max-width: 320px; padding: 8px 12px; border-radius: var(--r-field); border: 1px solid var(--border-strong); background: var(--bg-elev); color: var(--text); }
+.hierarchy-search:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow-focus); }
+/* Bare <select>/<input> in the Hierarchy/Reports toolbars aren't inside a
+   .field wrapper, so they need their own theming (matches .field select). */
+.hierarchy-toolbar select, .reports-toolbar select {
+  padding: 8px 12px; border-radius: var(--r-field); border: 1px solid var(--border-strong);
+  background: var(--bg-elev); color: var(--text); font-size: 13px; cursor: pointer;
+}
+.hierarchy-toolbar select:hover, .reports-toolbar select:hover { border-color: var(--accent); }
+.hierarchy-toolbar select:focus, .reports-toolbar select:focus,
+.reports-toolbar input:focus { outline: none; border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.reports-toolbar input[type="date"] {
+  padding: 7px 12px; border-radius: var(--r-field); border: 1px solid var(--border-strong);
+  background: var(--bg-elev); color: var(--text); font-size: 13px;
+}
+.hierarchy-breadcrumb-hint { margin-bottom: 12px; }
+.hierarchy-tree, .hierarchy-tree ul { list-style: none; margin: 0; padding: 0; }
+.hierarchy-tree ul { padding-left: 22px; }
+.hier-node { margin-bottom: 2px; }
+.hier-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: none; background: transparent; color: var(--text);
+  padding: 6px 8px; border-radius: var(--r-field); font-size: 13px;
+}
+.hier-row:hover { background: var(--bg-elev-3); }
+.hier-row.hier-leaf { color: var(--text-muted); }
+.hier-row-clickable {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer;
+  border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0;
+}
+.hier-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hier-daterange { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.hier-sprint-icon { flex-shrink: 0; font-family: "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.hier-link {
+  border: none; background: transparent; color: inherit; font: inherit; padding: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
+}
+.hier-chevron { display: inline-block; transition: transform 0.15s; color: var(--text-faint); font-size: 10px; flex-shrink: 0; }
+.hier-chevron.open { transform: rotate(90deg); }
+.hier-status-pill {
+  font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  background: var(--bg-elev-3); border: 1px solid var(--border-strong); color: var(--text-muted);
+  flex-shrink: 0;
+}
+.hier-link:hover { color: var(--accent); text-decoration: underline; }
+.hier-empty { padding: 4px 8px 4px 30px; }
+.hier-archived-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.hier-task-row { justify-content: flex-start; flex-wrap: wrap; }
+.hier-task-flag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); margin-left: auto; cursor: pointer; }
+.hier-blocked-pill {
+  font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--status-reopened, #c62828) 20%, transparent);
+  color: var(--status-reopened, #c62828); border: 1px solid var(--status-reopened, #c62828);
+}
+/* Inline "+ Add" affordance at every hierarchy level — always visible so a
+   first-time user can discover it without knowing to hover (Section 12). */
+.hier-add-btn { flex-shrink: 0; }
+.hier-inline-create { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.hier-inline-input {
+  padding: 5px 10px; border-radius: var(--r-field); border: 1px solid var(--accent);
+  background: var(--bg-elev); color: var(--text); font-size: 12px; min-width: 160px;
+}
+.hier-inline-input:focus { outline: none; box-shadow: var(--shadow-focus); }
+.hier-new-collection-btn { margin-left: auto; }
+
+/* Distinct accent color per hierarchy level (Section 5: colors must be
+   prominent) — a left border + tinted row background, echoing the epic-pill
+   palette used on Board/Backlog cards. */
+.hier-sprint > .hier-row {
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 14px;
+}
+.hier-sprint > .hier-row:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.hier-collection > .hier-row { border-left: 3px solid #7e57c2; background: color-mix(in srgb, #7e57c2 6%, transparent); }
+.hier-epic > .hier-row { border-left: 3px solid #2e7d32; background: color-mix(in srgb, #2e7d32 6%, transparent); }
+.hier-feature > .hier-row { border-left: 3px solid #1565c0; background: color-mix(in srgb, #1565c0 6%, transparent); }
+.hier-story > .hier-row { border-left: 3px solid #ef6c00; background: color-mix(in srgb, #ef6c00 6%, transparent); }
+.hier-task > .hier-row { border-left: 3px solid var(--border-strong); }
+.hier-collection > .hier-row:hover { background: color-mix(in srgb, #7e57c2 14%, transparent); }
+.hier-epic > .hier-row:hover { background: color-mix(in srgb, #2e7d32 14%, transparent); }
+.hier-feature > .hier-row:hover { background: color-mix(in srgb, #1565c0 14%, transparent); }
+.hier-story > .hier-row:hover { background: color-mix(in srgb, #ef6c00 14%, transparent); }
+
+.hier-sprint-pill {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  padding: 1px 8px; border-radius: 999px; color: var(--accent-text);
+  background: var(--accent); flex-shrink: 0;
+}
+.hier-sprint-remove {
+  border: none; background: transparent; color: inherit; cursor: pointer; padding: 0;
+  font-size: 10px; line-height: 1; opacity: 0.8;
+}
+.hier-sprint-remove:hover { opacity: 1; }
+
+/* Reports tab */
+.reports-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+/* Label+control pairs (Sprint/From/To/Date) are single flex items so wrapping
+   only ever happens between pairs, never between a label and its own input —
+   and the BhSelect/BhDateInput's own width:100% no longer forces every
+   sibling onto its own line. */
+.reports-field { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.reports-field .bh-sel-wrap, .reports-field .bh-date-wrap { width: auto; }
+.reports-field .bh-sel-btn, .reports-field .bh-date-btn { width: auto; min-width: 160px; }
+.report-card {
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-card);
+  padding: 16px; margin-bottom: 16px;
+}
+.report-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.report-card-head h3 { margin: 0 0 2px; }
+.report-card-head .reports-toolbar { margin-bottom: 0; }
+.report-kpis { display: flex; gap: 20px; flex-wrap: wrap; margin: 12px 0; }
+.report-kpi { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
+.report-kpi-num { font-size: 24px; font-weight: 700; color: var(--accent); }
+.report-points { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: var(--text-muted); }
+.reports-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.reports-table th, .reports-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+@media print {
+  .sprints-toolbar, .reports-toolbar button { display: none; }
+}
+
+/* Epic quick-filter row */
+.epic-filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.epic-chip {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border-strong);
+  background: var(--bg-elev); color: var(--text-muted); font-size: 12px; font-weight: 600;
+  transition: border-color 0.15s, color 0.15s;
+}
+.epic-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--epic-color, var(--accent)); flex-shrink: 0; }
+.epic-chip:hover { color: var(--text); border-color: var(--epic-color, var(--accent)); }
+.epic-chip.active { color: var(--text); border-color: var(--epic-color, var(--accent)); background: color-mix(in srgb, var(--epic-color, var(--accent)) 14%, var(--bg-elev)); }
+
+/* Releases/Components/Labels/Collections form row + button layout —
+   ensures the create/add input and button stack cleanly without gaps. */
+.sprints-create-bar { margin-bottom: 16px; }
+.sprints-create { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sprints-create input { padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-field); background: var(--bg-elev); color: var(--text); }
+
+/* Sprint / Backlog sections */
+.backlog-panel { display: flex; flex-direction: column; gap: 16px; }
+.sprint-block { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
+/* The "+ Add items" picker's dropdown is position:absolute and was being
+   clipped by this card's overflow:hidden (there purely for the rounded
+   corners) — lift the clip only while that popup is actually open. */
+.sprint-block:has(.item-picker-pop) { overflow: visible; }
+.sprint-block-header {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px; background: var(--bg-elev-2); border-bottom: 1px solid var(--border);
+}
+.sprint-block-header strong { font-size: 14px; }
+.sprint-collapse-toggle { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 4px; }
+.sprint-block-actions { margin-left: auto; display: flex; gap: 8px; }
+.sprint-goal { margin: 0; padding: 8px 16px 0; }
+/* Quick-add-existing-item-to-sprint row \u2014 an explicit non-drag alternative,
+   since drag-and-drop alone was not discoverable as "how do I add to a sprint". */
+.sprint-quick-add { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
+.sprint-quick-add select { flex: 1; min-width: 200px; max-width: 420px; }
+.sprint-block-body { padding: 6px; min-height: 46px; transition: background 0.12s; border-radius: 0 0 var(--r-card) var(--r-card); }
+.sprint-block-body.drop-over { background: var(--accent-soft); }
+.backlog-empty { padding: 14px 10px; text-align: center; }
+
+/* Backlog row (drag-and-drop list item) */
+.backlog-row {
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  border-radius: var(--r-field); background: var(--bg-elev);
+  border: 1px solid transparent; margin-bottom: 4px;
+}
+.backlog-row:hover { border-color: var(--border-strong); background: var(--bg-elev-3); }
+.backlog-row-handle { cursor: grab; color: var(--text-faint); touch-action: none; user-select: none; font-size: 16px; font-family: "Segoe UI Symbol", "Segoe UI", Arial, sans-serif; }
+.backlog-row-handle.disabled { cursor: default; opacity: 0.3; }
+.backlog-row-type { flex-shrink: 0; font-family: "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", sans-serif; }
+.backlog-row-key { color: var(--text-muted); font-size: 12px; flex-shrink: 0; min-width: 34px; }
+/* Row title is a bare <button>: without an explicit reset it falls back to the
+   browser's grey ButtonFace chrome and renders as an unthemed grey bar. */
+.backlog-row-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: inherit; font-size: 13px; text-align: left;
+  background: transparent; border: none; color: var(--text);
+  padding: 2px 6px; border-radius: var(--r-sm);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.backlog-row-title:hover { color: var(--accent); text-decoration: underline; }
+.backlog-row-title:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.backlog-row-action { flex-shrink: 0; }
+.backlog-row-overlay { box-shadow: var(--shadow-lg); border-color: var(--accent); cursor: grabbing; }
+.backlog-row-select { flex-shrink: 0; cursor: pointer; }
+.backlog-bulk-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; margin: 0 0 8px; background: var(--bg-elev-3);
+  border: 1px solid var(--border-strong); border-radius: var(--r-field);
+}
+/* Drag overlay mimics the backlog-row layout but with no gap distortion —
+   the gaps work within flexbox but render differently in DragOverlay's portal. */
+.backlog-row-overlay .backlog-row-handle { margin-right: -2px; }
+.backlog-row-overlay .backlog-row-type { margin-right: -4px; }
+
+.epic-pill {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; color: var(--text);
+  background: color-mix(in srgb, var(--epic-color, var(--accent)) 18%, transparent);
+  border: 1px solid var(--epic-color, var(--accent)); flex-shrink: 0; max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.sp-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px;
+  background: var(--bg-elev-3); border: 1px solid var(--border-strong);
+  font-size: 11px; font-weight: 700; color: var(--text-muted); flex-shrink: 0;
+}
+.card-avatars { display: flex; align-items: center; }
+.card-avatars .avatar { margin-left: -6px; border: 2px solid var(--bg-elev); }
+.card-avatars .avatar:first-child { margin-left: 0; }
+.avatar-more { background: var(--bg-elev-3); color: var(--text-muted); }
+.card-avatar-empty {
+  width: 22px; height: 22px; border-radius: 50%; border: 1px dashed var(--border-strong);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 11px; flex-shrink: 0;
+}
+
+/* Board tab (Kanban) */
+.board-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.board-toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+/* Own row beneath the toolbar so the picker never pushes controls off-screen. */
+.board-add-existing {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px;
+  padding: 10px 12px; border: 1px dashed var(--border-strong);
+  border-radius: var(--r-field); background: var(--bg-elev);
+}
+.board-add-existing .item-picker { flex: 1; min-width: 0; }
+/* align-items: stretch (not flex-start) so every column shares the same height —
+   flex-start let columns with fewer cards end short, making the board look misaligned. */
+.board-columns { display: flex; gap: 10px; align-items: stretch; overflow-x: auto; padding-bottom: 8px; }
+.board-column {
+  flex: 1 1 0; min-width: 0; background: var(--bg-elev-2); border: 1px solid var(--border);
+  border-radius: var(--r-card); display: flex; flex-direction: column; max-height: calc(100vh - 260px);
+}
+.board-column.drop-over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.board-column-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 20px;
+  padding: 10px 12px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted); border-bottom: 2px solid var(--border-strong); flex-wrap: nowrap;
+}
+.board-column-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-column-count { flex-shrink: 0; }
+.board-column-head[data-category="done"] { border-bottom-color: var(--status-resolved); }
+.board-column-head[data-category="in_progress"] { border-bottom-color: var(--status-progress); }
+.board-column-head[data-category="todo"] { border-bottom-color: var(--status-new); }
+.board-column-count { background: var(--bg-elev-3); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+.board-column-count.over-limit { background: var(--status-reopened); color: white; }
+.board-column-add {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 999px; border: 1px solid var(--border-strong);
+  background: var(--bg-elev-3); color: var(--text); font-size: 14px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.board-column-add:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.board-column-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
+.board-column-empty { text-align: center; color: var(--text-faint); font-size: 12px; padding: 16px 0; }
+
+/* Backlog: multi-select "+ Add items" picker (replaces drag-and-drop, Section 6) */
+.sprint-add-picker { padding: 8px 10px; border: 1px dashed var(--border-strong); border-radius: var(--r-field); margin: 6px 0; background: var(--bg-elev); }
+.sprint-add-picker-actions { display: flex; gap: 8px; margin-top: 8px; }
+.sprint-create-date-label { display: flex; align-items: center; gap: 6px; }
+.sprint-create-date-label input { padding: 7px 10px; }
+
+.issue-card {
+  background: var(--bg-elev); border: 1px solid var(--border); border-left: 3px solid transparent;
+  border-radius: var(--r-field); padding: 10px 12px; cursor: grab; box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.issue-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); }
+.issue-card.flagged { background: color-mix(in srgb, var(--p-high) 10%, var(--bg-elev)); }
+.issue-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.issue-card-key { color: var(--text-faint); font-size: 11px; }
+.issue-card-flag { margin-left: auto; }
+.issue-card-title { font-size: 13px; margin-bottom: 6px; line-height: 1.35; }
+.issue-card-epic {
+  display: inline-block; font-size: 10px; color: var(--text-muted); margin-bottom: 6px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.issue-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.issue-card-bottom-right { display: flex; align-items: center; gap: 6px; }
+
+.confirm-input {
+  width: 100%; margin-top: 10px; padding: 8px 12px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-field); background: var(--bg-elev-2); color: var(--text);
+}
+
+/* Epics panel */
+.epics-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.epics-archived-toggle { display: flex; align-items: center; gap: 6px; }
+.epics-list { display: flex; flex-direction: column; gap: 10px; }
+.epic-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-card); padding: 12px 16px; }
+.epic-card.archived { opacity: 0.6; }
+.epic-card-header { display: flex; align-items: center; gap: 10px; cursor: pointer; flex-wrap: wrap; }
+.epic-card-color { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.epic-health { background: color-mix(in srgb, var(--health-color) 18%, transparent); border: 1px solid var(--health-color); color: var(--text); }
+.epics-expand-arrow { margin-left: auto; color: var(--text-muted); }
+.epic-progress { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.epic-progress-bar { flex: 1; max-width: 240px; height: 6px; border-radius: 999px; background: var(--bg-elev-3); overflow: hidden; }
+.epic-progress-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s var(--ease-out); }
+.epic-card-detail { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.epic-detail-fields { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.epic-detail-fields .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.epic-detail-fields select, .epic-detail-fields input { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-field); background: var(--bg-elev-2); color: var(--text); }
+
+/* Taxonomy panel (Releases/Components/Labels/Collections) */
+.taxonomy-subtabs { margin-bottom: 16px; }
+
+/* Planning panel */
+.planning-summary { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.planning-stat {
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-card);
+  padding: 12px 20px; text-align: center; min-width: 100px;
+}
+.planning-stat strong { display: block; font-size: 20px; }
+.planning-stat.planning-ready.ok strong { color: var(--status-resolved); }
+.planning-readiness-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.planning-readiness-item { padding: 8px 12px; border-radius: var(--r-field); background: var(--bg-elev); border: 1px solid var(--border); font-size: 13px; }
+/* Text stays in the body colour (readable in both themes); the state shows
+   as the mark and a coloured edge. */
+.planning-readiness-item.pass { border-left: 4px solid var(--status-resolved); }
+.planning-readiness-item.warning { border-left: 4px solid var(--p-high); }
+.planning-readiness-item.error { border-left: 4px solid var(--status-reopened); }
+
 
 .pagination {
   display: flex;
@@ -1782,6 +2276,36 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   border-top: 1px solid var(--border);
 }
 
+/* Hierarchy create/edit dialog (Collection > Epic > Feature > Story > Task) */
+.hier-dialog { max-width: 520px; }
+.hier-dialog .modal-foot { padding: 14px 20px; margin-top: 0; }
+.hier-dialog-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.hier-dialog-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.hier-dialog-error { margin: 0; color: var(--danger); font-size: 12.5px; }
+.hier-open-btn { flex-shrink: 0; min-width: 62px; }
+.hierarchy-detail-dialog { max-width: 560px; }
+.hierarchy-detail-body { gap: 18px; }
+.hier-detail-description { margin: 0; color: var(--text); line-height: 1.55; white-space: pre-wrap; }
+.hier-detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hier-detail-meta span { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 12px; }
+.hier-detail-meta strong { color: var(--text); font-size: 13px; font-weight: 600; }
+.hier-detail-actions { display: flex; align-items: end; gap: 14px; }
+.hier-detail-actions .field { flex: 1; }
+
+.bulk-import-result { margin-top: 16px; }
+.bulk-import-issues { margin-top: 12px; }
+.bulk-import-issues h4 { margin: 0 0 6px; font-size: 13px; color: var(--danger); }
+.bulk-import-issues ul {
+  margin: 0; padding-left: 0; list-style: none;
+  max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.bulk-import-issues li {
+  padding: 8px 10px; font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.bulk-import-issues li:last-child { border-bottom: none; }
+
 .bug-modal-body { padding: 0; }
 .bug-modal-body .bug-title-field { margin: 18px 22px 0; }
 .bug-modal-body .bug-title-field input {
@@ -1881,6 +2405,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   flex: 1;
   min-width: 0;
 }
+.bug-sprint-current, .bug-sprint-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Neutralizes default fieldset border/padding/margin so it matches <label class="field">; used for chip-picker groups where <label> can't wrap a non-control. */
 fieldset.field {
   border: 0;
@@ -2789,7 +3314,10 @@ input[type="checkbox"]:checked::after {
   .kpi-strip { grid-template-columns: repeat(2, 1fr); padding: 14px; gap: 8px; }
   .filter-bar { padding: 0 12px 12px; }
   .chrome { padding: 0 12px; gap: 12px; }
-  .pagehead { padding: 16px 12px 4px; }
+  /* Title/actions row would otherwise push the "+ New" button off-screen —
+     wrap onto a second line instead of clipping it (Section 4.3). */
+  .pagehead { padding: 16px 12px 4px; flex-wrap: wrap; }
+  .pagehead .actions { flex-wrap: wrap; }
   /* Hide profile name + brand wordmark (logo/avatar remain) so Ask Sleuth, bell, and avatar fit one row; wordmark/version show in the drawer instead. */
   .chrome-right { gap: 8px; }
   .brandmark .wm { display: none; }
@@ -2820,6 +3348,11 @@ input[type="checkbox"]:checked::after {
   .kpi { padding: 12px 14px; }
   .kpi-num { font-size: 22px; }
   .pagehead h1 { font-size: 19px; }
+  /* Three action buttons never fit one line at this width — stack them full-width
+     instead of relying on wrap, which can still clip the last button by a hair. */
+  .pagehead .actions { flex-direction: column; align-items: stretch; width: 100%; }
+  .pagehead .actions .btn, .pagehead .new-item-wrap { width: 100%; }
+  .pagehead .new-item-wrap > .btn.primary:first-child { flex: 1; }
   .supernav { padding: 0 10px; }
   .modal { padding: 0; }
   .modal-card { max-height: 100vh; height: 100vh; border-radius: 0; max-width: 100%; }
@@ -2911,7 +3444,7 @@ input[type="checkbox"]:checked::after {
 .muted.small { font-size: 11px; }
 .no-cursor { cursor: default !important; }
 .chip-empty { color: var(--text-faint); padding: 4px 8px; font-size: 12px; }
-.chip-sub { opacity: 0.65; font-weight: normal; }
+.chip-sub { color: var(--text-muted); font-weight: normal; }
 .swatch.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .avatar.mini { display: inline-flex; width: 18px; height: 18px; font-size: 9px; margin-right: 6px; vertical-align: middle; }
 .att-count {
@@ -3357,6 +3890,11 @@ input[type="checkbox"]:checked::after {
   border-bottom-right-radius: 0;
   padding-right: 12px;
 }
+.new-item-wrap.new-item-single > .btn.primary:first-child {
+  border-radius: var(--r-btn);
+  padding-right: 16px;
+  min-width: 112px;
+}
 .new-item-caret {
   border-top-left-radius: 0 !important;
   border-bottom-left-radius: 0 !important;
@@ -3417,6 +3955,11 @@ input[type="checkbox"]:checked::after {
   gap: 14px;
 }
 .event-card {
+  /* A <button>: without these it renders ButtonText (black) and centred. */
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  width: 100%;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -3473,8 +4016,8 @@ input[type="checkbox"]:checked::after {
   flex-wrap: wrap;
 }
 .event-card-count {
-  background: var(--accent);
-  color: white;
+  background: var(--accent-fill);
+  color: var(--on-accent-fill);
   font-weight: 700;
   padding: 2px 10px;
   border-radius: 999px;
@@ -4326,6 +4869,12 @@ body.is-loading .events-detail-mode {
 /* REPORTS view: sidebar filter panel + main table + Download. Grid columns get min-width:0 (else intrinsic min-content leaks a wide table past the viewport edge); filter panel has a scrollable inner area + pinned Run/Reset footer; result table scrolls horizontally inside its container; 3 breakpoints (1200/1000/720px); uses theme tokens, no hard-coded white panels. */
 .reports-intro { padding: 18px 24px 8px; }
 
+.reports-sprint-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 0 24px 8px; padding: 10px 16px; background: var(--accent-soft); border: 1px solid var(--accent);
+  border-radius: var(--r-field); font-size: 13px; color: var(--text);
+}
+
 .reports-shell {
   display: grid;
   grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
@@ -5026,3 +5575,51 @@ body.is-loading .events-detail-mode {
     padding: 8px 10px;
   }
 }
+
+
+/* Git branch creation: compact Development section inside existing item dialogs. */
+.git-branch-list { display: grid; gap: 8px; margin-bottom: 12px; }
+.git-branch-row, .git-branch-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line, #d8dce3); border-radius: 8px; }
+.git-branch-row a { overflow-wrap: anywhere; }
+.git-branch-create { display: grid; gap: 10px; }
+.git-branch-create > .field { margin: 0; }
+.git-branch-confirm { align-items: flex-start; background: var(--surface-subtle, rgba(0, 0, 0, 0.025)); }
+.git-branch-confirm strong { overflow-wrap: anywhere; }
+.git-branch-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.git-branch-reason { margin-top: 8px; }
+/* Per-row action cluster: status chip + Remove sit together at the right. */
+.git-branch-row-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.git-branch-remove-btn { padding: 4px 10px; font-size: 11.5px; }
+/* Removed branch history is sidelined: greyed out, dashed, and (via
+ * partitionBranches) ordered after every active branch. */
+.git-branch-row.is-removed { opacity: 0.55; border-style: dashed; }
+.git-branch-row.is-removed a { color: var(--text-faint); text-decoration: line-through; }
+/* Faint, status-relevant chips for branch rows: soft green when live,
+ * soft red once removed, soft amber when the provider state is unknown. */
+.badge[data-branch-status="Active"]  { color: var(--ok); border-color: rgba(47, 189, 107, 0.45); }
+.badge[data-branch-status="Deleted"] { color: var(--danger); border-color: rgba(229, 72, 77, 0.45); }
+.badge[data-branch-status="Unknown"] { color: var(--warn); border-color: rgba(242, 184, 75, 0.45); }
+.hierarchy-detail-body .git-branches-section { margin-top: 14px; }
+@media (max-width: 640px) {
+  .git-branch-row, .git-branch-confirm { align-items: stretch; flex-direction: column; }
+  .git-branch-row-side { justify-content: flex-start; }
+  .git-branch-confirm-actions { justify-content: flex-start; }
+}
+
+/* Project-level Git administration, kept inside the existing project modal. */
+.project-modal-content { max-height: min(82vh, 900px); overflow: auto; }
+.project-git-settings { border-top: 1px solid var(--line, #d8dce3); padding: 18px 20px 22px; }
+.project-git-settings h3, .project-git-settings h4 { margin: 0; }
+.project-git-auth { margin: 8px 0 14px; }
+.project-git-auth.is-error { color: var(--danger, #b42318); }
+.project-git-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.project-git-status { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0; }
+.project-git-actions, .project-git-section-head, .project-git-repository-head, .project-git-repository-controls, .project-git-add { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.project-git-actions { margin: 12px 0 18px; }
+.project-git-section-head, .project-git-repository-head { justify-content: space-between; }
+.project-git-repositories { display: grid; gap: 12px; }
+.project-git-repository { border: 1px solid var(--line, #d8dce3); border-radius: 8px; padding: 12px; }
+.project-git-repository-controls { margin: 10px 0 6px; }
+.project-git-repository-controls .field { min-width: 180px; flex: 1; margin: 0; }
+.project-git-add > .bh-sel-wrap { min-width: 240px; flex: 1; }
+@media (max-width: 640px) { .project-git-grid { grid-template-columns: 1fr; } }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -20,14 +21,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.agile.integrity import set_actor
 from app.config import get_settings
 from app.database import get_db
 from app.models import (
     ROLE_ADMIN,
     ROLE_MANAGER,
     PasswordResetToken,
-    Session as SessionRow,
     User,
+)
+from app.models import (
+    Session as SessionRow,
 )
 
 logger = logging.getLogger("bug_hunter.auth")
@@ -52,13 +56,30 @@ def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
 _FALLBACK_SECRET = secrets.token_hex(32)
 
 
+# bcrypt cost used when hashing passwords. Production keeps the default 12;
+# the test suite overrides BCRYPT_TEST_ROUNDS to 4 so CI does not burn most of
+# its wall-clock in password hashing (each rounds-12 hash costs ~0.3-0.6s and
+# the suite hashes/verify hundreds of times). Overriding an arbitrary low value
+# is capped at 12 so production strength can never be weakened through this.
+_TEST_BCRYPT_ROUNDS = 4
+_MAX_BCRYPT_ROUNDS = 12
+
+
+def _bcrypt_rounds() -> int:
+    """Cost factor for new hashes; honour a test-only override, capped at prod strength."""
+    try:
+        return max(1, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
+    except ValueError:
+        return _MAX_BCRYPT_ROUNDS
+
+
 def hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt."""
     if not plain:
         raise ValueError("Password cannot be empty")
     # bcrypt caps input at 72 bytes -> sha256 pre-hash; must match verify_password forever.
     pre = hashlib.sha256(plain.encode("utf-8")).digest()
-    return bcrypt.hashpw(pre, bcrypt.gensalt(rounds=12)).decode("utf-8")
+    return bcrypt.hashpw(pre, bcrypt.gensalt(rounds=_bcrypt_rounds())).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: Optional[str]) -> bool:
@@ -271,15 +292,10 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+    # The route receives this same session, so work-item history written by
+    # its flushes is attributed to this user (app/agile/integrity.py).
+    set_actor(db, user.id)
     return user
-
-
-def get_current_user_optional(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> Optional[User]:
-    """Return the current user if logged in, else None. Never raises."""
-    return _user_from_request(request, db)
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
@@ -341,26 +357,3 @@ def can_delete_event(user: User) -> bool:
 def can_manage_projects(user: User) -> bool:
     """Create/edit projects: admin or manager (delete is admin-only)."""
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
-
-
-def can_delete_project(user: User) -> bool:
-    return user.role == ROLE_ADMIN
-
-
-def can_manage_users(user: User) -> bool:
-    """Create/edit users: admin or manager (delete is admin-only)."""
-    return user.role in (ROLE_ADMIN, ROLE_MANAGER)
-
-
-def can_delete_user(user: User) -> bool:
-    return user.role == ROLE_ADMIN
-
-
-def can_view_audit(user: User) -> bool:
-    """Audit trail is admin/manager only."""
-    return user.role in (ROLE_ADMIN, ROLE_MANAGER)
-
-
-def can_manage_sessions(user: User) -> bool:
-    """Only admins can list / revoke other users' sessions."""
-    return user.role == ROLE_ADMIN

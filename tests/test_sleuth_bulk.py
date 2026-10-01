@@ -3,7 +3,9 @@ non-admin writes (single or bulk) get action_denied while reads keep working (te
 """
 from __future__ import annotations
 
-import os as _os, sys as _sys
+import os as _os
+import sys as _sys
+
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
@@ -17,15 +19,16 @@ os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
 
 # Purge app.* so this file gets a fresh import bound to its own DB (avoids "no such table").
 import sys as _sys_purge
+
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
         del _sys_purge.modules[_m]
 
-from app.database import Base, engine, SessionLocal
 from app import models
 from app.auth import hash_password
-from app.chatbot import executor, actions
+from app.chatbot import actions, executor
 from app.chatbot.memory import store as memstore
+from app.database import Base, SessionLocal, engine
 
 
 def seed():
@@ -263,6 +266,52 @@ def test_clear_all_assignees_admin_only():
         db.close()
 
 
+def test_clear_all_assignees_no_matching_items():
+    # A valid scope phrase with a status filter matching nothing (all seeded
+    # bugs are "New") must report no matching items, not stage a plan.
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        r = executor.execute("remove assignees from all closed bugs", db, admin)
+        assert r.intent == "action_invalid", r.intent
+        assert "couldn't find" in r.blocks[0].payload["text"].lower()
+    finally:
+        db.close()
+
+
+def test_clear_all_assignees_over_cap_refused(monkeypatch):
+    # 3 seeded bugs exceed a cap of 1: refuse rather than stage a runaway plan.
+    ids = seed()
+    monkeypatch.setattr(executor, "_BULK_ACTION_CAP", 1)
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        r = executor.execute("remove assignees from all the bugs", db, admin)
+        assert r.intent == "action_invalid", r.intent
+        assert "too many" in r.blocks[0].payload["text"].lower()
+    finally:
+        db.close()
+
+
+def test_clear_assignees_with_named_user_is_not_a_clear_all():
+    # "remove Bob as assignee..." names a specific user: this is a targeted
+    # unassign, not a clear-all, so _maybe_handle_clear_assignees must defer
+    # (return None) and let the normal single/bulk-unassign flow handle it.
+    from app.chatbot.nlu import ParsedQuery
+    ids = seed()
+    db = SessionLocal()
+    try:
+        admin = _user(db, ids["admin"])
+        pq = ParsedQuery()
+        pq.assignee_ids = [ids["usr"]]
+        res = executor._maybe_handle_clear_assignees(
+            "remove Uma as assignee from all bugs", db, admin, pq)
+        assert res is None
+    finally:
+        db.close()
+
+
 def test_bulk_assign_needs_a_user():
     ids = seed()
     db = SessionLocal()
@@ -307,7 +356,9 @@ def test_bulk_assign_with_status_filter():
     try:
         admin = _user(db, ids["admin"])
         # Move one bug to In Progress so only the remaining two match the New filter.
-        b = db.get(models.Bug, ids["bugs"][0]); b.status = "In Progress"; db.commit()
+        b = db.get(models.Bug, ids["bugs"][0])
+        b.status = "In Progress"
+        db.commit()
         staged = executor.execute("assign all new bugs to Saikat Aich", db, admin)
         assert staged.intent == "confirm_action", staged.intent
         assert "2" in staged.blocks[0].payload["text"]
@@ -377,7 +428,10 @@ def test_bulk_assign_all_items_covers_every_type_with_breakdown():
         staged = executor.execute("assign all items to Saikat Aich", db, admin)
         assert staged.intent == "confirm_action", staged.intent
         text = staged.blocks[0].payload["text"]
-        assert "5" in text and "Bug" in text and "Requirement" in text and "Task" in text, text
+        assert "5" in text, text
+        assert "Bug" in text, text
+        assert "Requirement" in text, text
+        assert "Task" in text, text
 
         done = executor.execute("yes", db, admin)
         assert done.intent == "action_done", done.intent

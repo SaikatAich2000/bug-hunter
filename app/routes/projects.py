@@ -14,10 +14,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.access import accessible_project_ids, add_user_project, can_access_project
+from app.agile import boards as boards_svc
+from app.api_docs import CONFLICT_409, NOT_FOUND_404, NOT_FOUND_CONFLICT_409
 from app.auth import get_current_user, require_admin, require_manager_or_admin
 from app.database import get_db
 from app.models import ROLE_ADMIN, Activity, Bug, Project, User
-from app.schemas import ProjectIn, ProjectOut
+from app.schemas import ProjectCreateIn, ProjectIn, ProjectOut
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -45,29 +47,40 @@ def list_projects(
     return list(db.scalars(stmt.limit(500)).all())
 
 
-@router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED, responses=CONFLICT_409)
 def create_project(
-    payload: ProjectIn,
+    payload: ProjectCreateIn,
     db: Session = Depends(get_db),
     actor: User = Depends(require_manager_or_admin),
 ) -> Project:
-    p = Project(**payload.model_dump())
+    p = Project(**payload.model_dump(exclude={"agile_enabled"}))
     db.add(p)
     try:
         db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Project name already exists") from exc
+    # Optional Agile activation in the same transaction: a failure rolls the
+    # whole creation back, so a project is never left half-configured (no board
+    # while agile_enabled says otherwise).
+    if payload.agile_enabled:
+        try:
+            boards_svc.activate_agile_for_project(db, p, actor, {})
+        except boards_svc.AgileActivationError as exc:
+            db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     # auto-enroll the creating manager so they keep visibility of their new project
     if actor.role != ROLE_ADMIN:
         add_user_project(db, actor.id, p.id)
     _audit(db, actor, "project_created", p.id, f"Created project '{p.name}'")
+    if payload.agile_enabled:
+        _audit(db, actor, "agile_enabled", p.id, f"Enabled Agile for project '{p.name}'")
     db.commit()
     db.refresh(p)
     return p
 
 
-@router.get("/{project_id}", response_model=ProjectOut)
+@router.get("/{project_id}", response_model=ProjectOut, responses=NOT_FOUND_404)
 def get_project(
     project_id: int,
     db: Session = Depends(get_db),
@@ -80,7 +93,7 @@ def get_project(
     return p
 
 
-@router.put("/{project_id}", response_model=ProjectOut)
+@router.put("/{project_id}", response_model=ProjectOut, responses=NOT_FOUND_CONFLICT_409)
 def update_project(
     project_id: int,
     payload: ProjectIn,
@@ -112,7 +125,7 @@ def update_project(
     return p
 
 
-@router.delete("/{project_id}")
+@router.delete("/{project_id}", responses=NOT_FOUND_CONFLICT_409)
 def delete_project(
     project_id: int,
     db: Session = Depends(get_db),

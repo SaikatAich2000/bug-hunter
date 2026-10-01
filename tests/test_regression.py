@@ -71,7 +71,7 @@ class TestAuth:
 
     def test_login_with_inactive_user_is_unified_401(self, admin_client):
         """Deactivated user gets the same 401 as a wrong password (no account-state leak)."""
-        u = _create_user(admin_client, "Deact", "deact@x.com",
+        _create_user(admin_client, "Deact", "deact@x.com",
                          password="DeactivatedZx9Q", is_active=False)
         _logout(admin_client)
         r = admin_client.post("/api/auth/login", json={
@@ -99,7 +99,8 @@ class TestAuth:
         })
         set_cookies = r.headers.get_list("set-cookie")
         bh_cookie = next((c for c in set_cookies if c.startswith("bh_session=")), None)
-        assert bh_cookie and "samesite=lax" in bh_cookie.lower()
+        assert bh_cookie
+        assert "samesite=lax" in bh_cookie.lower()
 
     def test_change_password_with_short_new_password_fails(self, admin_client):
         """New password must be ≥ 8 chars."""
@@ -227,7 +228,7 @@ class TestUsers:
 
     def test_email_is_unique_on_update(self, admin_client):
         """Updating user2's email to user1's email must 409."""
-        u1 = _create_user(admin_client, "U1", "one@x.com")
+        _create_user(admin_client, "U1", "one@x.com")
         u2 = _create_user(admin_client, "U2", "two@x.com")
         r = admin_client.put(f"/api/users/{u2['id']}", json={"email": "one@x.com"})
         assert r.status_code == 409, r.text
@@ -424,7 +425,8 @@ class TestBugs:
         _create_bug(admin_client, p2["id"], title="bug-three", priority="High", environment="PROD")
         r = admin_client.get(f"/api/bugs?project_id={p1['id']}&priority=High")
         items = r.json()["items"]
-        assert len(items) == 1 and items[0]["title"] == "bug-one"
+        assert len(items) == 1
+        assert items[0]["title"] == "bug-one"
 
     def test_bug_update_invalid_field_value(self, admin_client):
         p = _create_project(admin_client, name="N14")
@@ -466,6 +468,7 @@ class TestBugs:
     def test_xlsx_export_works(self, admin_client):
         """A freshly-created bug must appear in the Reports XLSX export."""
         import io
+
         from openpyxl import load_workbook
         p = _create_project(admin_client, name="N18")
         _create_bug(admin_client, p["id"], title="csv-test")
@@ -593,7 +596,7 @@ class TestStatsAudit:
         assert sum(d["count"] for d in body["timeline"]) >= 1
 
     def test_audit_filter_by_entity_type(self, admin_client):
-        p = _create_project(admin_client, name="ST2")
+        _create_project(admin_client, name="ST2")
         r = admin_client.get("/api/audit?entity_type=project")
         assert r.status_code == 200
         rows = r.json()
@@ -601,7 +604,7 @@ class TestStatsAudit:
         assert any(row["action"] == "project_created" for row in rows)
 
     def test_audit_search_by_text(self, admin_client):
-        p = _create_project(admin_client, name="UniqueAuditMarker_xyz")
+        _create_project(admin_client, name="UniqueAuditMarker_xyz")
         r = admin_client.get("/api/audit?q=UniqueAuditMarker_xyz")
         rows = r.json()
         assert len(rows) >= 1
@@ -709,7 +712,8 @@ class TestSecurity:
         r2 = client.post("/api/auth/login", json={
             "email": "admin@test.local", "password": "wrongpass",
         })
-        assert r1.status_code == 401 and r2.status_code == 401
+        assert r1.status_code == 401
+        assert r2.status_code == 401
         assert r1.json()["detail"] == r2.json()["detail"]
 
     def test_unauth_xlsx_export_blocked(self, client):
@@ -988,7 +992,7 @@ class TestV321Chatbot:
         their own name."""
         p = _create_project(admin_client, name="ME1")
         me = admin_client.get("/api/auth/me").json()
-        bug = _create_bug(admin_client, p["id"], title="Mine to fix",
+        _create_bug(admin_client, p["id"], title="Mine to fix",
                           assignee_ids=[me["id"]])
         _create_bug(admin_client, p["id"], title="Someone else's")
 
@@ -1036,7 +1040,7 @@ class TestV321Chatbot:
         # to make updated_at deltas measurable.
         first = _create_bug(admin_client, p["id"], title="Older one")
         time.sleep(1.1)
-        second = _create_bug(admin_client, p["id"], title="Newer one")
+        _create_bug(admin_client, p["id"], title="Newer one")
         time.sleep(1.1)
         # Touch the first bug so its updated_at moves past the second.
         admin_client.put(f"/api/bugs/{first['id']}", json={"priority": "High"})

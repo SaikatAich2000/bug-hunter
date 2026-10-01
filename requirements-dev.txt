@@ -7,6 +7,15 @@
 pytest>=8.0,<10
 pytest-order>=1.3
 
+# Browser end-to-end suites (tests/test_ui_smoke.py, tests/test_playwright_*.py,
+# marker `ui`). One-time browser download: python -m playwright install chromium
+playwright>=1.47,<2
+
 # Coverage
 pytest-cov>=5.0
 coverage>=7.4
+
+# Static analysis / security scanning (CI lint + security jobs)
+ruff>=0.6
+bandit[toml]>=1.7
+pip-audit>=2.7

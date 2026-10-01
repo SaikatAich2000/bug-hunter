@@ -57,7 +57,8 @@ def test_redact_keeps_innocuous_text():
 
 def test_redact_keeps_label_when_scrubbing_value():
     out = redact("password: superSecretValue")
-    assert "password" in out and "superSecretValue" not in out
+    assert "password" in out
+    assert "superSecretValue" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,8 @@ def test_remember_bug_user_and_filter():
     sess = s.get(5)
     # remember_filter copies, so the later mutation must not bleed into the stored filter.
     assert sess.last_bug_id == 99
-    assert sess.last_user_id == 7 and sess.last_user_name == "Carol"
+    assert sess.last_user_id == 7
+    assert sess.last_user_name == "Carol"
     assert sess.last_filter == {"status": ["New"]}
 
 
@@ -130,6 +132,7 @@ def test_capacity_eviction_drops_lru(monkeypatch):
     s.touch(10_000)                            # over cap; LRU (uid 0) should be evicted
     sessions = s._all_sessions_for_test()
     assert len(sessions) == mem._MAX_SESSIONS
-    assert 0 not in sessions and 10_000 in sessions
+    assert 0 not in sessions
+    assert 10_000 in sessions
     s._clear_all_for_test()
     assert s._all_sessions_for_test() == {}

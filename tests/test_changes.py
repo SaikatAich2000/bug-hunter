@@ -3,8 +3,6 @@ Covers the two new statuses, KPI strip shape, repeated ?status params, and the a
 """
 from __future__ import annotations
 
-import pytest
-
 
 # Shared helpers used by multiple test classes below.
 def _make_project(client, name="P-status"):
@@ -138,13 +136,14 @@ class TestMultiSelectFilters:
 
         r = admin_client.get("/api/bugs?priority=High&priority=Critical")
         titles = {b["title"] for b in r.json()["items"]}
-        assert "hi-bug" in titles and "crit-bug" in titles
+        assert "hi-bug" in titles
+        assert "crit-bug" in titles
         assert "low-bug" not in titles
 
     def test_repeat_environment_param(self, admin_client):
         p = _make_project(admin_client, "MS-3")
         # Default environment is DEV; override with PUT.
-        b1 = _make_bug(admin_client, p["id"], title="env-dev")
+        _make_bug(admin_client, p["id"], title="env-dev")
         b2 = _make_bug(admin_client, p["id"], title="env-uat")
         admin_client.put(f"/api/bugs/{b2['id']}", json={"environment": "UAT"})
         b3 = _make_bug(admin_client, p["id"], title="env-prod")
@@ -152,7 +151,8 @@ class TestMultiSelectFilters:
 
         r = admin_client.get("/api/bugs?environment=UAT&environment=PROD")
         titles = {b["title"] for b in r.json()["items"]}
-        assert "env-uat" in titles and "env-prod" in titles
+        assert "env-uat" in titles
+        assert "env-prod" in titles
         assert "env-dev" not in titles
 
     def test_repeat_project_id_param(self, admin_client):
@@ -165,7 +165,8 @@ class TestMultiSelectFilters:
 
         r = admin_client.get(f"/api/bugs?project_id={p1['id']}&project_id={p2['id']}")
         titles = {b["title"] for b in r.json()["items"]}
-        assert "bug-in-p1" in titles and "bug-in-p2" in titles
+        assert "bug-in-p1" in titles
+        assert "bug-in-p2" in titles
         assert "bug-in-p3" not in titles
 
     def test_single_value_still_works(self, admin_client):
@@ -218,7 +219,7 @@ class TestAttachmentCountPerf:
         """The aggregate-query path must still return correct attachment counts."""
         p = _make_project(admin_client, "PERF-1")
         b1 = _make_bug(admin_client, p["id"], title="att-bug")
-        b2 = _make_bug(admin_client, p["id"], title="no-att-bug")
+        _make_bug(admin_client, p["id"], title="no-att-bug")
         # Two attachments on b1, none on b2.
         for fname in ("a.txt", "b.txt"):
             files = {"file": (fname, b"hello world", "text/plain")}
@@ -233,6 +234,7 @@ class TestAttachmentCountPerf:
     def test_list_bugs_uses_single_count_query(self, admin_client):
         """Instrument SQLAlchemy and verify query count stays constant (generous <15 threshold catches an N+1 return)."""
         from sqlalchemy import event
+
         from app.database import engine
 
         p = _make_project(admin_client, "PERF-2")

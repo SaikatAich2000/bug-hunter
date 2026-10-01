@@ -154,7 +154,8 @@ def test_event_create_emails_only_managers(admin_client, monkeypatch):
     assert "Sprint kickoff" in subj
     assert to == ["mgra@x.test", "mgrb@x.test"], to
     assert "Managers:" in body
-    assert ev["managers"] and len(ev["managers"]) == 2
+    assert ev["managers"]
+    assert len(ev["managers"]) == 2
 
 
 def test_event_update_emails_managers(admin_client, monkeypatch):
@@ -216,7 +217,7 @@ def test_task_creation_does_NOT_email_event_managers(admin_client, monkeypatch):
     })
     assert r.status_code == 201, r.text
     # Only the assignee gets a task-created email; the event manager must not.
-    flat = " ".join(b for _, _, b in sent) + " " + " ".join(s for s, _, _ in sent)
+    " ".join(b for _, _, b in sent) + " " + " ".join(s for s, _, _ in sent)
     all_to = [addr for _, to, _ in sent for addr in to]
     assert "wkr@x.test" in all_to, "Assignee should be notified"
     assert "evmgr@x.test" not in all_to, \

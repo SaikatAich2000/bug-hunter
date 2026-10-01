@@ -13,9 +13,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api_docs import BAD_REQUEST_NOT_FOUND_404 as NOT_FOUND_400
 from app.auth import COOKIE_NAME, parse_session_token, require_admin
 from app.database import get_db
-from app.models import Activity, Session as SessionRow, User
+from app.models import Activity, User
+from app.models import Session as SessionRow
 from app.schemas import SessionOut
 
 logger = logging.getLogger("bug_hunter.sessions")
@@ -91,7 +93,7 @@ def list_sessions(
     return out
 
 
-@router.delete("/{session_id}", status_code=200)
+@router.delete("/{session_id}", status_code=200, responses=NOT_FOUND_400)
 def revoke_session(
     session_id: int,
     request: Request,

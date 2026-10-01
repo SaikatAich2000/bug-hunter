@@ -18,7 +18,7 @@ def test_load_dotenv_oserror_is_logged(monkeypatch):
 
 def test_load_dotenv_ok(monkeypatch):
     seen = {}
-    monkeypatch.setattr(config, "load_dotenv", lambda path: seen.update(path=path))
+    monkeypatch.setattr(config, "load_dotenv", lambda path, override=False: seen.update(path=path))
     config._load_dotenv()
     assert "path" in seen
 
@@ -96,6 +96,7 @@ def test_env_float_clamps_minimum(monkeypatch):
 def test_smtp_password_strips_gmail_display_spaces(monkeypatch):
     """Gmail shows app passwords as 4 space-separated groups; the real secret has none."""
     import importlib
+
     # Re-import fresh: the module-level `config` binding can go stale if another
     # test's `client` fixture already dropped app.config from sys.modules.
     import app.config as fresh_config
@@ -107,6 +108,54 @@ def test_smtp_password_strips_gmail_display_spaces(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(fresh_config)
+
+
+# Settings.APP_BASE_URL
+# _normalize_database_url
+def test_normalize_database_url_no_scheme_separator():
+    assert config._normalize_database_url("not-a-url") == "not-a-url"
+
+
+def test_normalize_database_url_non_postgres_dialect():
+    url = "mysql://user:pass@host/db"
+    assert config._normalize_database_url(url) == url
+
+
+def test_normalize_database_url_already_psycopg():
+    url = "postgresql+psycopg://user:pass@host/db"
+    assert config._normalize_database_url(url) == url
+
+
+def test_normalize_database_url_bare_postgres_gets_psycopg_driver():
+    assert config._normalize_database_url("postgres://user:pass@host/db") == (
+        "postgresql+psycopg://user:pass@host/db"
+    )
+    assert config._normalize_database_url("postgresql://user:pass@host/db") == (
+        "postgresql+psycopg://user:pass@host/db"
+    )
+
+
+# Settings.APP_BASE_URL
+def test_default_base_url_from_container_app_hostname(monkeypatch):
+    monkeypatch.setenv("CONTAINER_APP_HOSTNAME", "app.example.azurecontainerapps.io")
+    assert config._default_base_url() == "https://app.example.azurecontainerapps.io"
+
+
+def test_default_base_url_from_name_and_dns_suffix(monkeypatch):
+    monkeypatch.delenv("CONTAINER_APP_HOSTNAME", raising=False)
+    monkeypatch.setenv("CONTAINER_APP_NAME", "bug-hunter")
+    monkeypatch.setenv("CONTAINER_APP_ENV_DNS_SUFFIX", "bluesky.westus.azurecontainerapps.io")
+    assert config._default_base_url() == (
+        "https://bug-hunter.bluesky.westus.azurecontainerapps.io"
+    )
+
+
+def test_default_base_url_falls_back_to_localhost(monkeypatch):
+    for var in (
+        "CONTAINER_APP_HOSTNAME", "CONTAINER_APP_NAME", "CONTAINER_APP_ENV_DNS_SUFFIX",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    assert config._default_base_url() == "http://localhost:8765"
 
 
 # Settings.is_production

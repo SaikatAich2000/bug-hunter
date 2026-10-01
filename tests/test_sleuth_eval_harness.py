@@ -30,11 +30,17 @@ def test_score_trajectory_shapes():
     from app.chatbot.eval_harness import score_trajectory
     # Well-formed, grounded, efficient run.
     good = score_trajectory(["retrieve", "query", "final"], max_steps=4, grounded_final=True)
-    assert good.valid and good.efficient and good.grounded_final and good.ok
-    assert good.steps == 3 and good.score == 1.0
+    assert good.valid
+    assert good.efficient
+    assert good.grounded_final
+    assert good.ok
+    assert good.steps == 3
+    assert good.score == 1.0
     # Valid but ungrounded -> lower score, not ok.
     ungrounded = score_trajectory(["query", "final"], max_steps=4, grounded_final=False)
-    assert ungrounded.valid and not ungrounded.grounded_final and not ungrounded.ok
+    assert ungrounded.valid
+    assert not ungrounded.grounded_final
+    assert not ungrounded.ok
     assert ungrounded.score == 0.7
     # Terminal in the middle is invalid; a tool step must precede the finish.
     assert not score_trajectory(["final", "query"], max_steps=4, grounded_final=True).valid
@@ -43,10 +49,14 @@ def test_score_trajectory_shapes():
     # Unknown action -> invalid. Empty -> invalid, score 0.
     assert not score_trajectory(["frobnicate", "final"], max_steps=4, grounded_final=True).valid
     empty = score_trajectory([], max_steps=4, grounded_final=True)
-    assert not empty.valid and empty.steps == 0 and empty.score == 0.0
+    assert not empty.valid
+    assert empty.steps == 0
+    assert empty.score == 0.0
     # Over-budget: valid but not efficient.
     over = score_trajectory(["query", "query", "query", "final"], max_steps=2, grounded_final=True)
-    assert over.valid and not over.efficient and over.score == 0.8
+    assert over.valid
+    assert not over.efficient
+    assert over.score == 0.8
 
 
 def test_run_and_trace_terminal_paths():
@@ -63,16 +73,19 @@ def test_run_and_trace_terminal_paths():
         run_retrieve=lambda q: ("#1 Login", {1}), max_steps=4,
     )
     assert actions == ["retrieve", "query", "final"]
-    assert result.kind == "text" and result.grounded_ids == {1}
+    assert result.kind == "text"
+    assert result.grounded_ids == {1}
     ts = eh.score_trajectory(actions, max_steps=4, grounded_final=bool(result.grounded_ids))
-    assert ts.ok and ts.score == 1.0
+    assert ts.ok
+    assert ts.score == 1.0
 
     # answer_data: the loop returns a canonical query for a real table lookup.
     result, actions = eh.run_and_trace(
         "list open", call_model=_scripted([{"action": "answer_data", "canonical_query": "open bugs"}]),
         run_query=lambda c: "x", run_retrieve=lambda q: ("", set()), max_steps=4,
     )
-    assert actions == ["answer_data"] and result.kind == "data"
+    assert actions == ["answer_data"]
+    assert result.kind == "data"
     assert eh.score_trajectory(actions, max_steps=4, grounded_final=True).ok
 
     # Never terminates -> kind "none", no terminal action in the trace.
@@ -80,13 +93,15 @@ def test_run_and_trace_terminal_paths():
         "loop", call_model=_scripted([{"action": "query", "canonical_query": "open bugs"}] * 5),
         run_query=lambda c: "x", run_retrieve=lambda q: ("", set()), max_steps=3,
     )
-    assert actions == ["query", "query", "query"] and result.kind == "none"
+    assert actions == ["query", "query", "query"]
+    assert result.kind == "none"
     assert not eh.score_trajectory(actions, max_steps=3, grounded_final=False).valid
 
 
 # 2. Outcome — did the final Response achieve the goal?
 def test_check_outcome_pure():
     import types
+
     from app.chatbot.eval_harness import check_outcome
     resp = types.SimpleNamespace(
         intent="cloud_data:list_bugs",
@@ -97,22 +112,24 @@ def test_check_outcome_pure():
                                 "text_contains": "found 2"}).ok
     bad = check_outcome(resp, {"intent": "greeting", "has_file": True,
                                "text_contains": "nope"})
-    assert not bad.ok and len(bad.reasons) == 3
+    assert not bad.ok
+    assert len(bad.reasons) == 3
     # Wrong intent prefix and missing table block.
     miss = check_outcome(
         types.SimpleNamespace(intent="greeting", blocks=[]),
         {"intent_prefix": "cloud_data:", "has_table": True},
     )
-    assert not miss.ok and len(miss.reasons) == 2
+    assert not miss.ok
+    assert len(miss.reasons) == 2
     assert not check_outcome(None, {}).ok
 
 
 def test_outcome_over_executor_golden_tasks(admin_client):
     """Golden corpus through the real executor: each Response matches its goal shape."""
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import executor
     from app.chatbot.eval_harness import check_outcome
+    from app.database import SessionLocal
     pid = _project(admin_client)
     _bug(admin_client, pid, "Login crash", "boom")
     golden = [
@@ -145,8 +162,8 @@ def test_agreement_and_brier_pure():
 
 def test_llm_judge_agreement_and_confidence_over_golden_set():
     """Stubbed LLM-judge over a labelled golden set: decisions match labels, confidence calibrated."""
-    from app.chatbot import evals
     from app.chatbot import eval_harness as eh
+    from app.chatbot import evals
     golden = [
         ("how many open?", "#1 Login (New)", "There is 1 open bug, #1.",
          True, {"grounded": True, "faithful": True, "score": 0.9}),
@@ -183,10 +200,10 @@ def test_reliability_metrics_pure():
 
 def test_reliability_route_determinism_on_deterministic_layer(admin_client):
     """Deterministic parse+dispatch returns the same intent every run (LLM layer excluded)."""
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import executor
     from app.chatbot.eval_harness import self_consistency
+    from app.database import SessionLocal
     pid = _project(admin_client)
     _bug(admin_client, pid, "Login crash", "boom")
     db = SessionLocal()
@@ -202,10 +219,10 @@ def test_reliability_route_determinism_on_deterministic_layer(admin_client):
 
 def test_reliability_live_counters(admin_client, monkeypatch):
     """Live counters record which provider served the turn and which route was chosen."""
-    from app.config import get_settings
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import cloud_llm, executor
+    from app.config import get_settings
+    from app.database import SessionLocal
     pid = _project(admin_client)
     _bug(admin_client, pid, "Login crash", "boom")
     s = get_settings()
@@ -243,7 +260,7 @@ def test_cooldown_no_ratchet_and_trip_counter(monkeypatch):
 
 # 5. pass@k — fraction of tasks where at least one of K attempts passed
 def test_pass_at_k_pure():
-    from app.chatbot.eval_harness import pass_at_k, aggregate_pass_at_k
+    from app.chatbot.eval_harness import aggregate_pass_at_k, pass_at_k
     assert pass_at_k([False, True, False]) == 1.0
     assert pass_at_k([False, False]) == 0.0
     assert aggregate_pass_at_k([]) == 0.0
@@ -253,10 +270,10 @@ def test_pass_at_k_pure():
 
 def test_pass_at_k_over_outcome_checks(admin_client):
     """A deterministic data task passes every attempt, so pass@k and aggregate are 1.0."""
-    from app.database import SessionLocal
     from app import models
     from app.chatbot import executor
-    from app.chatbot.eval_harness import check_outcome, pass_at_k, aggregate_pass_at_k
+    from app.chatbot.eval_harness import aggregate_pass_at_k, check_outcome, pass_at_k
+    from app.database import SessionLocal
     pid = _project(admin_client)
     _bug(admin_client, pid, "Login crash", "boom")
     spec = {"intent": "list_bugs", "has_table": True}

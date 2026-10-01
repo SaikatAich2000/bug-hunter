@@ -34,6 +34,7 @@ def _session():
 
 def _uid(db, email: str) -> int:
     from sqlalchemy import select
+
     from app.models import User
     return db.scalar(select(User).where(User.email == email)).id
 
@@ -102,13 +103,17 @@ def test_subscribe_then_unsubscribe(admin_client):
     db.close()
 
     r = admin_client.post("/api/push/subscribe", json={"token": "tok-abc", "platform": "web"})
-    assert r.status_code == 200 and r.json()["ok"] is True
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
 
     from sqlalchemy import select
+
     from app.models import PushSubscription
     db = _session()
     sub = db.scalar(select(PushSubscription).where(PushSubscription.token == "tok-abc"))
-    assert sub is not None and sub.user_id == admin_id and sub.platform == "web"
+    assert sub is not None
+    assert sub.user_id == admin_id
+    assert sub.platform == "web"
     db.close()
 
     assert admin_client.post("/api/push/unsubscribe", json={"token": "tok-abc"}).json()["ok"] is True
@@ -122,6 +127,7 @@ def test_subscribe_same_token_upserts(admin_client):
     admin_client.post("/api/push/subscribe", json={"token": "dup", "platform": "web"})
 
     from sqlalchemy import func, select
+
     from app.models import PushSubscription
     db = _session()
     n = db.scalar(
@@ -143,6 +149,7 @@ def test_unsubscribe_is_user_scoped(admin_client):
     assert r.json()["ok"] is False  # wrong owner, nothing removed
 
     from sqlalchemy import select
+
     from app.models import PushSubscription
     db = _session()
     assert db.scalar(select(PushSubscription).where(PushSubscription.token == "admins-token")) is not None
@@ -179,6 +186,7 @@ def test_push_to_users_sends_and_prunes_dead_tokens(admin_client, monkeypatch):
     assert delivered == 1  # 2 tokens sent, 1 reported dead
 
     from sqlalchemy import select
+
     from app.models import PushSubscription
     db = _session()
     assert db.scalar(select(PushSubscription).where(PushSubscription.token == "dead-tok")) is None

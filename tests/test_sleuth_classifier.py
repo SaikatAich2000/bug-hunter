@@ -2,15 +2,16 @@
 degradation without a model file, so CI never downloads a GGUF."""
 from __future__ import annotations
 
-import os as _os, sys as _sys
-# Make the bug-hunter root importable when run directly.
+import os as _os
+import sys as _sys
+
+# Make the project root importable when run directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import sys
 import tempfile
 import traceback
-from datetime import datetime, timedelta, timezone
 
 _tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp.close()
@@ -24,16 +25,17 @@ os.environ["SLEUTH_LLM_MODEL_PATH"] = "/tmp/__sleuth_no_model__.gguf"
 
 # Purge cached app.* so imports bind to this file's DB, not a torn-down engine.
 import sys as _sys_purge
+
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
         del _sys_purge.modules[_m]
 
-from app.database import Base, engine, SessionLocal
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
 from app import models
 from app.auth import hash_password
 from app.chatbot import classifier, executor, llm
-
-import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+from app.database import Base, SessionLocal, engine
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +52,6 @@ def _rebind_app_modules():
     g["classifier"] = importlib.import_module("app.chatbot.classifier")
     g["executor"] = importlib.import_module("app.chatbot.executor")
     g["llm"] = importlib.import_module("app.chatbot.llm")
-    yield
 
 
 PASSED: list[str] = []
@@ -86,7 +87,8 @@ def seed():
         db.add_all([admin, alice])
         db.commit()
         proj = models.Project(name="Apollo")
-        db.add(proj); db.commit()
+        db.add(proj)
+        db.commit()
         bugs = [
             models.Bug(title="Login broken", description="d",
                        status="New", priority="High", environment="PROD",
@@ -95,7 +97,8 @@ def seed():
                        status="Closed", priority="Low", environment="DEV",
                        project_id=proj.id, reporter_id=admin.id),
         ]
-        db.add_all(bugs); db.commit()
+        db.add_all(bugs)
+        db.commit()
         return admin.id
     finally:
         db.close()
@@ -331,7 +334,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         FAILED.append(("HARNESS", "uncaught"))
 
-    print(f"\n=== RESULTS ===")
+    print("\n=== RESULTS ===")
     print(f"Passed: {len(PASSED)}")
     print(f"Failed: {len(FAILED)}")
     if FAILED:

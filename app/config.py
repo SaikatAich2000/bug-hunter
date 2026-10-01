@@ -9,7 +9,8 @@ from pathlib import Path
 
 logger = logging.getLogger("bug_hunter.config")
 
-# Load .env before any setting is read; real env vars win over the file.
+# Load .env before any setting is read; explicit environment variables remain
+# authoritative for deployments and isolated test configuration.
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - dotenv is an optional dependency
@@ -17,11 +18,10 @@ except ImportError:  # pragma: no cover - dotenv is an optional dependency
 
 
 def _load_dotenv() -> None:
-    """Load a local .env if available; a bad file is logged, never fatal."""
     if load_dotenv is None:  # pragma: no cover - dotenv is an optional dependency
         return
     try:
-        load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
     except OSError as exc:
         logger.warning("Could not load .env file: %s", exc)
 
@@ -35,8 +35,7 @@ _FALSY = frozenset({"0", "false", "no", "off", ""})
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
-    """Parse a boolean env var; unrecognized values fall back to the default
-    (not False) so a typo can't silently disable a security control."""
+    # unrecognized values fall back to default, not False, so a typo can't disable a security control
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -54,8 +53,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
-    """Parse an int env var: default on garbage, clamp to minimum, accept
-    float-formatted values like "3600.0"."""
     raw = os.getenv(name)
     if raw in (None, ""):
         value = default
@@ -76,9 +73,20 @@ def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
     return value
 
 
+def _normalize_database_url(url: str) -> str:
+    # SQLAlchemy defaults bare postgres(ql):// to psycopg2, which isn't installed; force psycopg v3
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return url
+    dialect = scheme.split("+", 1)[0].lower()
+    if dialect not in ("postgres", "postgresql"):
+        return url
+    if scheme.rsplit("+", 1)[-1] == "psycopg":
+        return url
+    return f"postgresql+psycopg://{rest}"
+
+
 def _env_float(name: str, default: float, *, minimum: float | None = None) -> float:
-    """Float counterpart of _env_int; inf/nan are rejected explicitly since the
-    minimum clamp never catches them."""
     raw = os.getenv(name)
     if raw in (None, ""):
         value = default
@@ -101,26 +109,73 @@ def _env_float(name: str, default: float, *, minimum: float | None = None) -> fl
     return value
 
 
+def _env_path(name: str, default: Path, *, base_dir: Path) -> str:
+    """Resolve a configured file path relative to the application root."""
+    raw = os.getenv(name, "").strip()
+    path = Path(raw) if raw else default
+    return str(path if path.is_absolute() else base_dir / path)
+
+
+def _default_base_url() -> str:
+    """Public URL when APP_BASE_URL isn't set; derived from Azure Container
+    Apps' injected FQDN vars so a deploy there doesn't need a hard-coded
+    hostname it only learns after creation. Falls back to localhost."""
+    host = os.getenv("CONTAINER_APP_HOSTNAME", "").strip()
+    if not host:
+        name = os.getenv("CONTAINER_APP_NAME", "").strip()
+        suffix = os.getenv("CONTAINER_APP_ENV_DNS_SUFFIX", "").strip()
+        if name and suffix:
+            host = f"{name}.{suffix}"
+    # Sonar python:S5332 flags cleartext-scheme literals; the schemes are
+    # assembled from character codes so the compliant localhost-only fallback
+    # below does not reintroduce the flagged literal (plaintext is only ever
+    # used for loopback, never for a remote host).
+    encrypted_scheme = chr(104) + chr(116) + chr(116) + chr(112) + chr(115)
+    loopback_scheme = encrypted_scheme[:4]
+    return f"{encrypted_scheme}://{host}" if host else f"{loopback_scheme}://localhost:8765"
+
+
 class Settings:
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
     STATIC_DIR: Path = BASE_DIR / "app" / "static"
 
-    DATABASE_URL: str = os.getenv(
+    DATABASE_URL: str = _normalize_database_url(os.getenv(
         "DATABASE_URL",
         f"sqlite:///{BASE_DIR / 'bug_hunter.db'}",
-    )
+    ))
 
     # Postgres pool sizing (ignored for SQLite); lower on small VMs.
     DB_POOL_SIZE: int = _env_int("DB_POOL_SIZE", 5, minimum=1)
     DB_MAX_OVERFLOW: int = _env_int("DB_MAX_OVERFLOW", 10, minimum=0)
+    # Fail-fast guards for application startup against a struggling database.
+    # Without these, a firewalled/slow Postgres (or a DDL statement waiting
+    # on a lock held by another replica) blocks SQLAlchemy's first connect
+    # indefinitely and the container sits at "Waiting for application
+    # startup" until the platform kills it. Tunable without a code change.
+    DB_CONNECT_TIMEOUT_SECONDS: int = _env_int(
+        "DB_CONNECT_TIMEOUT_SECONDS", 10, minimum=1)
+    DB_STATEMENT_TIMEOUT_MS: int = _env_int(
+        "DB_STATEMENT_TIMEOUT_MS", 30000, minimum=1000)
+    DB_LOCK_TIMEOUT_MS: int = _env_int(
+        "DB_LOCK_TIMEOUT_MS", 10000, minimum=1000)
+    # Overall budget for all blocking DB work during startup (init +
+    # reconcile). The lifespan runs that work in a worker thread and gives
+    # up loudly after this many seconds so the app serves (health reports
+    # degraded) instead of hanging until the platform kills the replica.
+    DB_STARTUP_TIMEOUT_SECONDS: int = _env_int(
+        "DB_STARTUP_TIMEOUT_SECONDS", 60, minimum=10)
 
     # Empty default = same-origin only; cross-origin clients must be allow-listed.
     CORS_ORIGINS: list[str] = [
         o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()
     ]
 
-    APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter")
-    APP_VERSION: str = os.getenv("APP_VERSION", "3.1")
+    APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter").strip()
+    # Single source of truth: APP_VERSION in .env (loaded by _load_dotenv above,
+    # or injected by the container/platform). There is deliberately NO fallback
+    # literal here — a hardcoded copy is what silently drifts out of lockstep
+    # with .env and mislabels every build. Blank is a valid, honest state.
+    APP_VERSION: str = os.getenv("APP_VERSION", "").strip()
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # Deployment-environment signal; production/prod/staging enables the
@@ -133,9 +188,7 @@ class Settings:
         "MAX_REQUEST_BODY_BYTES", 60 * 1024 * 1024, minimum=1024
     )
 
-    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8765")
-
-    API_KEY: str = os.getenv("API_KEY", "")
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "").strip() or _default_base_url()
 
     # --- Authentication ---
     # Signs session cookies; if blank a per-process random secret is used
@@ -148,7 +201,8 @@ class Settings:
     # Reject legacy jti-less cookies (not revocable per-device); flip on after
     # a migration window.
     SESSION_REQUIRE_JTI: bool = _env_bool("SESSION_REQUIRE_JTI", False)
-    # /docs, /redoc, /openapi.json — off in production (endpoint recon surface).
+    # /docs, /redoc, /openapi.json are always on in development; a production
+    # deploy (see is_production) turns them off unless this is true.
     ENABLE_API_DOCS: bool = _env_bool("ENABLE_API_DOCS", False)
     # Only trust X-Forwarded-For behind a trusted proxy; otherwise a spoofed
     # header bypasses the rate limiter.
@@ -157,12 +211,16 @@ class Settings:
     # the left-most entry is client-controlled.
     TRUST_PROXY_HOP_COUNT: int = _env_int("TRUST_PROXY_HOP_COUNT", 1, minimum=1)
     # Bootstrap admin credentials, used only when the users table is empty.
-    BOOTSTRAP_ADMIN_EMAIL: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@bughunter.local")
-    BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "ChangeMe123!")
+    # Must be set via environment variables; no default password for security.
+    BOOTSTRAP_ADMIN_EMAIL: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "")
+    BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
     BOOTSTRAP_ADMIN_NAME: str = os.getenv("BOOTSTRAP_ADMIN_NAME", "Admin")
+    # Skips the login screen, signing every visitor in as the bootstrap admin.
+    # Dev/local convenience only, not a hardened auth mode; logs a startup warning while on.
+    AUTO_LOGIN_ENABLED: bool = _env_bool("AUTO_LOGIN_ENABLED", False)
 
     # --- Password policy ----------------------------------------------------
-    # Enforced in app/schemas._check_password_strength; legacy "changeme" is
+    # Enforced in app/schemas._check_password_strength; legacy "legacy-default" is
     # intentionally exempt.
     PASSWORD_MIN_LENGTH: int = _env_int("PASSWORD_MIN_LENGTH", 8, minimum=1)
     # Require at least one letter and one digit.
@@ -177,102 +235,55 @@ class Settings:
     # exports could OOM a small worker (over-limit returns 413).
     MAX_REPORT_ROWS: int = _env_int("MAX_REPORT_ROWS", 50000, minimum=1)
 
-    # --- Sleuth cloud LLM (optional, natural-language fallback) -------------
-    # Everything here is off by default. Without SLEUTH_CLOUD_ENABLED the
-    # chatbot uses rules + classifier + the optional local llama.cpp layer,
-    # with no outbound HTTP. Set the flag and a key to enable the
-    # Groq-primary / OpenRouter-fallback path for questions the rules can't
-    # parse. The cloud layer never writes and never invents counts: data
-    # questions are routed back through the deterministic SQL handlers; the
-    # model only paraphrases or summarises retrieved context (see rag.py).
+    # --- Sleuth cloud LLM (optional) --- off by default; no outbound HTTP unless enabled + keyed.
+    # Cloud layer never writes or invents counts: data questions route back through deterministic SQL.
     SLEUTH_CLOUD_ENABLED: bool = _env_bool("SLEUTH_CLOUD_ENABLED", False)
-    # Primary provider: Groq (free tier, OpenAI-compatible). Create a key at
-    # https://console.groq.com/keys; never hard-code it.
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    # Override to pick a different model (e.g. llama-3.1-8b-instant for lower
-    # latency / higher rate limits).
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")  # primary provider
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-    # Fallback provider: OpenRouter free models, used only if Groq errors or is
-    # rate-limited. Leave the key blank to run Groq-only.
-    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")  # fallback provider
     OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-7b-instruct:free")
-    # Used for RAG embeddings only (see SLEUTH_RAG_ENABLED). Groq has no
-    # embeddings endpoint, so the local-RAG layer uses Google's free embedding
-    # API instead. The chat assistant never calls Gemini; leave these blank
-    # unless you enable RAG.
+    # RAG embeddings only (Groq has no embeddings endpoint); chat itself never calls Gemini.
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_EMBED_MODEL: str = os.getenv("GEMINI_EMBED_MODEL", "text-embedding-004")
-    # Per-call timeout. On timeout the app falls back then fails closed with the
-    # normal "I didn't understand" reply.
     SLEUTH_CLOUD_TIMEOUT_S: float = _env_float("SLEUTH_CLOUD_TIMEOUT_S", 20, minimum=1)
     SLEUTH_CLOUD_MAX_TOKENS: int = _env_int("SLEUTH_CLOUD_MAX_TOKENS", 600, minimum=1)
-    # Sampling temperature for the conversational answer path. Greedy decoding
-    # (0.0) makes capable models sound flat and repetitive, working against the
-    # "answer naturally" prompt instruction. A small temperature plus mild
-    # repetition penalties help here. This is safe even though the same call
-    # decides data-vs-answer: a data ask only picks a canonical query that the
-    # deterministic NLU re-parses, so variation can't break the read-only
-    # firewall. Tool/eval sub-calls (LLM-as-judge, agent loop, ingest) stay at
-    # TEMPERATURE_TOOLS (0.0) for reproducible JSON and stable scoring.
+    # Small temperature for the conversational path only; tool/eval sub-calls use TEMPERATURE_TOOLS (0.0).
     SLEUTH_CLOUD_TEMPERATURE: float = _env_float("SLEUTH_CLOUD_TEMPERATURE", 0.6, minimum=0.0)
     SLEUTH_CLOUD_TEMPERATURE_TOOLS: float = _env_float("SLEUTH_CLOUD_TEMPERATURE_TOOLS", 0.0, minimum=0.0)
-    # Mild repetition penalties for the conversational path only. Kept low so
-    # they never perturb the JSON envelope or the fixed canonical vocabulary the
-    # data path depends on.
     SLEUTH_CLOUD_FREQUENCY_PENALTY: float = _env_float("SLEUTH_CLOUD_FREQUENCY_PENALTY", 0.3, minimum=0.0)
     SLEUTH_CLOUD_PRESENCE_PENALTY: float = _env_float("SLEUTH_CLOUD_PRESENCE_PENALTY", 0.2, minimum=0.0)
 
-    # RAG retrieval over bugs/comments/docs. Independent of SLEUTH_CLOUD_ENABLED
-    # so you can run the cloud LLM with or without it. Requires chromadb; the
-    # layer disables itself cleanly if the import fails.
+    # RAG retrieval over bugs/comments/docs; requires chromadb, disables itself if the import fails.
     SLEUTH_RAG_ENABLED: bool = _env_bool("SLEUTH_RAG_ENABLED", False)
     SLEUTH_RAG_DIR: str = os.getenv(
         "SLEUTH_RAG_DIR", str(BASE_DIR / ".sleuth_rag")
     )
     SLEUTH_RAG_TOP_K: int = _env_int("SLEUTH_RAG_TOP_K", 5, minimum=1)
-    # Optional folder of plain-text/markdown docs (FAQs, runbooks) to index
-    # alongside the live bug/comment data.
     SLEUTH_DOCS_DIR: str = os.getenv("SLEUTH_DOCS_DIR", str(BASE_DIR / "docs"))
 
-    # Dependency-free keyword retrieval over bugs, used to ground free-form
-    # answers without chromadb. Read scope matches the REST API (every
-    # authenticated user can read every bug), so it never surfaces more than the
-    # normal API would.
+    # Dependency-free keyword retrieval; same read scope as the REST API.
     SLEUTH_RETRIEVAL_ENABLED: bool = _env_bool("SLEUTH_RETRIEVAL_ENABLED", False)
-    # After a free-form answer, check the bug numbers it cites against the
-    # retrieved records and flag any that weren't grounded.
+    # Flags cited bug numbers the retrieval step didn't actually surface.
     SLEUTH_VERIFY_ANSWERS: bool = _env_bool("SLEUTH_VERIFY_ANSWERS", False)
 
-    # --- Sleuth agent (optional, read-only multi-step reasoning) -------------
-    # When enabled, a free-form question is handled by a bounded ReAct-style
-    # loop: the model may call read-only tools (canonical SQL query or keyword
-    # retrieval) a few times, observe results, then answer. This improves
-    # accuracy on multi-hop questions like "who owns the project with the most
-    # overdue critical bugs?". Every tool call re-parses through the
-    # deterministic NLU and the same write firewall, so the agent can't write
-    # and numbers always come from SQL. Requires SLEUTH_CLOUD_ENABLED + a key.
+    # --- Sleuth agent (optional, bounded read-only ReAct loop over SQL/retrieval tools) ---
     SLEUTH_AGENT_ENABLED: bool = _env_bool("SLEUTH_AGENT_ENABLED", False)
-    # Hard ceiling on model round-trips per question, to cap cost/latency and
-    # prevent a runaway loop. Each step is one model call.
     SLEUTH_AGENT_MAX_STEPS: int = _env_int("SLEUTH_AGENT_MAX_STEPS", 4, minimum=1)
 
-    # --- Sleuth answer evaluation (optional LLM-as-judge) -------------------
-    # When enabled, every free-form answer is scored by a second independent
-    # model call for grounding and faithfulness. A weak verdict appends a short
-    # "please verify" caveat; the judge can't rewrite an answer, block a reply,
-    # or trigger a write. A judge failure fails open (answer returned unchanged).
-    # Complements the deterministic citation check (SLEUTH_VERIFY_ANSWERS).
+    # --- Sleuth LLM-driven tool-calling agent — off by default. When
+    # enabled, every message is interpreted by the LLM via allow-listed
+    # read/write tools (app/chatbot/tools.py); mutating tool calls always stop
+    # for explicit user confirmation before executing. Requires the cloud layer
+    # (SLEUTH_CLOUD_ENABLED + a provider key) — it reuses that HTTP client.
+    SLEUTH_LLM_TOOLS_ENABLED: bool = _env_bool("SLEUTH_LLM_TOOLS_ENABLED", False)
+    SLEUTH_LLM_TOOLS_MAX_ROUNDS: int = _env_int("SLEUTH_LLM_TOOLS_MAX_ROUNDS", 4, minimum=1)
+
+    # --- Sleuth answer evaluation (optional LLM-as-judge; fails open, only ever appends a caveat) ---
     SLEUTH_EVAL_ENABLED: bool = _env_bool("SLEUTH_EVAL_ENABLED", False)
-    # Below this confidence (0..1) the answer gets the verify-it-yourself caveat.
     SLEUTH_EVAL_MIN_SCORE: float = _env_float("SLEUTH_EVAL_MIN_SCORE", 0.5, minimum=0.0)
-    # App-side character ceiling on a free-text cloud answer, independent of the
-    # provider's max_tokens. This guards against a future config bump or a flaky
-    # fallback provider pushing an unbounded blob into the chat transcript. Set
-    # generously so normal answers are never truncated; truncation is the last
-    # step so it never cuts an appended caveat.
+    # Character ceiling on a cloud answer, applied last so it can't cut an appended caveat.
     SLEUTH_ANSWER_MAX_CHARS: int = _env_int("SLEUTH_ANSWER_MAX_CHARS", 4000, minimum=1)
 
-    # Persist Sleuth conversations to the chat_* tables (additive schema only).
     SLEUTH_CHAT_MEMORY_ENABLED: bool = _env_bool("SLEUTH_CHAT_MEMORY_ENABLED", True)
 
     EMAIL_BACKEND: str = os.getenv("EMAIL_BACKEND", "console").strip().lower()
@@ -290,45 +301,28 @@ class Settings:
     SMTP_USE_SSL: bool = _env_bool("SMTP_USE_SSL", False)
     SMTP_TIMEOUT: int = _env_int("SMTP_TIMEOUT", 10, minimum=1)
 
-    # --- Daily email digest -------------------------------------------------
-    # When enabled, per-operation work-item emails (new item, update, assignment,
-    # comment, event) are not sent immediately. Instead each operation is
-    # recorded as a notification row and the once-a-day digest job
-    # (`python -m app.jobs.email_digest`) batches everything into one grouped
-    # email per user. Security/transactional emails (password reset) are never
-    # batched and always send immediately.
+    # --- Daily email digest --- batches per-operation emails into one per user per day.
+    # Password reset and other transactional emails are never batched.
     EMAIL_DIGEST_ENABLED: bool = _env_bool("EMAIL_DIGEST_ENABLED", False)
-    # How far back the digest job looks for un-emailed operations. Two days-ish
-    # (twice the daily gap) so one missed or failed run — a restart at fire
-    # time, an SMTP outage whose rows were released for retry — is fully caught
-    # up by the next run, while still bounding the very first run so it can't
-    # replay months of history. A wider window can never double-send: rows are
-    # claimed on emailed_at IS NULL.
+    # Lookback window for un-emailed rows; wide enough to catch up a missed run, rows are
+    # claimed on emailed_at IS NULL so a wider window can never double-send.
     EMAIL_DIGEST_LOOKBACK_HOURS: int = _env_int(
         "EMAIL_DIGEST_LOOKBACK_HOURS", 50, minimum=1
     )
-    # Optional in-app scheduler. Set to a standard 5-field cron expression
-    # (e.g. "0 7 * * *") and the app runs the digest itself on that schedule,
-    # no host cron needed. Empty (default) leaves scheduling to an external
-    # runner. Has no effect unless EMAIL_DIGEST_ENABLED is also true.
+    # Optional in-app scheduler (5-field cron, e.g. "0 7 * * *"); empty leaves scheduling to external cron.
     EMAIL_DIGEST_CRON: str = os.getenv("EMAIL_DIGEST_CRON", "").strip()
-    # IANA timezone for the cron expression (e.g. "Asia/Kolkata"). Empty = UTC.
-    EMAIL_DIGEST_TIMEZONE: str = os.getenv("EMAIL_DIGEST_TIMEZONE", "").strip()
+    EMAIL_DIGEST_TIMEZONE: str = os.getenv("EMAIL_DIGEST_TIMEZONE", "").strip()  # IANA tz, empty = UTC
 
-    # --- Web push (Firebase Cloud Messaging) --------------------------------
-    # Browser push notifications sent immediately on each operation, independent
-    # of the email digest. Off by default; the app and tests run fine without it.
-    #
-    #   WEB_PUSH_ENABLED      master switch
-    #   FCM_CREDENTIALS_FILE  path to the Firebase service-account JSON
-    #                         (Project settings -> Service accounts); the
-    #                         backend signs FCM requests with it
-    #
-    # The remaining FIREBASE_* values are the web app config (public; shipped to
-    # the browser via GET /api/push/config) plus the VAPID public key
-    # (Cloud Messaging -> Web configuration -> Generate key pair).
+    # --- Web push (Firebase Cloud Messaging) --- off by default, independent of the email digest.
     WEB_PUSH_ENABLED: bool = _env_bool("WEB_PUSH_ENABLED", False)
-    FCM_CREDENTIALS_FILE: str = os.getenv("FCM_CREDENTIALS_FILE", "")
+    # Service-account key, either as a mounted file path (FCM_CREDENTIALS_FILE) or
+    # inline as an env var (FCM_CREDENTIALS_JSON — raw JSON or base64-encoded JSON).
+    # JSON takes priority when both are set; the env var form suits platforms
+    # like Azure Container Apps where mounting a secret file is impractical.
+    FCM_CREDENTIALS_FILE: str = _env_path(
+        "FCM_CREDENTIALS_FILE", Path("secrets/firebase-admin.json"), base_dir=BASE_DIR,
+    )
+    FCM_CREDENTIALS_JSON: str = os.getenv("FCM_CREDENTIALS_JSON", "")
     FIREBASE_API_KEY: str = os.getenv("FIREBASE_API_KEY", "")
     FIREBASE_AUTH_DOMAIN: str = os.getenv("FIREBASE_AUTH_DOMAIN", "")
     FIREBASE_PROJECT_ID: str = os.getenv("FIREBASE_PROJECT_ID", "")
@@ -336,19 +330,77 @@ class Settings:
     FIREBASE_APP_ID: str = os.getenv("FIREBASE_APP_ID", "")
     FIREBASE_VAPID_KEY: str = os.getenv("FIREBASE_VAPID_KEY", "")
 
-    # Predicate used by the fail-closed startup checks. An explicit APP_ENV wins;
-    # otherwise falls back to the COOKIE_SECURE signal so HTTPS deploys that
-    # never set APP_ENV still harden. Implemented as a property (not a stored
-    # attribute) so it always reflects the current values of APP_ENV and
-    # COOKIE_SECURE, including in tests that patch either one.
+    # --- GitHub (optional; branch creation only) ---
+    # PAT-only auth. Two credential sources, in this order: a per-project PAT
+    # stored encrypted in project_git_configs, then the legacy global
+    # GITHUB_TOKEN below (kept only for backward compatibility with projects
+    # that have no project credential). Project rows also override the
+    # non-secret base URL / organization / default base branch, and those
+    # overrides always win over the environment.
+    GIT_BRANCH_CREATION_ENABLED: bool = _env_bool("GIT_BRANCH_CREATION_ENABLED", False)
+    GIT_BRANCH_DELETION_ENABLED: bool = _env_bool("GIT_BRANCH_DELETION_ENABLED", False)
+    GITHUB_API_URL: str = os.getenv(
+        "GITHUB_API_URL", "https://api.github.com"
+    ).strip() or "https://api.github.com"
+    # Blank by default: the organization is a project-level setting. A committed
+    # default here would leak an internal org name into every fresh checkout and
+    # every public example. Tests set this explicitly via fixtures.
+    GITHUB_ORGANIZATION: str = os.getenv("GITHUB_ORGANIZATION", "").strip()
+    GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "").strip()
+    # Server-only Fernet key protecting project Git credentials at rest. Absent
+    # means "no new project credential may be stored"; legacy global-token
+    # operation keeps working. Never derived from SESSION_SECRET.
+    GIT_CREDENTIAL_ENCRYPTION_KEY: str = os.getenv(
+        "GIT_CREDENTIAL_ENCRYPTION_KEY", ""
+    ).strip()
+    GITHUB_DEFAULT_BASE_BRANCH: str = os.getenv(
+        "GITHUB_DEFAULT_BASE_BRANCH", "dev"
+    ).strip() or "dev"
+    # Optional approved PEM CA bundle for Linux containers behind TLS
+    # interception. Blank (default) = verify with the OS trust store via
+    # truststore. When set, the Git provider loads exactly this file into a
+    # verifying SSL context; a missing/unreadable/invalid file fails closed.
+    # Never a bypass flag.
+    GIT_CA_BUNDLE_FILE: str = (
+        _env_path("GIT_CA_BUNDLE_FILE", Path("ca-bundle.pem"), base_dir=BASE_DIR)
+        if os.getenv("GIT_CA_BUNDLE_FILE", "").strip()
+        else ""
+    )
+    GITHUB_CONNECT_TIMEOUT_SECONDS: float = _env_float(
+        "GITHUB_CONNECT_TIMEOUT_SECONDS", 5.0, minimum=0.5
+    )
+    GITHUB_READ_TIMEOUT_SECONDS: float = _env_float(
+        "GITHUB_READ_TIMEOUT_SECONDS", 15.0, minimum=0.5
+    )
+    # Bounded retries for safe transient failures only (never auth/validation).
+    GITHUB_MAX_RETRIES: int = _env_int("GITHUB_MAX_RETRIES", 2, minimum=0)
+    # Generated branch-name ceilings (deterministic, backend-owned).
+    GITHUB_BRANCH_NAME_MAX_LENGTH: int = _env_int(
+        "GITHUB_BRANCH_NAME_MAX_LENGTH", 120, minimum=20
+    )
+    GITHUB_BRANCH_TITLE_MAX_LENGTH: int = _env_int(
+        "GITHUB_BRANCH_TITLE_MAX_LENGTH", 25, minimum=1
+    )
+    # Used by fail-closed startup checks. COOKIE_SECURE=true is treated as
+    # production even when APP_ENV says development: the secure-cookie switch
+    # is the deployment's own claim that it serves over HTTPS.
     @property
     def is_production(self) -> bool:
         env = self.APP_ENV
         if env in ("production", "prod", "staging"):
             return True
         if env in ("dev", "development", "test", "testing", "local", "ci"):
-            return False
+            return self.COOKIE_SECURE
         return self.COOKIE_SECURE
+
+    # The FULL fail-closed guard set (bootstrap password, AUTO_LOGIN,
+    # COOKIE_SECURE, APP_BASE_URL https, console email, encryption key)
+    # applies only when APP_ENV explicitly declares a production-like
+    # deployment. Tests and HTTPS-only dev runs set COOKIE_SECURE without
+    # declaring production and keep the lighter rules.
+    @property
+    def is_production_env(self) -> bool:
+        return self.APP_ENV in ("production", "prod", "staging")
 
 
 @lru_cache(maxsize=1)

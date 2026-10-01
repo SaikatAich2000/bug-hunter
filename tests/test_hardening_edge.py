@@ -97,6 +97,7 @@ def test_unassign_notifies_removed_user(admin_client):
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"assignee_ids": []})
     assert r.status_code == 200, r.text
     from sqlalchemy import select
+
     from app.models import Notification
     db = _session()
     notes = list(db.scalars(select(Notification).where(Notification.user_id == bob["id"])).all())
@@ -113,7 +114,8 @@ def test_bulk_version_conflict_is_skipped(admin_client):
         "expected_versions": {str(bug["id"]): bug["version"] + 5},
     })
     body = r.json()
-    assert body["conflicts"] == 1 and body["updated"] == 0, body
+    assert body["conflicts"] == 1, body
+    assert body["updated"] == 0, body
     assert admin_client.get(f"/api/bugs/{bug['id']}").json()["priority"] != "High"
     # Correct version: update should succeed.
     fresh = admin_client.get(f"/api/bugs/{bug['id']}").json()
@@ -126,14 +128,15 @@ def test_bulk_version_conflict_is_skipped(admin_client):
 
 # XLSX Filters Applied sheet defangs free-text filters
 def test_xlsx_filters_sheet_defangs_formula():
-    from app.reports.engine import ReportResult
     from app.reports import xlsx
+    from app.reports.engine import ReportResult
     result = ReportResult(
         report_key="item_detail", report_label="X", columns=[], rows=[],
         filters={"text_search": "=cmd|'/c calc'!A1", "label": "+evil()"},
     )
     data = xlsx.build_workbook_bytes(result)
     import io
+
     from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(data))
     ws = wb["Filters Applied"]
@@ -144,7 +147,7 @@ def test_xlsx_filters_sheet_defangs_formula():
 
 # Aging report with a non-open status filter returns empty
 def test_aging_empty_status_intersection(admin_client):
-    from app.reports.engine import run_report, Filters
+    from app.reports.engine import Filters, run_report
     proj = _mk_project(admin_client, "PAge")
     admin_client.post("/api/bugs", json={"project_id": proj["id"], "title": "open one"})
     db = _session()
@@ -171,10 +174,41 @@ def test_reopened_bug_has_no_resolved_info(admin_client):
     assert bug["id"] not in info, info
 
 
+# A bug's newest status_changed row doesn't parse to a resolved status (e.g. a
+# malformed detail string); the lookup must fall back to an older row instead
+# of giving up, so a currently-resolved bug still gets credited.
+def test_resolution_info_falls_back_past_unparseable_row(admin_client):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import Activity
+    from app.reports.engine import _fetch_resolution_info
+    proj = _mk_project(admin_client, "PFallback")
+    bug = admin_client.post(
+        "/api/bugs", json={"project_id": proj["id"], "title": "fallback bug"}
+    ).json()
+    admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Resolved"})
+    db = _session()
+    try:
+        newest = Activity(
+            bug_id=bug["id"], entity_type="bug", entity_id=bug["id"],
+            action="status_changed", detail="status: 'New' → 'In Progress'",
+            actor_name="Test Admin",
+            created_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        db.add(newest)
+        db.commit()
+        info = _fetch_resolution_info(db, [bug["id"]])
+        assert bug["id"] in info
+        resolver, _resolved_at = info[bug["id"]]
+        assert resolver == "Test Admin"
+    finally:
+        db.close()
+
+
 # Throughput marks itself truncated when the scan hits the cap
 def test_throughput_truncated_flag(admin_client, monkeypatch):
     import app.reports.engine as engine
-    from app.reports.engine import run_report, Filters
+    from app.reports.engine import Filters, run_report
     monkeypatch.setattr(engine, "_detail_cap", lambda: 1)
     proj = _mk_project(admin_client, "PThru")
     for i in range(2):
@@ -214,6 +248,7 @@ def test_extract_json_skips_non_dict():
 # memory — staged ingest expires after the confirm window
 def test_ingest_confirm_ttl(monkeypatch):
     import types
+
     from app.chatbot import memory
     store = memory._Store()
     store.stage_ingest(1, {"specs": [{"title": "x"}]})
@@ -228,8 +263,9 @@ def test_ingest_confirm_ttl(monkeypatch):
 
 # push_service — register survives a unique-token insert race
 def test_push_register_insert_race(admin_client, monkeypatch):
-    from sqlalchemy.exc import IntegrityError
     from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+
     from app import push_service
     from app.models import PushSubscription, User
     db0 = _session()
@@ -256,12 +292,14 @@ def test_push_register_insert_race(admin_client, monkeypatch):
     monkeypatch.setattr(db, "scalar", fake_scalar)
     monkeypatch.setattr(db, "flush", fake_flush)
     sub = push_service.register(db, user_id=admin_id, token="race-tok", platform="web")
-    assert sub.token == "race-tok" and sub.user_id == admin_id
+    assert sub.token == "race-tok"
+    assert sub.user_id == admin_id
 
 
 def test_push_register_race_reraises_when_row_gone(monkeypatch):
     # If recovery after IntegrityError still finds no row, re-raise (something else is wrong).
     from sqlalchemy.exc import IntegrityError
+
     from app import push_service
     db = _session()
 
@@ -317,6 +355,7 @@ def test_update_reporter_to_inactive_rejected(admin_client):
 # database — _add_column_safely logs-and-skips a failing ALTER (savepoint)
 def test_add_column_safely_skips_on_error(tmp_path):
     from sqlalchemy import create_engine
+
     import app.database as database
     eng = create_engine(f"sqlite:///{tmp_path / 'leg.db'}")
     with eng.begin() as conn:

@@ -10,6 +10,8 @@ import threading
 import time
 from typing import Any, Optional
 
+from app.config import get_settings
+
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -94,7 +96,8 @@ def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     ws.title = "Bugs"
 
     # banner row with the filter description
-    banner = f"Bug Hunter export — {description}" if description else "Bug Hunter export"
+    app_name = get_settings().APP_NAME
+    banner = f"{app_name} export — {description}" if description else f"{app_name} export"
     ws.cell(row=1, column=1, value=banner).font = Font(bold=True, size=12)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_COLUMNS))
 

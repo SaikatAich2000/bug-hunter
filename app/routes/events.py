@@ -13,20 +13,42 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import notification_service
 from app.access import (
-    accessible_project_ids, can_access_project, scope_bug_query, scope_event_query,
+    accessible_project_ids,
+    can_access_project,
+    scope_bug_query,
+    scope_event_query,
+)
+from app.api_docs import (
+    BAD_REQUEST_FORBIDDEN_403,
+    BAD_REQUEST_FORBIDDEN_NOT_FOUND_404,
+    NOT_FOUND_404,
+    NOT_FOUND_FORBIDDEN_403,
 )
 from app.auth import can_delete_event, can_edit_bug, can_edit_event, get_current_user
 from app.database import get_db
 from app.email_service import (
-    EventSnapshot, UserSnapshot,
-    notify_event_created, notify_event_deleted, notify_event_updated,
+    EventSnapshot,
+    UserSnapshot,
+    notify_event_created,
+    notify_event_deleted,
+    notify_event_updated,
 )
 from app.models import (
-    ROLE_ADMIN, ROLE_MANAGER,
-    Activity, Attachment, Bug, Event, Project, User, bug_assignees,
+    ROLE_ADMIN,
+    ROLE_MANAGER,
+    Activity,
+    Attachment,
+    Bug,
+    Event,
+    Project,
+    User,
+    bug_assignees,
 )
 from app.schemas import (
-    EventCreate, EventDetail, EventOut, EventUpdate,
+    EventCreate,
+    EventDetail,
+    EventOut,
+    EventUpdate,
 )
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -238,7 +260,7 @@ def list_events(
 _EVENT_ITEMS_MAX = 1000
 
 
-@router.get("/{event_id}", response_model=EventDetail)
+@router.get("/{event_id}", response_model=EventDetail, responses=NOT_FOUND_404)
 def get_event(
     event_id: int,
     db: Session = Depends(get_db),
@@ -284,7 +306,7 @@ def get_event(
     return payload
 
 
-@router.post("", response_model=EventOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=EventOut, status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_403)
 def create_event(
     payload: EventCreate,
     background: BackgroundTasks,
@@ -369,7 +391,7 @@ def _persist_event_update(db: Session, ev: Event, actor: User,
     db.commit()
 
 
-@router.put("/{event_id}", response_model=EventOut)
+@router.put("/{event_id}", response_model=EventOut, responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_404)
 def update_event(
     event_id: int,
     payload: EventUpdate,
@@ -425,7 +447,7 @@ def update_event(
     return _event_brief(db, ev)
 
 
-@router.delete("/{event_id}")
+@router.delete("/{event_id}", responses=NOT_FOUND_FORBIDDEN_403)
 def delete_event(
     event_id: int,
     background: BackgroundTasks,

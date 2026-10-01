@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.access import accessible_project_ids, scope_bug_query, scope_event_query
+from app.api_docs import BAD_REQUEST_400
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Bug, Event, Project, User, bug_assignees
@@ -116,7 +117,7 @@ def _derive_kpis(
     )
 
 
-@router.get("", response_model=StatsOut)
+@router.get("", responses=BAD_REQUEST_400)
 def stats(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),

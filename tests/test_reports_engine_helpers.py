@@ -218,6 +218,28 @@ def test_fold_throughput_row_accumulates_multiple_for_one_user():
     assert len(details) == 2
 
 
+# --- _bucket_resolved_by_day ---
+def test_bucket_resolved_by_day_counts_resolution():
+    from app.reports.engine import _bucket_resolved_by_day
+    rows = [_raw("status: 'New' → 'Resolved'", created_at=_utc(2026, 1, 2))]
+    assert _bucket_resolved_by_day(rows) == {"2026-01-02": 1}
+
+
+def test_bucket_resolved_by_day_skips_resolved_to_resolved():
+    # Resolved -> Closed is not a new resolution; must not be double-counted
+    # into the timeline (same guard _fold_throughput_row uses).
+    from app.reports.engine import _bucket_resolved_by_day
+    rows = [_raw("status: 'Resolved' → 'Closed'", current_status="Closed",
+                 created_at=_utc(2026, 1, 3))]
+    assert _bucket_resolved_by_day(rows) == {}
+
+
+def test_bucket_resolved_by_day_ignores_non_resolution():
+    from app.reports.engine import _bucket_resolved_by_day
+    rows = [_raw("status: 'New' → 'In Progress'", current_status="In Progress")]
+    assert _bucket_resolved_by_day(rows) == {}
+
+
 # --- _percentile (NIST linear interpolation) ---
 def test_percentile_empty_is_zero():
     from app.reports.engine import _percentile
@@ -241,6 +263,7 @@ def test_percentile_interpolates_between_ranks():
 # --- Filter-blob parsing helpers ---
 def test_parse_date_variants():
     from datetime import date
+
     from app.reports.engine import _parse_date
     assert _parse_date("2026-06-11") == date(2026, 6, 11)
     assert _parse_date(date(2026, 1, 2)) == date(2026, 1, 2)

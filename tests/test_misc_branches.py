@@ -50,7 +50,7 @@ def _now():
 
 def test_nlu_coerce_bug_id_rejects_non_int_and_out_of_range():
     # Non-integer, over-range, and non-positive values all coerce to None.
-    from app.chatbot.nlu import _coerce_bug_id, _MAX_BUG_ID
+    from app.chatbot.nlu import _MAX_BUG_ID, _coerce_bug_id
     assert _coerce_bug_id("not-a-number") is None
     assert _coerce_bug_id(str(_MAX_BUG_ID + 1)) is None  # over range
     assert _coerce_bug_id("0") is None                   # non-positive
@@ -59,7 +59,7 @@ def test_nlu_coerce_bug_id_rejects_non_int_and_out_of_range():
 
 def test_nlu_extract_bug_id_skips_out_of_range_matches():
     # _BUG_ID_RE matches but _coerce_bug_id returns None; all three candidate paths fall through.
-    from app.chatbot.nlu import _extract_bug_id, _MAX_BUG_ID
+    from app.chatbot.nlu import _MAX_BUG_ID, _extract_bug_id
     over = str(_MAX_BUG_ID + 5)
     # Both forms fail to coerce; the trailing word blocks the whole-message-digits path.
     assert _extract_bug_id(f"bug {over} please") is None
@@ -69,7 +69,8 @@ def test_nlu_time_window_tolerates_internal_whitespace():
     # Irregular whitespace must be normalised or the time filter is silently dropped.
     from app.chatbot.nlu import _parse_time_window
     tw = _parse_time_window("bugs from this  week please", _now())
-    assert tw is not None and tw.label == "this week"
+    assert tw is not None
+    assert tw.label == "this week"
 
 
 def test_nlu_candidate_name_phrases_skips_empty_phrase():
@@ -81,7 +82,7 @@ def test_nlu_candidate_name_phrases_skips_empty_phrase():
 
 def test_nlu_action_add_comment_is_none_for_list_verb():
     # 'show comment on #5' is a read; _action_add_comment returns None for list verbs.
-    from app.chatbot.nlu import _action_add_comment, ParsedQuery
+    from app.chatbot.nlu import ParsedQuery, _action_add_comment
     pq = ParsedQuery()
     pq.bug_id = 5
     # "comment on" (singular) matches _COMMENT_RE; "show" is a list verb.
@@ -92,13 +93,25 @@ def test_nlu_action_create_bug_bare_without_title():
     # _CREATE_BUG_RE matches with no captured title: action_title None, kind still create_bug.
     # (Tail markers start with a space, so _strip_create_bug_tail only returns '' for empty input.)
     from app.chatbot.nlu import (
-        _action_create_bug, _strip_create_bug_tail, ParsedQuery,
+        ParsedQuery,
+        _action_create_bug,
+        _strip_create_bug_tail,
     )
     pq = ParsedQuery()
     res = _action_create_bug("create a bug", pq)
     assert res == "create_bug"
     assert pq.action_title is None
     assert _strip_create_bug_tail("") == ""
+
+
+def test_nlu_action_create_bug_bare_whitespace_only_title():
+    # Trailing whitespace after "bug" lets the bare regex match and capture
+    # just that whitespace; stripped to "", it must not set action_title.
+    from app.chatbot.nlu import ParsedQuery, _action_create_bug
+    pq = ParsedQuery()
+    res = _action_create_bug("create a bug   ", pq)
+    assert res == "create_bug"
+    assert pq.action_title is None
 
 
 # app/reports/engine.py — helpers
@@ -138,8 +151,8 @@ def test_engine_fold_throughput_skips_resolved_to_resolved():
 
 def test_engine_utc_date_postgresql_branch():
     # Postgres wraps the column in func.timezone('UTC', col); fake bind reports postgresql.
-    from app.reports.engine import _utc_date
     from app.models import Bug
+    from app.reports.engine import _utc_date
 
     class _Dialect:
         name = "postgresql"
@@ -207,8 +220,9 @@ def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
             # Only minute 0 matches, so iter1 fires and iter3 (07:01) does not.
             return now.minute == 0
 
+    coro = sched._loop(_Schedule(), timezone.utc)
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(sched._loop(_Schedule(), timezone.utc))
+        asyncio.run(coro)
 
     assert ticks["n"] == 1  # fired exactly once
 
@@ -216,10 +230,10 @@ def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
 # app/jobs/email_digest.py — concurrent-claim continue branch
 def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
     # A concurrent runner stamps emailed_at inside patched _group_by_user, so the guarded UPDATE claims 0 rows.
-    from app.database import SessionLocal
-    from app.jobs import email_digest
     from app import models
     from app.auth import hash_password
+    from app.database import SessionLocal
+    from app.jobs import email_digest
 
     db = SessionLocal()
     try:
@@ -267,11 +281,12 @@ def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
 # app/auth.py — SESSION_REQUIRE_JTI legacy jti-less path
 def test_auth_legacy_jtiless_session_accepted_when_not_required(client):
     # A jti-less cookie is accepted when SESSION_REQUIRE_JTI is False.
+    from sqlalchemy import select
+
+    from app.auth import COOKIE_NAME, make_session_token
     from app.config import get_settings
-    from app.auth import make_session_token, COOKIE_NAME
     from app.database import SessionLocal
     from app.models import User
-    from sqlalchemy import select
 
     s = get_settings()
     s.__class__.SESSION_REQUIRE_JTI = False
@@ -291,11 +306,12 @@ def test_auth_legacy_jtiless_session_accepted_when_not_required(client):
 
 def test_auth_legacy_jtiless_session_rejected_when_required(client):
     # A jti-less cookie is rejected (401) when SESSION_REQUIRE_JTI is True.
+    from sqlalchemy import select
+
+    from app.auth import COOKIE_NAME, make_session_token
     from app.config import get_settings
-    from app.auth import make_session_token, COOKIE_NAME
     from app.database import SessionLocal
     from app.models import User
-    from sqlalchemy import select
 
     s = get_settings()
     s.__class__.SESSION_REQUIRE_JTI = True
@@ -326,6 +342,7 @@ def test_change_password_rejects_same_password(admin_client):
 def test_reset_password_tzaware_expiry_branch(client):
     # SQLite reads tz columns naive; a one-shot load listener coerces expires_at aware to mimic Postgres.
     from sqlalchemy import event, select
+
     from app.auth import generate_reset_token
     from app.database import SessionLocal
     from app.models import PasswordResetToken, User
@@ -380,11 +397,13 @@ def test_push_subscribe_conflict_returns_409(admin_client):
 # app/routes/sessions.py — empty list + sweep error rollback
 def test_sessions_list_empty_skips_user_prefetch(client):
     # Empty sessions table skips user-prefetch; a legacy jti-less cookie lets us wipe the table and stay admin.
-    from app.config import get_settings
-    from app.auth import make_session_token, COOKIE_NAME
-    from app.database import SessionLocal
-    from app.models import Session as SessionRow, User
     from sqlalchemy import select
+
+    from app.auth import COOKIE_NAME, make_session_token
+    from app.config import get_settings
+    from app.database import SessionLocal
+    from app.models import Session as SessionRow
+    from app.models import User
 
     get_settings().__class__.SESSION_REQUIRE_JTI = False
 
@@ -405,8 +424,9 @@ def test_sessions_list_empty_skips_user_prefetch(client):
 
 def test_sessions_list_survives_sweep_error(admin_client, monkeypatch):
     # SQLAlchemyError during the sweep is caught and rolled back; listing still returns.
-    import app.routes.sessions as sessions_mod
     from sqlalchemy.exc import SQLAlchemyError
+
+    import app.routes.sessions as sessions_mod
 
     real_execute_marker = {"raised": False}
 
@@ -452,7 +472,8 @@ def test_main_asset_version_large_file_uses_size(tmp_path, monkeypatch):
     big = tmp_path / "big.js"
     big.write_text("0123456789")  # 10 bytes > 4-byte cap
     v = main._compute_asset_version(tmp_path)
-    assert v and v != "dev"
+    assert v
+    assert v != "dev"
 
 
 def test_main_cache_control_static_non_fingerprinted(monkeypatch):
@@ -506,7 +527,8 @@ def test_main_body_limit_413_on_oversized_body(monkeypatch):
     scope = {"type": "http", "path": "/api/x"}
     asyncio.run(mw(scope, receive, send))
     starts = [m for m in sent if m.get("type") == "http.response.start"]
-    assert starts and starts[0]["status"] == 413
+    assert starts
+    assert starts[0]["status"] == 413
 
 
 def test_main_body_limit_reraises_when_response_started(monkeypatch):
@@ -527,14 +549,16 @@ def test_main_body_limit_reraises_when_response_started(monkeypatch):
 
     mw = main.StreamingBodyLimitMiddleware(app_inner)
     scope = {"type": "http", "path": "/api/x"}
+    coro = mw(scope, receive, send)
     with pytest.raises(main._RequestBodyTooLarge):
-        asyncio.run(mw(scope, receive, send))
+        asyncio.run(coro)
 
 
 def test_main_evict_dead_rate_bucket(monkeypatch):
     # Buckets past the eviction horizon and empty buckets are deleted; under cap, nothing more.
-    import app.main as main
     import time as _time
+
+    import app.main as main
     main._rate_buckets.clear()
     old = _time.monotonic() - 10_000  # older than _MAX_RATE_WINDOW
     main._rate_buckets[("/old", "ipX")] = main.deque([old])
@@ -568,11 +592,12 @@ def test_main_csrf_origin_present_not_allowed_blocks(monkeypatch):
 
 def test_main_has_valid_session_missing_row_returns_false(client):
     # A valid-looking token whose jti was never persisted must be rejected.
+    from sqlalchemy import select
+
     import app.main as main
-    from app.auth import make_session_token, new_jti, COOKIE_NAME
+    from app.auth import COOKIE_NAME, make_session_token, new_jti
     from app.database import SessionLocal
     from app.models import User
-    from sqlalchemy import select
 
     db = SessionLocal()
     try:
@@ -589,9 +614,9 @@ def test_main_has_valid_session_missing_row_returns_false(client):
 # app/chatbot/actions.py — write-path edge branches
 def _seed_chat_world(client):
     """Seed two users, an inactive user, a project, and a bug; return a dict of ids."""
-    from app.database import SessionLocal
     from app import models
     from app.auth import hash_password
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -649,9 +674,11 @@ def test_actions_resolve_targets_empty_and_inactive(client):
     db = SessionLocal()
     try:
         users, err = actions._resolve_targets(db, [])
-        assert users == [] and "find the user" in err.lower()
+        assert users == []
+        assert "find the user" in err.lower()
         users2, err2 = actions._resolve_targets(db, [ids["dead"]])
-        assert users2 == [] and "deactivated" in err2.lower()
+        assert users2 == []
+        assert "deactivated" in err2.lower()
     finally:
         db.close()
 
@@ -785,7 +812,8 @@ def test_executor_bulk_kind_detects_unassign(client):
     from app.chatbot.nlu import ParsedQuery
     pq = ParsedQuery()
     kind, value = executor._bulk_kind_and_value("unassign everyone from all the bugs", pq)
-    assert kind == "unassign" and value is None
+    assert kind == "unassign"
+    assert value is None
 
 
 def test_executor_resolve_bulk_filters_by_environment(client):
@@ -827,10 +855,10 @@ def test_executor_bulk_set_status_without_value_returns_none(client):
 
 
 def test_executor_bulk_over_cap_refused(client, monkeypatch):
+    from app import models
     from app.chatbot import executor
     from app.chatbot.nlu import ParsedQuery
     from app.database import SessionLocal
-    from app import models
     from app.models import User
 
     ids = _seed_chat_world(client)
@@ -852,7 +880,8 @@ def test_executor_bulk_over_cap_refused(client, monkeypatch):
             "resolve all the bugs", db, admin, pq, ctx)
     finally:
         db.close()
-    assert res is not None and res.intent == "action_invalid"
+    assert res is not None
+    assert res.intent == "action_invalid"
     assert "too many" in res.summary.lower() or "more than" in str(res.blocks).lower()
 
 
@@ -920,8 +949,9 @@ def test_bugs_dangerous_ext_no_extension_returns_none(client):
 def test_bugs_resolve_user_unknown_raises_400(client):
     # None is allowed (no filter); a non-existent id is a hard 400.
     from fastapi import HTTPException
-    from app.routes.bugs import _resolve_user
+
     from app.database import SessionLocal
+    from app.routes.bugs import _resolve_user
     db = SessionLocal()
     try:
         assert _resolve_user(db, None) is None
@@ -935,7 +965,8 @@ def test_bugs_resolve_user_unknown_raises_400(client):
 def test_bugs_reject_overflow_ids_raises_422(client):
     # An id filter outside the int4 range is a clean 422.
     from fastapi import HTTPException
-    from app.routes.bugs import _reject_overflow_ids, _MAX_PK_INT
+
+    from app.routes.bugs import _MAX_PK_INT, _reject_overflow_ids
     with pytest.raises(HTTPException) as ei:
         _reject_overflow_ids(reporter_id=_MAX_PK_INT + 1)
     assert ei.value.status_code == 422
@@ -943,10 +974,11 @@ def test_bugs_reject_overflow_ids_raises_422(client):
 
 def test_bugs_directional_link_reaches_multi_hop(client):
     # BFS walks an intermediate node before finding the goal one hop further.
-    from app.routes.bugs import _directional_link_reaches
-    from app.database import SessionLocal
-    from app import models
     from sqlalchemy import select
+
+    from app import models
+    from app.database import SessionLocal
+    from app.routes.bugs import _directional_link_reaches
 
     db = SessionLocal()
     try:
@@ -972,6 +1004,50 @@ def test_bugs_directional_link_reaches_multi_hop(client):
         ])
         db.commit()
         reached = _directional_link_reaches(db, a.id, c.id, "blocks")
+    finally:
+        db.close()
+    assert reached is True
+
+
+def test_bugs_directional_link_reaches_diamond_revisits_node(client):
+    # A --blocks--> B --blocks--> E and A --blocks--> C --blocks--> E, then
+    # E --blocks--> D (goal): the same frontier level discovers E twice (via B
+    # and via C) before D is reached, so the second discovery must skip E as
+    # already-seen rather than re-queuing it.
+    from sqlalchemy import select
+
+    from app import models
+    from app.database import SessionLocal
+    from app.routes.bugs import _directional_link_reaches
+
+    db = SessionLocal()
+    try:
+        actor = db.scalar(
+            select(models.User).where(models.User.email == BOOTSTRAP_EMAIL))
+        proj = models.Project(name="DiamondProj", description="")
+        db.add(proj)
+        db.flush()
+        a, b, c, e, d = (
+            models.Bug(title=t, description="", status="New", priority="Low",
+                      environment="DEV", project_id=proj.id, reporter_id=actor.id)
+            for t in ("A", "B", "C", "E", "D")
+        )
+        db.add_all([a, b, c, e, d])
+        db.flush()
+        db.add_all([
+            models.BugLink(source_bug_id=a.id, target_bug_id=b.id,
+                           link_type="blocks", created_by_user_id=actor.id),
+            models.BugLink(source_bug_id=a.id, target_bug_id=c.id,
+                           link_type="blocks", created_by_user_id=actor.id),
+            models.BugLink(source_bug_id=b.id, target_bug_id=e.id,
+                           link_type="blocks", created_by_user_id=actor.id),
+            models.BugLink(source_bug_id=c.id, target_bug_id=e.id,
+                           link_type="blocks", created_by_user_id=actor.id),
+            models.BugLink(source_bug_id=e.id, target_bug_id=d.id,
+                           link_type="blocks", created_by_user_id=actor.id),
+        ])
+        db.commit()
+        reached = _directional_link_reaches(db, a.id, d.id, "blocks")
     finally:
         db.close()
     assert reached is True
@@ -1032,6 +1108,28 @@ def test_bugs_update_changes_reporter_and_notifies(admin_client):
     assert r.status_code == 200, r.text
     assert r.json()["title"] == "renamed"
     assert r.json()["reporter"]["id"] == uid
+
+
+def test_bugs_update_reporter_change_same_display_name_not_tracked(admin_client):
+    # Two different users sharing a display name: the reporter_id genuinely
+    # changes, and even though the plain display-name label is identical, the
+    # write must not be silently rolled back as a no-op — the audit entry
+    # disambiguates via email instead.
+    uid1 = _mk_user_via_api(admin_client, "Same Name", "same1@test.local")
+    uid2 = _mk_user_via_api(admin_client, "Same Name", "same2@test.local")
+    proj = admin_client.post("/api/projects", json={"name": "SameNameProj"}).json()
+    bug = admin_client.post("/api/bugs", json={
+        "project_id": proj["id"], "title": "orig", "priority": "Low",
+        "environment": "DEV", "reporter_id": uid1,
+    }).json()
+    r = admin_client.put(f"/api/bugs/{bug['id']}", json={"reporter_id": uid2})
+    assert r.status_code == 200, r.text
+    assert r.json()["reporter"]["id"] == uid2
+    activity = admin_client.get(f"/api/bugs/{bug['id']}/activity").json()
+    assert any(
+        "reporter" in a["detail"].lower() and "same2@test.local" in a["detail"]
+        for a in activity
+    )
 
 
 def test_bugs_update_legacy_invalid_status_tolerated(admin_client):
@@ -1113,14 +1211,16 @@ def test_bugs_attachment_grows_past_limit_after_strip(admin_client, monkeypatch)
 def test_bugs_reload_link_missing_raises_409(client):
     # A concurrently deleted row (db.scalar returns None) must give a clean 409.
     from fastapi import HTTPException
+
     from app.routes.bugs import _reload_link
 
     class _FakeDB:
         def scalar(self, _stmt):
             return None
 
+    fake_db = _FakeDB()
     with pytest.raises(HTTPException) as ei:
-        _reload_link(_FakeDB(), 123)
+        _reload_link(fake_db, 123)
     assert ei.value.status_code == 409
 
 
@@ -1139,9 +1239,10 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
         "target_bug_id": b["id"], "link_type": "blocks",
     }).json()
 
+    from sqlalchemy import select
+
     from app.database import SessionLocal
     from app.models import BugLink
-    from sqlalchemy import select
 
     db = SessionLocal()
     try:
@@ -1172,9 +1273,10 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
 
 def _orphan_link(admin_client, *, drop="other"):
     """Create A--blocks-->B, delete one bug with FK off so the link survives orphaned; returns (path_bug_id, link_id)."""
+    from sqlalchemy import delete, text
+
     from app.database import SessionLocal
     from app.models import Bug
-    from sqlalchemy import delete, text
 
     proj = admin_client.post("/api/projects", json={"name": f"Orphan{drop}"}).json()
     a = admin_client.post("/api/bugs", json={

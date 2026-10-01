@@ -1,7 +1,9 @@
 """Assistant write side: action plans, confirmation flow, permission denial, audit, pronouns, atomicity (temp-SQLite)."""
 from __future__ import annotations
 
-import os as _os, sys as _sys
+import os as _os
+import sys as _sys
+
 # Ensure the repo root is on the path when running this file directly.
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
@@ -9,7 +11,6 @@ import os
 import sys
 import tempfile
 import traceback
-from datetime import datetime, timedelta, timezone
 
 _tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp.close()
@@ -21,17 +22,18 @@ os.environ["BOOTSTRAP_ADMIN_NAME"] = "Admin Person"
 
 # Force a fresh import of app.* bound to this file's DB; a stale engine would fail create_all.
 import sys as _sys_purge
+
 for _m in list(_sys_purge.modules):
     if _m == "app" or _m.startswith("app."):
         del _sys_purge.modules[_m]
 
-from app.database import Base, engine, SessionLocal
+import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+
 from app import models
 from app.auth import hash_password
-from app.chatbot import executor, nlu
+from app.chatbot import executor
 from app.chatbot.memory import store as memstore
-
-import pytest  # noqa: E402  (after the deliberate sys.modules purge above)
+from app.database import Base, SessionLocal, engine
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +50,6 @@ def _rebind_app_modules():
     g["executor"] = importlib.import_module("app.chatbot.executor")
     g["nlu"] = importlib.import_module("app.chatbot.nlu")
     g["memstore"] = importlib.import_module("app.chatbot.memory").store
-    yield
 
 
 PASSED: list[str] = []
@@ -425,6 +426,7 @@ def test_action_via_http() -> None:
     section("HTTP path: end-to-end action through /api/chat/ask")
     admin_id, _, bob_id, bug1 = seed_fresh()
     from fastapi.testclient import TestClient
+
     from app.main import app
     client = TestClient(app)
     r = client.post("/api/auth/login",
@@ -472,7 +474,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         FAILED.append(("HARNESS", "uncaught crash"))
 
-    print(f"\n=== RESULTS ===")
+    print("\n=== RESULTS ===")
     print(f"Passed: {len(PASSED)}")
     print(f"Failed: {len(FAILED)}")
     if FAILED:

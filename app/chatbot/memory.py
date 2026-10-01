@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-
 _MAX_SESSIONS = 200
 _TTL_SECONDS = 30 * 60   # 30 minutes idle
 # Shorter than the session TTL so a stray late "ok" can't fire a write.

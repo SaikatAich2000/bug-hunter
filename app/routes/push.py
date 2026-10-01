@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import push_service
+from app.api_docs import CONFLICT_409
 from app.auth import get_current_user
 from app.config import get_settings
 from app.database import get_db
@@ -20,7 +21,7 @@ from app.schemas import PushConfigOut, PushSubscribeIn, PushUnsubscribeIn
 router = APIRouter(prefix="/api/push", tags=["push"])
 
 
-@router.get("/config", response_model=PushConfigOut)
+@router.get("/config")
 def push_config() -> PushConfigOut:
     """Public Firebase web config; enabled=False lets the frontend hide the toggle."""
     s = get_settings()
@@ -40,7 +41,7 @@ def push_config() -> PushConfigOut:
     )
 
 
-@router.post("/subscribe")
+@router.post("/subscribe", responses=CONFLICT_409)
 def subscribe(
     payload: PushSubscribeIn,
     db: Session = Depends(get_db),

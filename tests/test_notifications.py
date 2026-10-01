@@ -78,6 +78,25 @@ def test_assignment_creates_notification_for_assignee(client):
     assert bobc.get(f"{_NOTIFS}/unread_count").json()["unread"] >= 1
 
 
+def test_assignee_only_update_skips_updated_notification(client):
+    """A PUT that only adds an assignee (no other tracked field changes) must
+    fire the 'assigned' notification but no 'updated' one, since `changes` is
+    empty for everyone except the newly-assigned user."""
+    _admin(client)
+    proj = _mk_project(client, "AssigneeOnlyProj")
+    bob = _mk_user(client, "Bob", "bob.assignonly@notif.test")
+    bug = _mk_bug(client, proj["id"], title="No assignees yet")
+
+    r = client.put(f"/api/bugs/{bug['id']}", json={"assignee_ids": [bob["id"]]})
+    assert r.status_code == 200, r.text
+
+    bobc = _new_client()
+    _login(bobc, "bob.assignonly@notif.test")
+    bob_notifs = bobc.get(_NOTIFS).json()
+    assert any(n["kind"] == "assigned" and n["bug_id"] == bug["id"] for n in bob_notifs), bob_notifs
+    assert not any(n["kind"] == "updated" and n["bug_id"] == bug["id"] for n in bob_notifs), bob_notifs
+
+
 def test_self_assignment_notifies_actor(client):
     """Self-assignment still produces a notification for the actor."""
     _admin(client)
@@ -299,8 +318,9 @@ def test_notifications_table_is_additive_and_idempotent(tmp_path, monkeypatch):
             del sys.modules[mod]
     from app.config import get_settings
     get_settings.cache_clear()  # type: ignore[attr-defined]
-    from app.database import engine, init_db
     from sqlalchemy import inspect
+
+    from app.database import engine, init_db
 
     init_db()
     assert "notifications" in inspect(engine).get_table_names()

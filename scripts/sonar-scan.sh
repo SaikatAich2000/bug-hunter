@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run pytest with coverage, then push the report to the local SonarQube via the
 # sonar-scanner-cli Docker image. Env overrides: SONAR_HOST_URL (default
-# http://localhost:9000) and SONAR_TOKEN (required if anonymous analysis is disabled).
+# http://localhost:9090) and SONAR_TOKEN (required if anonymous analysis is disabled).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,8 +18,18 @@ command -v python >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 \
   || abort "python is not on PATH"
 PY=$(command -v python || command -v python3)
 
-SONAR_HOST_URL="${SONAR_HOST_URL:-http://localhost:9000}"
+SONAR_HOST_URL="${SONAR_HOST_URL:-http://localhost:9090}"
 SONAR_TOKEN="${SONAR_TOKEN:-}"
+
+# sonar.projectVersion is not hardcoded in sonar-project.properties; it comes
+# from APP_VERSION in .env so there is exactly one place to bump a release.
+if [[ -z "${APP_VERSION:-}" ]]; then
+  APP_VERSION="$(grep -m1 '^APP_VERSION=' "${ROOT}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+fi
+if [[ -z "${APP_VERSION:-}" ]]; then
+  abort "APP_VERSION is not set in the environment or .env - add it (see .env.example)."
+fi
+info "Using APP_VERSION=${APP_VERSION} as sonar.projectVersion"
 
 if ! curl -sf -o /dev/null -m 5 "${SONAR_HOST_URL}/api/system/status"; then
   abort "Can't reach SonarQube at ${SONAR_HOST_URL}. Is the container up? Override with SONAR_HOST_URL=…"
@@ -88,6 +98,8 @@ fi
 docker run --rm \
   "${SCANNER_ARGS[@]}" \
   -v "${MOUNT_SRC}:/usr/src" \
-  sonarsource/sonar-scanner-cli:latest
+  -w /usr/src \
+  sonarsource/sonar-scanner-cli:latest \
+  -Dsonar.projectVersion="${APP_VERSION}"
 
 info "Done. Browse results at ${SONAR_HOST_URL}/dashboard?id=Bug-Hunter"

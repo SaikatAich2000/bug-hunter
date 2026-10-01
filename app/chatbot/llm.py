@@ -15,12 +15,15 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import User
 from app.chatbot.executor import Response
+from app.models import User
+
+if TYPE_CHECKING:
+    from app.chatbot import nlu as _nlu
 
 
 logger = logging.getLogger("bug_hunter.sleuth.llm")
@@ -211,7 +214,7 @@ _last_used_at: float = 0.0   # epoch seconds of last inference call
 def _ensure_loaded() -> Any:
     """Lazy-load the model (caller must not hold _lock); return the Llama
     instance or raise."""
-    global _llm, _loaded_at, _last_used_at
+    global _llm, _loaded_at
     with _lock:
         # Unload if idle past the threshold before deciding whether to load.
         if (_llm is not None and _last_used_at > 0
@@ -443,9 +446,13 @@ def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Opti
     """Route a predicted intent to its rule-based handler. Read-only."""
     from app.access import accessible_project_ids
     from app.chatbot.executor import (
-        _handle_help, _handle_stats, _handle_recent_activity,
-        _handle_list_users, _handle_list_projects, _handle_bug_detail,
+        _handle_bug_detail,
+        _handle_help,
         _handle_list_bugs,
+        _handle_list_projects,
+        _handle_list_users,
+        _handle_recent_activity,
+        _handle_stats,
     )
     # Computed lazily per branch (not once up front) so intents that need no DB/actor
     # (help, an id-less bug_detail, unknown) stay callable with db=actor=None, as the

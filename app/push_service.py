@@ -49,10 +49,12 @@ def schedule(
     """Schedule an immediate background push to ``user_ids``; no-op when web push
     is disabled."""
     if not get_settings().WEB_PUSH_ENABLED:
+        logger.info("Push skipped: WEB_PUSH_ENABLED is off.")
         return
     ids = [uid for uid in user_ids if uid is not None]
     if not ids:
         return
+    logger.info("Queuing push to user_ids=%s.", ids)
     background.add_task(
         push_to_users, ids, title=title, body=body,
         url=_deep_link(bug_id, event_id),
@@ -153,6 +155,7 @@ def push_to_users(
     try:
         subs = _subs_for_users(db, ids)
         if not subs:
+            logger.info("Push skipped: no registered device for user_ids=%s.", ids)
             return 0
         tokens = [s.token for s in subs]
         dead = set(fcm_transport.send(tokens, title=title, body=body, url=url))

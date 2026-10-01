@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
@@ -23,10 +23,8 @@ from app.models import (
     Bug,
     Project,
     User,
-    bug_assignees,
 )
 from app.reports.catalog import REPORT_CATALOG
-
 
 # Resolution maps — keep in sync with app/schemas.py::STATUSES_BY_TYPE.
 RESOLVED_STATUSES_BY_TYPE: dict[str, list[str]] = {
@@ -126,6 +124,11 @@ class Filters:
             "text_search": self.text_search,
             "label": self.label,
         }
+
+    def with_overrides(self, **overrides: Any) -> "Filters":
+        """Typed wrapper over dataclasses.replace() so callers get back a
+        properly-typed Filters, not the generic DataclassInstance."""
+        return replace(self, **overrides)
 
 
 def _parse_date(v: Any) -> Optional[date]:
@@ -982,7 +985,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     # Created side: bugs with created_at in [start, end]. statuses=[] so the
     # created side isn't status-filtered; restrict_project_ids carries through
     # unchanged, or the timeline leaks other projects.
-    created_filters: Filters = replace(filters, date_from=start, date_to=end, statuses=[])
+    created_filters = filters.with_overrides(date_from=start, date_to=end, statuses=[])
     created_stmt = _apply_bug_filters(
         select(_utc_date(db, Bug.created_at), func.count(Bug.id)),
         created_filters,
@@ -990,7 +993,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     created_by_day = {str(d): int(c) for d, c in db.execute(created_stmt).all()}
     # Resolved side: reuse the throughput query and bucket by day. statuses is
     # left as-is since _build_throughput_query never reads Filters.statuses.
-    res_filters: Filters = replace(filters, date_from=start, date_to=end)
+    res_filters = filters.with_overrides(date_from=start, date_to=end)
     # The 366-day window clamps the date span but not the number of
     # status-change rows within it, so an unbounded query here could stream the
     # entire activity history into memory on a busy instance.

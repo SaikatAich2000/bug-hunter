@@ -10,7 +10,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-
 # (intent_label, example_phrasings); labels match nlu.parse() intents.
 _CORPUS: list[tuple[str, list[str]]] = [
     ("greeting", [
@@ -98,7 +97,7 @@ _CORPUS: list[tuple[str, list[str]]] = [
         "create a project called mercury",
         "add a new project named sentinel",
         "register a project: customer portal",
-        "set up a project for the mobile app",
+        "set up a project for the web portal",
     ]),
 ]
 

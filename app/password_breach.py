@@ -17,9 +17,9 @@ logger = logging.getLogger("bug_hunter.password_breach")
 _API_URL = "https://api.pwnedpasswords.com/range/"
 _TIMEOUT_SECONDS = 3.0
 
-# 'changeme' is the factory-default password (always accepted by the strength
+# 'legacy-default' is the legacy password (always accepted by the strength
 # validator), so skip the breach gate even though it's in the HIBP corpus.
-_ALWAYS_ALLOWED = frozenset({"changeme"})
+_ALWAYS_ALLOWED = frozenset({"legacy-default", "changeme"})
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -32,7 +32,7 @@ def _is_enabled() -> bool:
 
 def _sha1_hex(plain: str) -> str:
     # SHA-1 is the HIBP k-anonymity lookup key, not a credential hash (that's bcrypt).
-    return hashlib.sha1(plain.encode("utf-8")).hexdigest().upper()  # NOSONAR
+    return hashlib.sha1(plain.encode("utf-8"), usedforsecurity=False).hexdigest().upper()  # nosec B324  # NOSONAR(S4790)
 
 
 def _fetch_range(prefix: str) -> str | None:

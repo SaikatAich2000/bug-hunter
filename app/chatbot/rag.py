@@ -30,6 +30,7 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         return None
     try:
         import httpx
+
         from app.chatbot.redaction import redact
         model = f"models/{s.GEMINI_EMBED_MODEL}"
         r = httpx.post(

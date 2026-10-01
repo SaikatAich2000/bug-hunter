@@ -91,9 +91,21 @@ def test_resolve_tz_valid_returns_tzinfo():
 
 
 # --- start()/stop() control ----------------------------------------------
-def test_start_noop_when_cron_empty():
-    scheduler._task = None
+def test_start_noop_when_cron_empty(monkeypatch):
+    monkeypatch.setattr(scheduler, "_task", None)
     scheduler.start()  # default settings: EMAIL_DIGEST_CRON is empty
+    assert scheduler._task is None
+
+
+def test_start_noop_when_cron_and_digest_both_off(monkeypatch):
+    # Explicit, deterministic counterpart to the "default settings" test above:
+    # cron empty and digest disabled together must skip the warning entirely.
+    monkeypatch.setattr(scheduler, "get_settings", lambda: type(
+        "S", (), {"EMAIL_DIGEST_CRON": "",
+                  "EMAIL_DIGEST_ENABLED": False,
+                  "EMAIL_DIGEST_TIMEZONE": ""})())
+    monkeypatch.setattr(scheduler, "_task", None)
+    scheduler.start()
     assert scheduler._task is None
 
 
@@ -102,7 +114,7 @@ def test_start_noop_when_digest_disabled(monkeypatch):
         "S", (), {"EMAIL_DIGEST_CRON": "0 7 * * *",
                   "EMAIL_DIGEST_ENABLED": False,
                   "EMAIL_DIGEST_TIMEZONE": ""})())
-    scheduler._task = None
+    monkeypatch.setattr(scheduler, "_task", None)
     scheduler.start()
     assert scheduler._task is None
 
@@ -112,7 +124,7 @@ def test_start_noop_on_invalid_cron(monkeypatch):
         "S", (), {"EMAIL_DIGEST_CRON": "not a cron",
                   "EMAIL_DIGEST_ENABLED": True,
                   "EMAIL_DIGEST_TIMEZONE": ""})())
-    scheduler._task = None
+    monkeypatch.setattr(scheduler, "_task", None)
     scheduler.start()
     assert scheduler._task is None
 
@@ -125,15 +137,15 @@ def test_start_warns_when_enabled_but_cron_empty(monkeypatch, caplog):
         "S", (), {"EMAIL_DIGEST_CRON": "",
                   "EMAIL_DIGEST_ENABLED": True,
                   "EMAIL_DIGEST_TIMEZONE": ""})())
-    scheduler._task = None
+    monkeypatch.setattr(scheduler, "_task", None)
     with caplog.at_level("WARNING", logger="bug_hunter.scheduler"):
         scheduler.start()
     assert scheduler._task is None
     assert any("EMAIL_DIGEST_CRON is empty" in r.message for r in caplog.records)
 
 
-def test_stop_noop_when_never_started():
-    scheduler._task = None
+def test_stop_noop_when_never_started(monkeypatch):
+    monkeypatch.setattr(scheduler, "_task", None)
     asyncio.run(scheduler.stop())  # must not raise
 
 
@@ -148,7 +160,8 @@ def test_tick_runs_when_schedule_matches(monkeypatch):
     monkeypatch.setattr(scheduler, "_run_digest_once", fake_run)
     c = CronSchedule("* * * * *")
     stats = asyncio.run(scheduler._tick(c, timezone.utc, now=_dt(2026, 6, 15, 7, 0)))
-    assert seen.get("ran") and stats["emails_sent"] == 2
+    assert seen.get("ran")
+    assert stats["emails_sent"] == 2
 
 
 def test_tick_skips_when_no_match(monkeypatch):

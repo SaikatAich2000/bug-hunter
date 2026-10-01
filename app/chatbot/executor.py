@@ -17,8 +17,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.access import (
-    accessible_project_ids, can_access_project, scope_bug_query,
+    accessible_project_ids,
+    can_access_project,
+    scope_bug_query,
 )
+from app.config import get_settings
 from app.models import (
     Activity,
     Attachment,
@@ -29,9 +32,9 @@ from app.models import (
 )
 
 from .nlu import (
+    OPEN_STATUSES,
     Context,
     ParsedQuery,
-    OPEN_STATUSES,
     describe_filters,
     parse,
     pick_report_key,
@@ -184,7 +187,7 @@ def _apply_bug_filters(stmt, count_stmt, pq: ParsedQuery):
 def _handle_greeting(actor: User) -> Response:
     name_part = f", {actor.name.split()[0]}" if actor and actor.name else ""
     text = (
-        f"Hi{name_part}! I'm **Sleuth** 🔍, your Bug Hunter assistant.\n\n"
+        f"Hi{name_part}! I'm **Sleuth** 🔍, your {get_settings().APP_NAME} assistant.\n\n"
         "Ask me anything about bugs, projects, users or activity. A few "
         "examples:\n"
         "- *show all open bugs assigned to John*\n"
@@ -215,7 +218,7 @@ def _handle_help() -> Response:
         "- *show open bugs assigned to <name>*\n"
         "- *list critical bugs in PROD*\n"
         "- *bugs reported by Alice this week*\n"
-        "- *bugs in project Mobile with status closed*\n"
+        "- *bugs in project Web Portal with status closed*\n"
         "- *bugs about \"login crash\"*\n\n"
         "**Counts & stats**\n"
         "- *how many open bugs?*\n"
@@ -489,7 +492,7 @@ def _handle_bug_detail(db: Session, pq: ParsedQuery, accessible=None) -> Respons
     if short_descr:
         body += f"\n**Description:**\n{short_descr}"
     body += (
-        f"\n\n[Open in Bug Hunter](#open-bug-{bug.id})"
+        f"\n\n[Open in {get_settings().APP_NAME}](#open-bug-{bug.id})"
     )
     return Response(
         blocks=[Block("text", {"text": body, "open_bug_id": bug.id})],
@@ -588,7 +591,7 @@ def _handle_stats(db: Session, accessible=None) -> Response:
     ) or 0)
 
     text = (
-        f"**Bug Hunter — current snapshot**\n\n"
+        f"**{get_settings().APP_NAME} — current snapshot**\n\n"
         f"- **Total** (excluding *Not a Bug*): {total}\n"
         f"- **Open** (New + In Progress + Reopened): {open_n}\n"
         f"- **Resolved**: {resolved}\n"
@@ -1517,6 +1520,9 @@ def _handle_confirm_yes(db: Session, actor: User) -> Response:
             summary="No pending action",
             intent="confirm_idle",
         )
+    if raw.get("kind") == "llm_tool_call":
+        from app.chatbot import llm_tools_agent
+        return llm_tools_agent.confirm_pending_tool_call(db, actor, raw)
     plan = _actions.ActionPlan.from_dict(raw)
     resp = _actions.execute_plan(plan, db, actor)
     # Keep last-bug-id fresh so pronouns ("close it") still resolve.
@@ -1802,6 +1808,13 @@ def execute(message: str, db: Session, actor: User,
         return _handle_confirm_yes(db, actor)
     if pq.intent == "confirm_no":
         return _handle_confirm_no(actor)
+
+    # When the fully LLM-driven tool-calling agent is enabled, it is
+    # the sole mainline engine for everything except confirm_yes/no above —
+    # no deterministic rule-engine fallback runs underneath it.
+    from app.chatbot import llm_tools_agent
+    if llm_tools_agent.is_available():
+        return llm_tools_agent.run(message, db, actor)
 
     # "Remove all assignees from <bug|filter>" — caught ahead of the single-action
     # handler, whose set-status detector otherwise hijacks the scoping status word.

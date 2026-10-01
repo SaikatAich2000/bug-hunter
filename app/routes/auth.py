@@ -9,6 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import account_lockout
+from app.api_docs import (
+    AUTH_401,
+    FORGOT_PASSWORD_404,
+    PASSWORD_CHANGE_400,
+    RESET_TOKEN_400,
+)
 from app.auth import (
     PASSWORD_RESET_TTL,
     clear_session_cookie,
@@ -23,11 +29,12 @@ from app.auth import (
     trusted_forwarded_ip,
     verify_password,
 )
-from app.password_breach import is_password_breached
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import notify_password_reset
-from app.models import Activity, PasswordResetToken, Session as SessionRow, User
+from app.models import Activity, PasswordResetToken, User
+from app.models import Session as SessionRow
+from app.password_breach import is_password_breached
 from app.schemas import (
     ChangePasswordIn,
     ForgotPasswordIn,
@@ -39,7 +46,16 @@ from app.schemas import (
 logger = logging.getLogger("bug_hunter.auth")
 
 # Verified for unknown emails so timing can't distinguish "no account" from "wrong password".
-_DUMMY_PASSWORD_HASH = hash_password("dummy-not-a-real-credential")
+# Cost depends on construction order vs env: the test suite sets BCRYPT_TEST_ROUNDS
+# in tests/conftest.py, but conftest imports app modules first is NOT guaranteed
+# across files (pytest resolves conftest at collection; imports of app.routes by
+# earlier test modules can happen first). So compute it lazily per call instead
+# of baking a production-cost hash at import time — otherwise CI pays rounds=12
+# on EVERY unknown-email verify (~0.5s each) even when the override is set.
+def _dummy_password_hash() -> str:
+    if not hasattr(_dummy_password_hash, "cached"):
+        _dummy_password_hash.cached = hash_password("dummy-not-a-real-credential")  # type: ignore[attr-defined]
+    return _dummy_password_hash.cached  # type: ignore[attr-defined]
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -92,7 +108,7 @@ def _client_ip(request: Request) -> str:
     return ""
 
 
-@router.post("/login", response_model=MeOut)
+@router.post("/login", response_model=MeOut, responses=AUTH_401)
 def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)) -> User:
     """Verify credentials, create a session row, and set the signed cookie.
     The cookie's `jti` maps back to the row, enabling per-session admin revocation."""
@@ -103,7 +119,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     user = db.scalar(select(User).where(User.email == payload.email))
     # Run bcrypt even for unknown emails to keep response timing uniform.
     if user is None:
-        verify_password(payload.password, _DUMMY_PASSWORD_HASH)
+        verify_password(payload.password, _dummy_password_hash())
         password_ok = False
     else:
         password_ok = verify_password(payload.password, user.password_hash)
@@ -165,7 +181,7 @@ def me(user: User = Depends(get_current_user)) -> User:
     return user
 
 
-@router.post("/change-password", status_code=204)
+@router.post("/change-password", status_code=204, responses=PASSWORD_CHANGE_400)
 def change_password(
     payload: ChangePasswordIn,
     request: Request,
@@ -215,7 +231,7 @@ def change_password(
     return out
 
 
-@router.post("/forgot-password", status_code=204)
+@router.post("/forgot-password", status_code=204, responses=FORGOT_PASSWORD_404)
 def forgot_password(
     payload: ForgotPasswordIn,
     background: BackgroundTasks,
@@ -259,7 +275,7 @@ def forgot_password(
     return Response(status_code=204)
 
 
-@router.post("/reset-password", status_code=204)
+@router.post("/reset-password", status_code=204, responses=RESET_TOKEN_400)
 def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> Response:
     """Set a new password via reset token; bumps session_version and
     invalidates the user's other outstanding reset tokens."""

@@ -11,9 +11,9 @@ import pytest
 # Seeding helpers — build users, projects, events, and bugs via the ORM.
 def _seed(client):
     """Populate the per-test DB with a representative dataset; returns a dict of ids."""
-    from app.database import SessionLocal
     from app import models
     from app.auth import hash_password
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -153,7 +153,7 @@ def test_cov_time_relative_and_since_weekday():
     assert pq2.time_window.start == mon.replace(
         hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
 
-    for phrase, unit_word in [
+    for phrase, _unit_word in [
         ("bugs in the last 7 days", "day"),
         ("bugs in the last 2 weeks", "week"),
         ("bugs in the last 3 months", "month"),
@@ -477,9 +477,9 @@ def test_cov_describe_filters_branches():
 # executor.py — build_context
 def test_cov_build_context_email_without_at(client):
     _seed(client)
-    from app.database import SessionLocal
     from app import models
     from app.chatbot.executor import build_context
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -645,7 +645,8 @@ def test_cov_exec_stats(client):
         r = executor.execute("summary", db, admin)
         assert r.intent == "stats"
         body = _texts(r)
-        assert "Total" in body and "Open" in body
+        assert "Total" in body
+        assert "Open" in body
         assert _table(r) is not None  # top-assignees table
     finally:
         db.close()
@@ -755,7 +756,8 @@ def test_cov_suggest_user_helpers():
         projects=[],
     )
     pool = executor._build_user_suggest_pool(ctx)
-    assert "alice wonderland" in pool and "bob" in pool
+    assert "alice wonderland" in pool
+    assert "bob" in pool
     assert "" not in pool
 
     assert "Alice Wonderland" in executor._suggest_user("alise wonderland", ctx)
@@ -813,9 +815,10 @@ def test_cov_exec_export_capped(client):
         ctx = executor.build_context(db)
         pq = nlu.parse("export all bugs to excel", ctx)
         # Pass total > cap directly to trigger the "capped" note in the response.
-        from app.chatbot.executor import _eager_bug_query, _apply_bug_filters
-        from sqlalchemy import select, func
+        from sqlalchemy import func, select
+
         from app import models
+        from app.chatbot.executor import _apply_bug_filters, _eager_bug_query
         stmt, _cs = _apply_bug_filters(
             _eager_bug_query(), select(func.count(models.Bug.id)), pq)
         rows = list(db.scalars(stmt.limit(5000)).all())
@@ -885,7 +888,8 @@ def test_cov_report_pure_helpers():
     assert "Total items" in executor._format_summary_extras(s_items)
     s_timeline = {"total_created": 8, "total_resolved": 6, "net": 2}
     out = executor._format_summary_extras(s_timeline)
-    assert "Created" in out and "Net" in out
+    assert "Created" in out
+    assert "Net" in out
     s_ttr = {"average_hours": 4, "median_hours": 3, "p95_hours": 9}
     assert "Average" in executor._format_summary_extras(s_ttr)
 
@@ -899,7 +903,8 @@ def test_cov_report_pure_helpers():
     assert out[0] == ""
     assert out[1] == "7"
     assert out[2] == "short"
-    assert out[3].endswith("…") and len(out[3]) == 78  # 77 chars + ellipsis
+    assert out[3].endswith("…")
+    assert len(out[3]) == 78  # 77 chars + ellipsis
 
 
 def test_cov_build_report_preview_text():
@@ -925,7 +930,8 @@ def test_cov_build_report_preview_text():
         total = 1
         summary = {}
     text2 = executor._build_report_preview_text(_Res1(), filters2, preview_rows_count=15)
-    assert "2026-01-01" in text2 and "2026-02-01" in text2
+    assert "2026-01-01" in text2
+    assert "2026-02-01" in text2
 
 
 def test_cov_filters_from_parsed_dates_and_types(client):
@@ -948,7 +954,8 @@ def test_cov_filters_from_parsed_dates_and_types(client):
 
         pq3 = nlu.parse("report of all items", ctx)   # no time window → dates None
         filt3 = executor._filters_from_parsed(pq3)
-        assert filt3.date_from is None and filt3.date_to is None
+        assert filt3.date_from is None
+        assert filt3.date_to is None
     finally:
         db.close()
 
@@ -1048,6 +1055,19 @@ def test_action_misfire_keeps_canned_prompt_when_cloud_off(client):
         db.close()
 
 
+def test_cloud_available_fails_closed_on_exception(monkeypatch):
+    """_cloud_available() must never raise — an import/call failure in the
+    optional cloud layer degrades to 'not available', not a 500."""
+    import app.chatbot.cloud_llm as cloud
+    from app.chatbot import executor
+
+    def _boom():
+        raise RuntimeError("cloud layer exploded")
+
+    monkeypatch.setattr(cloud, "is_available", _boom)
+    assert executor._cloud_available() is False
+
+
 def test_cov_exec_action_plan_each_kind(client):
     ids = _seed(client)
     from app.chatbot import executor, nlu
@@ -1061,21 +1081,29 @@ def test_cov_exec_action_plan_each_kind(client):
             return executor._build_action_plan(pq, admin)
 
         plan, err = plan_for("assign bug 1 to alice")
-        assert err is None and plan.kind == "assign"
+        assert err is None
+        assert plan.kind == "assign"
         plan, err = plan_for("unassign alice from bug 1")
-        assert err is None and plan.kind == "unassign"
+        assert err is None
+        assert plan.kind == "unassign"
         plan, err = plan_for("mark bug 1 as resolved")
-        assert err is None and plan.new_value == "Resolved"
+        assert err is None
+        assert plan.new_value == "Resolved"
         plan, err = plan_for("set bug 1 priority to high")
-        assert err is None and plan.new_value == "High"
+        assert err is None
+        assert plan.new_value == "High"
         plan, err = plan_for("due bug 1 2026-06-15")
-        assert err is None and plan.new_value == "2026-06-15"
+        assert err is None
+        assert plan.new_value == "2026-06-15"
         plan, err = plan_for("comment on #1: hi there")
-        assert err is None and plan.comment_body == "hi there"
+        assert err is None
+        assert plan.comment_body == "hi there"
         plan, err = plan_for('create a bug titled "Fresh" in project Apollo')
-        assert err is None and plan.new_title == "Fresh"
+        assert err is None
+        assert plan.new_title == "Fresh"
         plan, err = plan_for("create project Neptune")
-        assert err is None and plan.new_project_name == "Neptune"
+        assert err is None
+        assert plan.new_project_name == "Neptune"
     finally:
         db.close()
 
@@ -1085,40 +1113,48 @@ def test_cov_exec_action_plan_missing_value_errors(client):
     from app.chatbot import executor, nlu
     db = _new_db()
     try:
-        admin = _user(db, ids["admin"])
+        _user(db, ids["admin"])
         from app.chatbot.actions import ActionPlan
 
         pq = nlu.ParsedQuery(bug_id=1, action_kind="assign")
         plan, err = executor._plan_assign(ActionPlan(kind="assign", actor_user_id=1), pq, "assign")
-        assert plan is None and "name" in err.lower()
+        assert plan is None
+        assert "name" in err.lower()
 
         plan, err = executor._plan_set_status(ActionPlan(kind="set_status", actor_user_id=1),
                                               nlu.ParsedQuery(bug_id=1))
-        assert plan is None and "status" in err.lower()
+        assert plan is None
+        assert "status" in err.lower()
 
         plan, err = executor._plan_set_priority(ActionPlan(kind="set_priority", actor_user_id=1),
                                                nlu.ParsedQuery(bug_id=1))
-        assert plan is None and "priority" in err.lower()
+        assert plan is None
+        assert "priority" in err.lower()
 
         plan, err = executor._plan_set_environment(
             ActionPlan(kind="set_environment", actor_user_id=1), nlu.ParsedQuery(bug_id=1))
-        assert plan is None and "environment" in err.lower()
+        assert plan is None
+        assert "environment" in err.lower()
 
         plan, err = executor._plan_set_due_date(
             ActionPlan(kind="set_due_date", actor_user_id=1), nlu.ParsedQuery(bug_id=1))
-        assert plan is None and "date" in err.lower()
+        assert plan is None
+        assert "date" in err.lower()
 
         plan, err = executor._plan_add_comment(
             ActionPlan(kind="add_comment", actor_user_id=1), nlu.ParsedQuery(bug_id=1))
-        assert plan is None and "comment" in err.lower()
+        assert plan is None
+        assert "comment" in err.lower()
 
         plan, err = executor._plan_create_bug(
             ActionPlan(kind="create_bug", actor_user_id=1), nlu.ParsedQuery())
-        assert plan is None and "title" in err.lower()
+        assert plan is None
+        assert "title" in err.lower()
 
         plan, err = executor._plan_create_project(
             ActionPlan(kind="create_project", actor_user_id=1), nlu.ParsedQuery())
-        assert plan is None and "project name" in err.lower()
+        assert plan is None
+        assert "project name" in err.lower()
     finally:
         db.close()
 
@@ -1209,7 +1245,8 @@ def test_cov_resolve_me_pronoun_direct():
     # Not flagged → no-op.
     pq = nlu.ParsedQuery()
     executor._resolve_me_pronoun(pq, _Actor())
-    assert pq.assignee_ids == [] and pq.reporter_ids == []
+    assert pq.assignee_ids == []
+    assert pq.reporter_ids == []
 
     # me_role="reporter" → fills reporter slot; second call must not duplicate.
     pq2 = nlu.ParsedQuery(used_pronoun_me=True, me_role="reporter")
@@ -1249,7 +1286,7 @@ def test_cov_exec_unknown_hint_branches(client):
     from app.chatbot import executor
     db = _new_db()
     try:
-        admin = _user(db, ids["admin"])
+        _user(db, ids["admin"])
         # Drive _handle_unknown directly to hit each topic-hint branch and the default.
         assert "list users" in _texts(executor._handle_unknown("blah team members blah")).lower()
         assert "list projects" in _texts(executor._handle_unknown("zzz project zzz")).lower()
@@ -1340,10 +1377,10 @@ def test_cov_http_ask_report_forbidden_for_regular_user(user_client):
     assert r.json()["intent"] == "report_forbidden"
 
 
-def test_cov_changeme_password_still_valid():
-    # 'changeme' must always pass the strength policy.
+def test_cov_legacy_default_password_still_valid():
+    # 'legacy-default' must always pass the strength policy.
     from app.schemas import _check_password_strength
-    assert _check_password_strength("changeme") == "changeme"
+    assert _check_password_strength("legacy-default") == "legacy-default"
 
 
 # Focused coverage — partial branches, error paths, monkeypatched modules.
@@ -1366,8 +1403,8 @@ def test_cov_bug_detail_no_event_branch(client):
 def test_cov_bug_detail_empty_description(client):
     # An empty description skips the short_descr block entirely.
     ids = _seed(client)
-    from app.chatbot import executor
     from app import models
+    from app.chatbot import executor
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
@@ -1410,7 +1447,7 @@ def test_cov_inline_list_truncation_note(client):
     from app.chatbot import executor, nlu
     db = _new_db()
     try:
-        admin = _user(db, ids["admin"])
+        _user(db, ids["admin"])
         ctx = executor.build_context(db)
         pq = nlu.parse("show all bugs", ctx)
         pq.limit = 5   # below the seeded count of 9
@@ -1425,15 +1462,17 @@ def test_cov_export_import_error_and_excel_error(client, monkeypatch):
     # (a) openpyxl import fails; (b) stage_workbook raises ExcelGenerationError.
     ids = _seed(client)
     import sys
+
     from app.chatbot import executor, nlu
     db = _new_db()
     try:
-        admin = _user(db, ids["admin"])
+        _user(db, ids["admin"])
         ctx = executor.build_context(db)
         pq = nlu.parse("export all bugs to excel", ctx)
-        from app.chatbot.executor import _eager_bug_query, _apply_bug_filters
-        from sqlalchemy import select, func
+        from sqlalchemy import func, select
+
         from app import models
+        from app.chatbot.executor import _apply_bug_filters, _eager_bug_query
         stmt, _cs = _apply_bug_filters(
             _eager_bug_query(), select(func.count(models.Bug.id)), pq)
         rows = list(db.scalars(stmt.limit(10)).all())
@@ -1473,22 +1512,24 @@ def test_cov_filters_from_parsed_start_only_end_only(client):
         pq = nlu.parse("report of all bugs", ctx)
         pq.time_window = nlu.TimeWindow(start=now, end=None, label="x")
         filt = executor._filters_from_parsed(pq)
-        assert filt.date_from is not None and filt.date_to is None
+        assert filt.date_from is not None
+        assert filt.date_to is None
 
         pq2 = nlu.parse("report of all bugs", ctx)
         pq2.time_window = nlu.TimeWindow(start=None, end=now, label="y")
         filt2 = executor._filters_from_parsed(pq2)
-        assert filt2.date_from is None and filt2.date_to is not None
+        assert filt2.date_from is None
+        assert filt2.date_to is not None
     finally:
         db.close()
 
 
 def test_cov_stage_report_xlsx_build_error(monkeypatch):
     # XlsxBuildError from build_workbook_bytes is wrapped in ExcelGenerationError.
-    from app.chatbot import executor
     import app.reports as reports
-    from app.reports.xlsx import XlsxBuildError
     from app.chatbot import excel as _excel
+    from app.chatbot import executor
+    from app.reports.xlsx import XlsxBuildError
 
     def _raise(_result):
         raise XlsxBuildError("bad workbook")
@@ -1498,15 +1539,16 @@ def test_cov_stage_report_xlsx_build_error(monkeypatch):
     class _Res:
         total = 1
 
+    result = _Res()
     with pytest.raises(_excel.ExcelGenerationError):
-        executor._stage_report_xlsx(_Res(), "item_detail", 1)
+        executor._stage_report_xlsx(result, "item_detail", 1)
 
 
 def test_cov_handle_report_run_error(client, monkeypatch):
     # ValueError from run_report → "couldn't run that report" response.
     ids = _seed(client)
-    from app.chatbot import executor
     import app.reports as reports
+    from app.chatbot import executor
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
@@ -1544,14 +1586,15 @@ def test_cov_plan_set_environment_and_create_bug_fields(client):
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
-        ctx = executor.build_context(db)
+        executor.build_context(db)
 
         # The text->action map doesn't flag set_environment; drive the planner directly.
         from app.chatbot.actions import ActionPlan
         pq_env = nlu.ParsedQuery(bug_id=1, environments=["PROD"])
         plan, err = executor._plan_set_environment(
             ActionPlan(kind="set_environment", actor_user_id=admin.id), pq_env)
-        assert err is None and plan.new_value == "PROD"
+        assert err is None
+        assert plan.new_value == "PROD"
 
         # 'create a critical bug' misses the regex; drive the planner directly with slots filled.
         pq_cb = nlu.ParsedQuery(
@@ -1604,7 +1647,8 @@ def test_cov_confirm_yes_remembers_bug(client):
         executor.execute("close bug 5", db, admin)
         executor.execute("yes", db, admin)
         sess = mem.get(admin.id)
-        assert sess is not None and sess.last_bug_id == 5
+        assert sess is not None
+        assert sess.last_bug_id == 5
     finally:
         db.close()
 
@@ -1620,10 +1664,12 @@ def test_cov_dispatch_bug_detail_remembers(client):
         mem.reset(admin.id)
         ctx = executor.build_context(db)
         pq = nlu.parse("bug 3", ctx)
-        assert pq.intent == "bug_detail" and pq.bug_id == 3
+        assert pq.intent == "bug_detail"
+        assert pq.bug_id == 3
         executor._dispatch_read_intent("bug_detail", db, pq, admin, ctx)
         sess = mem.get(admin.id)
-        assert sess is not None and sess.last_bug_id == 3
+        assert sess is not None
+        assert sess.last_bug_id == 3
     finally:
         db.close()
 
@@ -1631,8 +1677,8 @@ def test_cov_dispatch_bug_detail_remembers(client):
 def test_cov_try_classifier_action_branch(client, monkeypatch):
     # Classifier predicts an action_* intent the rules couldn't fill -> _classifier_action_invalid.
     ids = _seed(client)
-    from app.chatbot import executor, nlu
     from app.chatbot import classifier as clf
+    from app.chatbot import executor, nlu
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
@@ -1645,7 +1691,8 @@ def test_cov_try_classifier_action_branch(client, monkeypatch):
 
         monkeypatch.setattr(clf, "predict", lambda _m: _Pred())
         r = executor._try_classifier("do the thing", db, pq, admin, ctx)
-        assert r is not None and r.intent == "action_invalid"
+        assert r is not None
+        assert r.intent == "action_invalid"
 
         # predict returns None → None; non-read/non-action intent → None.
         monkeypatch.setattr(clf, "predict", lambda _m: None)
@@ -1681,8 +1728,8 @@ def test_cov_try_llm_exception_swallowed(client, monkeypatch):
 def test_cov_try_cloud_llm_exception_swallowed(client, monkeypatch):
     # Exceptions inside _try_cloud_llm are swallowed; it returns None.
     ids = _seed(client)
-    from app.chatbot import executor
     from app.chatbot import cloud_llm as _cloud
+    from app.chatbot import executor
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
@@ -1699,9 +1746,9 @@ def test_cov_try_cloud_llm_exception_swallowed(client, monkeypatch):
 def test_cov_execute_cloud_then_classifier_then_llm(client, monkeypatch):
     # Walk execute()'s fallback chain: cloud → classifier → unknown.
     ids = _seed(client)
-    from app.chatbot import executor
-    from app.chatbot import cloud_llm as _cloud
     from app.chatbot import classifier as _clf
+    from app.chatbot import cloud_llm as _cloud
+    from app.chatbot import executor
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
@@ -1735,8 +1782,8 @@ def test_cov_execute_cloud_then_classifier_then_llm(client, monkeypatch):
 
 def test_cov_did_you_mean_classifier_raises(monkeypatch):
     # A classifier error inside _did_you_mean must be swallowed, not propagate.
-    from app.chatbot import executor
     from app.chatbot import classifier as _clf
+    from app.chatbot import executor
 
     def _boom(*a, **k):
         raise RuntimeError("classifier down")
@@ -1760,7 +1807,8 @@ def test_cov_nlu_record_name_match_reporter_and_unresolved():
     seen_a: set[int] = set()
     seen_r: set[int] = set()
     nlu._record_name_match("reporter", 9, "Rae Porter", pq, seen_a, seen_r)
-    assert pq.reporter_ids == [9] and pq.reporter_names == ["Rae Porter"]
+    assert pq.reporter_ids == [9]
+    assert pq.reporter_names == ["Rae Porter"]
     # Duplicate id is ignored.
     nlu._record_name_match("reporter", 9, "Rae Porter", pq, seen_a, seen_r)
     assert pq.reporter_ids == [9]
@@ -1790,7 +1838,8 @@ def test_cov_nlu_status_dedup_and_multi_name_and_bare_create():
     # create-bug verb with nothing capturable after "bug" → action_title is None.
     pq = nlu.ParsedQuery()
     kind = nlu._action_create_bug("create a bug", pq)
-    assert kind == "create_bug" and pq.action_title is None
+    assert kind == "create_bug"
+    assert pq.action_title is None
 
 
 def test_cov_nlu_add_resolved_projects_dedup():
@@ -1830,8 +1879,8 @@ def test_cov_plan_create_bug_assignee_without_project(client):
 def test_cov_execute_reaches_llm_return(client, monkeypatch):
     # Read dispatch and classifier decline but _try_llm returns a Response -> returned.
     ids = _seed(client)
-    from app.chatbot import executor
     from app.chatbot import classifier as _clf
+    from app.chatbot import executor
     from app.chatbot import llm as _llm
     db = _new_db()
     try:
@@ -1894,7 +1943,8 @@ def test_cov_build_action_plan_set_environment_dispatch(client):
         pq = nlu.ParsedQuery(bug_id=1, action_kind="set_environment",
                              environments=["PROD"])
         plan, err = executor._build_action_plan(pq, admin)
-        assert err is None and plan.kind == "set_environment"
+        assert err is None
+        assert plan.kind == "set_environment"
         assert plan.new_value == "PROD"
     finally:
         db.close()
@@ -1922,8 +1972,8 @@ def test_cov_try_llm_available_calls_understand(client, monkeypatch):
 def test_cov_execute_reaches_final_unknown(client, monkeypatch):
     # Every fallback returns None → execute() reaches _handle_unknown.
     ids = _seed(client)
-    from app.chatbot import executor
     from app.chatbot import classifier as _clf
+    from app.chatbot import executor
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
@@ -1961,7 +2011,8 @@ def test_cov_nlu_action_helpers_absent_body_branches():
     # Comment with a bug target but no colon -> body None (treated as a read).
     pq2 = nlu.ParsedQuery(bug_id=5)
     kind2 = nlu._action_add_comment("comment on #5", pq2)
-    assert kind2 == "add_comment" and pq2.action_comment is None
+    assert kind2 == "add_comment"
+    assert pq2.action_comment is None
 
     # No bug target → not a command, treated as a question.
     assert nlu._action_add_comment("any comment on the release?", nlu.ParsedQuery()) is None
@@ -1969,12 +2020,14 @@ def test_cov_nlu_action_helpers_absent_body_branches():
     # Colon present but whitespace-only body → strips to empty → action_comment None.
     pq2b = nlu.ParsedQuery(bug_id=5)
     kind2b = nlu._action_add_comment("comment on #5:    ", pq2b)
-    assert kind2b == "add_comment" and pq2b.action_comment is None
+    assert kind2b == "add_comment"
+    assert pq2b.action_comment is None
 
     # Bare-form create_bug with a non-empty tail → title captured.
     pq3b = nlu.ParsedQuery()
     kind3b = nlu._action_create_bug("create a bug Login is broken", pq3b)
-    assert kind3b == "create_bug" and pq3b.action_title == "Login is broken"
+    assert kind3b == "create_bug"
+    assert pq3b.action_title == "Login is broken"
 
     # Bare-form with only a project cue as the tail → still returns create_bug.
     pq3c = nlu.ParsedQuery()
@@ -1984,12 +2037,14 @@ def test_cov_nlu_action_helpers_absent_body_branches():
     # Quoted-title form sets the title immediately.
     pq4 = nlu.ParsedQuery()
     kind4 = nlu._action_create_bug('file a bug titled "Quoted" now', pq4)
-    assert kind4 == "create_bug" and pq4.action_title == "Quoted"
+    assert kind4 == "create_bug"
+    assert pq4.action_title == "Quoted"
 
     # due-date verb with no ISO date → action_value stays None.
     pq5 = nlu.ParsedQuery()
     kind5 = nlu._action_set_due_date("set the due date for bug 5", pq5)
-    assert kind5 == "set_due_date" and pq5.action_value is None
+    assert kind5 == "set_due_date"
+    assert pq5.action_value is None
 
 
 def test_cov_nlu_record_unresolved_unknown_role():
@@ -2024,10 +2079,11 @@ def test_cov_nlu_classify_final_intent_report_branch():
 def test_cov_apply_time_window_start_only_end_only(client):
     # _apply_time_window with a start-only window, then an end-only window.
     _seed(client)
+    from sqlalchemy import func, select
+
+    from app import models
     from app.chatbot import executor, nlu
     from app.chatbot.executor import _eager_bug_query
-    from sqlalchemy import select, func
-    from app import models
     db = _new_db()
     try:
         now = datetime.now(timezone.utc)
@@ -2082,7 +2138,8 @@ def test_cov_dispatch_bug_detail_without_id(client):
         pq = nlu.ParsedQuery(intent="bug_detail", bug_id=None)
         r = executor._dispatch_read_intent("bug_detail", db, pq, admin,
                                            executor.build_context(db))
-        assert r is not None and r.intent == "bug_detail"
+        assert r is not None
+        assert r.intent == "bug_detail"
     finally:
         db.close()
 

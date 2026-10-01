@@ -14,6 +14,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
 WIPE_DB=false
+CLEAN_DB=false
 REMOVE_IMAGES=false
 FORCE=false
 
@@ -22,15 +23,22 @@ usage() {
   echo "Usage: $0 [OPTIONS]"
   echo ""
   echo "  (no flags)       Stop containers, keep DB volume & image intact"
-  echo "  --wipe-db        Also DELETE the bugtracker_pgdata volume (ALL DATA LOST)"
+  echo "  --clean-db       Reset the database to its FIRST-LAUNCH state: deletes"
+  echo "                   all work items/projects/users/audit rows but KEEPS the"
+  echo "                   bootstrap admin (its .env credentials), the seeded"
+  echo "                   default project and the workflow baseline. Prints a"
+  echo "                   dry-run plan, then asks before deleting."
+  echo "  --wipe-db        Also DELETE the bugtracker_pgdata volume (ALL DATA LOST,"
+  echo "                   baseline included — the app re-seeds it from .env)"
   echo "  --remove-images  Also remove the built bugtracker_app image"
   echo "  --full-clean     Equivalent to --wipe-db --remove-images"
-  echo "  --force          Skip the --wipe-db confirmation prompt (for automation)"
+  echo "  --force          Skip the confirmation prompts (for automation)"
   echo ""
 }
 
 for arg in "$@"; do
   case $arg in
+    --clean-db)       CLEAN_DB=true ;;
     --wipe-db)        WIPE_DB=true ;;
     --remove-images)  REMOVE_IMAGES=true ;;
     --full-clean)     WIPE_DB=true; REMOVE_IMAGES=true ;;
@@ -40,8 +48,49 @@ for arg in "$@"; do
   esac
 done
 
-# ── Safety: never touch pmis-postgres ────────────────────────────────────────
-info "Stopping Bug Hunter services only (pmis-* containers are untouched)..."
+# ── Optional: reset the data, keeping the first-launch baseline ───────────────
+# Runs BEFORE `down` (the app image is still present and the db gets started on
+# demand), and never drops the volume, so the bootstrap admin's credentials and
+# the seeded project survive. `--wipe-db` below is the only destructive path.
+if [[ "$CLEAN_DB" == true ]]; then
+  info "Starting the database service for the cleanup..."
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d db
+
+  info "Waiting for bugtracker_db to be healthy..."
+  RETRIES=20
+  until docker inspect --format='{{.State.Health.Status}}' bugtracker_db 2>/dev/null \
+        | grep -qx "healthy"; do
+    RETRIES=$((RETRIES - 1))
+    [[ $RETRIES -le 0 ]] && { echo -e "${RED}[ERROR]${NC} bugtracker_db did not become healthy in time."; exit 1; }
+    sleep 3
+  done
+
+  # --no-deps: the db is already up; the app service is only used as the image
+  # that carries scripts/clean_db.py and the DATABASE_URL for this stack.
+  CLEAN=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm --no-deps -T app
+         python scripts/clean_db.py)
+
+  info "Planned cleanup (dry run — nothing deleted yet):"
+  "${CLEAN[@]}" --dry-run || warn "Cleanup dry run could not complete (is the image built? run ./deploy.sh first)."
+
+  if [[ "$FORCE" == true ]]; then
+    warn "--force given: deleting without confirmation."
+    CONFIRM="YES"
+  elif ! read -rp "Delete this data now? The admin login, default project and workflow baseline stay. Type YES to confirm: " CONFIRM; then
+    CONFIRM=""
+  fi
+
+  if [[ "$CONFIRM" == "YES" ]]; then
+    "${CLEAN[@]}" --yes || warn "Cleanup did not complete."
+    info "Database reset to the first-launch baseline. Users sign in again with the .env bootstrap credentials."
+  else
+    info "Skipped the database cleanup."
+  fi
+fi
+
+# Only this Compose project's containers are stopped; other containers on the
+# host are never touched.
+info "Stopping Bug Hunter services only..."
 
 # ── Stop & remove containers ──────────────────────────────────────────────────
 if [[ -f "$ENV_FILE" ]]; then
@@ -76,9 +125,16 @@ fi
 
 # ── Optional: remove built image ─────────────────────────────────────────────
 if [[ "$REMOVE_IMAGES" == true ]]; then
-  info "Removing bugtracker_app image..."
-  docker rmi bugtracker_app:3.1 2>/dev/null && info "Image removed." \
-    || warn "Image not found or already removed."
+  # Read the same APP_VERSION .env uses for the image tag (docker-compose.yml
+  # requires it with no fallback), so the tag isn't a second hardcoded copy.
+  APP_VERSION="$(grep -m1 '^APP_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  if [[ -z "$APP_VERSION" ]]; then
+    warn "APP_VERSION is not set in $ENV_FILE - skipping image removal."
+  else
+    info "Removing bugtracker_app:${APP_VERSION} image..."
+    docker rmi "bugtracker_app:${APP_VERSION}" 2>/dev/null && info "Image removed." \
+      || warn "Image not found or already removed."
+  fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
@@ -87,7 +143,6 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║        Bug Hunter stopped cleanly.           ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
-info "pmis-postgres and all pmis-* services are still running."
 info "To restart Bug Hunter: ./deploy.sh"
 echo ""
 

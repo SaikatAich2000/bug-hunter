@@ -4,8 +4,6 @@ from __future__ import annotations
 import sys
 import types
 
-import pytest
-
 from app.chatbot import rag
 
 
@@ -163,7 +161,8 @@ def test_gather_db_docs():
     ids, docs, metas = rag._gather_db_docs(_FakeDB([bug], [comment]))
     assert ids == ["bug:5", "comment:9"]
     assert "Comment on #5 by Al: hi" in docs[1]
-    assert metas[0]["kind"] == "bug" and metas[1]["kind"] == "comment"
+    assert metas[0]["kind"] == "bug"
+    assert metas[1]["kind"] == "comment"
 
 
 def test_read_doc_ok_and_missing(tmp_path):
@@ -279,7 +278,8 @@ def test_upsert_bug_writes(monkeypatch):
             return bug
 
     rag.upsert_bug(_DB(), 7)
-    assert col.upserts and col.upserts[0][0] == ["bug:7"]
+    assert col.upserts
+    assert col.upserts[0][0] == ["bug:7"]
 
 
 def test_upsert_bug_swallows_errors(monkeypatch):
@@ -326,6 +326,7 @@ def test_retrieve_text_formats_and_defangs(monkeypatch):
     monkeypatch.setattr(rag, "_embed", lambda texts: [[0.1]])
     monkeypatch.setattr(rag, "get_settings", lambda: _settings())
     out = rag.retrieve_text("q")
-    assert out.startswith("<<DATA>>") and out.endswith("<<END DATA>>")
+    assert out.startswith("<<DATA>>")
+    assert out.endswith("<<END DATA>>")
     # The injected literal fence inside the doc body is defanged.
     assert "< <DATA>>" in out

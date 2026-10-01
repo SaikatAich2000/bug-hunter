@@ -20,8 +20,11 @@ from sqlalchemy.orm import Session
 
 from app.models import Activity, Bug, Project, User
 from app.schemas import (
-    ALLOWED_ENVIRONMENTS, ALLOWED_ITEM_TYPES, ALLOWED_PRIORITIES,
-    MIN_TITLE_LENGTH, sanitize_html,
+    ALLOWED_ENVIRONMENTS,
+    ALLOWED_PRIORITIES,
+    LEGACY_ITEM_TYPES,
+    MIN_TITLE_LENGTH,
+    sanitize_html,
 )
 
 logger = logging.getLogger("bug_hunter.sleuth.ingest")
@@ -105,7 +108,7 @@ def _clean_spec(raw: Any) -> Optional[dict]:
         "title": title[:200],
         "description": str(desc).strip() if desc is not None else "",
         "priority": _norm_from(_first_key(raw, _PRIORITY_KEYS), _PRIORITY_SYNONYMS, ALLOWED_PRIORITIES, "Medium"),
-        "item_type": _norm_from(_first_key(raw, _TYPE_KEYS), _TYPE_SYNONYMS, ALLOWED_ITEM_TYPES, "Bug"),
+        "item_type": _norm_from(_first_key(raw, _TYPE_KEYS), _TYPE_SYNONYMS, LEGACY_ITEM_TYPES, "Bug"),
         "environment": _norm_from(_first_key(raw, _ENV_KEYS), _ENV_SYNONYMS, ALLOWED_ENVIRONMENTS, "DEV"),
     }
 

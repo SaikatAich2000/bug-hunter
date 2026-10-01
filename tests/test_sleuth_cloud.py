@@ -18,12 +18,12 @@ os.environ["SESSION_SECRET"] = "test-cloud"
 
 import pytest  # noqa: E402
 
-from app.database import Base, engine, SessionLocal  # noqa: E402
 from app import models  # noqa: E402
 from app.auth import hash_password  # noqa: E402
-from app.chatbot import executor, cloud_llm  # noqa: E402
+from app.chatbot import cloud_llm, executor  # noqa: E402
 from app.chatbot.memory import store as memstore  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from app.database import Base, SessionLocal, engine  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -41,10 +41,9 @@ def _rebind_app_modules():
     g["memstore"] = importlib.import_module("app.chatbot.memory").store
     g["hash_password"] = importlib.import_module("app.auth").hash_password
     g["get_settings"] = importlib.import_module("app.config").get_settings
-    yield
 
 
-@pytest.fixture()
+@pytest.fixture
 def db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -55,9 +54,11 @@ def db():
                             password_hash=hash_password("AdminPass123!"), is_active=True)
         john = models.User(name="John", email="john@example.com", role="manager",
                            password_hash=hash_password("JohnPass123!"), is_active=True)
-        s.add_all([admin, john]); s.flush()
+        s.add_all([admin, john])
+        s.flush()
         proj = models.Project(name="Mobile", description="")
-        s.add(proj); s.flush()
+        s.add(proj)
+        s.flush()
         # 2 open, 1 closed.
         s.add_all([
             models.Bug(project_id=proj.id, title="Crash on login", status="New",
@@ -74,7 +75,7 @@ def db():
         s.close()
 
 
-@pytest.fixture()
+@pytest.fixture
 def enabled(monkeypatch):
     """Force the cloud layer on by patching is_available() (the single gate), robust to get_settings.cache_clear()."""
     monkeypatch.setattr(cloud_llm, "is_available", lambda: True)
@@ -103,7 +104,8 @@ def test_data_question_uses_real_sql_not_a_guess(db, enabled, monkeypatch):
     # Must produce identical rows to the deterministic rule query.
     cloud_tables = [b for b in cloud_resp.blocks if b.kind == "table"]
     direct_tables = [b for b in direct.blocks if b.kind == "table"]
-    assert cloud_tables and direct_tables
+    assert cloud_tables
+    assert direct_tables
     assert cloud_tables[0].payload["rows"] == direct_tables[0].payload["rows"]
 
 
@@ -160,7 +162,8 @@ def test_answer_mode_returns_conversational_text(db, enabled, monkeypatch):
         '\'create bug Login crash\' and confirm it."}',
     )
     resp = cloud_llm.try_understand("can you add bugs?", db, db.actor)
-    assert resp is not None and resp.intent == "cloud_answer"
+    assert resp is not None
+    assert resp.intent == "cloud_answer"
     assert "create bug" in resp.blocks[0].payload["text"].lower()
 
 
@@ -225,7 +228,8 @@ def test_multiword_greetings_skip_the_cloud(db, monkeypatch):
 def test_history_passed_to_model(db, enabled, monkeypatch):
     # Prior turns must be included in the prompt so follow-ups have context.
     conv = models.ChatConversation(user_id=db.actor.id)
-    db.add(conv); db.flush()
+    db.add(conv)
+    db.flush()
     db.add(models.ChatMessage(conversation_id=conv.id, role="user",
                               content="show me critical bugs"))
     db.commit()

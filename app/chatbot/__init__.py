@@ -1,4 +1,4 @@
-"""Sleuth, Bug Hunter's built-in assistant.
+"""Sleuth, the application's built-in assistant.
 
 Layers by cost: nlu (regex) -> classifier (TF-IDF) -> llm (local llama.cpp)
 -> cloud_llm (Groq primary, OpenRouter fallback; opt-in, read-only, redacted).

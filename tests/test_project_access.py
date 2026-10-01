@@ -199,21 +199,24 @@ def test_manager_can_only_grant_own_projects(client):
 def test_bug_list_scoped_by_membership(client):
     w = _two_project_world(client)
     ids, total = _bug_ids(client)
-    assert {w.ba["id"], w.bb["id"]} <= ids and total >= 2
+    assert {w.ba["id"], w.bb["id"]} <= ids
+    assert total >= 2
 
     # Manager tagged to Alpha only sees Alpha's bug.
     _as_admin(client)
     _mk_user(client, "alpha@x.com", role="manager", project_ids=[w.pa["id"]])
     _login(client, "alpha@x.com")
     ids, total = _bug_ids(client)
-    assert ids == {w.ba["id"]} and total == 1
+    assert ids == {w.ba["id"]}
+    assert total == 1
 
     # No project memberships means no visible bugs.
     _as_admin(client)
     _mk_user(client, "none@x.com", role="user", project_ids=[])
     _login(client, "none@x.com")
     ids, total = _bug_ids(client)
-    assert ids == set() and total == 0
+    assert ids == set()
+    assert total == 0
 
 
 def test_bug_detail_and_subresources_scoped(client):
@@ -242,7 +245,8 @@ def test_bug_create_and_update_scoped(client):
 
     assert client.post("/api/bugs", json={"title": "Mine", "project_id": w.pa["id"]}).status_code == 201
     r = client.post("/api/bugs", json={"title": "Nope", "project_id": w.pb["id"]})
-    assert r.status_code == 400 and "does not exist" in r.json()["detail"]
+    assert r.status_code == 400
+    assert "does not exist" in r.json()["detail"]
 
     # Out-of-scope bug is 404; moving an in-scope bug to an inaccessible project is rejected.
     assert client.put(f"/api/bugs/{w.bb['id']}", json={"priority": "High"}).status_code == 404
@@ -277,7 +281,8 @@ def test_bulk_action_scoped(client):
     assert r.status_code == 200
     body = r.json()
     # The Alpha bug updates; the Beta bug is out-of-scope so it counts as failed.
-    assert body["updated"] == 1 and body["failed"] == 1
+    assert body["updated"] == 1
+    assert body["failed"] == 1
 
 
 def test_bug_create_and_update_with_out_of_scope_event_rejected(client):
@@ -292,7 +297,8 @@ def test_bug_create_and_update_with_out_of_scope_event_rejected(client):
     r = client.post("/api/bugs", json={
         "title": "linking test bug", "project_id": pa["id"], "event_id": ev_b["id"],
     })
-    assert r.status_code == 400 and "Event does not exist" in r.json()["detail"]
+    assert r.status_code == 400
+    assert "Event does not exist" in r.json()["detail"]
     r = client.put(f"/api/bugs/{own['id']}", json={"event_id": ev_b["id"]})
     assert r.status_code == 400
 
@@ -307,6 +313,20 @@ def test_attachment_download_scoped(client):
     # Downloading an attachment on an out-of-scope bug must return 404.
     r = client.get(f"/api/bugs/{w.bb['id']}/attachments/{att['id']}/download")
     assert r.status_code == 404
+
+
+def test_attachment_download_in_scope_succeeds(client):
+    # Counterpart to the 404 case above: a scoped (non-admin) user downloading
+    # an attachment on a bug within their own accessible project must succeed.
+    w = _two_project_world(client)
+    _as_admin(client)
+    files = {"file": ("a.txt", b"hi there", "text/plain")}
+    att = client.post(f"/api/bugs/{w.ba['id']}/attachments", files=files).json()
+    _mk_user(client, "alpha2@x.com", role="manager", project_ids=[w.pa["id"]])
+    _login(client, "alpha2@x.com")
+    r = client.get(f"/api/bugs/{w.ba['id']}/attachments/{att['id']}/download")
+    assert r.status_code == 200
+    assert r.content == b"hi there"
 
 
 # Events — require/validate project + scoped visibility
@@ -509,7 +529,8 @@ def test_sleuth_bug_detail_scoped(client):
     _mk_user(client, "alpha@x.com", role="manager", project_ids=[w.pa["id"]])
     _login(client, "alpha@x.com")
     resp = _chat(client, f"bug {w.ba['id']}")
-    assert resp["intent"] == "bug_detail" and "Not found" not in resp["summary"]
+    assert resp["intent"] == "bug_detail"
+    assert "Not found" not in resp["summary"]
     # Out-of-scope bug must surface as not found through the chat path as well.
     resp = _chat(client, f"bug {w.bb['id']}")
     assert resp["summary"] == "Not found"
@@ -523,7 +544,8 @@ def test_sleuth_projects_and_stats_scoped(client):
 
     resp = _chat(client, "list projects")
     flat = " ".join(str(cell) for row in _chat_table_rows(resp) for cell in row)
-    assert "Alpha" in flat and "Beta" not in flat
+    assert "Alpha" in flat
+    assert "Beta" not in flat
 
     resp = _chat(client, "summary")
     text = " ".join(b["payload"].get("text", "") for b in resp["blocks"] if b["kind"] == "text")
@@ -541,8 +563,8 @@ def test_sleuth_untagged_user_sees_nothing(client):
 
 def test_sleuth_cloud_data_path_scoped_for_manager(client, monkeypatch):
     """Regression: cloud _route_data_query must scope like the deterministic path (was accessible=None, admin-level)."""
-    from app.config import get_settings
     from app.chatbot import cloud_llm
+    from app.config import get_settings
     w = _two_project_world(client)
     _as_admin(client)
     _mk_user(client, "alpha@x.com", role="manager", project_ids=[w.pa["id"]])

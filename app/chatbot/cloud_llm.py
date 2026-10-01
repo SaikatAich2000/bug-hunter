@@ -16,6 +16,11 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from app.chatbot.executor import Block, Response
+from app.chatbot.redaction import redact
+from app.config import get_settings
+from app.models import User
+
 # Validate operator-supplied model ids before use in the request body;
 # '/' and ':' allowed for "vendor/model:tag" shapes.
 _GROQ_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\-]+$")
@@ -23,11 +28,6 @@ _OPENROUTER_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\-]+$")
 
 # Ceiling on the canonical_query we re-parse.
 _MAX_CANONICAL_QUERY_CHARS = 500
-
-from app.config import get_settings
-from app.models import User
-from app.chatbot.executor import Block, Response
-from app.chatbot.redaction import redact
 
 logger = logging.getLogger("bug_hunter.sleuth.cloud")
 
@@ -49,7 +49,7 @@ def is_available() -> bool:
 # System prompt — one JSON object: mode="data" routes to SQL handlers,
 # mode="answer" is free-form. The model never produces counts or writes.
 SYSTEM_PROMPT = (
-    "You are Sleuth, the assistant built into the Bug Hunter issue tracker. "
+    f"You are Sleuth, the assistant built into the {get_settings().APP_NAME} work tracker. "
     "Talk like a helpful teammate: natural and varied. Keep chat replies "
     "concise — usually 1-3 sentences — but for a genuine how-to or "
     "explanation, expand into a short list or a few short paragraphs when it "
@@ -648,7 +648,7 @@ def _route_data_query(canonical: str, db: Session, actor: User,
                     len(canonical))
         return None
     from app.access import accessible_project_ids
-    from app.chatbot.executor import build_context, _dispatch_read_intent
+    from app.chatbot.executor import _dispatch_read_intent, build_context
     from app.chatbot.nlu import parse
 
     ctx = build_context(db)

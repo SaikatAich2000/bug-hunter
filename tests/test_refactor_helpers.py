@@ -1,7 +1,7 @@
 """Direct unit tests for chatbot nlu/executor/llm and routes/bugs helpers."""
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -170,7 +170,7 @@ def test_first_str_match():
 
 
 def test_typo_fallback_no_typo_run_when_filled():
-    from app.chatbot.nlu import _typo_fallback, _PRIORITY_SYNONYMS
+    from app.chatbot.nlu import _PRIORITY_SYNONYMS, _typo_fallback
     out = ["Critical"]
     _typo_fallback("blocker", _PRIORITY_SYNONYMS, out)
     # already-filled list must stay unchanged
@@ -242,7 +242,8 @@ def test_format_bug_row():
     row = _format_bug_row(bug)
     assert row[0] == "#42"
     assert row[1] == "A bug"
-    assert "Bob" in row[7] and "Carol" in row[7]
+    assert "Bob" in row[7]
+    assert "Carol" in row[7]
 
 
 def test_format_bug_row_handles_none_project():
@@ -555,6 +556,7 @@ def test_normalize_choice_list_none_input():
 
 def test_normalize_choice_list_rejects_unknown():
     from fastapi import HTTPException
+
     from app.routes.bugs import _normalize_choice_list
     with pytest.raises(HTTPException) as exc:
         _normalize_choice_list(["bogus"], ["New", "Closed"], "status")

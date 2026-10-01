@@ -14,7 +14,8 @@ from app import email_service as es
 def _use_backend(monkeypatch, backend: str, **over) -> None:
     cfg = SimpleNamespace(
         EMAIL_BACKEND=backend,
-        EMAIL_FROM="Bug Hunter <bot@bh.local>",
+        EMAIL_FROM="Test Tracker <bot@bh.local>",
+        APP_NAME="Test Tracker",
         APP_BASE_URL="http://bh.local:8765",
         SMTP_HOST="mail.bh.local",
         SMTP_PORT=587,
@@ -170,7 +171,7 @@ _CRED = "s3cr3t"  # placeholder value to exercise the auth branch
 
 
 def test_smtp_starttls_path(monkeypatch):
-    _FakeSMTP.instances = []
+    monkeypatch.setattr(_FakeSMTP, "instances", [])
     monkeypatch.setattr(es.smtplib, "SMTP", _FakeSMTP)
     _use_backend(
         monkeypatch, "smtp",
@@ -180,11 +181,13 @@ def test_smtp_starttls_path(monkeypatch):
     es.deliver("Hi", ["a@b.local"], "body")
     assert len(_FakeSMTP.instances) == 1
     inst = _FakeSMTP.instances[0]
-    assert inst.started_tls and inst.logged_in and len(inst.sent) == 1
+    assert inst.started_tls
+    assert inst.logged_in
+    assert len(inst.sent) == 1
 
 
 def test_smtp_ssl_path(monkeypatch):
-    _FakeSMTP.instances = []
+    monkeypatch.setattr(_FakeSMTP, "instances", [])
     monkeypatch.setattr(es.smtplib, "SMTP_SSL", _FakeSMTP)
     _use_backend(
         monkeypatch, "smtp",
@@ -192,7 +195,8 @@ def test_smtp_ssl_path(monkeypatch):
         SMTP_USERNAME="bot", SMTP_PASSWORD=_CRED,
     )
     es.deliver("Hi", ["a@b.local"], "body")
-    assert _FakeSMTP.instances[0].sent and _FakeSMTP.instances[0].logged_in
+    assert _FakeSMTP.instances[0].sent
+    assert _FakeSMTP.instances[0].logged_in
 
 
 def test_smtp_missing_host_is_dropped(monkeypatch, caplog):

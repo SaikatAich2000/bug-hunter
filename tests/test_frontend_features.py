@@ -13,14 +13,14 @@ APP = REPO / "app"
 
 STYLES = SRC / "styles" / "styles.css"
 CHATBOT_CSS = SRC / "styles" / "chatbot.css"
-TYPES = SRC / "types.ts"
-APPCTX = SRC / "state" / "AppContext.tsx"
-BUGMODAL = SRC / "modals" / "BugModal.tsx"
-LISTVIEW = SRC / "views" / "ListView.tsx"
-SIDEBAR = SRC / "shell" / "Sidebar.tsx"
-TOPCHROME = SRC / "shell" / "TopChrome.tsx"
-SHELL = SRC / "shell" / "Shell.tsx"
-SLEUTH = SRC / "sleuth" / "SleuthPanel.tsx"
+TYPES = SRC / "types.js"
+APPCTX = SRC / "state" / "AppContext.jsx"
+BUGMODAL = SRC / "modals" / "BugModal.jsx"
+LISTVIEW = SRC / "views" / "ListView.jsx"
+SIDEBAR = SRC / "shell" / "Sidebar.jsx"
+TOPCHROME = SRC / "shell" / "TopChrome.jsx"
+SHELL = SRC / "shell" / "Shell.jsx"
+SLEUTH = SRC / "sleuth" / "SleuthPanel.jsx"
 
 
 def _read(p: Path) -> str:
@@ -41,7 +41,8 @@ def test_bulk_and_link_routes_present():
 
 def test_sleuth_ingest_is_admin_only_and_conversational():
     router = _read(APP / "chatbot" / "router.py")
-    assert '"/ingest"' in router and "AdminUser" in router
+    assert '"/ingest"' in router
+    assert "AdminUser" in router
     # The endpoint stages a preview rather than auto-creating.
     assert "ingest_preview" in router, "upload must preview, not auto-create"
     assert "stage_ingest" in router
@@ -51,24 +52,34 @@ def test_sleuth_ingest_is_admin_only_and_conversational():
 
 def test_bug_modal_keeps_links_section():
     src = _read(BUGMODAL)
-    assert "bugLinksSection" in src and "/links" in src
+    assert "bugLinksSection" in src
+    assert "/links" in src
 
 
 def test_list_view_keeps_bulk_bar():
     src = _read(LISTVIEW)
-    assert "bulk-bar" in src and "/bugs/bulk" in src and "col-select" in src
+    assert "bulk-bar" in src
+    assert "/bugs/bulk" in src
+    assert "col-select" in src
 
 
 def test_sleuth_panel_admin_upload_and_text():
     src = _read(SLEUTH)
-    assert "sleuthUploadBtn" in src and "/chat/ingest" in src and "isAdmin" in src
+    assert "sleuthUploadBtn" in src
+    assert "/chat/ingest" in src
+    assert "isAdmin" in src
     assert "Ask Me Anything" in src, "placeholder must be 'Ask Me Anything'"
     assert ">Online<" in src, "status must read just 'Online'"
 
 
-# Removed features — watchers and labels must be gone everywhere
+# Removed features — watchers and (the old per-bug) labels must be gone everywhere.
+# NOTE: Agile later added its own, unrelated project-scoped taxonomy
+# `Label`/`LabelOut` (app/models.py Label, app/schemas.py LabelOut) — a
+# same-named but different feature, so "class Label(" is intentionally not
+# banned here anymore; the fields below are what actually distinguished the
+# old per-bug watch/label feature and remain gone.
 @pytest.mark.parametrize("needle", [
-    "bug_watchers", "bug_labels", "class Label(", "watchers:", "labels:",
+    "bug_watchers", "bug_labels", "watchers:", "labels:",
 ])
 def test_models_have_no_watchers_or_labels(needle):
     assert needle not in _read(APP / "models.py"), f"models.py still references {needle!r}"
@@ -79,12 +90,15 @@ def test_no_labels_router_file():
 
 
 def test_no_label_modal_component():
-    assert not (SRC / "modals" / "LabelModal.tsx").exists(), "LabelModal must be deleted"
+    assert not (SRC / "modals" / "LabelModal.jsx").exists(), "LabelModal must be deleted"
 
 
 def test_schemas_drop_label_and_watch():
+    """Old per-bug watch/label fields must be gone; Agile's own LabelOut/
+    WorkItemTaxonomyIn.label_ids (added later, unrelated) are not part of
+    this guard."""
     schemas = _read(APP / "schemas.py")
-    for gone in ("class LabelOut", "class LabelIn", "watcher_count", "is_watching", "label_ids"):
+    for gone in ("class LabelIn", "watcher_count", "is_watching"):
         assert gone not in schemas, f"schemas.py still has {gone!r}"
 
 
@@ -107,21 +121,26 @@ def test_frontend_has_no_label_or_watch_wiring(src_file, gone):
 def test_shell_uses_frame_not_collapsible_rail():
     shell = _read(SHELL)
     assert '"frame"' in shell, "Shell must render the frame layout"
-    assert "app-shell" not in shell and "collapsed" not in shell, "collapse must be gone"
+    assert "app-shell" not in shell, "collapse must be gone"
+    assert "collapsed" not in shell, "collapse must be gone"
 
 
 def test_topchrome_carries_the_brandmark():
     chrome = _read(TOPCHROME)
     assert "brandmark" in chrome, "brand mark must live in the chrome (not the sidebar)"
-    assert "HUNTER</span>" in chrome
+    # Two-tone wordmark: first word plain, the rest in the accent span (BUG + HUNTER).
+    assert "{wordmark.first}" in chrome and "<span>{wordmark.rest}</span>" in chrome
+    assert "getWordmarkParts" in chrome, "wordmark parts function must be imported for dynamic branding"
 
 
 def test_layout_css_is_frame_grid():
     css = _read(STYLES)
-    assert ".frame {" in css and "grid-template-columns: 236px 1fr" in css
+    assert ".frame {" in css
+    assert "grid-template-columns: 236px 1fr" in css
     assert ".brandmark" in css
     # The collapsible-rail CSS is gone.
-    assert "--rail-w" not in css and ".app-shell" not in css
+    assert "--rail-w" not in css
+    assert ".app-shell" not in css
 
 
 @pytest.mark.parametrize("cls", [

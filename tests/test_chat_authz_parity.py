@@ -24,7 +24,8 @@ def test_chat_blocks_regular_user_on_task_and_requirement():
     user = _actor("user")
     task_err = _check_can_edit_bug(user, _bug("Task"))
     req_err = _check_can_edit_bug(user, _bug("Requirement"))
-    assert task_err is not None and req_err is not None
+    assert task_err is not None
+    assert req_err is not None
     # Error message should name the type the user tried to edit.
     assert "task" in task_err.lower()
     assert "requirement" in req_err.lower()

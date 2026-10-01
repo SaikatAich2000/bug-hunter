@@ -7,23 +7,22 @@ from pathlib import Path
 
 import pytest
 
-
 REPO = Path(__file__).resolve().parents[1]
 FRONTEND = REPO / "frontend"
 SRC = FRONTEND / "src"
 
 STYLES = SRC / "styles" / "styles.css"
 CHATBOT = SRC / "styles" / "chatbot.css"
-NAVITEMS = SRC / "shell" / "navItems.ts"
-TOPCHROME = SRC / "shell" / "TopChrome.tsx"
-SIDEBAR = SRC / "shell" / "Sidebar.tsx"
-PAGEHEAD = SRC / "shell" / "PageHead.tsx"
-AUDIT = SRC / "views" / "AuditView.tsx"
-SESSIONS = SRC / "views" / "SessionsView.tsx"
-REPORTS = SRC / "views" / "ReportsView.tsx"
-EVENTS = SRC / "views" / "EventsView.tsx"
-APPCONTEXT = SRC / "state" / "AppContext.tsx"
-MAIN = SRC / "main.tsx"
+NAVITEMS = SRC / "shell" / "navItems.js"
+TOPCHROME = SRC / "shell" / "TopChrome.jsx"
+SIDEBAR = SRC / "shell" / "Sidebar.jsx"
+PAGEHEAD = SRC / "shell" / "PageHead.jsx"
+AUDIT = SRC / "views" / "AuditView.jsx"
+SESSIONS = SRC / "views" / "SessionsView.jsx"
+REPORTS = SRC / "views" / "ReportsView.jsx"
+EVENTS = SRC / "views" / "EventsView.jsx"
+APPCONTEXT = SRC / "state" / "AppContext.jsx"
+MAIN = SRC / "main.jsx"
 
 
 def _read(p: Path) -> str:
@@ -105,14 +104,14 @@ def test_frame_layout_and_drawer_outranks_chrome():
     assert "z-index: 44" in css, "mobile backdrop must sit above the chrome"
 
 
-# 3. Steam field-gradient modal header
-def test_modal_head_uses_steam_field_gradient():
+# 3. field-gradient modal header
+def test_modal_head_uses_panel_field_gradient():
     css = _read(STYLES)
     start = css.find(".modal-head {")
     assert start != -1
     block = css[start:start + 500]
     assert "var(--panel-field)" in block, (
-        "modal header must use the Steam field-gradient (same surface family as "
+        "modal header must use the panel field-gradient (same surface family as "
         "the table panel header)"
     )
     # Both are referenced by the Modal wrapper component.
@@ -126,7 +125,7 @@ def test_sessions_copy_points_at_profile_menu_not_sidebar():
     assert "profile menu" in src, "Sessions help must direct users to the profile menu"
     assert "the sidebar" not in src, (
         "Sessions copy still references the old sidebar Log out (it moved to the "
-        "profile menu in the v3.1 shell)"
+        "profile menu now)"
     )
 
 
@@ -164,7 +163,8 @@ def test_collapse_sidebar_button_wired_in_sidebar():
 def test_collapse_state_is_persisted_in_appcontext():
     """Collapsed flag persists in localStorage and is reflected as body.sidebar-collapsed."""
     src = _read(APPCONTEXT)
-    assert "sidebarCollapsed" in src and "toggleSidebarCollapsed" in src
+    assert "sidebarCollapsed" in src
+    assert "toggleSidebarCollapsed" in src
     assert 'readLs("sidebarCollapsed"' in src, "initial state must hydrate from storage"
     assert 'localStorage.setItem("sidebarCollapsed"' in src, "toggle must persist"
     assert '"sidebar-collapsed"' in src, "the flag must toggle the body class"

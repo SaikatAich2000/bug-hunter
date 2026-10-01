@@ -14,7 +14,8 @@ try:
 except ImportError:   # pragma: no cover — broken installs only
     OPENPYXL_AVAILABLE = False
 
-from app.reports.engine import ReportResult, ReportColumn
+from app.config import get_settings
+from app.reports.engine import ReportColumn, ReportResult
 
 
 class XlsxBuildError(Exception):
@@ -189,7 +190,7 @@ def _write_summary_block(ws, result: ReportResult, start_row: int) -> int:
 
 def _write_filters_sheet(ws, result: ReportResult) -> None:
     ws.title = "Filters Applied"
-    ws.cell(row=1, column=1, value=f"Bug Hunter — {result.report_label}").font = Font(bold=True, size=12)
+    ws.cell(row=1, column=1, value=f"{get_settings().APP_NAME} — {result.report_label}").font = Font(bold=True, size=12)
     ws.cell(row=2, column=1, value=f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
     ws.cell(row=3, column=1, value=f"Total rows: {result.total}")
     ws.column_dimensions["A"].width = 24

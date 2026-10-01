@@ -221,8 +221,9 @@ def test_bug_links_table_is_additive_and_idempotent(tmp_path, monkeypatch):
             del sys.modules[mod]
     from app.config import get_settings
     get_settings.cache_clear()  # type: ignore[attr-defined]
-    from app.database import engine, init_db
     from sqlalchemy import inspect
+
+    from app.database import engine, init_db
 
     init_db()
     assert "bug_links" in inspect(engine).get_table_names()

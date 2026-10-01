@@ -47,10 +47,11 @@ def _insert_reset_token(user_id: int, *, expires_in_hours: float = 2.0,
 
 def _token_used_at(raw_token: str):
     """Return the used_at value for the token row matching ``raw_token``."""
+    from sqlalchemy import select
+
     from app.auth import hash_reset_token
     from app.database import SessionLocal
     from app.models import PasswordResetToken
-    from sqlalchemy import select
 
     h = hash_reset_token(raw_token)
     db = SessionLocal()
@@ -74,9 +75,10 @@ def test_cov_forgot_password_known_email_creates_token(client):
     assert res.status_code == 204
 
     # Confirm the token row was actually persisted.
+    from sqlalchemy import select
+
     from app.database import SessionLocal
     from app.models import PasswordResetToken
-    from sqlalchemy import select
     db = SessionLocal()
     try:
         rows = db.scalars(
@@ -253,8 +255,9 @@ def test_cov_logout_token_user_deleted_skips_audit(client, admin_client):
     uid = created.json()["id"]
 
     # Second TestClient so the admin session cookie is undisturbed.
-    from app.main import app
     from fastapi.testclient import TestClient
+
+    from app.main import app
     with TestClient(app) as user_c:
         login = user_c.post("/api/auth/login", json={
             "email": "ephemeral@test.local", "password": "Ephemeral9",
@@ -293,8 +296,9 @@ def test_cov_client_ip_trust_enabled_empty_xff_falls_through(monkeypatch):
     import app.config as config
     monkeypatch.setattr(config.Settings, "TRUST_PROXY_FORWARDED_FOR", True)
 
-    from app.routes.auth import _client_ip
     from starlette.requests import Request
+
+    from app.routes.auth import _client_ip
 
     scope = {
         "type": "http", "method": "POST", "path": "/api/auth/login",
@@ -312,8 +316,9 @@ def test_cov_client_ip_trust_enabled_uses_rightmost_xff(monkeypatch):
     monkeypatch.setattr(config.Settings, "TRUST_PROXY_FORWARDED_FOR", True)
     monkeypatch.setattr(config.Settings, "TRUST_PROXY_HOP_COUNT", 1)
 
-    from app.routes.auth import _client_ip
     from starlette.requests import Request
+
+    from app.routes.auth import _client_ip
 
     scope = {
         "type": "http", "method": "POST", "path": "/api/auth/login",
@@ -331,8 +336,9 @@ def test_cov_client_ip_trust_enabled_garbage_xff_falls_through(monkeypatch):
     import app.config as config
     monkeypatch.setattr(config.Settings, "TRUST_PROXY_FORWARDED_FOR", True)
 
-    from app.routes.auth import _client_ip
     from starlette.requests import Request
+
+    from app.routes.auth import _client_ip
 
     scope = {
         "type": "http", "method": "POST", "path": "/api/auth/login",
@@ -346,8 +352,9 @@ def test_cov_client_ip_trust_enabled_garbage_xff_falls_through(monkeypatch):
 
 def test_cov_client_ip_no_client_returns_empty(monkeypatch):
     """No transport client: _client_ip returns the empty string."""
-    from app.routes.auth import _client_ip
     from starlette.requests import Request
+
+    from app.routes.auth import _client_ip
 
     scope = {
         "type": "http", "method": "POST", "path": "/api/auth/login",
@@ -381,8 +388,9 @@ def test_cov_me_expired_token_401(client):
     uid = _admin_user_id(client)
     client.post("/api/auth/logout")
 
-    from app.auth import COOKIE_NAME, _signer
     from itsdangerous import TimestampSigner
+
+    from app.auth import COOKIE_NAME, _signer
 
     live = _signer()  # same secret + salt the app validates with
 
@@ -411,9 +419,10 @@ def test_cov_expired_session_row_deletes_and_rejects(client):
     """An expired backing session row is rejected and deleted inline."""
     uid = _admin_user_id(client)
 
+    from sqlalchemy import select
+
     from app.database import SessionLocal
     from app.models import Session as SessionRow
-    from sqlalchemy import select
 
     db = SessionLocal()
     try:
@@ -441,9 +450,10 @@ def test_cov_naive_session_expiry_is_coerced(client):
     """A tz-naive future session expires_at is coerced to UTC and accepted."""
     uid = _admin_user_id(client)
 
+    from sqlalchemy import select
+
     from app.database import SessionLocal
     from app.models import Session as SessionRow
-    from sqlalchemy import select
 
     db = SessionLocal()
     try:
@@ -464,9 +474,10 @@ def test_cov_last_seen_bump_runs_after_throttle_window(client):
     """After the throttle window, _maybe_bump_last_seen writes a fresh last_seen_at."""
     uid = _admin_user_id(client)
 
+    from sqlalchemy import select
+
     from app.database import SessionLocal
     from app.models import Session as SessionRow
-    from sqlalchemy import select
 
     old = datetime.now(timezone.utc) - timedelta(hours=1)
     db = SessionLocal()
@@ -496,9 +507,10 @@ def test_cov_last_seen_bump_runs_after_throttle_window(client):
 def _persisted_session_row(client):
     """Log in and return (uid, jti, db, SessionRow) backed by a real persisted row."""
     uid = _admin_user_id(client)
+    from sqlalchemy import select
+
     from app.database import SessionLocal
     from app.models import Session as SessionRow
-    from sqlalchemy import select
     db = SessionLocal()
     sess = db.scalar(select(SessionRow).where(SessionRow.user_id == uid))
     assert sess is not None
@@ -536,6 +548,7 @@ def test_cov_maybe_bump_last_seen_aware_recent_is_noop(client):
 def test_cov_delete_expired_session_commit_error_is_swallowed(client, monkeypatch):
     """SQLAlchemyError from commit() during delete is logged and rolled back, not propagated."""
     from sqlalchemy.exc import SQLAlchemyError
+
     from app.auth import _delete_expired_session
     uid, jti, db, sess = _persisted_session_row(client)
     try:
@@ -560,6 +573,7 @@ def test_cov_delete_expired_session_commit_error_is_swallowed(client, monkeypatc
 def test_cov_maybe_bump_last_seen_commit_error_is_swallowed(client, monkeypatch):
     """Commit failure while bumping last_seen_at rolls back and does not raise."""
     from sqlalchemy.exc import SQLAlchemyError
+
     from app.auth import _maybe_bump_last_seen
     uid, jti, db, sess = _persisted_session_row(client)
     try:
@@ -583,18 +597,21 @@ def test_cov_maybe_bump_last_seen_commit_error_is_swallowed(client, monkeypatch)
         db.close()
 
 
-# get_current_user_optional
-def test_cov_get_current_user_optional_paths(client):
+# _user_from_request (the session-cookie resolver behind get_current_user)
+def test_cov_user_from_request_paths(client):
     """Returns None anonymously and the User when authenticated."""
     uid = _admin_user_id(client)
 
+    from sqlalchemy import select
+    from starlette.requests import Request
+
     from app.auth import (
-        COOKIE_NAME, get_current_user_optional, make_session_token,
+        COOKIE_NAME,
+        _user_from_request,
+        make_session_token,
     )
     from app.database import SessionLocal
     from app.models import Session as SessionRow
-    from sqlalchemy import select
-    from starlette.requests import Request
 
     def _req(cookie_header: bytes | None) -> Request:
         headers = [(b"cookie", cookie_header)] if cookie_header else []
@@ -607,14 +624,15 @@ def test_cov_get_current_user_optional_paths(client):
 
     db = SessionLocal()
     try:
-        assert get_current_user_optional(_req(None), db) is None  # anonymous
+        assert _user_from_request(_req(None), db) is None  # anonymous
 
         # Rebuild a valid cookie from the real session row so the jti resolves.
         sess = db.scalar(select(SessionRow).where(SessionRow.user_id == uid))
         assert sess is not None
         tok = make_session_token(uid, 0, jti=sess.jti)
-        user = get_current_user_optional(_req(f"{COOKIE_NAME}={tok}".encode()), db)
-        assert user is not None and user.id == uid
+        user = _user_from_request(_req(f"{COOKIE_NAME}={tok}".encode()), db)
+        assert user is not None
+        assert user.id == uid
     finally:
         db.close()
 
@@ -635,22 +653,28 @@ def test_cov_require_admin_allows_admin(admin_client):
 def test_cov_require_admin_unit_raises_for_manager():
     """require_admin raises 403 for a manager when called directly."""
     from types import SimpleNamespace
+
     from fastapi import HTTPException
+
     from app.auth import require_admin
 
+    manager = SimpleNamespace(role="manager")
     with pytest.raises(HTTPException) as ei:
-        require_admin(SimpleNamespace(role="manager"))
+        require_admin(manager)
     assert ei.value.status_code == 403
 
 
 def test_cov_require_manager_or_admin_forbids_user():
     """Raises 403 for a plain user; passes for manager or admin."""
     from types import SimpleNamespace
+
     from fastapi import HTTPException
+
     from app.auth import require_manager_or_admin
 
+    plain_user = SimpleNamespace(role="user")
     with pytest.raises(HTTPException) as ei:
-        require_manager_or_admin(SimpleNamespace(role="user"))
+        require_manager_or_admin(plain_user)
     assert ei.value.status_code == 403
 
     mgr = SimpleNamespace(role="manager")

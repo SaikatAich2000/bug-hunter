@@ -40,8 +40,6 @@ from app.models import Notification, User, _utcnow
 
 logger = logging.getLogger("bug_hunter.digest")
 
-_SUBJECT_PREFIX = "[Bug Hunter]"
-
 # Display order and labels for the five notification kinds, matching the in-app bell.
 _CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
     ("assigned", "🎯 Assigned to you"),
@@ -80,7 +78,8 @@ def _section_lines(label: str, rows: list[Notification], base: str) -> list[str]
 
 def render_digest(user: User, rows: list[Notification]) -> tuple[str, str]:
     """Build the (subject, body) for one user's batched operations."""
-    base = get_settings().APP_BASE_URL.rstrip("/")
+    settings = get_settings()
+    base = settings.APP_BASE_URL.rstrip("/")
     by_kind: dict[str, list[Notification]] = {}
     for row in rows:
         by_kind.setdefault(row.kind, []).append(row)
@@ -89,7 +88,7 @@ def render_digest(user: User, rows: list[Notification]) -> tuple[str, str]:
     body_lines = [
         f"Hi {user.name or 'there'},",
         "",
-        f"Here's your Bug Hunter activity digest — {total} update{_plural(total)} "
+        f"Here's your {settings.APP_NAME} activity digest — {total} update{_plural(total)} "
         "since the last one.",
         "",
     ]
@@ -103,8 +102,8 @@ def render_digest(user: User, rows: list[Notification]) -> tuple[str, str]:
     if other:
         body_lines += _section_lines("📌 Other", other, base)
 
-    body_lines.append("— Bug Hunter")
-    subject = f"{_SUBJECT_PREFIX} Your activity digest — {total} update{_plural(total)}"
+    body_lines.append(f"— {settings.APP_NAME}")
+    subject = f"[{settings.APP_NAME}] Your activity digest — {total} update{_plural(total)}"
     return subject, "\n".join(body_lines)
 
 

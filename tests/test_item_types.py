@@ -28,7 +28,10 @@ def _make_item(client, project_id, item_type="Bug", **extra):
 def test_meta_exposes_item_types(client):
     body = client.get("/api/meta").json()
     assert "item_types" in body
-    assert set(body["item_types"]) == {"Bug", "Requirement", "Task"}
+    # Legacy types stay creatable via /api/bugs; Epic/Story/Sub-task are additive and only creatable via /api/agile/work-items.
+    assert set(body["item_types"]) == {
+        "Bug", "Requirement", "Task", "Epic", "Story", "Sub-task",
+    }
 
 
 # Create / update
@@ -56,10 +59,23 @@ def test_create_rejects_unknown_type(admin_client):
     r = admin_client.post("/api/bugs", json={
         "title": "bad type",
         "project_id": p["id"],
-        "item_type": "Epic",
+        "item_type": "NotARealType",
     })
     assert r.status_code == 422, r.text
     assert "item_type" in r.text
+
+
+def test_create_rejects_agile_type_via_legacy_endpoint(admin_client):
+    """Epic/Story/Sub-task are recognized
+    item_types but can only be created via /api/agile/work-items."""
+    p = _make_project(admin_client)
+    r = admin_client.post("/api/bugs", json={
+        "title": "agile type via legacy endpoint",
+        "project_id": p["id"],
+        "item_type": "Epic",
+    })
+    assert r.status_code == 422, r.text
+    assert "agile/work-items" in r.text
 
 
 def test_default_item_type_is_bug(admin_client):
@@ -133,6 +149,7 @@ def test_stats_includes_by_type(admin_client):
 # XLSX export carries the type column (verified against the Item Detail report).
 def test_xlsx_export_includes_type_column(admin_client):
     import io
+
     from openpyxl import load_workbook
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], item_type="Task")
@@ -154,8 +171,11 @@ def test_xlsx_export_includes_type_column(admin_client):
 def test_email_subject_uses_item_type(monkeypatch):
     """Email subjects and bodies should reflect the actual item type, not always 'bug'."""
     from app.email_service import (
-        BugSnapshot, UserSnapshot,
-        notify_assignment, notify_bug_created, notify_bug_updated,
+        BugSnapshot,
+        UserSnapshot,
+        notify_assignment,
+        notify_bug_created,
+        notify_bug_updated,
         notify_comment_added,
     )
 
@@ -308,7 +328,6 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
 
     # Boot against the legacy DB; init_db() should add item_type DEFAULT 'Bug'.
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
-    monkeypatch.setenv("API_KEY", "")
     monkeypatch.setenv("EMAIL_BACKEND", "disabled")
     monkeypatch.setenv("SESSION_SECRET", "legacy_secret")
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@test.local")
@@ -323,6 +342,7 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
     from fastapi.testclient import TestClient
+
     from app.main import app
     with TestClient(app) as c:
         r = c.post("/api/auth/login", json={
@@ -332,3 +352,270 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
         rows = c.get("/api/bugs").json()
         assert rows["total"] == 1
         assert rows["items"][0]["item_type"] == "Bug"
+
+
+# --- Item-type conversion (same-table, explicit validation) ---------------
+# Conversions keep the same `bugs` row id, common data and relations. Story is
+# included because a User Story created through /api/agile/work-items lives in
+# the same table. Feature/Collection and the hierarchy-only types are refused,
+# and an Active feature branch blocks a Story from leaving the Story type.
+
+
+def _enable_agile(client, project_id):
+    r = client.post(f"/api/agile/projects/{project_id}/enable", json={"feature_flags": {}})
+    assert r.status_code in (200, 201), r.text
+    return r.json()
+
+
+def _make_story(client, project_id, title="Convertible story"):
+    """Persisted User Story (same bugs table, agile creation path)."""
+    _enable_agile(client, project_id)
+    r = client.post(
+        "/api/agile/work-items",
+        json={"project_id": project_id, "title": title, "item_type": "story"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _branch_row(project_id, work_item_id, *, status="Active", work_item_type="Story"):
+    """Insert branch history directly: these tests exercise conversion, not Git."""
+    from app.database import SessionLocal
+    from app.models import WorkItemBranch
+
+    session = SessionLocal()
+    try:
+        row = WorkItemBranch(
+            work_item_type=work_item_type,
+            work_item_id=work_item_id,
+            project_id=project_id,
+            provider_repo_id="42",
+            branch_name="feature_1_convertible-story",
+            base_branch="main",
+            status=status,
+            created_by_name="Test Admin",
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row.id
+    finally:
+        session.close()
+
+
+def _activity_actions(client, bug_id):
+    acts = client.get(f"/api/bugs/{bug_id}/activity").json()
+    return [a["action"] for a in acts]
+
+
+def test_conversion_bug_to_story_keeps_row_id_and_common_data(admin_client):
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug", title="Keep me",
+                     description="<p>body</p>", due_date="2026-06-01")
+    _enable_agile(admin_client, p["id"])
+
+    r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": "Story"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == row["id"]
+    assert body["item_type"] == "Story"
+    # Common data and relations survive; the display id is frozen at creation.
+    assert body["title"] == "Keep me"
+    # Descriptions are normalized to plain text (see rich_text_to_plain).
+    assert body["description"] == "body"
+    assert body["due_date"] == "2026-06-01"
+    assert body["project_id"] == p["id"]
+    assert body["reporter"]["id"] == row["reporter"]["id"]
+    assert body["display_id"] == row["display_id"]
+
+    actions = _activity_actions(admin_client, row["id"])
+    assert "conversion_requested" in actions
+    assert "conversion_succeeded" in actions
+
+
+def test_conversion_story_to_bug_keeps_row_id(admin_client):
+    p = _make_project(admin_client)
+    story = _make_story(admin_client, p["id"], title="Back to a bug")
+    before = admin_client.get(f"/api/bugs/{story['id']}").json()
+
+    r = admin_client.put(f"/api/bugs/{story['id']}", json={"item_type": "Bug"})
+    assert r.status_code == 200, r.text
+    assert r.json()["item_type"] == "Bug"
+    assert r.json()["id"] == story["id"]
+    # The Story display id is preserved so existing references keep resolving.
+    assert r.json()["display_id"] == before["display_id"]
+
+
+def test_conversion_among_bug_requirement_task_is_supported(admin_client):
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    for target in ("Requirement", "Task", "Bug"):
+        r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": target})
+        assert r.status_code == 200, r.text
+        assert r.json()["item_type"] == target
+
+
+def test_conversion_rejects_feature_collection_and_hierarchy_types(admin_client):
+    """Feature/Collection and Epic/Sub-task are separate contracts: refuse them."""
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    for target in ("Feature", "Collection", "Epic", "Sub-task"):
+        r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": target})
+        assert r.status_code == 422, (target, r.text)
+        assert r.headers.get("X-Error-Code") == "item_conversion_not_supported", (target, r.text)
+    # The item was never touched.
+    assert admin_client.get(f"/api/bugs/{row['id']}").json()["item_type"] == "Bug"
+
+
+def test_conversion_story_to_feature_is_refused(admin_client):
+    p = _make_project(admin_client)
+    story = _make_story(admin_client, p["id"])
+    r = admin_client.put(f"/api/bugs/{story['id']}", json={"item_type": "Feature"})
+    assert r.status_code == 422, r.text
+    assert r.headers.get("X-Error-Code") == "item_conversion_not_supported", r.text
+
+
+
+def test_active_feature_branch_blocks_story_conversion(admin_client):
+    p = _make_project(admin_client)
+    story = _make_story(admin_client, p["id"], title="Has a live branch")
+    _branch_row(p["id"], story["id"], status="Active")
+
+    r = admin_client.put(f"/api/bugs/{story['id']}", json={"item_type": "Bug"})
+    assert r.status_code == 409, r.text
+    assert r.headers.get("X-Error-Code") == "item_conversion_blocked_by_active_branch"
+    assert "active feature branch" in r.json()["detail"].lower()
+    # Nothing changed, and the blocked attempt is audited on its own transaction.
+    assert admin_client.get(f"/api/bugs/{story['id']}").json()["item_type"] == "Story"
+    assert "conversion_failed" in _activity_actions(admin_client, story["id"])
+
+
+def test_deleted_branch_history_does_not_block_story_conversion(admin_client):
+    p = _make_project(admin_client)
+    story = _make_story(admin_client, p["id"], title="Removed branch")
+    _branch_row(p["id"], story["id"], status="Deleted")
+
+    r = admin_client.put(f"/api/bugs/{story['id']}", json={"item_type": "Task"})
+    assert r.status_code == 200, r.text
+    assert r.json()["item_type"] == "Task"
+
+
+def _stored_branch(branch_id):
+    from app.database import SessionLocal
+    from app.models import WorkItemBranch
+
+    session = SessionLocal()
+    try:
+        row = session.get(WorkItemBranch, branch_id)
+        if row is None:
+            return None
+        return {
+            "status": row.status,
+            "work_item_type": row.work_item_type,
+            "branch_name": row.branch_name,
+        }
+    finally:
+        session.close()
+
+
+def test_non_story_conversion_leaves_branch_history_untouched(admin_client):
+    """Conversion never deletes a remote branch or rewrites branch history rows."""
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    branch_id = _branch_row(p["id"], row["id"], status="Deleted", work_item_type="Bug")
+
+    r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": "Requirement"})
+    assert r.status_code == 200, r.text
+
+    stored = _stored_branch(branch_id)
+    assert stored is not None
+    assert stored["status"] == "Deleted"
+    assert stored["work_item_type"] == "Bug"
+    assert stored["branch_name"] == "feature_1_convertible-story"
+
+
+def test_conversion_requires_permission_regular_user(client):
+    """Regular users cannot convert a Bug into a Task/Requirement they cannot edit.
+
+    One client is used deliberately: the `user_client` fixture re-logs the shared
+    TestClient in as the regular user, so the admin setup has to happen first.
+    """
+    r = client.post("/api/auth/login", json={
+        "email": "admin@test.local", "password": "Admin1234",
+    })
+    assert r.status_code == 200, r.text
+    p = _make_project(client)
+    row = _make_item(client, p["id"], item_type="Bug")
+    # The regular user must be a member of the project, otherwise the item is
+    # out of scope and the route 404s before the conversion permission check.
+    r = client.post("/api/users", json={
+        "name": "Regular User", "email": "user@test.local",
+        "role": "user", "password": "User12345", "project_ids": [p["id"]],
+    })
+    assert r.status_code == 201, r.text
+
+    client.post("/api/auth/logout")
+    r = client.post("/api/auth/login", json={
+        "email": "user@test.local", "password": "User12345",
+    })
+    assert r.status_code == 200, r.text
+    r = client.put(f"/api/bugs/{row['id']}", json={"item_type": "Task"})
+    assert r.status_code == 403, r.text
+    assert "permission to convert" in r.json()["detail"]
+
+    client.post("/api/auth/logout")
+    r = client.post("/api/auth/login", json={
+        "email": "admin@test.local", "password": "Admin1234",
+    })
+    assert r.status_code == 200, r.text
+    assert client.get(f"/api/bugs/{row['id']}").json()["item_type"] == "Bug"
+
+
+def test_conversion_version_conflict(admin_client):
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    stale = row["version"] + 5
+
+    r = admin_client.put(
+        f"/api/bugs/{row['id']}",
+        json={"item_type": "Story", "expected_version": stale},
+    )
+    assert r.status_code == 409, r.text
+    assert r.headers.get("X-Error-Code") == "version_conflict"
+    assert admin_client.get(f"/api/bugs/{row['id']}").json()["item_type"] == "Bug"
+
+
+def test_conversion_bumps_version_once(admin_client):
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    before = admin_client.get(f"/api/bugs/{row['id']}").json()["version"]
+
+    r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": "Requirement"})
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == before + 1
+
+
+def test_conversion_rejects_status_outside_the_vocabulary(admin_client):
+    p = _make_project(admin_client)
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    r = admin_client.put(
+        f"/api/bugs/{row['id']}", json={"item_type": "Task", "status": "Nonsense"}
+    )
+    assert r.status_code in (400, 422), r.text
+    assert admin_client.get(f"/api/bugs/{row['id']}").json()["item_type"] == "Bug"
+
+
+def test_conversion_preserves_relations(admin_client):
+    p = _make_project(admin_client)
+    other = _make_item(admin_client, p["id"], item_type="Bug", title="Related")
+    row = _make_item(admin_client, p["id"], item_type="Bug")
+    link = admin_client.post(
+        f"/api/bugs/{row['id']}/links",
+        json={"target_bug_id": other["id"], "link_type": "relates"},
+    )
+    assert link.status_code in (200, 201), link.text
+
+    r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": "Story"})
+    assert r.status_code == 200, r.text
+    detail = admin_client.get(f"/api/bugs/{row['id']}").json()
+    assert any(edge["other_bug_id"] == other["id"] for edge in detail["links"])

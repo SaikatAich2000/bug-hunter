@@ -85,15 +85,16 @@ def test_bulk_set_environment(admin_client):
     assert r.json()["updated"] == 2
 
 
-def test_bulk_set_status_skips_invalid_for_type(admin_client):
+def test_bulk_set_status_universal_vocabulary_updates_all_types(admin_client):
     proj = _mk_project(admin_client, "SetStatus")
     bug = _mk_bug(admin_client, proj["id"], "a bug")           # Bug
     task = _mk_bug(admin_client, proj["id"], "a task", item_type="Task")  # Task
-    # "Resolved" is valid for Bug but not Task, so one item is skipped.
+    # Universal status vocabulary: "Resolved" is a canonical status valid for
+    # every shared work-item type, so both items are updated (no per-type skip).
     r = admin_client.post(_BULK, json={"action": "set_status", "ids": [bug["id"], task["id"]], "value": "Resolved"})
     body = r.json()
-    assert body["updated"] == 1
-    assert body["skipped"] == 1
+    assert body["updated"] == 2
+    assert body["skipped"] == 0
 
 
 def test_bulk_set_status_noop_is_skipped(admin_client):

@@ -11,7 +11,7 @@ function Info  { param([string]$msg) Write-Host "[EXPORT] $msg" -ForegroundColor
 function Warn  { param([string]$msg) Write-Host "[WARN]   $msg" -ForegroundColor Yellow }
 function Abort { param([string]$msg) Write-Host "[ERROR]  $msg" -ForegroundColor Red; exit 1 }
 
-if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9000" }
+if (-not $env:SONAR_HOST_URL) { $env:SONAR_HOST_URL = "http://localhost:9090" }
 if (-not $env:SONAR_TOKEN) {
     Abort "SONAR_TOKEN is not set. Run: `$env:SONAR_TOKEN = 'sqp_xxxx' first."
 }

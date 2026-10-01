@@ -18,7 +18,9 @@ class TestChatbotExcelDefang:
 
     def test_workbook_cells_defanged(self, client):
         import io
+
         from openpyxl import load_workbook
+
         from app.chatbot.excel import _build_workbook
         rows = [{
             "id": 1, "title": "=HYPERLINK(\"http://evil\")", "project": "P",

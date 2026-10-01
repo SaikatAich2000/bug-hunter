@@ -1,40 +1,79 @@
-"""FastAPI application entry point for Bug Hunter."""
+"""FastAPI application entry point."""
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import os
 import time
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
+from typing import Optional
 
-from datetime import datetime, timezone
-
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    responses,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DataError, SQLAlchemyError
+from sqlalchemy.orm import Session as OrmSession
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.auth import (
     COOKIE_NAME,
     hash_password,
+    new_jti,
     parse_session_token,
+    set_session_cookie,
     trusted_forwarded_ip,
 )
-from app.config import get_settings
-from app.database import SessionLocal, init_db
-from app.models import Project, Session as SessionRow, User
 from app.chatbot.router import router as chatbot_router
+from app.config import get_settings
+from app.database import (
+    DEFAULT_PROJECT_COLOR,
+    DEFAULT_PROJECT_DESCRIPTION,
+    DEFAULT_PROJECT_NAME,
+    SessionLocal,
+    get_db,
+    init_db,
+)
+from app.models import Activity, Project, User
+from app.models import Session as SessionRow
 from app.routes import (
-    audit, auth, bugs, events, notifications, projects, push, reports,
-    sessions, stats, users,
+    agile,
+    agile_board,
+    agile_planning,
+    agile_reports,
+    agile_taxonomy,
+    audit,
+    auth,
+    bugs,
+    events,
+    git,
+    notifications,
+    projects,
+    push,
+    reports,
+    sessions,
+    stats,
+    users,
 )
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
@@ -43,14 +82,19 @@ from app.schemas import (
     ALLOWED_STATUSES,
     STATUSES_BY_TYPE,
 )
+from app.telemetry import instrument_app, setup_telemetry, shutdown_telemetry
 
 logger = logging.getLogger("bug_hunter")
 logging.basicConfig(level=get_settings().LOG_LEVEL)
+# Console format (LOG_FORMAT) + OTLP traces/metrics/logs. No-op unless
+# OTEL_EXPORTER_OTLP_ENDPOINT is set; never replaces console output.
+setup_telemetry()
 
 
 # Asset version hash, recomputed on every server start.
 # Injected into HTML so asset URLs change on redeploy (cache busting).
 ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
+APP_NAME_PLACEHOLDER = "__APP_NAME__"
 APP_VERSION_PLACEHOLDER = "__APP_VERSION__"
 
 
@@ -84,20 +128,19 @@ def _bootstrap() -> None:
     with SessionLocal() as db:
         if db.query(Project).count() == 0:
             db.add(Project(
-                name="General",
-                description="Default project for uncategorized bugs",
-                color="#c9764f",
+                name=DEFAULT_PROJECT_NAME,
+                description=DEFAULT_PROJECT_DESCRIPTION,
+                color=DEFAULT_PROJECT_COLOR,
             ))
 
         # Admin only when the users table is empty, so a fresh install can log in.
         if db.query(User).count() == 0:
-            if s.is_production and s.BOOTSTRAP_ADMIN_PASSWORD == "ChangeMe123!":
-                # Refuse the default password on production deploys.
+            if not s.BOOTSTRAP_ADMIN_PASSWORD or not s.BOOTSTRAP_ADMIN_EMAIL:
+                # Require explicit configuration for security.
                 raise RuntimeError(
-                    "Refusing to bootstrap the default admin with the built-in "
-                    "default password in a production deploy. Set "
-                    "BOOTSTRAP_ADMIN_PASSWORD to a strong value (and APP_ENV / "
-                    "COOKIE_SECURE appropriately for non-production)."
+                    "Bootstrap admin not configured. Set BOOTSTRAP_ADMIN_EMAIL "
+                    "and BOOTSTRAP_ADMIN_PASSWORD environment variables to "
+                    "initialize the admin account."
                 )
             admin = User(
                 name=s.BOOTSTRAP_ADMIN_NAME,
@@ -127,27 +170,195 @@ def _runtime_config_warnings(s) -> list[str]:
             "users out unpredictably. Set SESSION_SECRET (`openssl rand -hex 32`) "
             "for any non-throwaway deploy, HTTP or HTTPS."
         )
+    # Console email stays allowed in dev. On an HTTPS deploy without an
+    # explicit APP_ENV it is allowed but warned about (bodies can carry
+    # password-reset links); APP_ENV=production rejects it outright in
+    # _production_config_errors.
     if s.is_production and s.EMAIL_BACKEND == "console":
         warnings.append(
             "EMAIL_BACKEND=console on a production deploy: every email body, "
             "INCLUDING password-reset links, is written to the logs. Set "
             "EMAIL_BACKEND=smtp (or 'disabled') in production."
         )
+    if s.AUTO_LOGIN_ENABLED:
+        warnings.append(
+            "AUTO_LOGIN_ENABLED is on: every visitor is signed in automatically "
+            "as the bootstrap admin (BOOTSTRAP_ADMIN_EMAIL), with no "
+            "credentials, and never sees the login screen. This is a "
+            "convenience switch for trusted local/dev deployments only — "
+            "leave it off anywhere the server is reachable by anyone else."
+        )
     return warnings
+
+
+def _is_placeholder(value: str | None) -> bool:
+    """True for the published ".env.example" placeholders ("replace_with_...").
+
+    They are long enough to pass a length check, but anyone can read them, so a
+    production deploy must treat them as unset.
+    """
+    return (value or "").strip().lower().startswith("replace_with")
+
+
+def _production_config_errors(s) -> list[str]:
+    """Fail-closed production checks. Any entry aborts startup with 500-safe text.
+
+    Two tiers. Every production-like deploy (``is_production``: APP_ENV says
+    production, or COOKIE_SECURE=true) must have a strong session secret, no
+    default bootstrap password, auto-login off and a well-formed Git key. The
+    stricter deployment-shape rules (secure cookie, https base URL, real email
+    backend) apply only when APP_ENV explicitly declares production/staging, so
+    an HTTPS deploy that never set APP_ENV keeps working across upgrades.
+    """
+    errors: list[str] = []
+    if len(s.SESSION_SECRET or "") < 32 or _is_placeholder(s.SESSION_SECRET):
+        errors.append("SESSION_SECRET must be set to a strong value (>= 32 chars)")
+    if (s.BOOTSTRAP_ADMIN_PASSWORD or "") in ("", "ChangeMe123!") or _is_placeholder(s.BOOTSTRAP_ADMIN_PASSWORD):
+        # Only matters on a fresh install (empty users table); checked at
+        # bootstrap time so existing deploys never break on restart.
+        errors.append("default bootstrap admin password is not allowed in production")
+    if s.AUTO_LOGIN_ENABLED:
+        errors.append("AUTO_LOGIN_ENABLED must be off in production")
+    key = (s.GIT_CREDENTIAL_ENCRYPTION_KEY or "").strip()
+    if key:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(key.encode("utf-8"))
+        except Exception:
+            errors.append("GIT_CREDENTIAL_ENCRYPTION_KEY is malformed")
+    if not getattr(s, "is_production_env", False):
+        return errors
+    if not s.COOKIE_SECURE:
+        errors.append("COOKIE_SECURE must be true in production")
+    if not (s.APP_BASE_URL or "").strip():
+        errors.append("APP_BASE_URL must be set in production")
+    elif not (s.APP_BASE_URL or "").strip().lower().startswith("https://"):
+        errors.append("APP_BASE_URL must use https in production")
+    if s.EMAIL_BACKEND == "console":
+        errors.append("EMAIL_BACKEND=console is not allowed in production")
+    return errors
 
 
 def _safe_init_db() -> bool:
     """Run schema init and bootstrap; a DB-down error starts the app degraded
-    (reported by /api/health) rather than crash-looping."""
-    try:
-        init_db()
-        _bootstrap()
+    (reported by /api/health) rather than crash-looping.
+
+    Bounded by DB_STARTUP_TIMEOUT_SECONDS: a firewalled/slow Postgres (or
+    DDL waiting on a lock) must never hang the container at "Waiting for
+    application startup" until the platform kills the replica -- run the
+    blocking SQLAlchemy work in a thread and give up loudly instead.
+    """
+    import concurrent.futures
+
+    def _work() -> None:
+        # Startup writes (first-run seeding, board backfill) run inside
+        # init_db's migration lock, so only one replica ever performs them.
+        init_db(on_migrated=_startup_writes)
+
+    timeout = float(get_settings().DB_STARTUP_TIMEOUT_SECONDS)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_work)
+        try:
+            future.result(timeout=timeout)
+            return True
+        except concurrent.futures.TimeoutError:
+            logger.error(
+                "Database initialization timed out after %ss; starting "
+                "degraded (/api/health reports degraded). A later replica "
+                "or restart will retry reconciliation.",
+                get_settings().DB_STARTUP_TIMEOUT_SECONDS,
+            )
+            return False
+        except (SQLAlchemyError, OSError):
+            logger.exception(
+                "Database initialization failed at startup; starting degraded."
+            )
+            return False
+
+
+def _board_schema_ready(db) -> bool:
+    """Guard: on an old database the display_id columns may not exist
+    yet (a previous failed migration). Reconciling with the full
+    Board model would SELECT the missing column and crash startup --
+    defer to the next boot after _add_missing_columns has run."""
+    from sqlalchemy import inspect as _inspect
+    # get_columns() returns a list of per-column dicts (unhashable),
+    # so collect the names directly — set() on the dicts raises
+    # "TypeError: cannot use 'dict' as a set element".
+    board_col_names = {col["name"] for col in _inspect(db.bind).get_columns("boards")}
+    required = {"display_id"}
+    if required <= board_col_names:
         return True
+    logger.warning(
+        "Board reconciliation deferred: boards table lacks %s; "
+        "will retry next boot after column migration.",
+        sorted(required - board_col_names),
+    )
+    return False
+
+
+def _reconcile_board_columns(db) -> tuple[bool, int]:
+    """Add the Testing column + status mappings to every board.
+
+    Returns (changed, testing_count): whether anything was updated and how
+    many boards expose a Testing column after reconciliation.
+    """
+    from app.agile.boards import reconcile_board_status_mappings, reconcile_testing_column
+    from app.models import Board
+    changed = False
+    boards = db.scalars(select(Board)).all()
+    for board in boards:
+        if reconcile_testing_column(db, board):
+            changed = True
+        if reconcile_board_status_mappings(db, board):
+            changed = True
+    testing_count = sum(1 for b in boards if "testing" in {c.category for c in b.columns})
+    return changed, testing_count
+
+
+def _reconcile_status_transitions(db) -> bool:
+    """Backfill WorkflowTransition rows for statuses seeded after the fact.
+
+    Returns True when any transition row was added.
+    """
+    from app.agile.workflow import reconcile_transitions
+    from app.models import WorkflowStatus
+    changed = False
+    work_item_types = db.scalars(
+        select(WorkflowStatus.work_item_type).where(WorkflowStatus.scope_key == "global").distinct()
+    ).all()
+    for work_item_type in work_item_types:
+        if reconcile_transitions(db, work_item_type):
+            changed = True
+    return changed
+
+
+def _reconcile_existing_boards() -> None:
+    """Additive backfill: boards activated before the Testing
+    column existed only have todo/in_progress/done. Idempotent — a no-op on
+    every subsequent boot once every board has a testing column. Also
+    backfills WorkflowTransition rows for any status added to a work-item
+    type after its transitions were first seeded (e.g. Testing added to
+    Bug/Task/Requirement later), otherwise no card could ever transition
+    into/out of that status."""
+    try:
+        with SessionLocal() as db:
+            if not _board_schema_ready(db):
+                return
+            columns_changed, testing_count = _reconcile_board_columns(db)
+            transitions_changed = _reconcile_status_transitions(db)
+            if columns_changed or transitions_changed:
+                db.commit()
+            if columns_changed:
+                logger.info("Reconciled Testing column onto %d pre-existing board(s).",
+                            testing_count)
+            if transitions_changed:
+                logger.info("Reconciled missing workflow transitions for newly-added statuses.")
     except (SQLAlchemyError, OSError):
-        logger.exception(
-            "Database initialization failed at startup; starting degraded."
-        )
-        return False
+        logger.exception("Board Testing-column reconciliation failed; continuing without it.")
+    except Exception:
+        logger.exception("Board reconciliation failed unexpectedly; continuing without it.")
 
 
 def _check_db_health() -> bool:
@@ -163,18 +374,48 @@ def _check_db_health() -> bool:
         return False
 
 
+def _startup_writes() -> None:
+    """Data writes that must run once per boot, under the migration lock."""
+    _bootstrap()
+    # Logs and swallows its own failures: a backfill problem never blocks boot.
+    _reconcile_existing_boards()
+
+
+def _enforce_production_config(_settings) -> None:
+    """Fail-closed production gate; a no-op outside production."""
+    if not _settings.is_production:
+        return
+    failures = _production_config_errors(_settings)
+    # A fresh production database with a placeholder bootstrap password must
+    # not boot; an existing database (users already present) is unaffected.
+    if any("bootstrap" in failure for failure in failures):
+        try:
+            from app.database import SessionLocal as _SessionLocal
+            from app.models import User as _User
+
+            with _SessionLocal() as _db:
+                if _db.query(_User).count() > 0:
+                    failures = [
+                        failure
+                        for failure in failures
+                        if "bootstrap" not in failure
+                    ]
+        except SQLAlchemyError:
+            logger.warning(
+                "Production bootstrap-password check skipped: database "
+                "unavailable at startup."
+            )
+    if failures:
+        raise RuntimeError(
+            "Production configuration is unsafe: " + "; ".join(failures)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _safe_init_db()
-
     _settings = get_settings()
-    if _settings.is_production and len(_settings.SESSION_SECRET) < 32:
-        # Fail closed rather than weaken every session.
-        raise RuntimeError(
-            "SESSION_SECRET must be set to a strong value (>= 32 chars) in "
-            "production (APP_ENV=production or COOKIE_SECURE=true). Generate "
-            "one with `openssl rand -hex 32`."
-        )
+    _enforce_production_config(_settings)
     for _w in _runtime_config_warnings(_settings):
         logger.warning(_w)
 
@@ -182,23 +423,91 @@ async def lifespan(app: FastAPI):
     from app import scheduler
     scheduler.start()
 
-    logger.info("Bug Hunter started. asset_version=%s", app.state.asset_version)
+    logger.info("%s started. asset_version=%s", settings.APP_NAME, app.state.asset_version)
     yield
     await scheduler.stop()
-    logger.info("Bug Hunter shutting down.")
+    logger.info("%s shutting down.", settings.APP_NAME)
+    shutdown_telemetry()  # flush queued spans/metrics/logs before exit
 
 
 settings = get_settings()
-# Expose interactive docs in dev; disable in production unless explicitly opted in.
+# API docs: always on in development; a production deploy (APP_ENV=production
+# or COOKIE_SECURE=true) turns /docs, /redoc and /openapi.json off unless
+# ENABLE_API_DOCS=true, since a full endpoint map is reconnaissance surface.
+# The UI assets are self-hosted (app/static/swagger-ui, vendored from
+# swagger-ui-dist@5 / redoc@2) and the pages use only external scripts because
+# the strict CSP (`script-src 'self'`, no inline) blanks FastAPI's default.
 _docs_enabled = settings.ENABLE_API_DOCS or not settings.is_production
+# OpenAPI requires a non-empty version; APP_VERSION stays blank when .env
+# doesn't set it (no hardcoded fallback), so show "dev" rather than crash.
+DISPLAY_VERSION = settings.APP_VERSION or "dev"
+
+_SWAGGER_ASSET_DIR = settings.STATIC_DIR / "swagger-ui"
 app = FastAPI(
     title=settings.APP_NAME,
-    version=settings.APP_VERSION,
+    version=DISPLAY_VERSION,
     lifespan=lifespan,
-    docs_url="/docs" if _docs_enabled else None,
-    redoc_url="/redoc" if _docs_enabled else None,
+    docs_url=None,
+    redoc_url=None,
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
+# Server spans (route, status, latency) + HTTP metrics + DB/outbound spans.
+instrument_app(app)
+
+
+def swagger_docs() -> responses.HTMLResponse:
+    return HTMLResponse(
+        f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(settings.APP_NAME)} — API docs</title>
+  <link rel="stylesheet" href="/static/swagger-ui/swagger-ui.css">
+  <link rel="icon" type="image/png" href="/static/icon.png?v={app.state.asset_version}" />
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="/static/swagger-ui/swagger-ui-bundle.js" defer></script>
+  <script src="/static/swagger-ui/swagger-ui-init.js" defer></script>
+</body>
+</html>""",
+    )
+
+
+def redoc_docs() -> responses.HTMLResponse:
+    return HTMLResponse(
+        f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(settings.APP_NAME)} — API reference</title>
+  <link rel="icon" type="image/png" href="/static/icon.png?v={app.state.asset_version}" />
+</head>
+<body>
+  <redoc spec-url="/openapi.json"></redoc>
+  <script src="/static/swagger-ui/redoc.standalone.js"></script>
+</body>
+</html>""",
+    )
+
+
+def swagger_ui_init_js() -> FileResponse:
+    """External Swagger UI initializer (CSP forbids FastAPI's inline script)."""
+    return FileResponse(
+        _SWAGGER_ASSET_DIR / "swagger-ui-init.js",
+        media_type="application/javascript",
+    )
+
+
+if _docs_enabled:
+    app.add_api_route("/docs", swagger_docs, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/redoc", redoc_docs, methods=["GET"], include_in_schema=False)
+    app.add_api_route(
+        "/static/swagger-ui/swagger-ui-init.js", swagger_ui_init_js,
+        methods=["GET"], include_in_schema=False,
+    )
 
 # Computed once at import time. Kept on app.state so tests can override it.
 app.state.asset_version = _compute_asset_version(settings.STATIC_DIR)
@@ -548,8 +857,9 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
         if origin:
             if origin in allowed:
                 return await call_next(request)
-        elif referer:
-            # Origin absent but Referer present: match by URL prefix.
+        else:
+            # Origin absent means referer is present (see the guard above);
+            # match by URL prefix.
             if any(referer.startswith(a + "/") or referer == a for a in allowed if a):
                 return await call_next(request)
 
@@ -589,14 +899,15 @@ _html_cache: dict[tuple[str, str], str] = {}
 
 
 def _serve_html(filename: str) -> HTMLResponse:
-    """Serve an HTML file with the version placeholders replaced, cached
+    """Serve an HTML file with branding placeholders replaced, cached
     per (file, asset_version)."""
     key = (filename, app.state.asset_version)
     body = _html_cache.get(key)
     if body is None:
         body = (settings.STATIC_DIR / filename).read_text(encoding="utf-8")
         body = body.replace(ASSET_VERSION_PLACEHOLDER, app.state.asset_version)
-        body = body.replace(APP_VERSION_PLACEHOLDER, settings.APP_VERSION)
+        body = body.replace(APP_NAME_PLACEHOLDER, settings.APP_NAME)
+        body = body.replace(APP_VERSION_PLACEHOLDER, DISPLAY_VERSION)
         if len(_html_cache) > 32:  # only a few pages exist; clear if somehow large
             _html_cache.clear()
         _html_cache[key] = body
@@ -636,20 +947,63 @@ def _has_valid_session(request: Request) -> bool:
         db.close()
 
 
+def _auto_login(request: Request, db: OrmSession) -> Optional[tuple[User, str]]:
+    """When AUTO_LOGIN_ENABLED, sign in as the bootstrap admin with no
+    credentials — a convenience switch for trusted local/dev deployments,
+    not a hardened auth mode (see the startup warning in
+    _runtime_config_warnings). Returns None (falling back to the normal
+    login flow) if the flag is off or that account is missing/deactivated.
+    """
+    if not settings.AUTO_LOGIN_ENABLED:
+        return None
+    email = settings.BOOTSTRAP_ADMIN_EMAIL.strip().lower()
+    user = db.scalar(select(User).where(User.email == email))
+    if user is None or not user.is_active:
+        return None
+    jti = new_jti()
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+    db.add(SessionRow(
+        user_id=user.id,
+        jti=jti,
+        user_agent=(request.headers.get("user-agent") or "")[:400],
+        ip_address=_client_ip(request)[:64],
+        expires_at=expires_at,
+    ))
+    db.add(Activity(
+        bug_id=None, entity_type="auth", entity_id=None,
+        actor_user_id=user.id, actor_name=user.name,
+        action="login", detail=f"{user.email} auto-logged in (AUTO_LOGIN_ENABLED)",
+    ))
+    db.commit()
+    return user, jti
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def home(request: Request):
+def home(request: Request, db: OrmSession = Depends(get_db)):
     # Server-side redirect avoids a flash of the empty app shell.
     if not _has_valid_session(request):
-        return RedirectResponse(url="/login.html", status_code=302)
+        auto = _auto_login(request, db)
+        if auto is None:
+            return RedirectResponse(url="/login.html", status_code=302)
+        user, jti = auto
+        resp = _serve_html("index.html")
+        set_session_cookie(resp, user, jti=jti)
+        return resp
     return _serve_html("index.html")
 
 
 @app.get("/login.html", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
-def login_page(request: Request):
+def login_page(request: Request, db: OrmSession = Depends(get_db)):
     # Skip the login form for users who are already logged in.
     if _has_valid_session(request):
         return RedirectResponse(url="/", status_code=302)
+    auto = _auto_login(request, db)
+    if auto is not None:
+        user, jti = auto
+        resp = RedirectResponse(url="/", status_code=302)
+        set_session_cookie(resp, user, jti=jti)
+        return resp
     return _serve_html("login.html")
 
 
@@ -671,10 +1025,10 @@ const messaging = firebase.messaging();
 messaging.onBackgroundMessage(function (payload) {
   const n = payload.notification || {};
   const d = payload.data || {};
-  self.registration.showNotification(n.title || 'Bug Hunter', {
+    self.registration.showNotification(n.title || '__APP_NAME__', {
     body: n.body || '',
-    icon: '/static/icon.png',
-    badge: '/static/icon.png',
+    icon: '/static/icon.png?v=__ASSET_VERSION__',
+    badge: '/static/icon.png?v=__ASSET_VERSION__',
     data: { url: d.url || '/' },
     tag: d.url || 'bug-hunter'
   });
@@ -709,7 +1063,9 @@ def firebase_messaging_sw() -> Response:
         "appId": settings.FIREBASE_APP_ID,
     })
     return Response(
-        _FIREBASE_SW.replace("__FIREBASE_CONFIG__", cfg),
+        _FIREBASE_SW.replace("__FIREBASE_CONFIG__", cfg)
+        .replace("__APP_NAME__", settings.APP_NAME)
+        .replace("__ASSET_VERSION__", app.state.asset_version),
         media_type=media,
         headers=headers,
     )
@@ -728,7 +1084,7 @@ def health() -> Response:
     payload = {
         "status": "ok" if db_ok else "degraded",
         "database": "ok" if db_ok else "unavailable",
-        "version": settings.APP_VERSION,
+        "version": DISPLAY_VERSION,
         "asset_version": app.state.asset_version,
     }
     return JSONResponse(payload, status_code=200 if db_ok else 503)
@@ -757,6 +1113,12 @@ app.include_router(audit.router)
 app.include_router(sessions.router)
 app.include_router(notifications.router)
 app.include_router(push.router)
+app.include_router(agile.router)
+app.include_router(agile_board.router)
+app.include_router(agile_planning.router)
+app.include_router(agile_taxonomy.router)
+app.include_router(agile_reports.router)
+app.include_router(git.router)
 app.include_router(chatbot_router)
 
 
@@ -769,6 +1131,24 @@ async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse
         content={"detail": exc.detail},
         headers=getattr(exc, "headers", None) or None,
     )
+
+
+@app.exception_handler(OverflowError)
+@app.exception_handler(DataError)
+async def out_of_range_handler(request: Request, exc: Exception) -> JSONResponse:
+    # A client-supplied value the database can't hold: an id past 64 bits
+    # (SQLite raises OverflowError while binding), or PostgreSQL's DataError
+    # (integer out of range, value too long). The statement never ran and the
+    # session is rolled back on close, so this is bad input, not a server fault.
+    logger.warning(
+        "Rejected out-of-range value on %s %s: %s",
+        request.method, request.url.path, type(exc).__name__,
+    )
+    # Same shape as FastAPI's own 422 (documented as HTTPValidationError).
+    return JSONResponse(status_code=422, content={"detail": [{
+        "type": "value_error", "loc": ["request"],
+        "msg": "A value in the request is out of range.", "input": None,
+    }]})
 
 
 @app.exception_handler(Exception)

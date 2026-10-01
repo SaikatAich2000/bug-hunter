@@ -67,5 +67,6 @@ def test_handle_unknown_response_shape():
     resp = _handle_unknown("flibber the wobbular")
     assert resp.intent == "unknown"
     assert resp.fallback_eligible is True
-    assert resp.blocks and resp.blocks[0].kind == "text"
+    assert resp.blocks
+    assert resp.blocks[0].kind == "text"
     assert "help" in resp.blocks[0].payload["text"].lower()

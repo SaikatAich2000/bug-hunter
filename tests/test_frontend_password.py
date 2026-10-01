@@ -1,5 +1,5 @@
-"""Source guards for password-field UX: the reveal toggle and the permanent 'changeme' exception.
-Guards refactors that drop the toggle or reject 'changeme' client-side when the server accepts it.
+"""Source guards for password-field UX: the reveal toggle and legacy exception.
+Guards refactors that drop the toggle or reject the legacy value client-side when the server accepts it.
 """
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "frontend" / "src"
 
-PASSWORD_INPUT = SRC / "components" / "PasswordInput.tsx"
-CONSTANTS = SRC / "lib" / "constants.ts"
+PASSWORD_INPUT = SRC / "components" / "PasswordInput.jsx"
+CONSTANTS = SRC / "lib" / "constants.js"
 STYLES = SRC / "styles" / "styles.css"
 
 # Every form that collects a password.
-LOGIN = SRC / "login" / "LoginPage.tsx"
-RESET = SRC / "reset" / "ResetPage.tsx"
-CHANGE_PW = SRC / "modals" / "ChangePasswordModal.tsx"
-USER_MODAL = SRC / "modals" / "UserModal.tsx"
+LOGIN = SRC / "login" / "LoginPage.jsx"
+RESET = SRC / "reset" / "ResetPage.jsx"
+CHANGE_PW = SRC / "modals" / "ChangePasswordModal.jsx"
+USER_MODAL = SRC / "modals" / "UserModal.jsx"
 
 PASSWORD_FORMS = [LOGIN, RESET, CHANGE_PW, USER_MODAL]
 
@@ -29,7 +29,7 @@ def _read(p: Path) -> str:
 
 # The reusable PasswordInput component
 def test_password_input_component_exists():
-    assert PASSWORD_INPUT.exists(), "PasswordInput.tsx must exist"
+    assert PASSWORD_INPUT.exists(), "PasswordInput.jsx must exist"
 
 
 def test_password_input_toggles_type_and_renders_eye():
@@ -40,7 +40,8 @@ def test_password_input_toggles_type_and_renders_eye():
     assert 'className="pw-wrap"' in src
     assert 'className="pw-toggle"' in src
     # Aria label must reflect current visibility state.
-    assert "Show password" in src and "Hide password" in src
+    assert "Show password" in src
+    assert "Hide password" in src
     # Explicit type="button" prevents accidental form submission.
     assert 'type="button"' in src
     # forwardRef lets callers reach the DOM node for focus management.
@@ -73,7 +74,7 @@ def test_password_toggle_css_present(cls):
     assert cls in _read(STYLES), f"styles.css missing {cls!r}"
 
 
-# The permanent 'changeme' client-side exception
-def test_client_validator_allows_changeme():
-    # 'changeme' is whitelisted case-insensitively before length/complexity so UI matches backend.
-    assert 'toLowerCase() === "changeme"' in _read(CONSTANTS)
+# The legacy client-side exception
+def test_client_validator_allows_legacy_default():
+    # The legacy value is whitelisted case-insensitively before length/complexity so UI matches backend.
+    assert 'toLowerCase() === "legacy-default"' in _read(CONSTANTS)

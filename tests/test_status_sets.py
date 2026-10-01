@@ -62,27 +62,24 @@ def test_status_new_is_shared_by_every_type(admin_client):
         assert r.json()["status"] == "New"
 
 
-def test_task_cannot_be_created_with_not_a_bug_status(admin_client):
+def test_task_can_be_created_with_not_a_bug_status(admin_client):
+    # Universal status vocabulary: Not a Bug is a canonical status, valid for Task.
     p = _make_project(admin_client)
     r = admin_client.post("/api/bugs", json={
-        "title": "Bad task", "project_id": p["id"], "item_type": "Task",
+        "title": "Task with shared status", "project_id": p["id"], "item_type": "Task",
         "priority": "Medium", "environment": "DEV", "status": "Not a Bug",
     })
-    assert r.status_code == 422, r.text
-    # The validation error should name the bad status and the item type.
-    body = r.json()
-    msgs = [d.get("msg", "") for d in body.get("detail", [])]
-    joined = " ".join(msgs).lower()
-    assert "task" in joined
-    assert "not a bug" in joined
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "Not a Bug"
 
 
-def test_requirement_cannot_move_to_resolved(admin_client):
+def test_requirement_can_move_to_resolved(admin_client):
+    # Universal status vocabulary: Resolved is valid for Requirement.
     p = _make_project(admin_client)
     req = _make_item(admin_client, p["id"], item_type="Requirement")
     r = admin_client.put(f"/api/bugs/{req['id']}", json={"status": "Resolved"})
-    assert r.status_code == 400, r.text
-    assert "requirement" in r.json()["detail"].lower()
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "Resolved"
 
 
 def test_bug_can_use_not_a_bug_status(admin_client):
@@ -109,17 +106,22 @@ def test_requirement_can_use_approved_status(admin_client):
     assert r.json()["status"] == "Approved"
 
 
-def test_changing_type_validates_status_against_new_type(admin_client):
-    """A PUT changing item_type revalidates status against the new type; an invalid combo is rejected 400."""
+def test_changing_type_accepts_universal_status_vocabulary(admin_client):
+    """A PUT changing item_type keeps the universal canonical vocabulary: any
+    canonical status is valid for the new type; unknown statuses are rejected."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Not a Bug"})
     assert r.status_code == 200
-    # Flip to Task while keeping a Bug-only status — must be rejected.
+    # Universal vocabulary: "Resolved" is canonical for Task too, so the flip succeeds.
     r = admin_client.put(f"/api/bugs/{bug['id']}", json={
         "item_type": "Task", "status": "Resolved",
     })
-    assert r.status_code == 400
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "Resolved"
+    # An unknown status is still rejected (schema validation -> 422).
+    r = admin_client.put(f"/api/bugs/{bug['id']}", json={"status": "Not A Real Status"})
+    assert r.status_code == 422
 
 
 def test_meta_endpoint_exposes_statuses_by_type(admin_client):
@@ -128,21 +130,17 @@ def test_meta_endpoint_exposes_statuses_by_type(admin_client):
     body = r.json()
     assert "statuses_by_type" in body
     sbt = body["statuses_by_type"]
-    assert "Bug" in sbt and "Requirement" in sbt and "Task" in sbt
-    # Verify the key membership rules.
-    assert "New" in sbt["Bug"]
-    assert "New" in sbt["Requirement"]
-    assert "New" in sbt["Task"]
-    assert "Not a Bug" in sbt["Bug"]
-    assert "Not a Bug" not in sbt["Task"]
-    assert "Not a Bug" not in sbt["Requirement"]
-    assert "Done" in sbt["Task"]
-    assert "Done" not in sbt["Bug"]
-    assert "Approved" in sbt["Requirement"]
-    assert "Approved" not in sbt["Task"]
+    assert "Bug" in sbt
+    assert "Requirement" in sbt
+    assert "Task" in sbt
+    # Universal vocabulary: every type exposes the full canonical status set.
+    for itype in ("Bug", "Requirement", "Task"):
+        for status in ("New", "Not a Bug", "Done", "Approved", "Resolved"):
+            assert status in sbt[itype], f"{status} missing for {itype}"
+    from app.schemas import CANONICAL_STATUSES
+    for itype, statuses in sbt.items():
+        assert sorted(statuses) == sorted(CANONICAL_STATUSES), itype
 
-
-# 2. Comments — admin-only edit + delete
 def test_comment_delete_is_admin_only(admin_client):
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")

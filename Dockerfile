@@ -21,7 +21,11 @@ ARG BASE_IMAGE=python:3.12-slim
 # Compiles frontend/src into app/static using a throwaway Node image. This
 # means app/static is rebuilt fresh from source on every image build — the
 # server itself never needs npm/node installed. Vite's outDir already points
+<<<<<<< HEAD
 # at ../app/static (see frontend/vite.config.js), so we hand it a copy of the
+=======
+# at ../app/static (see frontend/vite.config.ts), so we hand it a copy of the
+>>>>>>> 57a42aa5aae2c70f0c2b3892114bdfca3b276461
 # committed app/static (favicon, icon, fonts, vendor/) and let the build
 # overwrite index.html/login.html/reset.html/assets/ in place.
 # ---------------------------------------------------------------------------
@@ -30,7 +34,12 @@ WORKDIR /repo
 COPY frontend ./frontend
 COPY app/static ./app/static
 WORKDIR /repo/frontend
+<<<<<<< HEAD
 RUN npm ci && npm run build
+=======
+RUN npm ci
+RUN npm run build
+>>>>>>> 57a42aa5aae2c70f0c2b3892114bdfca3b276461
 
 FROM ${BASE_IMAGE} AS base
 
@@ -65,20 +74,28 @@ RUN pip install --require-hashes -r requirements-lock.txt
 # Copy application code
 COPY app ./app
 
+<<<<<<< HEAD
 # Operator scripts (e.g. clean_db.py, invoked by down.sh --clean-db). Small,
 # secret-free, and the build context already excludes tests/, secrets/ and .env.
 COPY scripts ./scripts
 
+=======
+>>>>>>> 57a42aa5aae2c70f0c2b3892114bdfca3b276461
 # Overwrite app/static with the freshly-built frontend from the
 # frontend-build stage, so the image never ships a stale bundle.
 COPY --from=frontend-build /repo/app/static ./app/static
 
+<<<<<<< HEAD
 # Run as a non-root user with a fixed numeric UID/GID, so orchestrators that
 # enforce runAsNonRoot can verify it without resolving a user name. 1000 is the
 # UID the unpinned useradd already produced, so a host-side secrets/ file that
 # is readable today (e.g. mode 0600 owned by uid 1000) stays readable.
 RUN groupadd --gid 1000 appuser \
  && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin appuser \
+=======
+# Run as a non-root user
+RUN useradd --create-home --shell /bin/bash appuser \
+>>>>>>> 57a42aa5aae2c70f0c2b3892114bdfca3b276461
  && chown -R appuser:appuser /app
 USER 1000:1000
 
@@ -94,6 +111,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 
+<<<<<<< HEAD
 # --no-server-header: uvicorn adds "Server: uvicorn" below the ASGI app, where
 # the security-headers middleware cannot remove it.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]
+=======
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+>>>>>>> 57a42aa5aae2c70f0c2b3892114bdfca3b276461

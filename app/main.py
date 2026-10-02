@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 """FastAPI application entry point."""
-=======
-"""FastAPI application entry point for Bug Hunter"""
->>>>>>> 57a42aa5aae2c70f0c2b3892114bdfca3b276461
 from __future__ import annotations
 
 import hashlib

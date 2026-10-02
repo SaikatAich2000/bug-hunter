@@ -12,15 +12,11 @@ time by app.agile.integrity, so they hold on every write path.
 """
 from __future__ import annotations
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agile.itemtypes import EPIC, STANDARD_TYPES, SUBTASK, is_epic, is_standard, is_subtask
+from app.agile.itemtypes import STANDARD_TYPES, is_epic, is_standard, is_subtask
 from app.models import Bug, EpicDetail
 
-# Backwards-compatible names used across the agile package.
-EPIC_TYPE = EPIC
-SUBTASK_TYPE = SUBTASK
 LEVEL2_TYPES = set(STANDARD_TYPES)
 
 
@@ -100,18 +96,3 @@ def assign_hierarchy(
     item.epic_id = resolved_epic_id
     db.flush()
     return item
-
-
-def subtasks_of(db: Session, item_id: int) -> list[Bug]:
-    return list(db.scalars(
-        select(Bug).where(Bug.parent_id == item_id, Bug.item_type == SUBTASK).order_by(Bug.id)
-    ).all())
-
-
-def children_count(db: Session, item: Bug) -> int:
-    """Items that hang off ``item``: Sub-tasks of a standard issue, issues of an Epic."""
-    if is_epic(item.item_type):
-        stmt = select(Bug.id).where(Bug.epic_id == item.id, Bug.item_type.in_(STANDARD_TYPES))
-    else:
-        stmt = select(Bug.id).where(Bug.parent_id == item.id)
-    return len(db.scalars(stmt).all())

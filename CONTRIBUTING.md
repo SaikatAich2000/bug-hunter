@@ -134,9 +134,8 @@ cd frontend && npm run lint && npm test && npm audit --omit=dev --audit-level=hi
 - New routes need tests; new schemas need validators.
 - Database changes must only *add* — see *Live-data safety* in
   [README.md](README.md). No destructive migrations.
-- If you add or change an API route, regenerate the docs with
-  `python scripts/gen-api-docs.py` (generated artifacts are gitignored; the live
-  FastAPI app is the source of truth).
+- The live FastAPI app is the source of truth for the API: browse `/docs` on a
+  running instance.
 
 ## Version bumps
 

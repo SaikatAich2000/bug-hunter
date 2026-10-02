@@ -12,16 +12,17 @@ Every step is idempotent: once the data is aligned nothing matches again.
 4. Epics leave sprints (Epics are not planned into sprints).
 5. Every standard issue is ranked in the list it sits in (sprint or backlog),
    Epics in their project's Epic list; Sub-tasks carry no rank.
-6. The retired Collection and Feature levels become labels on the items they
+6. Databases from before the Jira rebuild may still hold the retired
+   Collection and Feature tables. Those levels become labels on the items they
    grouped (a Story also takes its Feature's Epic), then the old links are
-   cleared so a label removed later is not re-added. The collections and
-   features tables themselves are left untouched.
+   cleared so a label removed later is not re-added. The tables are no longer
+   part of the schema: they are read only when present and left in place.
 """
 from __future__ import annotations
 
 import logging
 
-from sqlalchemy import and_, bindparam, exists, func, select, text
+from sqlalchemy import and_, bindparam, exists, func, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.agile.itemtypes import STANDARD_TYPES
@@ -41,11 +42,6 @@ _STATEMENTS: list[tuple[str, str]] = [
     ("epic links to non-epics",
      "UPDATE bugs SET epic_id = NULL WHERE item_type IN :standard AND epic_id IS NOT NULL "
      "AND epic_id NOT IN (SELECT e.id FROM bugs e WHERE e.item_type = 'Epic' AND e.project_id = bugs.project_id)"),
-    ("story epics from features",
-     "UPDATE bugs SET epic_id = (SELECT f.epic_id FROM features f WHERE f.id = bugs.feature_id) "
-     "WHERE feature_id IS NOT NULL AND epic_id IS NULL AND item_type IN :standard "
-     "AND (SELECT f.epic_id FROM features f WHERE f.id = bugs.feature_id) IN "
-     "(SELECT e.id FROM bugs e WHERE e.item_type = 'Epic' AND e.project_id = bugs.project_id)"),
     ("sub-task display ids",
      "UPDATE bugs SET display_id = 'SUB-' || id "
      "WHERE item_type = 'Sub-task' AND display_id = 'TASK-' || id"),
@@ -67,6 +63,14 @@ _STATEMENTS: list[tuple[str, str]] = [
      "UPDATE workflow_statuses SET is_active = FALSE "
      "WHERE work_item_type IN ('Collection', 'Feature') AND is_active = TRUE"),
 ]
+
+_STORY_EPICS_FROM_FEATURES = (
+    "story epics from features",
+    "UPDATE bugs SET epic_id = (SELECT f.epic_id FROM features f WHERE f.id = bugs.feature_id) "
+    "WHERE feature_id IS NOT NULL AND epic_id IS NULL AND item_type IN :standard "
+    "AND (SELECT f.epic_id FROM features f WHERE f.id = bugs.feature_id) IN "
+    "(SELECT e.id FROM bugs e WHERE e.item_type = 'Epic' AND e.project_id = bugs.project_id)",
+)
 
 
 def _statement(sql: str):
@@ -163,13 +167,13 @@ def _attach(conn, label_id: int, item_ids: set[int]) -> int:
     return added
 
 
-def _retire_levels_to_labels(conn) -> int:
-    from app.models import Bug, Collection, CollectionItem, Feature, Label, WorkItemLabel
+def _retire_levels_to_labels(conn, tables: set[str], bug_columns: set[str]) -> int:
+    from app.models import Bug, Label, WorkItemLabel
 
-    bugs, collections, features = Bug.__table__, Collection.__table__, Feature.__table__
-    members = CollectionItem.__table__
+    bugs = Bug.__table__
     converted = 0
     touched_labels: set[int] = set()
+
     def label_items(name: str, item_ids: set[int]) -> int:
         # Labels are per project: each grouped item gets the label in its own
         # project (a collection could hold items from several projects).
@@ -183,19 +187,29 @@ def _retire_levels_to_labels(conn) -> int:
             touched_labels.add(label_id)
         return attached
 
-    for c in conn.execute(select(collections.c.id, collections.c.name)).all():
-        item_ids = set(conn.execute(select(bugs.c.id).where(bugs.c.collection_id == c.id)).scalars())
-        item_ids |= set(conn.execute(
-            select(members.c.work_item_id).where(members.c.collection_id == c.id)).scalars())
-        if item_ids:
-            converted += label_items(c.name, item_ids)
-    for f in conn.execute(select(features.c.id, features.c.title)).all():
-        item_ids = set(conn.execute(select(bugs.c.id).where(bugs.c.feature_id == f.id)).scalars())
-        if item_ids:
-            converted += label_items(f.title, item_ids)
-    conn.execute(bugs.update().where(bugs.c.collection_id.is_not(None)).values(collection_id=None))
-    conn.execute(bugs.update().where(bugs.c.feature_id.is_not(None)).values(feature_id=None))
-    conn.execute(members.delete())
+    def ids_of(sql: str, group_id: int) -> set[int]:
+        return set(conn.execute(text(sql), {"gid": group_id}).scalars())
+
+    if "collections" in tables:
+        for gid, name in conn.execute(text("SELECT id, name FROM collections")).all():
+            item_ids: set[int] = set()
+            if "collection_id" in bug_columns:
+                item_ids |= ids_of("SELECT id FROM bugs WHERE collection_id = :gid", gid)
+            if "collection_items" in tables:
+                item_ids |= ids_of("SELECT work_item_id FROM collection_items WHERE collection_id = :gid", gid)
+            if item_ids:
+                converted += label_items(name, item_ids)
+    if "features" in tables and "feature_id" in bug_columns:
+        for gid, title in conn.execute(text("SELECT id, title FROM features")).all():
+            item_ids = ids_of("SELECT id FROM bugs WHERE feature_id = :gid", gid)
+            if item_ids:
+                converted += label_items(title, item_ids)
+    if "collection_id" in bug_columns:
+        conn.execute(text("UPDATE bugs SET collection_id = NULL WHERE collection_id IS NOT NULL"))
+    if "feature_id" in bug_columns:
+        conn.execute(text("UPDATE bugs SET feature_id = NULL WHERE feature_id IS NOT NULL"))
+    if "collection_items" in tables:
+        conn.execute(text("DELETE FROM collection_items"))
     labels, links = Label.__table__, WorkItemLabel.__table__
     for label_id in touched_labels:
         count = conn.execute(select(func.count()).select_from(links).where(links.c.label_id == label_id)).scalar()
@@ -207,14 +221,20 @@ def _retire_levels_to_labels(conn) -> int:
 def align_agile_hierarchy(conn) -> None:
     try:
         with conn.begin_nested():
-            for label, sql in _STATEMENTS:
+            inspector = inspect(conn)
+            tables = set(inspector.get_table_names())
+            bug_columns = {column["name"] for column in inspector.get_columns("bugs")}
+            statements = list(_STATEMENTS)
+            if "features" in tables and "feature_id" in bug_columns:
+                statements.insert(4, _STORY_EPICS_FROM_FEATURES)
+            for label, sql in statements:
                 result = conn.execute(_statement(sql))
                 if result.rowcount:
                     logger.info("Agile upgrade: %s: %d row(s) aligned", label, result.rowcount)
             ranked = _normalize_rank_scopes(conn)
             if ranked:
                 logger.info("Agile upgrade: %d issue(s) re-ranked into their sprint or backlog", ranked)
-            converted = _retire_levels_to_labels(conn)
+            converted = _retire_levels_to_labels(conn, tables, bug_columns)
             if converted:
                 logger.info("Agile upgrade: %d Collection/Feature membership(s) converted to labels", converted)
     except SQLAlchemyError:

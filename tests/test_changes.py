@@ -70,9 +70,6 @@ class TestStatsShape:
         body = r.json()
         for key in ("bugs", "open", "resolved", "closed", "resolve_later"):
             assert key in body, f"missing KPI field: {key}"
-        # Keep these so an older cached frontend doesn't break.
-        assert "users" in body
-        assert "projects" in body
 
     def test_resolve_later_kpi_increments(self, admin_client):
         before = admin_client.get("/api/stats").json()["resolve_later"]

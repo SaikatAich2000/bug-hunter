@@ -32,9 +32,6 @@ function isDangerousFile(name) {
   if (dot < 0) return false;
   return _DANGEROUS_EXTS.has(cleaned.slice(dot + 1).trim().toLowerCase());
 }
-
-// Re-exported so existing importers of this module don't break.
-export { activityIcon };
 import VideoLightbox from "../../components/VideoLightbox";
 
 // --- Plain-text description bridge (API stores plain text, editor is HTML) ---

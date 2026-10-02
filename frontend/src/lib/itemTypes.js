@@ -6,8 +6,8 @@
  * different types, with different labels and icons everywhere in the UI.
  */
 
-export const EPIC = "Epic";
-export const SUBTASK = "Sub-task";
+const EPIC = "Epic";
+const SUBTASK = "Sub-task";
 export const STANDARD_TYPES = ["Story", "Task", "Bug", "Requirement"];
 export const ALL_ITEM_TYPES = [EPIC, ...STANDARD_TYPES, SUBTASK];
 

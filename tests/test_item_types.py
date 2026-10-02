@@ -357,8 +357,7 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
 # --- Item-type conversion (same-table, explicit validation) ---------------
 # Conversions keep the same `bugs` row id, common data and relations. Story is
 # included because a User Story created through /api/agile/work-items lives in
-# the same table. Feature/Collection and the hierarchy-only types are refused,
-# and an Active feature branch blocks a Story from leaving the Story type.
+# the same table. The hierarchy-only types are refused, and an Active feature branch blocks a Story from leaving the Story type.
 
 
 def _enable_agile(client, project_id):
@@ -455,11 +454,11 @@ def test_conversion_among_bug_requirement_task_is_supported(admin_client):
         assert r.json()["item_type"] == target
 
 
-def test_conversion_rejects_feature_collection_and_hierarchy_types(admin_client):
-    """Feature/Collection and Epic/Sub-task are separate contracts: refuse them."""
+def test_conversion_rejects_hierarchy_types(admin_client):
+    """Epic/Sub-task are separate contracts: refuse them."""
     p = _make_project(admin_client)
     row = _make_item(admin_client, p["id"], item_type="Bug")
-    for target in ("Feature", "Collection", "Epic", "Sub-task"):
+    for target in ("Epic", "Sub-task"):
         r = admin_client.put(f"/api/bugs/{row['id']}", json={"item_type": target})
         assert r.status_code == 422, (target, r.text)
         assert r.headers.get("X-Error-Code") == "item_conversion_not_supported", (target, r.text)
@@ -467,12 +466,12 @@ def test_conversion_rejects_feature_collection_and_hierarchy_types(admin_client)
     assert admin_client.get(f"/api/bugs/{row['id']}").json()["item_type"] == "Bug"
 
 
-def test_conversion_story_to_feature_is_refused(admin_client):
+def test_conversion_to_a_retired_level_is_a_schema_error(admin_client):
     p = _make_project(admin_client)
     story = _make_story(admin_client, p["id"])
-    r = admin_client.put(f"/api/bugs/{story['id']}", json={"item_type": "Feature"})
-    assert r.status_code == 422, r.text
-    assert r.headers.get("X-Error-Code") == "item_conversion_not_supported", r.text
+    for target in ("Feature", "Collection"):
+        r = admin_client.put(f"/api/bugs/{story['id']}", json={"item_type": target})
+        assert r.status_code == 422, r.text
 
 
 

@@ -137,8 +137,3 @@ def ranks_between(lo: str | None, hi: str | None, count: int) -> list[str]:
 def rank_between(lo: str | None, hi: str | None) -> str:
     """One token strictly after ``lo`` and before ``hi`` (see ranks_between)."""
     return ranks_between(lo, hi, 1)[0]
-
-
-def initial_ranks(n: int) -> list[str]:
-    """``n`` ascending tokens for a fresh list (kept for the board backfill)."""
-    return spaced_ranks(n)

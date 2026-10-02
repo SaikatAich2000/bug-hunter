@@ -276,7 +276,6 @@ def _add_missing_columns(conn) -> None:
 
     _add_missing_bug_display_id(conn, bug_cols)
     _add_missing_agile_columns(conn, inspector, bug_cols)
-    _add_missing_collection_columns(conn, inspector)
     _add_missing_sprint_columns(conn, inspector)
     _add_missing_epic_detail_columns(conn, inspector)
     _add_missing_git_columns(conn, inspector)
@@ -470,13 +469,10 @@ def _add_missing_bug_agile_columns_extra(conn, bug_cols: set[str]) -> None:
     _add_missing_hierarchy_columns(conn, bug_cols)
 
 
-# Simplified-hierarchy additive columns (Collection > Epic > Feature > Story > Sub-task).
-# `features`/`feature_assignees`/`collection_assignees`/`acceptance_criteria_items` are
-# brand-new tables, created by create_all(); only existing-table columns need ALTERs here.
+# Agile additive columns on bugs; new tables are created by create_all().
 def _add_missing_hierarchy_columns(conn, bug_cols: set[str]) -> None:
-    for col in ("feature_id", "collection_id", "owner_id"):
-        if col not in bug_cols:
-            _add_column_safely(conn, f"ALTER TABLE bugs ADD COLUMN {col} INTEGER")
+    if "owner_id" not in bug_cols:
+        _add_column_safely(conn, "ALTER TABLE bugs ADD COLUMN owner_id INTEGER")
     if "ready_for_sprint" not in bug_cols:
         _add_column_safely(conn,
             "ALTER TABLE bugs ADD COLUMN ready_for_sprint BOOLEAN NOT NULL DEFAULT FALSE")
@@ -491,24 +487,6 @@ def _add_missing_hierarchy_columns(conn, bug_cols: set[str]) -> None:
             "ALTER TABLE bugs ADD COLUMN mandatory BOOLEAN NOT NULL DEFAULT FALSE")
     if "start_date" not in bug_cols:
         _add_column_safely(conn, "ALTER TABLE bugs ADD COLUMN start_date VARCHAR(10)")
-
-
-def _add_missing_collection_columns(conn, inspector) -> None:
-    coll_cols = _column_names(inspector, "collections")
-    if not coll_cols:
-        return
-    if "status" not in coll_cols:
-        _add_column_safely(conn,
-            "ALTER TABLE collections ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Planned'")
-    if "start_date" not in coll_cols:
-        _add_column_safely(conn, "ALTER TABLE collections ADD COLUMN start_date VARCHAR(10)")
-    if "end_date" not in coll_cols:
-        _add_column_safely(conn, "ALTER TABLE collections ADD COLUMN end_date VARCHAR(10)")
-    if "sprint_id" not in coll_cols:
-        _add_column_safely(conn, "ALTER TABLE collections ADD COLUMN sprint_id INTEGER")
-    feature_cols = _column_names(inspector, "features")
-    if feature_cols and "sprint_id" not in feature_cols:
-        _add_column_safely(conn, "ALTER TABLE features ADD COLUMN sprint_id INTEGER")
 
 
 def _add_missing_sprint_columns(conn, inspector) -> None:

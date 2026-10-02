@@ -28,7 +28,7 @@ export const KPI_FILTER_MAP = {
   resolve_later: ["Resolve Later"],
 };
 
-export const EMPTY_FILTERS = {
+const EMPTY_FILTERS = {
   project_id: [],
   status: [],
   priority: [],

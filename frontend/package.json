@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Bug Hunter \u2014 React 18 + JSX single-page app, built with Vite into app/static. The product version is NOT here: it comes from APP_VERSION in .env (see .env.example).",
+  "description": "Bug Hunter — React 18 + JSX single-page app, built with Vite into app/static. The product version is NOT here: it comes from APP_VERSION in .env (see .env.example).",
   "scripts": {
     "dev": "vite",
     "vendor": "node scripts/vendor-firebase.mjs",
@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "dompurify": "^3.4.16",

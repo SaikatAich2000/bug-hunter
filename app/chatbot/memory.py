@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 _MAX_SESSIONS = 200
@@ -20,9 +20,6 @@ _CONFIRM_TTL_SECONDS = 5 * 60   # 5 minutes
 class _Session:
     """The mutable state we keep for one user."""
     last_bug_id: Optional[int] = None
-    last_user_id: Optional[int] = None
-    last_user_name: Optional[str] = None
-    last_filter: dict[str, Any] = field(default_factory=dict)
     pending_action: Optional[dict[str, Any]] = None
     # Separate from last_seen so later activity doesn't extend the confirm window.
     pending_staged_at: float = 0.0
@@ -86,24 +83,6 @@ class _Store:
             s.last_bug_id = bug_id
             s.last_seen = now
 
-    def remember_user(self, user_id: int,
-                      target_user_id: int,
-                      target_user_name: str) -> None:
-        now = time.time()
-        with self._lock:
-            s = self._get_or_create_locked(user_id, now)
-            s.last_user_id = target_user_id
-            s.last_user_name = target_user_name
-            s.last_seen = now
-
-    def remember_filter(self, user_id: int, filter_dict: dict[str, Any]) -> None:
-        now = time.time()
-        with self._lock:
-            s = self._get_or_create_locked(user_id, now)
-            # Defensive copy — the caller may mutate its own dict afterward.
-            s.last_filter = dict(filter_dict)
-            s.last_seen = now
-
     def stage_pending(self, user_id: int, action: dict[str, Any]) -> None:
         """Park an action awaiting user confirmation."""
         now = time.time()
@@ -130,13 +109,6 @@ class _Store:
             s.pending_action = None
             s.last_seen = now
             return action
-
-    def clear_pending(self, user_id: int) -> None:
-        with self._lock:
-            s = self._sessions.get(user_id)
-            if s is not None:
-                s.pending_action = None
-                s.last_seen = time.time()
 
     def stage_ingest(self, user_id: int, data: dict[str, Any]) -> None:
         """Park a parsed document's candidate specs awaiting 'create them'."""

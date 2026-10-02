@@ -29,14 +29,8 @@ FORGOT_PASSWORD_404: Final = _doc(404)
 RESET_TOKEN_400: Final = _doc(400)
 #: Entity does not exist (or is scoped away from the caller).
 NOT_FOUND_404: Final = _doc(404)
-#: Caller lacks permission for the target entity/project.
-FORBIDDEN_403: Final = _doc(403)
 #: Stale version / conflicting concurrent edit / duplicate.
 CONFLICT_409: Final = _doc(409)
-#: Semantic validation failure (bad type/status transition, bad request shape).
-VALIDATION_422: Final = _doc(422)
-#: Not found + forbidden + validation (the common detail-view trio).
-NOT_FOUND_FORBIDDEN_422: Final = _doc(404, 403, 422)
 #: Not found + conflict (rename/transition races).
 NOT_FOUND_CONFLICT_409: Final = _doc(404, 409)
 #: Not found + validation.
@@ -45,14 +39,6 @@ NOT_FOUND_VALIDATION_422: Final = _doc(404, 422)
 NOT_FOUND_FORBIDDEN_403: Final = _doc(404, 403)
 #: Not found + conflict + validation.
 NOT_FOUND_CONFLICT_VALIDATION_422: Final = _doc(404, 409, 422)
-#: Forbidden + conflict.
-FORBIDDEN_CONFLICT_409: Final = _doc(403, 409)
-#: Forbidden + validation.
-FORBIDDEN_VALIDATION_422: Final = _doc(403, 422)
-#: Conflict + validation.
-CONFLICT_VALIDATION_422: Final = _doc(409, 422)
-#: Not found + forbidden + conflict.
-NOT_FOUND_FORBIDDEN_CONFLICT_409: Final = _doc(404, 403, 409)
 #: Malformed request rejected before/around body validation.
 BAD_REQUEST_400: Final = _doc(400)
 #: Malformed request + entity not visible (user delete: self/last-admin are 400).
@@ -72,10 +58,6 @@ XLSX_FILE_200: Final = _file_200("Excel workbook", XLSX_MIME)
 XLSX_OR_CSV_FILE_200: Final = _file_200("Excel workbook or CSV file", XLSX_MIME, "text/csv")
 #: Stored attachment bytes (served with the file's own safe content type).
 ATTACHMENT_FILE_200: Final = _file_200("The attachment's content", "application/octet-stream")
-#: Rate limit exceeded (per-user request throttle).
-RATE_LIMITED_429: Final = _doc(429)
-#: Request body/payload exceeds a configured size or row limit.
-PAYLOAD_TOO_LARGE_413: Final = _doc(413)
 #: Unexpected server-side failure (downstream/infrastructure).
 SERVER_ERROR_500: Final = _doc(500)
 #: Export failures: bad report request, oversize export, workbook build failure.
@@ -84,8 +66,6 @@ EXPORT_ERRORS: Final = _doc(400, 413, 500)
 BAD_REQUEST_FORBIDDEN_403: Final = _doc(400, 403)
 #: Malformed request + caller lacks the required role + entity not visible.
 BAD_REQUEST_FORBIDDEN_NOT_FOUND_404: Final = _doc(400, 403, 404)
-#: Malformed request + forbidden grant + duplicate (user create).
-BAD_REQUEST_FORBIDDEN_CONFLICT_409: Final = _doc(400, 403, 409)
 #: Malformed request + forbidden grant + duplicate + entity not visible (user update).
 BAD_REQUEST_FORBIDDEN_CONFLICT_NOT_FOUND_404: Final = _doc(400, 403, 404, 409)
 #: Config/version conflict + missing project work-item/repository + bad branch input.
@@ -94,8 +74,6 @@ GIT_CONFIG_CONFLICT_NOT_FOUND_VALIDATION_422: Final = _doc(404, 409, 422)
 GIT_REMOVE_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422: Final = _doc(403, 404, 409, 422)
 #: Branch create/list/preview/discovery: missing scope + conflict + bad input.
 GIT_BRANCH_CONFLICT_NOT_FOUND_VALIDATION_422: Final = _doc(404, 409, 422)
-#: Branch create/persist: missing scope + version conflict + bad input.
-GIT_CREATE_CONFLICT_NOT_FOUND_VALIDATION_422: Final = _doc(404, 409, 422)
 
 # --- Additional endpoint combinations (Sonar S8415) ------------------------
 #: Codes an endpoint family raises: 400, 403, 404, 413, 429.

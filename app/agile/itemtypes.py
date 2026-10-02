@@ -13,11 +13,6 @@ from __future__ import annotations
 EPIC = "Epic"
 SUBTASK = "Sub-task"
 STANDARD_TYPES: tuple[str, ...] = ("Story", "Task", "Bug", "Requirement")
-ALL_TYPES: tuple[str, ...] = (EPIC, *STANDARD_TYPES, SUBTASK)
-
-# Legacy hierarchy levels from the xOPS port. No longer creatable; rows that
-# still exist in their own tables were converted to labels at upgrade.
-RETIRED_TYPES: tuple[str, ...] = ("Collection", "Feature")
 
 
 def is_standard(item_type: str | None) -> bool:

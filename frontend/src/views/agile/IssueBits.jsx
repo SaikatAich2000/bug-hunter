@@ -1,6 +1,6 @@
 /** Small building blocks every Sprints view renders an issue with. */
 import { itemTypeIcon, itemTypeLabel } from "../../lib/itemTypes";
-import { AssigneeStack, epicColor } from "./agileShared";
+import { epicColor } from "./agileShared";
 import { estimateOf, formatNumber, isEstimated, statisticUnit } from "./logic/estimates";
 
 export function TypeIcon({ type }) {
@@ -89,10 +89,6 @@ export function SubtaskProgress({ issue }) {
       🔹 {issue.subtasks_done}/{issue.subtask_count}
     </span>
   );
-}
-
-export function Assignees({ assignees }) {
-  return <AssigneeStack assignees={assignees} />;
 }
 
 /** Lozenges for the sprint/backlog header: to do / in progress / done totals. */

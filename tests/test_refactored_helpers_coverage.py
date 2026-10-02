@@ -8,7 +8,7 @@ from datetime import date
 import pytest
 
 from app.auth import hash_password
-from app.models import ROLE_ADMIN, AcceptanceCriterion, Bug, Feature, Project, User
+from app.models import ROLE_ADMIN, AcceptanceCriterion, Bug, Project, User
 from app.routes.agile import _apply_task_flag_updates, _validate_story_ready_requirements
 from app.schemas import WorkItemTaskFlagsIn
 
@@ -28,26 +28,6 @@ def test_project_and_user(db_session):
 
 
 @pytest.fixture
-def test_feature(db_session, test_project_and_user):
-    """Create a valid Feature hierarchy parent for Story tests."""
-    project, user = test_project_and_user
-    epic = Bug(
-        item_type="Epic", title="E", description="D", project_id=project.id,
-        owner_id=user.id,
-    )
-    db_session.add(epic)
-    db_session.flush()
-    feature = Feature(
-        project_id=project.id, epic_id=epic.id, key="FEAT-1",
-        title="F", description="D", owner_id=user.id, created_by_id=user.id,
-        updated_by_id=user.id,
-    )
-    db_session.add(feature)
-    db_session.flush()
-    return project, user, feature
-
-
-@pytest.fixture
 def task_project(db_session):
     """Create the required project for standalone task flag tests."""
     project = Project(name="TaskProj", color="#111", agile_enabled=True)
@@ -59,13 +39,13 @@ def task_project(db_session):
 class TestValidateStoryReadyRequirements:
     """Tests for _validate_story_ready_requirements helper."""
 
-    def test_returns_false_when_description_missing(self, db_session, test_feature):
+    def test_returns_false_when_description_missing(self, db_session, test_project_and_user):
         """Returns False if Story has empty description."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=5, owner_id=user.id,
+            priority="High", story_points=5, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -79,31 +59,13 @@ class TestValidateStoryReadyRequirements:
         story.description = ""
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_does_not_require_a_feature(self, db_session, test_project_and_user):
-        """Features are not a Jira level, so readiness never depends on one."""
+    def test_returns_false_when_no_priority(self, db_session, test_project_and_user):
+        """Returns False if Story has no priority."""
         project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=None, priority="High", story_points=5, owner_id=user.id,
-            start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
-        )
-        db_session.add(story)
-        db_session.flush()
-        
-        crit = AcceptanceCriterion(bug_id=story.id, description="C")
-        db_session.add(crit)
-        db_session.flush()
-        
-        assert _validate_story_ready_requirements(db_session, story)
-
-    def test_returns_false_when_no_priority(self, db_session, test_feature):
-        """Returns False if Story has no priority."""
-        project, user, feature = test_feature
-        
-        story = Bug(
-            item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="", story_points=5, owner_id=user.id,
+            priority="", story_points=5, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -115,13 +77,13 @@ class TestValidateStoryReadyRequirements:
         
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_returns_false_when_no_story_points(self, db_session, test_feature):
+    def test_returns_false_when_no_story_points(self, db_session, test_project_and_user):
         """Returns False if Story has no story points."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=None, owner_id=user.id,
+            priority="High", story_points=None, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -133,13 +95,13 @@ class TestValidateStoryReadyRequirements:
         
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_returns_false_when_no_owner_or_assignees(self, db_session, test_feature):
+    def test_returns_false_when_no_owner_or_assignees(self, db_session, test_project_and_user):
         """Returns False if Story has neither owner nor assignees."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=5, owner_id=None,
+            priority="High", story_points=5, owner_id=None,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -151,13 +113,13 @@ class TestValidateStoryReadyRequirements:
         
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_returns_false_when_no_start_date(self, db_session, test_feature):
+    def test_returns_false_when_no_start_date(self, db_session, test_project_and_user):
         """Returns False if Story has no start date."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=5, owner_id=user.id,
+            priority="High", story_points=5, owner_id=user.id,
             start_date=None, due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -169,13 +131,13 @@ class TestValidateStoryReadyRequirements:
         
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_returns_false_when_no_due_date(self, db_session, test_feature):
+    def test_returns_false_when_no_due_date(self, db_session, test_project_and_user):
         """Returns False if Story has no due date."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=5, owner_id=user.id,
+            priority="High", story_points=5, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=None
         )
         db_session.add(story)
@@ -187,13 +149,13 @@ class TestValidateStoryReadyRequirements:
         
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_returns_false_when_no_acceptance_criteria(self, db_session, test_feature):
+    def test_returns_false_when_no_acceptance_criteria(self, db_session, test_project_and_user):
         """Returns False if Story has no acceptance criteria."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=5, owner_id=user.id,
+            priority="High", story_points=5, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -202,13 +164,13 @@ class TestValidateStoryReadyRequirements:
         # No acceptance criterion added
         assert not _validate_story_ready_requirements(db_session, story)
 
-    def test_returns_true_when_all_requirements_met(self, db_session, test_feature):
+    def test_returns_true_when_all_requirements_met(self, db_session, test_project_and_user):
         """Returns True if Story has all mandatory fields."""
-        project, user, feature = test_feature
+        project, user = test_project_and_user
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            feature_id=feature.id, priority="High", story_points=5, owner_id=user.id,
+            priority="High", story_points=5, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)

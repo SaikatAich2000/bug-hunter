@@ -217,11 +217,6 @@ def normalize_web_base(base_url: str) -> str:
     return f"{scheme}://{netloc}"
 
 
-# Backwards-compatible private aliases for the two normalizers above.
-_api_base = normalize_api_base
-_web_base = normalize_web_base
-
-
 class GitHubEnterpriseProvider:
     """`GitProvider` implementation over the GitHub REST API."""
 
@@ -502,17 +497,6 @@ class GitHubEnterpriseProvider:
             )
             if repository is not None
         ]
-
-    def get_repository(self, owner: str, name: str) -> ProviderRepository:
-        payload = self._request(
-            "GET", f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
-        )
-        repository = self._to_provider_repository(payload)
-        if repository is None:
-            raise GitProviderError(
-                NOT_FOUND, f"Repository {owner}/{name} was not found"
-            )
-        return repository
 
     def get_branch_sha(self, owner: str, name: str, branch: str) -> str | None:
         payload = self._request(

@@ -4,7 +4,7 @@ the Sleuth LLM-driven tool-calling agent.
 from __future__ import annotations
 
 
-def _setup_project_with_board(admin_client, name="Slice68 Suite"):
+def _setup_project_with_board(admin_client, name="Release Suite"):
     res = admin_client.post("/api/projects", json={"name": name, "description": "", "color": "#c9764f"})
     assert res.status_code == 201, res.text
     project = res.json()

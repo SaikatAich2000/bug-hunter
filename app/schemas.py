@@ -240,13 +240,6 @@ LEGACY_ITEM_TYPES = ["Bug", "Requirement", "Task"]
 AGILE_ITEM_TYPES = ["Epic", "Story", "Sub-task"]
 ALLOWED_ITEM_TYPES = LEGACY_ITEM_TYPES + AGILE_ITEM_TYPES
 
-# Reclassification vocabulary accepted by PUT /api/bugs/{id}. The route is the
-# single authority on which of these are supported conversions: everything
-# outside the same-table Bug/Requirement/Task/Story set is refused there with
-# the stable item_conversion_not_supported code and a human-readable message,
-# rather than surfacing as a bare schema error. Feature/Collection are listed
-# so the refusal carries that code even though no route creates them here.
-CONVERSION_ITEM_TYPES = ALLOWED_ITEM_TYPES + ["Feature", "Collection"]
 ALLOWED_ROLES = ["admin", "manager", "user"]
 
 # Link kinds on the directed source→target edge; route renders the inverse label.
@@ -256,20 +249,17 @@ ALLOWED_LINK_TYPES = ["relates", "blocks", "duplicate"]
 ALLOWED_BULK_ACTIONS = [
     "set_status", "set_priority", "set_environment", "delete",
 ]
-MIN_PASSWORD_LENGTH = 8
 MIN_TITLE_LENGTH = 3
 MIN_NAME_LENGTH = 2
 MIN_PROJECT_NAME_LENGTH = 2
 _DATE_FORMAT_ERROR = "Dates must be YYYY-MM-DD"
 
 # --- Agile constants ---
-ALLOWED_BOARD_TYPES = ["scrum"]
 ALLOWED_ESTIMATION_MODES = ["story_points", "time", "item_count"]
 ALLOWED_SWIMLANE_MODES = ["none", "assignee", "epic", "story", "priority"]
 ALLOWED_WIP_ENFORCEMENT = ["off", "warn", "block"]
 ALLOWED_CARD_COLOR_SCHEMES = ["none", "priority", "item_type", "assignee", "epic"]
 ALLOWED_COLUMN_CATEGORIES = ["todo", "in_progress", "testing", "done"]
-ALLOWED_SPRINT_STATES = ["future", "active", "closed", "cancelled"]
 
 # Where an incomplete/remaining item goes on Complete/Cancel Sprint.
 ALLOWED_SPRINT_DISPOSITIONS = ["backlog", "sprint", "new_sprint"]
@@ -279,9 +269,9 @@ DEFAULT_WORKING_WEEKDAYS = [1, 2, 3, 4, 5]
 ALLOWED_CAPACITY_UNITS = ["points", "minutes"]
 ALLOWED_EPIC_HEALTH = ["on_track", "at_risk", "off_track", "unknown"]
 ALLOWED_VERSION_STATUSES = ["unreleased", "released", "archived"]
-ALLOWED_VERSION_RELATION_TYPES = ["fix", "affected"]
 ALLOWED_COMPONENT_ASSIGNEE_POLICIES = ["none", "lead"]
 MIN_LABEL_NAME_LENGTH = 1
+
 
 def normalize_choice(value: str, allowed: list[str], label: str) -> str:
     """Case-insensitive lookup against `allowed`; returns the canonical form."""
@@ -292,10 +282,6 @@ def normalize_choice(value: str, allowed: list[str], label: str) -> str:
         if canonical.lower() == needle:
             return canonical
     raise ValueError(f"Invalid {label}. Allowed: {', '.join(allowed)}")
-
-
-# Private alias kept for callers within this module.
-_normalize_choice = normalize_choice
 
 
 # Validates local part, domain labels, and an alphabetic TLD; quantifiers
@@ -594,23 +580,23 @@ class BugCreate(BaseModel):
     @field_validator("item_type")
     @classmethod
     def _check_item_type(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_ITEM_TYPES, "item_type")
+        return normalize_choice(v, ALLOWED_ITEM_TYPES, "item_type")
 
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: str) -> str:
         # Global union here; per-type check runs in _check_status_for_type below.
-        return _normalize_choice(v, ALLOWED_STATUSES, "status")
+        return normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
     @classmethod
     def _check_priority(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_PRIORITIES, "priority")
+        return normalize_choice(v, ALLOWED_PRIORITIES, "priority")
 
     @field_validator("environment")
     @classmethod
     def _check_env(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_ENVIRONMENTS, "environment")
+        return normalize_choice(v, ALLOWED_ENVIRONMENTS, "environment")
 
     @field_validator("due_date")
     @classmethod
@@ -682,22 +668,22 @@ class BugUpdate(BaseModel):
     @field_validator("item_type")
     @classmethod
     def _check_item_type(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, CONVERSION_ITEM_TYPES, "item_type")
+        return None if v is None else normalize_choice(v, ALLOWED_ITEM_TYPES, "item_type")
 
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_STATUSES, "status")
+        return None if v is None else normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
     @classmethod
     def _check_priority(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_PRIORITIES, "priority")
+        return None if v is None else normalize_choice(v, ALLOWED_PRIORITIES, "priority")
 
     @field_validator("environment")
     @classmethod
     def _check_env(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_ENVIRONMENTS, "environment")
+        return None if v is None else normalize_choice(v, ALLOWED_ENVIRONMENTS, "environment")
 
     @field_validator("due_date")
     @classmethod
@@ -885,7 +871,7 @@ class BugLinkIn(BaseModel):
     @field_validator("link_type")
     @classmethod
     def _check_type(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_LINK_TYPES, "link_type")
+        return normalize_choice(v, ALLOWED_LINK_TYPES, "link_type")
 
 
 class BugLinkOut(BaseModel):
@@ -995,9 +981,6 @@ class StatsOut(BaseModel):
     resolved: int
     closed: int
     resolve_later: int
-    # Kept for backward compatibility; the UI no longer renders these.
-    projects: int = 0
-    users: int = 0
     by_status: dict[str, int]
     by_priority: dict[str, int]
     by_environment: dict[str, int]
@@ -1241,22 +1224,22 @@ class BoardUpdateIn(BaseModel):
     @field_validator("estimation_mode")
     @classmethod
     def _check_estimation(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_ESTIMATION_MODES, "estimation_mode")
+        return None if v is None else normalize_choice(v, ALLOWED_ESTIMATION_MODES, "estimation_mode")
 
     @field_validator("swimlane_mode")
     @classmethod
     def _check_swimlane(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_SWIMLANE_MODES, "swimlane_mode")
+        return None if v is None else normalize_choice(v, ALLOWED_SWIMLANE_MODES, "swimlane_mode")
 
     @field_validator("wip_enforcement")
     @classmethod
     def _check_wip(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_WIP_ENFORCEMENT, "wip_enforcement")
+        return None if v is None else normalize_choice(v, ALLOWED_WIP_ENFORCEMENT, "wip_enforcement")
 
     @field_validator("card_color_scheme")
     @classmethod
     def _check_color(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_CARD_COLOR_SCHEMES, "card_color_scheme")
+        return None if v is None else normalize_choice(v, ALLOWED_CARD_COLOR_SCHEMES, "card_color_scheme")
 
     @field_validator("working_weekdays")
     @classmethod
@@ -1287,12 +1270,12 @@ class BoardColumnIn(BaseModel):
     @field_validator("category")
     @classmethod
     def _check_category(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_COLUMN_CATEGORIES, "category")
+        return normalize_choice(v, ALLOWED_COLUMN_CATEGORIES, "category")
 
     @field_validator("wip_enforcement")
     @classmethod
     def _check_wip(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_WIP_ENFORCEMENT, "wip_enforcement")
+        return normalize_choice(v, ALLOWED_WIP_ENFORCEMENT, "wip_enforcement")
 
 
 class BoardColumnsReplaceIn(BaseModel):
@@ -1543,7 +1526,7 @@ class SprintDispositionEntry(BaseModel):
     @field_validator("destination")
     @classmethod
     def _check_dest(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "destination")
+        return normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "destination")
 
     @model_validator(mode="after")
     def _check_target(self) -> "SprintDispositionEntry":
@@ -1632,7 +1615,7 @@ class SprintCompleteIn(BaseModel):
     @field_validator("default_destination")
     @classmethod
     def _check_dest(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "default_destination")
+        return normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "default_destination")
 
 
 class SprintCancelIn(BaseModel):
@@ -1650,7 +1633,7 @@ class SprintCancelIn(BaseModel):
     @field_validator("default_destination")
     @classmethod
     def _check_dest(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "default_destination")
+        return normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "default_destination")
 
 
 class SprintHistoryOut(BaseModel):
@@ -1741,7 +1724,7 @@ class AgileWorkItemCreateIn(BaseModel):
     @field_validator("item_type")
     @classmethod
     def _check_type(cls, v: str) -> str:
-        canonical = _normalize_choice(v, AGILE_ITEM_TYPES, "item_type")
+        canonical = normalize_choice(v, AGILE_ITEM_TYPES, "item_type")
         return canonical
 
     @model_validator(mode="after")
@@ -1755,12 +1738,12 @@ class AgileWorkItemCreateIn(BaseModel):
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_STATUSES, "status")
+        return normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
     @classmethod
     def _check_priority(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_PRIORITIES, "priority")
+        return normalize_choice(v, ALLOWED_PRIORITIES, "priority")
 
     @field_validator("start_date", "end_date")
     @classmethod
@@ -1915,8 +1898,6 @@ class AgileIssueOut(BaseModel):
     column_id: Optional[int] = None
 
 
-# Kept for API compatibility: a board card is an agile issue.
-BoardCardOut = AgileIssueOut
 
 
 class BoardViewColumnOut(BaseModel):
@@ -2011,7 +1992,7 @@ class SprintCapacityIn(BaseModel):
     @field_validator("capacity_unit")
     @classmethod
     def _check_unit(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_CAPACITY_UNITS, "capacity_unit")
+        return normalize_choice(v, ALLOWED_CAPACITY_UNITS, "capacity_unit")
 
     @field_validator("days_off")
     @classmethod
@@ -2089,7 +2070,7 @@ class EpicUpdateIn(BaseModel):
     @field_validator("health")
     @classmethod
     def _check_health(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_EPIC_HEALTH, "health")
+        return None if v is None else normalize_choice(v, ALLOWED_EPIC_HEALTH, "health")
 
     @field_validator("summary_note")
     @classmethod
@@ -2173,7 +2154,7 @@ class VersionUpdateIn(BaseModel):
     @field_validator("status")
     @classmethod
     def _check_status(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_VERSION_STATUSES, "status")
+        return None if v is None else normalize_choice(v, ALLOWED_VERSION_STATUSES, "status")
 
 
 class VersionOut(BaseModel):
@@ -2208,7 +2189,7 @@ class ComponentCreateIn(BaseModel):
     @field_validator("default_assignee_policy")
     @classmethod
     def _check_policy(cls, v: str) -> str:
-        return _normalize_choice(v, ALLOWED_COMPONENT_ASSIGNEE_POLICIES, "default_assignee_policy")
+        return normalize_choice(v, ALLOWED_COMPONENT_ASSIGNEE_POLICIES, "default_assignee_policy")
 
 
 class ComponentUpdateIn(BaseModel):
@@ -2222,7 +2203,7 @@ class ComponentUpdateIn(BaseModel):
     @field_validator("default_assignee_policy")
     @classmethod
     def _check_policy(cls, v: Optional[str]) -> Optional[str]:
-        return None if v is None else _normalize_choice(v, ALLOWED_COMPONENT_ASSIGNEE_POLICIES, "default_assignee_policy")
+        return None if v is None else normalize_choice(v, ALLOWED_COMPONENT_ASSIGNEE_POLICIES, "default_assignee_policy")
 
 
 class ComponentOut(BaseModel):
@@ -2418,8 +2399,6 @@ class EpicReportOut(BaseModel):
     todo: list[ReportIssueOut] = Field(default_factory=list)
 
 
-# The old name, kept for importers.
-EpicProgressReportOut = EpicReportOut
 
 
 class ScopeChangeEntryOut(BaseModel):

@@ -59,9 +59,6 @@ _FK_EVENTS_ID = "events.id"
 _CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
 _ONDELETE_SET_NULL = "SET NULL"
 
-# Composite FK target for the Collection hierarchy parent (Epic/Story rows).
-_COLLECTIONS_TABLE = "collections.id"
-
 # --- Junctions ---
 bug_assignees = Table(
     "bug_assignees",
@@ -104,7 +101,6 @@ Index("idx_user_projects_project_id", user_projects.c.project_id)
 ROLE_ADMIN = "admin"
 ROLE_MANAGER = "manager"
 ROLE_USER = "user"
-VALID_ROLES = (ROLE_ADMIN, ROLE_MANAGER, ROLE_USER)
 
 
 class User(Base):
@@ -304,20 +300,6 @@ class Bug(Base):
     resolution: Mapped[str | None] = mapped_column(String(50), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # --- Simplified-hierarchy fields (Collection > Epic > Feature > Story > Sub-task).
-    # All additive/nullable; existing Epic/Story/Sub-task rows are unaffected until set.
-    # Feature link for Story rows only (Level 2.5, sits between Epic and Story).
-    # use_alter breaks the bugs<->features circular FK dependency at CREATE TABLE time
-    # (features.epic_id references bugs.id) — emitted as a post-create ALTER instead.
-    feature_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("features.id", ondelete=_ONDELETE_SET_NULL, use_alter=True, name="fk_bugs_feature_id"),
-        nullable=True,
-    )
-    # Collection link for Epic rows only (Collection is the new top hierarchy parent).
-    collection_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_COLLECTIONS_TABLE, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
     # Distinct from reporter_id (creator) and the assignees M2M (contributors) —
     # the single accountable owner the hierarchy contract requires.
     owner_id: Mapped[int | None] = mapped_column(
@@ -379,9 +361,7 @@ class Bug(Base):
         Index("idx_bugs_epic_id", "epic_id"),
         Index("idx_bugs_sprint_id", "sprint_id"),
         Index("idx_bugs_rank_scope_rank", "rank_scope", "rank"),
-        # Simplified-hierarchy lookups (Feature/Collection/owner).
-        Index("idx_bugs_feature_id", "feature_id"),
-        Index("idx_bugs_collection_id", "collection_id"),
+        # Owner lookups.
         Index("idx_bugs_owner_id", "owner_id"),
     )
 
@@ -1053,66 +1033,6 @@ class EpicDetail(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
 
-# New hierarchy level (Collection > Epic > Feature > Story > Sub-task): sits between
-# Epic and Story. Modeled as its own table (not a Bug row) since Features carry no
-# story-points/sprint/rank semantics of their own — progress derives from child Stories.
-class Feature(Base):
-    __tablename__ = "features"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    display_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    project_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_FK_PROJECTS_ID, ondelete="CASCADE"), nullable=False
-    )
-    epic_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), nullable=False
-    )
-    sprint_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_SPRINTS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    key: Mapped[str] = mapped_column(String(32), nullable=False)
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="Planned")
-    start_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    end_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    owner_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    created_by_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    updated_by_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
-    )
-    assignees: Mapped[list["User"]] = relationship(
-        "User", secondary="feature_assignees", lazy="selectin"
-    )
-
-    __table_args__ = (
-        Index("idx_features_project_id", "project_id"),
-        Index("idx_features_epic_id", "epic_id"),
-        Index("idx_features_unique_key", "project_id", "key", unique=True),
-    )
-
-
-class FeatureAssignee(Base):
-    __tablename__ = "feature_assignees"
-    feature_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("features.id", ondelete="CASCADE"), primary_key=True
-    )
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True
-    )
-
-    __table_args__ = (Index("idx_feature_assignees_user_id", "user_id"),)
-
-
 # Structured acceptance criteria for a Story (Bug row, item_type="Story"); the
 # legacy Bug.acceptance_criteria free-text column remains for backward compatibility.
 class AcceptanceCriterion(Base):
@@ -1252,74 +1172,6 @@ class WorkItemLabel(Base):
     __table_args__ = (Index("idx_work_item_labels_label", "label_id"),)
 
 
-class Collection(Base):
-    __tablename__ = "collections"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    display_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    project_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_FK_PROJECTS_ID, ondelete="CASCADE"), nullable=False
-    )
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    name_normalized: Mapped[str] = mapped_column(String(120), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    color: Mapped[str] = mapped_column(String(20), nullable=False, default="")
-    owner_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    visibility: Mapped[str] = mapped_column(String(10), nullable=False, default="team")  # team | private
-    # Simplified-hierarchy fields: Collection is now the top parent of Epic
-    # (previously a flat tag via CollectionItem, which remains intact/unused-by-hierarchy).
-    # sprint_id roots the whole Collection>Epic>Feature>Story>Task tree under a Sprint.
-    sprint_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_SPRINTS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="Planned")
-    start_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    end_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
-    )
-    assignees: Mapped[list["User"]] = relationship(
-        "User", secondary="collection_assignees", lazy="selectin"
-    )
-
-    __table_args__ = (
-        Index("idx_collections_unique_name", "project_id", "name_normalized", unique=True),
-        Index("idx_collections_project_id", "project_id"),
-    )
-
-
-class CollectionAssignee(Base):
-    """Multiple-assignee M2M for Collection (Collection.owner_id already covers the single owner)."""
-    __tablename__ = "collection_assignees"
-    collection_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_COLLECTIONS_TABLE, ondelete="CASCADE"), primary_key=True
-    )
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True
-    )
-
-    __table_args__ = (Index("idx_collection_assignees_user_id", "user_id"),)
-
-
-class CollectionItem(Base):
-    __tablename__ = "collection_items"
-    collection_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_COLLECTIONS_TABLE, ondelete="CASCADE"), primary_key=True
-    )
-    work_item_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey(_FK_BUGS_ID, ondelete="CASCADE"), primary_key=True
-    )
-    rank: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    added_by_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
-    )
-    added_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
-
-    __table_args__ = (Index("idx_collection_items_work_item", "work_item_id"),)
 # =====================================================================
 # GitHub Enterprise integration: per-project configuration, the repository
 # allow-list and the per-work-item branch records.

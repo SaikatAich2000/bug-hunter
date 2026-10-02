@@ -13,7 +13,7 @@ import { formatDateRange, localIsoDate, localToday } from "./agileShared";
 import { CycleChart, FlowChart, SprintChart, VelocityChart } from "./charts/Charts";
 import { formatNumber, statisticLabel } from "./logic/estimates";
 
-export const REPORTS = [
+const REPORTS = [
   { key: "burndown", label: "Burndown chart", scope: "sprint", help: "Work left in the sprint against the ideal guideline." },
   { key: "burnup", label: "Burnup chart", scope: "sprint", help: "Work completed against the sprint's total scope." },
   { key: "sprint", label: "Sprint report", scope: "sprint", help: "What was committed, completed, carried over and removed." },

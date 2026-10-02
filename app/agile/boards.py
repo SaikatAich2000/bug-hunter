@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agile.ranking import initial_ranks
+from app.agile.ranking import spaced_ranks
 from app.models import (
     Board,
     BoardColumn,
@@ -134,7 +134,7 @@ def _backfill_ranks(db: Session, project_id: int) -> None:
     for scope, items in by_scope.items():
         if db.scalar(select(Bug.id).where(Bug.rank_scope == scope, Bug.rank.is_not(None)).limit(1)):
             continue
-        for item, token in zip(items, initial_ranks(len(items))):
+        for item, token in zip(items, spaced_ranks(len(items))):
             item.rank_scope = scope
             item.rank = token
     db.flush()
@@ -252,13 +252,6 @@ def done_status_values(db: Session, board: Board) -> set[str]:
             WorkflowStatus.is_active.is_(True),
         )
     ).all())
-
-
-def mapped_status_values(board: Board) -> set[str]:
-    values: set[str] = set()
-    for column in board.columns:
-        values |= column_status_values(column)
-    return values
 
 
 def disable_agile_for_project(db: Session, project: Project) -> None:

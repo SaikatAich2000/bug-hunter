@@ -93,13 +93,6 @@ class FakeProvider:
         self._record("list_repositories")
         return list(self.repositories)[:limit]
 
-    def get_repository(self, owner: str, name: str) -> ProviderRepository:
-        self._record("get_repository")
-        for repository in self.repositories:
-            if repository.name == name:
-                return repository
-        raise _provider_error(NOT_FOUND, f"Repository {name} was not found")
-
     def get_branch_sha(self, owner: str, name: str, branch: str) -> str | None:
         self._record("get_branch_sha")
         if (owner, name, branch) in self.remote_branches:

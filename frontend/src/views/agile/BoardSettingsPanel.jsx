@@ -26,7 +26,7 @@ const ENFORCEMENT = [
 ];
 
 /** Problems that would make the server refuse the column set, or leave issues stuck. */
-export function columnProblems(columns) {
+function columnProblems(columns) {
   const problems = [];
   if (!columns.length) problems.push("A board needs at least one column.");
   const names = new Set();
@@ -280,7 +280,7 @@ function ColumnsSettings({ board, onSaved }) {
 const EMPTY_FILTER = { name: "", item_types: [], priorities: [], assignee_ids: [], epic_ids: [], label_ids: [], flagged: false, text: "" };
 
 /** Human summary of a quick filter's criteria. */
-export function describeQuickFilter(spec, { users = [], epics = [], labels = [] } = {}) {
+function describeQuickFilter(spec, { users = [], epics = [], labels = [] } = {}) {
   const parts = [];
   const names = (ids, list, key = "name") => ids.map((id) => list.find((x) => x.id === id)?.[key] ?? `#${id}`).join(", ");
   if (spec.item_types?.length) parts.push(`type: ${spec.item_types.join(", ")}`);

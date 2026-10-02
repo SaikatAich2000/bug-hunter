@@ -17,7 +17,7 @@ const DURATIONS = [
 ];
 
 /** Inclusive end date ``weeks`` weeks after ``start`` (a 2-week sprint from Mon ends Sun+7). */
-export function endForDuration(start, weeks) {
+function endForDuration(start, weeks) {
   if (!start || weeks === "custom") return "";
   const d = new Date(`${start}T00:00:00`);
   if (Number.isNaN(d.getTime())) return "";
@@ -203,7 +203,7 @@ export function StartSprintDialog({ open, sprint, issues, mode, onClose }) {
 
 /** Jira's completion rule, as far as the client can see it: the issue and all
  * its Sub-tasks are done. The server applies the exact rule. */
-export function isCompleteIssue(issue) {
+function isCompleteIssue(issue) {
   return issue.status_category === "done" && (issue.subtasks_done ?? 0) >= (issue.subtask_count ?? 0);
 }
 

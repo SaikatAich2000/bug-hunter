@@ -61,7 +61,6 @@ def default_out() -> Path:
 
 ALLOW = [
     "app",
-    "audit",
     "app/static",
     "scripts",
     "tests",
@@ -74,10 +73,7 @@ ALLOW_FILES = [
     ".dockerignore",
     ".env.example",
     ".gitignore",
-    "CHANGELOG.md",
     "CONTRIBUTING.md",
-    "DEPLOYMENT.md",
-    "HUMAN_ACTIONS.md",
     "deploy.sh",
     "docker-compose.yml",
     "Dockerfile",

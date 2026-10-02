@@ -55,8 +55,6 @@ export function bandPath(xs, upper, lower, x, y) {
   return `${top} ${bottom} Z`;
 }
 
-const DAY = 86_400_000;
-
 /** Midnight-aligned day ticks between two instants (local time), thinned to ``max``. */
 export function dayTicks(startMs, endMs, max = 10) {
   if (!(endMs > startMs)) return [startMs];
@@ -117,5 +115,3 @@ export function toMs(value) {
 export function dateMs(isoDate) {
   return new Date(`${isoDate}T00:00:00`).getTime();
 }
-
-export { DAY };

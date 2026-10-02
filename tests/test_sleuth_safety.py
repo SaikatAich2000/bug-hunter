@@ -360,13 +360,6 @@ def test_memory_edge_cases() -> None:
     check("memory: take is single-use (second take is None)",
           pending2 is None)
 
-    # stage then clear
-    memstore.stage_pending(99003, {"kind": "close", "x": 2})
-    memstore.clear_pending(99003)
-    pending3 = memstore.take_pending(99003)
-    check("memory: clear_pending wipes the plan",
-          pending3 is None)
-
 
 def test_new_action_overrides_pending() -> None:
     section("Staging a 2nd action replaces the 1st pending")

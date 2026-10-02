@@ -77,19 +77,10 @@ def test_touch_creates_and_get_reads_without_creating():
     assert s.get(1) is sess
 
 
-def test_remember_bug_user_and_filter():
+def test_remember_bug():
     s = _fresh_store()
     s.remember_bug(5, 99)
-    s.remember_user(5, 7, "Carol")
-    src = {"status": ["New"]}
-    s.remember_filter(5, src)
-    src["priority"] = ["High"]       # mutate after storing
-    sess = s.get(5)
-    # remember_filter copies, so the later mutation must not bleed into the stored filter.
-    assert sess.last_bug_id == 99
-    assert sess.last_user_id == 7
-    assert sess.last_user_name == "Carol"
-    assert sess.last_filter == {"status": ["New"]}
+    assert s.get(5).last_bug_id == 99
 
 
 def test_pending_action_stage_take_is_single_use():
@@ -100,12 +91,8 @@ def test_pending_action_stage_take_is_single_use():
     assert s.take_pending(999) is None        # unknown user
 
 
-def test_clear_and_reset():
+def test_reset():
     s = _fresh_store()
-    s.stage_pending(8, {"op": "x"})
-    s.clear_pending(8)
-    assert s.get(8).pending_action is None
-    s.clear_pending(404)                      # no session — must not raise
     s.remember_bug(8, 1)
     s.reset(8)
     assert s.get(8) is None

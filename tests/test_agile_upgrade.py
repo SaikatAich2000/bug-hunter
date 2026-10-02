@@ -1,9 +1,39 @@
 """Boot-time alignment of pre-existing agile data with the Jira hierarchy
 (app/agile/upgrade.py). Rows are written with Core inserts, bypassing the
-flush-time rules, exactly as data from before the upgrade looks."""
+flush-time rules, exactly as data from before the upgrade looks. The retired
+Collection and Feature tables are no longer part of the schema, so the tests
+create them (and the two bugs columns that pointed at them) the way an old
+database has them."""
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import Column, Integer, MetaData, String, Table, inspect, select, text
+
+_retired = MetaData()
+COLLECTIONS = Table("collections", _retired,
+                    Column("id", Integer, primary_key=True), Column("project_id", Integer, nullable=False),
+                    Column("name", String(120), nullable=False))
+FEATURES = Table("features", _retired,
+                 Column("id", Integer, primary_key=True), Column("project_id", Integer, nullable=False),
+                 Column("epic_id", Integer, nullable=False), Column("title", String(200), nullable=False))
+COLLECTION_ITEMS = Table("collection_items", _retired,
+                         Column("collection_id", Integer, primary_key=True),
+                         Column("work_item_id", Integer, primary_key=True))
+
+
+def create_retired_schema(conn):
+    _retired.create_all(conn)
+    columns = {c["name"] for c in inspect(conn).get_columns("bugs")}
+    for column in ("collection_id", "feature_id"):
+        if column not in columns:
+            conn.execute(text(f"ALTER TABLE bugs ADD COLUMN {column} INTEGER"))
+
+
+def _link(conn, column, item_id, group_id):
+    conn.execute(text(f"UPDATE bugs SET {column} = :g WHERE id = :i"), {"g": group_id, "i": item_id})
+
+
+def _retired_link(conn, column, item_id):
+    return conn.execute(text(f"SELECT {column} FROM bugs WHERE id = :i"), {"i": item_id}).scalar()
 
 
 def _insert(conn, table, **values):
@@ -22,8 +52,9 @@ def _bug(conn, project_id, title, item_type, **extra):
 
 
 def _legacy_world(conn):
-    from app.models import Board, Collection, CollectionItem, EpicDetail, Feature, Project, Sprint
+    from app.models import Board, EpicDetail, Project, Sprint
 
+    create_retired_schema(conn)
     project = _insert(conn, Project.__table__, name="Legacy", description="", color="#c9764f",
                       agile_enabled=True, agile_feature_flags={})
     board = _insert(conn, Board.__table__, project_id=project, name="B", name_normalized="b",
@@ -37,18 +68,16 @@ def _legacy_world(conn):
     conn.execute(EpicDetail.__table__.insert().values(
         epic_id=epic, color="", sprint_id=sprint, health="unknown", summary_note="", archived=False, version=1,
     ))
-    collection = _insert(conn, Collection.__table__, project_id=project, name="Q4 Goals",
-                         name_normalized="q4 goals", description="", color="", visibility="team",
-                         status="Planned", archived=False, version=1)
+    collection = _insert(conn, COLLECTIONS, project_id=project, name="Q4 Goals")
     from app.models import Bug
 
-    conn.execute(Bug.__table__.update().where(Bug.__table__.c.id == epic).values(collection_id=collection))
-    feature = _insert(conn, Feature.__table__, project_id=project, epic_id=epic, key="F-1",
-                      title="Checkout", description="", status="Planned", archived=False, version=1)
-    story = _bug(conn, project, "Story under feature", "Story", feature_id=feature, sprint_id=sprint,
+    _link(conn, "collection_id", epic, collection)
+    feature = _insert(conn, FEATURES, project_id=project, epic_id=epic, title="Checkout")
+    story = _bug(conn, project, "Story under feature", "Story", sprint_id=sprint,
                  rank_scope=f"backlog:{project}", rank="i")
+    _link(conn, "feature_id", story, feature)
     stray = _bug(conn, project, "Collected bug", "Bug")
-    conn.execute(CollectionItem.__table__.insert().values(collection_id=collection, work_item_id=stray))
+    conn.execute(COLLECTION_ITEMS.insert().values(collection_id=collection, work_item_id=stray))
     sub = _bug(conn, project, "Sub under story", "Sub-task", parent_id=story, display_id=None)
     orphan = _bug(conn, project, "Orphan sub-task", "Sub-task")
     under_epic = _bug(conn, project, "Sub-task under an epic", "Sub-task", parent_id=epic)
@@ -62,7 +91,7 @@ def _legacy_world(conn):
 def assert_aligned(conn, w):
     """The state every legacy row must be in after the upgrade. Shared with
     the PostgreSQL run in test_postgres_migration.py."""
-    from app.models import Bug, CollectionItem, EpicDetail, Label, WorkItemLabel
+    from app.models import Bug, EpicDetail, Label, WorkItemLabel
 
     bugs = Bug.__table__
     rows = {r.id: r for r in conn.execute(select(bugs)).all()}
@@ -71,7 +100,7 @@ def assert_aligned(conn, w):
     assert conn.execute(select(EpicDetail.__table__.c.sprint_id)).scalar() is None
     # A Story under a Feature takes the Feature's Epic.
     assert rows[w["story"]].epic_id == w["epic"]
-    assert rows[w["story"]].feature_id is None
+    assert _retired_link(conn, "feature_id", w["story"]) is None
     # Sub-tasks follow their parent and get their own id prefix.
     assert (rows[w["sub"]].sprint_id, rows[w["sub"]].epic_id) == (w["sprint"], w["epic"])
     assert rows[w["sub"]].display_id == f"SUB-{w['sub']}"
@@ -91,8 +120,8 @@ def assert_aligned(conn, w):
     assert (w["stray"], labels["Q4 Goals"].id) in links
     assert (w["story"], labels["Checkout"].id) in links
     assert labels["Q4 Goals"].usage_count == 2 and labels["Checkout"].usage_count == 1
-    assert conn.execute(select(CollectionItem.__table__)).all() == []
-    assert rows[w["epic"]].collection_id is None
+    assert conn.execute(select(COLLECTION_ITEMS)).all() == []
+    assert _retired_link(conn, "collection_id", w["epic"]) is None
 
 
 def test_upgrade_aligns_legacy_agile_data(db_session):
@@ -158,17 +187,17 @@ def test_upgrade_never_links_across_projects(db_session):
     give its Story that Epic."""
     from app.agile.upgrade import align_agile_hierarchy
     from app.database import engine
-    from app.models import Bug, CollectionItem, Feature, Label, Project, WorkItemLabel
+    from app.models import Bug, Label, Project, WorkItemLabel
 
     with engine.begin() as conn:
         w = _legacy_world(conn)
         other = _insert(conn, Project.__table__, name="Other", description="", color="#c9764f",
                         agile_enabled=True, agile_feature_flags={})
         foreign = _bug(conn, other, "Other project's bug", "Bug")
-        conn.execute(CollectionItem.__table__.insert().values(collection_id=w["collection"], work_item_id=foreign))
-        feature = _insert(conn, Feature.__table__, project_id=other, epic_id=w["epic"], key="F-2",
-                          title="Cross", description="", status="Planned", archived=False, version=1)
-        story = _bug(conn, other, "Story under a cross-project feature", "Story", feature_id=feature)
+        conn.execute(COLLECTION_ITEMS.insert().values(collection_id=w["collection"], work_item_id=foreign))
+        feature = _insert(conn, FEATURES, project_id=other, epic_id=w["epic"], title="Cross")
+        story = _bug(conn, other, "Story under a cross-project feature", "Story")
+        _link(conn, "feature_id", story, feature)
     with engine.begin() as conn:
         align_agile_hierarchy(conn)
     with engine.connect() as conn:
@@ -243,3 +272,21 @@ def test_appending_after_a_damaged_list_respaces_it_instead_of_failing(db_sessio
         first_rank = db.get(Bug, first_id).rank
         assert first_rank < second.rank
         assert len(first_rank) <= 32 and len(second.rank) <= 32
+
+
+def test_upgrade_runs_on_a_database_without_the_retired_tables(db_session):
+    """A fresh install has no collections/features tables and no bugs columns
+    pointing at them; the upgrade must simply skip that step."""
+    from app.agile.upgrade import align_agile_hierarchy
+    from app.database import engine
+    from app.models import Project
+
+    with engine.begin() as conn:
+        assert "collections" not in inspect(conn).get_table_names()
+        project = _insert(conn, Project.__table__, name="Fresh", description="", color="#c9764f",
+                          agile_enabled=True, agile_feature_flags={})
+        _bug(conn, project, "Plain story", "Story")
+    with engine.begin() as conn:
+        align_agile_hierarchy(conn)
+    with engine.connect() as conn:
+        assert "collections" not in inspect(conn).get_table_names()

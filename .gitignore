@@ -1,78 +1,48 @@
-# ============================================
-# PYTHON
-# ============================================
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.egg
 *.egg-info/
-.eggs/
 dist/
 build/
-*.so
-.Python
-
-# ============================================
-# VIRTUAL ENVIRONMENTS
-# ============================================
 .venv/
 venv/
-env/
-ENV/
-.env.venv
 
-# ============================================
-# TESTING & COVERAGE (auto-generated, regenerate on each run)
-# ============================================
+# Tests, coverage, linters
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
+.hypothesis/
+.schemathesis/
 .coverage
 .coverage.*
 htmlcov/
-frontend/coverage/
-.tox/
 coverage.xml
 junit.xml
-# Per-file CI test fan-out artifacts (one pytest process per test file)
 junit-parts/
-ci-forensics/
-*.trx
-RELEASE/
-*.tar.gz
-*.zip
+frontend/coverage/
+playwright-report/
+test-results/
+*.har
 
-# ============================================
-# CODE QUALITY & LINTING (auto-generated)
-# ============================================
+# Sonar
 .scannerwork/
 .sonar/
-sonar-issues.json
-sonar-issues.csv
-sonar-hotspots.json
-sonar-hotspots.csv
-*.log
+sonar-issues.*
+sonar-hotspots.*
 
-# ============================================
-# DATABASES (local dev only)
-# ============================================
+# Databases (local dev only) and their snapshots
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
-bug_hunter.db
-# Local database snapshots created by backup/upgrade/export flows
-# (for example bug_hunter.db.pre-existing-backup)
+*.sqlite-shm
+*.sqlite-wal
 *.db.pre-*
 *.db.backup
 *.db.bak
 *.db.*.bak
-# Local SQLite snapshots and temporary backups
-bug_hunter.db.?
-*bug_hunter*.bak
 
-# ============================================
-# SECRETS & CREDENTIALS (NEVER commit)
-# ============================================
+# Secrets and credentials (never commit)
 .env
 .env.*
 !.env.example
@@ -89,127 +59,43 @@ secrets/
 google-credentials*.json
 private-key.txt
 
-# ============================================
-# LARGE MODEL FILES (regenerated per deployment)
-# ============================================
-models/*.gguf
-models/*.bin
-models/*.safetensors
+# Local model and index files (regenerated per deployment)
+models/
 .sleuth_rag/
 
-# ============================================
-# NODE.JS / FRONTEND (auto-generated)
-# ============================================
-frontend/node_modules/
-frontend/.npm/
+# Frontend tooling
+node_modules/
 frontend/.eslintcache
+frontend/.vite/
 frontend/dist/
-frontend/build/
-frontend/.parcel-cache/
-frontend/.cache/
-*.tsbuildinfo
 
-# ============================================
-# IDE / EDITOR (local preference, never commit)
-# ============================================
+# Release bundles
+RELEASE/
+*.tar.gz
+*.zip
+
+# Logs and scratch output
+*.log
+*.exit
+
+# IDE, OS and agent scratch
 .vscode/
 .idea/
 *.swp
-*.swo
-*.iml
 .DS_Store
 Thumbs.db
-.project
-.classpath
-*.sublime-project
-*.sublime-workspace
-
-# ============================================
-# AI AGENT / COPILOT SCRATCH (temporary)
-# ============================================
 .claude/
-.aider*
 .cursor/
-.continue/
 .playwright-mcp/
-.ai/
 
-# ============================================
-# DOCKER & DEPLOYMENT (local build artifacts)
-# ============================================
-.docker/
+# Docker (local overrides)
 docker-compose.override.yml
 .env.docker
 
-# ============================================
-# MISC BUILD ARTIFACTS
-# ============================================
-*.rar
-*.7z
-
-# --- Node (in case anyone runs frontend tooling) ---
-node_modules/
-npm-debug.log*
-
-# --- Playwright session artefacts (recordings, traces, MCP scratchpad) ---
-# NOTE: .playwright-mcp/ is already ignored in the "AI AGENT / COPILOT SCRATCH"
-# section above - not repeated here.
-playwright-report/
-test-results/
-*.har
-
-# --- Generated API artifacts ---
-# Produced by scripts/gen-api-docs.py from the live FastAPI app. The
-# canonical source of truth is the app itself — browse GET /openapi.json
-# or Swagger UI at /docs on a running instance. Regenerate locally with:
-#     python scripts/gen-api-docs.py
-docs/api/
-
-# --- Deployment guide (rendered PDF) ---
-# The pretty PDF can carry environment-specific details (server names, hosts),
-# so it is NOT committed. The canonical, public deployment doc is the plain
-# DEPLOYMENT.md in the repo root; the PDF is generated/kept locally only.
-docs/DEPLOYMENT.pdf
-
-# --- Build artifacts and logs ---
-# NOTE: *.log, *.tar.gz, *.zip and dist/ are already ignored above
-# (PYTHON/TESTING sections) - not repeated here.
-*.exit
-build-output.txt
-build.log
-.vite/
-
-# --- Database artifacts (SQLite journal files) ---
-*.db-shm
-*.db-wal
-*.sqlite-shm
-*.sqlite-wal
-
-# --- Development/temporary files ---
-# TypeScript/JavaScript conversion scripts (one-time use only)
-*convert*.cjs
-*convert*.ps1
-*convert*.js
-cleanup*.cjs
-cleanup*.ps1
-cleanup*.js
-test_regex.cjs
-clean-ts*.ps1
-
-# --- Screenshots and media files ---
-# Development/testing screenshots that shouldn't be in version control
+# Screenshots and media (the shipped icons are re-included)
 *.png
 *.jpg
 *.jpeg
 *.gif
 !app/static/*.png
 !frontend/public/*.png
-
-# --- Development server artifacts ---
-uvicorn-*.log
-uvicorn-*.stderr.log
-uvicorn-*.stdout.log
-
-# API fuzzing / property-testing caches (Schemathesis, Hypothesis)
-.schemathesis/
-.hypothesis/

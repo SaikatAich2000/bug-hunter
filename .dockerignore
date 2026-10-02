@@ -68,20 +68,13 @@ tests
 # Sleuth's optional local LLM model file is mounted as a volume at
 # runtime, not baked into the image. (Model files are typically
 # 300+ MB — keeping them out of the image saves a lot of bandwidth.)
-models/*.gguf
-models/*.bin
-models/*.safetensors
+models/
 
 # Docs / VCS
 .git
 .gitignore
 README.md
 *.md
-
-# Agent / editor scratch (never needed at runtime)
-.claude
-.vscode
-.idea
 
 # OS noise
 .DS_Store

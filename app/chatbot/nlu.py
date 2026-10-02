@@ -26,7 +26,6 @@ STATUSES_CANONICAL = [
 ]
 PRIORITIES_CANONICAL = ["Low", "Medium", "High", "Critical"]
 ENVIRONMENTS_CANONICAL = ["DEV", "UAT", "PROD"]
-ROLES_CANONICAL = ["admin", "manager", "user"]
 
 # "Open" = active work, matching the dashboard KPI: New / In Progress / Reopened.
 OPEN_STATUSES = [_S_NEW, _S_IN_PROGRESS, _S_REOPENED]

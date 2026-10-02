@@ -161,10 +161,6 @@ class GitProvider(Protocol):
         """Repositories the installation may select from (the allow-list source)."""
         ...
 
-    def get_repository(self, owner: str, name: str) -> ProviderRepository:
-        """Metadata for one repository; NOT_FOUND when it does not exist."""
-        ...
-
     def get_branch_sha(self, owner: str, name: str, branch: str) -> str | None:
         """Tip SHA of ``branch``, or None when the branch does not exist."""
         ...

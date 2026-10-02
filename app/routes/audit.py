@@ -12,7 +12,7 @@ from sqlalchemy.types import String
 from app.access import accessible_project_ids
 from app.auth import require_manager_or_admin
 from app.database import get_db
-from app.models import Activity, Board, Bug, Collection, Event, Feature, Project, Sprint, User
+from app.models import Activity, Board, Bug, Event, Project, Sprint, User
 from app.schemas import ActivityOut
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -41,8 +41,6 @@ def _scope_to_projects(stmt, accessible):
     sevent = aliased(Event)
     sboard = aliased(Board)
     ssprint = aliased(Sprint)
-    scollection = aliased(Collection)
-    sfeature = aliased(Feature)
     return stmt.where(or_(
         Activity.bug_id.in_(select(sbug.id).where(sbug.project_id.in_(accessible))),
         and_(
@@ -56,14 +54,6 @@ def _scope_to_projects(stmt, accessible):
         and_(
             Activity.entity_type == "sprint",
             Activity.entity_id.in_(select(ssprint.id).where(ssprint.project_id.in_(accessible))),
-        ),
-        and_(
-            Activity.entity_type == "collection",
-            Activity.entity_id.in_(select(scollection.id).where(scollection.project_id.in_(accessible))),
-        ),
-        and_(
-            Activity.entity_type == "feature",
-            Activity.entity_id.in_(select(sfeature.id).where(sfeature.project_id.in_(accessible))),
         ),
         and_(
             Activity.entity_type == "event",

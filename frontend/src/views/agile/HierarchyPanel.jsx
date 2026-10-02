@@ -19,7 +19,7 @@ import { formatNumber, statisticUnit } from "./logic/estimates";
 const EPIC_COLORS = ["#7e57c2", "#2e7d32", "#1565c0", "#ad1457", "#ef6c00", "#00838f", "#6d4c41", "#5c6bc0"];
 
 /** Done / in progress / to do bar from an epic's progress counts. */
-export function progressParts(progress) {
+function progressParts(progress) {
   const total = progress?.child_count || 0;
   if (!total) return { done: 0, inProgress: 0, todo: 0, total: 0 };
   const done = progress.completed_child_count || 0;

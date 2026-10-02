@@ -116,8 +116,8 @@ app/
 ├── auth.py · access.py · email_service.py · notification_service.py · push_service.py
 ├── bulk_import.py  # spreadsheet template + row-by-row validation
 ├── agile/       # boards · workflow · sprints · backlog/ranking · planning
-│                # hierarchy · features · releases · taxonomy · reports
-│                # permissions · idempotency
+│                # hierarchy · integrity · item types · releases · taxonomy
+│                # reports · permissions · idempotency · upgrade
 ├── git/         # branches · naming · provider · github · credentials · tls
 ├── routes/      # auth · users · projects · bugs · events · stats · audit
 │                # sessions · reports · notifications · push · git
@@ -404,10 +404,14 @@ image and set `APP_VERSION` to it), then `./deploy.sh`.
 
 ## Deployment
 
-To upgrade production: `git pull`, set `APP_VERSION` in `.env` to the new
-release, and run `./deploy.sh`. There's no separate migration step. See
-[DEPLOYMENT.md](DEPLOYMENT.md) for the step-by-step guide, including upgrading
-from 3.x.
+To upgrade production: take a database backup, `git pull`, set `APP_VERSION`
+in `.env` to the new release, and run `./deploy.sh`. There's no separate
+migration step: `init_db()` adds missing tables, columns and indexes on boot and
+never drops or rewrites existing rows (see *Live-data safety*), apart from
+the one-time Sprints upgrade described under *Features*. `./down.sh`
+keeps all data; only `./down.sh --wipe-db` deletes it. To roll back, `./down.sh`,
+check out the previous tag and `./deploy.sh` again (an older app still runs
+against a newer schema).
 
 | Aspect | How it's handled |
 | --- | --- |
@@ -522,10 +526,6 @@ behind a TLS-intercepting proxy.
 
 See [SECURITY.md](SECURITY.md) for supported versions, private vulnerability
 reporting, and the security posture.
-
-The production-readiness audit of this release (findings, test, security and performance
-reports) is in [`audit/`](audit/README.md); steps that need an operator are in
-[HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).
 
 ## Contributing
 

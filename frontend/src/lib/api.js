@@ -16,7 +16,7 @@ export class ApiError extends Error {
 
 let sessionRedirectInFlight = false;
 
-export function bounceToLogin() {
+function bounceToLogin() {
   if (sessionRedirectInFlight) return;
   sessionRedirectInFlight = true;
   const next = encodeURIComponent(

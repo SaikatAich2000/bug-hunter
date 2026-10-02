@@ -7,7 +7,7 @@ import BhSelect from "../../components/BhSelect";
 const READINESS_MARK = { passed: "✓", warning: "⚠", failed: "✕" };
 
 /** Symbol for a planning readiness check (passed / warning / failed). */
-export function readinessMark(item) {
+function readinessMark(item) {
   if (item.passed) return READINESS_MARK.passed;
   return READINESS_MARK[item.severity] || READINESS_MARK.failed;
 }

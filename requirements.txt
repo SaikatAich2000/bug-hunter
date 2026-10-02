@@ -61,8 +61,8 @@ firebase-admin>=6.6.0
 
 # --- Sleuth: optional local LLM layer ---
 # Uncomment to enable Layer 3 (local llama.cpp inference). Requires a
-# GGUF model file at models/sleuth.gguf. See models/README.md for
-# recommended models and the privacy/RAM tradeoffs.
+# GGUF model file at models/sleuth.gguf (the folder is created by you and
+# gitignored; a 1-3B instruct model in Q4 needs roughly 1-2 GB of RAM).
 # llama-cpp-python==0.3.2
 
 # --- SigNoz observability: OTLP/gRPC traces + metrics + logs (app/telemetry.py) ---

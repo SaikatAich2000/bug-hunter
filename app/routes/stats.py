@@ -192,13 +192,6 @@ def stats(
     else:
         by_status = by_status_global
 
-    # project_count reflects the actor's scope; user_count is global team size
-    if accessible is not None:
-        project_count = len(accessible)
-    else:
-        project_count = db.scalar(select(func.count(Project.id))) or 0
-    user_count = db.scalar(select(func.count(User.id))) or 0
-
     # str()/int() casts guard against NULL keys the response model would reject
     by_priority = {
         str(p): int(c)
@@ -243,8 +236,6 @@ def stats(
         resolved=resolved_count,
         closed=closed_count,
         resolve_later=resolve_later_count,
-        projects=project_count,
-        users=user_count,
         by_status=by_status,
         by_priority=by_priority,
         by_environment=by_environment,

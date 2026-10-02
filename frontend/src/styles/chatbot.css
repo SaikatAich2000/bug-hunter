@@ -1,8 +1,5 @@
 /* Sleuth chatbot widget; z-index kept below the bug modal; selectors are referenced by chatbot.js. */
 
-.sleuth-host { font-family: inherit; }
-
-
 .sleuth-fab {
   position: fixed;
   right: 22px;
@@ -97,7 +94,6 @@
   .sleuth-fab { display: none; }
 }
 
-
 .sleuth-panel {
   position: fixed;
   right: 22px;
@@ -151,7 +147,6 @@
   opacity: 1;
   border-color: var(--accent, #3aa6d6);
 }
-
 
 .sleuth-header {
   display: flex;
@@ -249,36 +244,6 @@
 .sleuth-icon-btn:hover { background: rgba(255,255,255,0.22); }
 .sleuth-icon-btn:active { transform: scale(0.92); }
 
-
-.sleuth-tabs {
-  display: flex;
-  gap: 0;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--border, #232c47);
-  background: var(--bg-elev-2, #1a2138);
-  flex-shrink: 0;
-}
-.sleuth-tab {
-  flex: 1;
-  background: none;
-  border: none;
-  color: var(--text-muted, #94a3b8);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 11px 4px;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  letter-spacing: 0.02em;
-  transition: color 0.15s ease, border-color 0.15s ease;
-}
-.sleuth-tab:hover { color: var(--text, #f1f5f9); }
-.sleuth-tab.active {
-  color: var(--accent, #3aa6d6);
-  border-bottom-color: var(--accent, #3aa6d6);
-}
-
-
 .sleuth-body {
   flex: 1;
   overflow-y: auto;
@@ -362,7 +327,6 @@
 }
 .sleuth-msg.user a { color: inherit; text-decoration: underline; }
 
-
 .sleuth-typing {
   align-self: flex-start;
   display: inline-flex;
@@ -385,32 +349,6 @@
 @keyframes sleuth-typing {
   0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
   40%           { transform: translateY(-4px); opacity: 1; }
-}
-
-
-.sleuth-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 0;
-}
-.sleuth-chip {
-  background: var(--bg-elev, #131829);
-  border: 1px solid var(--border, #232c47);
-  color: var(--text, #f1f5f9);
-  font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.15s ease;
-}
-.sleuth-chip:hover {
-  background: var(--accent-soft, rgba(129,140,248,0.16));
-  border-color: var(--accent, #3aa6d6);
-  color: var(--accent, #3aa6d6);
-  transform: translateY(-1px);
 }
 
 /* Confirm prompts (yes/no) — class names match chatbot.js renderConfirmBlock */
@@ -601,7 +539,6 @@ a.sleuth-file-btn:active,
 }
 .sleuth-suggestions button:active { transform: translateY(0); }
 
-
 .sleuth-input-row {
   display: flex;
   gap: 8px;
@@ -692,177 +629,7 @@ a.sleuth-file-btn:active,
   transform: none;
 }
 
-
-.sleuth-history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  flex: 1;
-  overflow-y: auto;
-}
-.sleuth-history-item {
-  background: var(--bg-elev, #131829);
-  border: 1px solid var(--border, #232c47);
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 12.5px;
-  color: var(--text, #f1f5f9);
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
-}
-.sleuth-history-item:hover {
-  border-color: var(--accent, #3aa6d6);
-  background: var(--bg-elev-2, #1a2138);
-  transform: translateX(2px);
-}
-.sleuth-history-empty {
-  text-align: center;
-  color: var(--text-muted, #94a3b8);
-  padding: 32px 16px;
-  font-size: 12.5px;
-  font-style: italic;
-}
-
-
-.sleuth-settings {
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  flex: 1;
-  overflow-y: auto;
-}
-.sleuth-setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  background: var(--bg-elev, #131829);
-  border: 1px solid var(--border, #232c47);
-  border-radius: 8px;
-  font-size: 13px;
-  transition: border-color 0.15s ease;
-}
-.sleuth-setting-row:hover { border-color: var(--border-strong, #475569); }
-.sleuth-setting-label {
-  color: var(--text, #f1f5f9);
-  flex: 1;
-}
-.sleuth-setting-hint {
-  display: block;
-  font-size: 11px;
-  color: var(--text-muted, #94a3b8);
-  margin-top: 2px;
-  font-weight: normal;
-}
-.sleuth-setting-row select,
-.sleuth-setting-row input[type="text"] {
-  background: var(--bg-elev-2, #1a2138);
-  color: var(--text, #f1f5f9);
-  border: 1px solid var(--border, #232c47);
-  border-radius: 7px;
-  padding: 5px 9px;
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-}
-.sleuth-setting-row select:focus,
-.sleuth-setting-row input[type="text"]:focus {
-  border-color: var(--accent, #3aa6d6);
-}
-
-
-.sleuth-toggle {
-  position: relative;
-  display: inline-block;
-  width: 38px;
-  height: 22px;
-  flex-shrink: 0;
-}
-.sleuth-toggle input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.sleuth-toggle-slider {
-  position: absolute;
-  inset: 0;
-  background: var(--border, #232c47);
-  border-radius: 22px;
-  cursor: pointer;
-  transition: background 0.18s ease;
-}
-.sleuth-toggle-slider::before {
-  content: "";
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  left: 3px;
-  bottom: 3px;
-  background: white;
-  border-radius: 50%;
-  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-}
-.sleuth-toggle input:checked + .sleuth-toggle-slider {
-  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
-}
-.sleuth-toggle input:checked + .sleuth-toggle-slider::before {
-  transform: translateX(16px);
-}
-
-.sleuth-settings-section-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-muted, #94a3b8);
-  font-weight: 700;
-  padding: 4px 2px;
-  margin-top: 4px;
-}
-
-.sleuth-clear-btn {
-  background: var(--danger-soft, rgba(244,63,94,0.14));
-  color: var(--danger, #f43f5e);
-  border: 1px solid var(--danger, #f43f5e);
-  padding: 9px 14px;
-  border-radius: 7px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  transition: all 0.15s ease;
-}
-.sleuth-clear-btn:hover {
-  background: var(--danger-strong, #b91c1c);
-  color: #fff;
-}
-
 /* Excel-export button (rendered inline by chatbot.js when relevant) */
-.sleuth-excel-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 7px 12px;
-  background: var(--accent-grad, linear-gradient(135deg, #2f8fbe, #c99a33));
-  color: var(--accent-text, #fff);
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: inherit;
-  text-decoration: none;
-  box-shadow: 0 2px 6px var(--accent-glow, rgba(129,140,248,0.30));
-  transition: transform 0.1s ease, box-shadow 0.15s ease;
-}
-.sleuth-excel-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 10px var(--accent-glow, rgba(129,140,248,0.40));
-}
-
 
 @media (max-width: 540px) {
   .sleuth-fab {
@@ -886,12 +653,10 @@ a.sleuth-file-btn:active,
   .sleuth-resize { display: none; }
 }
 
-
 @media (forced-colors: active) {
   .sleuth-fab,
-  .sleuth-msg.user,
-  .sleuth-send,
-  .sleuth-confirm-btn.yes {
+.sleuth-msg.user,
+.sleuth-send {
     forced-color-adjust: none;
     border: 2px solid CanvasText;
   }

@@ -1,11 +1,11 @@
 """Basic sanity tests for Agile: board view/transition/WIP,
-planning/capacity, epics/components/labels/collections, and core reports.
+planning/capacity, epics/components/labels, and core reports.
 
 """
 from __future__ import annotations
 
 
-def _setup_project_with_board(admin_client, name="Slice345 Suite"):
+def _setup_project_with_board(admin_client, name="Agile Suite"):
     res = admin_client.post("/api/projects", json={"name": name, "description": "", "color": "#c9764f"})
     assert res.status_code == 201, res.text
     project = res.json()

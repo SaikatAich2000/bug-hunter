@@ -29,6 +29,8 @@ pytest.importorskip(
 
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
+from tests.browser_support import launch  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 
 ADMIN_EMAIL = "admin@uitest.local"
@@ -98,7 +100,7 @@ def stack():
 @pytest.fixture(scope="module")
 def page(stack):
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = launch(p)
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         pg = context.new_page()
         pg.goto(f"{stack}/login.html")

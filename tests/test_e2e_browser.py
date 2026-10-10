@@ -32,12 +32,13 @@ pytest.importorskip("playwright.sync_api", reason="Playwright is required for th
 import httpx
 from playwright.sync_api import expect, sync_playwright
 
+from tests.browser_support import BROWSERS, launch
+
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN_EMAIL = "admin@e2e.test"
 ADMIN_PASSWORD = "E2eAdminPass42"
 USER_EMAIL = "user@e2e.test"
 USER_PASSWORD = "E2eUserPass42"
-BROWSERS = [b.strip() for b in os.environ.get("PW_BROWSERS", "chromium").split(",") if b.strip()]
 
 # Views and the element each one renders. `list` is the landing view.
 ADMIN_VIEWS = {
@@ -188,7 +189,7 @@ def _seed(base: str) -> dict:
 @pytest.fixture(scope="module")
 def browser(browser_name):
     with sync_playwright() as p:
-        b = getattr(p, browser_name).launch()
+        b = launch(p, browser_name)
         yield b
         b.close()
 
@@ -424,10 +425,14 @@ def test_board_keyboard_opens_and_moves_cards_through_the_menu(server, open_page
     menu = pg.locator('.ag-menu[role="menu"]')
     expect(menu).to_be_visible()
     target = menu.locator('[role="menuitem"]:has-text("(In Progress)")').first
+    # Focus moves asynchronously after each key; wait for it to land before
+    # judging where focus is (reading activeElement straight away raced the menu).
     for _ in range(10):
-        if pg.evaluate("document.activeElement?.textContent") == target.text_content():
+        if target.evaluate("el => el === document.activeElement"):
             break
+        previous = pg.evaluate_handle("document.activeElement")
         pg.keyboard.press("ArrowDown")
+        pg.wait_for_function("prev => document.activeElement !== prev", arg=previous)
     with pg.expect_response(lambda r: f"/work-items/{story['id']}/transition" in r.url) as resp:
         pg.keyboard.press("Enter")
     assert resp.value.ok, resp.value.text()

@@ -10,7 +10,7 @@ from app.access import accessible_project_ids, can_access_project
 from app.agile import boards as boards_svc
 from app.agile import planning as planning_svc
 from app.agile.permissions import MANAGE_BACKLOG, require_permission
-from app.api_docs import NOT_FOUND_404, NOT_FOUND_VALIDATION_422
+from app.api_docs import BAD_REQUEST_FORBIDDEN_NOT_FOUND_422, NOT_FOUND_404
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Activity, Project, Sprint, User
@@ -43,7 +43,7 @@ def get_planning(
     return planning_svc.build_planning_summary(db, sprint, board)
 
 
-@router.put("/sprints/{sprint_id}/capacity", response_model=PlanningOut, responses=NOT_FOUND_VALIDATION_422)
+@router.put("/sprints/{sprint_id}/capacity", response_model=PlanningOut, responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_422)
 def update_capacity(
     sprint_id: int, payload: SprintCapacityReplaceIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),

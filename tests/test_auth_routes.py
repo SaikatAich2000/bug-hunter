@@ -233,7 +233,7 @@ def test_cov_login_lockout_returns_429(client):
     account_lockout._reset_for_tests()
     try:
         for _ in range(account_lockout._LOGIN_FAIL_LIMIT):
-            account_lockout.record_failure(BOOTSTRAP_EMAIL)
+            account_lockout.record_failure(BOOTSTRAP_EMAIL, "testclient")  # TestClient's peer address
         # Even the correct password must be rejected once the bucket is locked.
         res = client.post("/api/auth/login", json={
             "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD,

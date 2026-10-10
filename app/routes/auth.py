@@ -100,7 +100,7 @@ def _client_ip(request: Request) -> str:
 def _record_failed_login(db: Session, user: User | None, email: str, ip: str, reason: str) -> None:
     """Log every failed sign-in (email masked) and audit those on real accounts, including the
     one that locks the account. Unknown emails are logged only, so typos never fill the audit."""
-    locked = account_lockout.record_failure(email)
+    locked = account_lockout.record_failure(email, ip)
     logger.warning("Sign-in failed (%s): %s from %s", reason, mask_email(email), ip)
     if locked:
         logger.warning("Sign-in locked after repeated failures: %s from %s", mask_email(email), ip)
@@ -117,10 +117,11 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     """Verify credentials, create a session row, and set the signed cookie.
     The cookie's `jti` maps back to the row, enabling per-session admin revocation."""
     # Check lockout before bcrypt so a login flood doesn't become a CPU flood.
+    client_ip = _client_ip(request)
     try:
-        account_lockout.check_locked(payload.email)
+        account_lockout.check_locked(payload.email, client_ip)
     except HTTPException:
-        logger.info("Sign-in refused while locked: %s from %s", mask_email(payload.email), _client_ip(request))
+        logger.info("Sign-in refused while locked: %s from %s", mask_email(payload.email), client_ip)
         raise
 
     # LoginIn already lowercases the email.
@@ -134,11 +135,11 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     # Same 401 for all failures so existence/disabled status doesn't leak.
     if user is None or not password_ok or not user.is_active:
         reason = "unknown account" if user is None else ("wrong password" if not password_ok else "inactive account")
-        _record_failed_login(db, user, payload.email, _client_ip(request), reason)
+        _record_failed_login(db, user, payload.email, client_ip, reason)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # Clear the lockout bucket so transient typos don't carry forward.
-    account_lockout.clear(payload.email)
+    # Clear the lockout buckets so transient typos don't carry forward.
+    account_lockout.clear(payload.email, client_ip)
 
     settings = get_settings()
     jti = new_jti()
@@ -161,9 +162,8 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
 @router.post("/logout", status_code=204)
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
     """Clear the session cookie and its server-side row; always 204 (idempotent)."""
-    from app.auth import COOKIE_NAME, parse_session_token
-    token = request.cookies.get(COOKIE_NAME, "")
-    parsed = parse_session_token(token)
+    from app.auth import parse_session_token, session_cookie_value
+    parsed = parse_session_token(session_cookie_value(request))
     if parsed:
         user_id, _version, jti = parsed
         user = db.get(User, user_id)

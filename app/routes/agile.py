@@ -32,10 +32,11 @@ from app.agile.permissions import (
 )
 from app.agile.sprints import SprintLifecycleError
 from app.api_docs import (
+    BAD_REQUEST_FORBIDDEN_NOT_FOUND_422,
+    BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422,
+    FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422,
+    FORBIDDEN_NOT_FOUND_VALIDATION_422,
     NOT_FOUND_404,
-    NOT_FOUND_CONFLICT_409,
-    NOT_FOUND_CONFLICT_VALIDATION_422,
-    NOT_FOUND_VALIDATION_422,
 )
 from app.auth import get_current_user
 from app.database import get_db
@@ -195,7 +196,7 @@ def get_agile_settings(
     }
 
 
-@router.post("/projects/{project_id}/enable", response_model=AgileSettingsOut, responses=NOT_FOUND_VALIDATION_422)
+@router.post("/projects/{project_id}/enable", response_model=AgileSettingsOut, responses=FORBIDDEN_NOT_FOUND_VALIDATION_422)
 def enable_agile(
     project_id: int, payload: AgileActivateIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -219,7 +220,7 @@ def enable_agile(
     }
 
 
-@router.post("/projects/{project_id}/disable", response_model=AgileSettingsOut, responses=NOT_FOUND_CONFLICT_409)
+@router.post("/projects/{project_id}/disable", response_model=AgileSettingsOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def disable_agile(
     project_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user),
 ) -> dict:
@@ -263,7 +264,7 @@ def get_board(
     return boards_svc.serialize_board(board)
 
 
-@router.put("/boards/{board_id}", response_model=BoardOut, responses=NOT_FOUND_CONFLICT_409)
+@router.put("/boards/{board_id}", response_model=BoardOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def update_board(
     board_id: int, payload: BoardUpdateIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -284,7 +285,7 @@ def update_board(
     return boards_svc.serialize_board(board)
 
 
-@router.put("/boards/{board_id}/columns", response_model=BoardOut, responses=NOT_FOUND_CONFLICT_VALIDATION_422)
+@router.put("/boards/{board_id}/columns", response_model=BoardOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def replace_board_columns(
     board_id: int, payload: BoardColumnsReplaceIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -419,7 +420,7 @@ def get_backlog(
     return [_backlog_item_out(i) for i in items]
 
 
-@router.post("/boards/{board_id}/rank", response_model=BacklogItemOut, responses=NOT_FOUND_VALIDATION_422)
+@router.post("/boards/{board_id}/rank", response_model=BacklogItemOut, responses=FORBIDDEN_NOT_FOUND_VALIDATION_422)
 def rank_backlog_item(
     board_id: int, payload: BacklogRankIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -479,7 +480,7 @@ def list_sprints_route(
 
 
 @router.post("/sprints", response_model=SprintOut, status_code=status.HTTP_201_CREATED,
-             responses=NOT_FOUND_CONFLICT_409)
+             responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def create_sprint_route(
     payload: SprintCreateIn,
     board_id: int = Query(...),
@@ -519,7 +520,7 @@ def get_sprint(
     return _sprint_out(db, sprint)
 
 
-@router.put("/sprints/{sprint_id}", response_model=SprintOut, responses=NOT_FOUND_CONFLICT_409)
+@router.put("/sprints/{sprint_id}", response_model=SprintOut, responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def update_sprint_route(
     sprint_id: int, payload: SprintUpdateIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -559,7 +560,7 @@ def update_sprint_route(
     return _sprint_out(db, sprint)
 
 
-@router.post("/sprints/{sprint_id}/items", response_model=list[BacklogItemOut], responses=NOT_FOUND_CONFLICT_409)
+@router.post("/sprints/{sprint_id}/items", response_model=list[BacklogItemOut], responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def add_sprint_items(
     sprint_id: int, payload: SprintItemsAddIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -580,7 +581,7 @@ def add_sprint_items(
     return [_backlog_item_out(i) for i in items]
 
 
-@router.delete("/sprints/{sprint_id}/items/{work_item_id}", responses=NOT_FOUND_404)
+@router.delete("/sprints/{sprint_id}/items/{work_item_id}", responses=FORBIDDEN_NOT_FOUND_VALIDATION_422)
 def remove_sprint_item(
     sprint_id: int, work_item_id: int,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -616,7 +617,7 @@ def _idempotent_lifecycle(
     return cached
 
 
-@router.post("/sprints/{sprint_id}/start", response_model=SprintOut, responses=NOT_FOUND_CONFLICT_409)
+@router.post("/sprints/{sprint_id}/start", response_model=SprintOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def start_sprint_route(
     sprint_id: int, payload: SprintStartIn,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -658,7 +659,7 @@ def start_sprint_route(
     return result
 
 
-@router.post("/sprints/{sprint_id}/complete", response_model=SprintOut, responses=NOT_FOUND_CONFLICT_409)
+@router.post("/sprints/{sprint_id}/complete", response_model=SprintOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def complete_sprint_route(
     sprint_id: int, payload: SprintCompleteIn,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -701,7 +702,7 @@ def complete_sprint_route(
     return result
 
 
-@router.post("/sprints/{sprint_id}/cancel", response_model=SprintOut, responses=NOT_FOUND_CONFLICT_409)
+@router.post("/sprints/{sprint_id}/cancel", response_model=SprintOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def cancel_sprint_route(
     sprint_id: int, payload: SprintCancelIn,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -752,7 +753,7 @@ def get_sprint_history(
 # Work-item hierarchy + Agile-type creation
 # =====================================================================
 
-@router.post("/work-items", response_model=BacklogItemOut, status_code=status.HTTP_201_CREATED, responses=NOT_FOUND_VALIDATION_422)
+@router.post("/work-items", response_model=BacklogItemOut, status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_422)
 def create_agile_work_item(
     payload: AgileWorkItemCreateIn,
     background: BackgroundTasks,
@@ -838,7 +839,7 @@ def create_agile_work_item(
     return _backlog_item_out(item)
 
 
-@router.put("/work-items/{item_id}/hierarchy", response_model=BacklogItemOut, responses=NOT_FOUND_CONFLICT_VALIDATION_422)
+@router.put("/work-items/{item_id}/hierarchy", response_model=BacklogItemOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def update_hierarchy(
     item_id: int, payload: WorkItemHierarchyIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -863,7 +864,7 @@ def update_hierarchy(
     return _backlog_item_out(item)
 
 
-@router.put("/work-items/{item_id}/ready-for-sprint", response_model=BacklogItemOut, responses=NOT_FOUND_CONFLICT_VALIDATION_422)
+@router.put("/work-items/{item_id}/ready-for-sprint", response_model=BacklogItemOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def set_ready_for_sprint(
     item_id: int, payload: ReadyForSprintIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -894,7 +895,7 @@ def set_ready_for_sprint(
     return _backlog_item_out(item)
 
 
-@router.put("/work-items/{item_id}/dates", response_model=BacklogItemOut, responses=NOT_FOUND_CONFLICT_409)
+@router.put("/work-items/{item_id}/dates", response_model=BacklogItemOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def update_work_item_dates(
     item_id: int, payload: WorkItemDatesIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -919,7 +920,7 @@ def update_work_item_dates(
     return _backlog_item_out(item)
 
 
-@router.put("/work-items/{item_id}/task-flags", response_model=BacklogItemOut, responses=NOT_FOUND_CONFLICT_VALIDATION_422)
+@router.put("/work-items/{item_id}/task-flags", response_model=BacklogItemOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def update_task_flags(
     item_id: int, payload: WorkItemTaskFlagsIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -969,7 +970,7 @@ def list_acceptance_criteria(
 @router.post(
     "/work-items/{item_id}/acceptance-criteria",
     response_model=AcceptanceCriterionOut, status_code=status.HTTP_201_CREATED,
-    responses=NOT_FOUND_404,
+    responses=FORBIDDEN_NOT_FOUND_VALIDATION_422,
 )
 def add_acceptance_criterion(
     item_id: int, payload: AcceptanceCriterionIn,
@@ -992,7 +993,7 @@ def add_acceptance_criterion(
     return row
 
 
-@router.put("/acceptance-criteria/{criterion_id}", response_model=AcceptanceCriterionOut, responses=NOT_FOUND_404)
+@router.put("/acceptance-criteria/{criterion_id}", response_model=AcceptanceCriterionOut, responses=FORBIDDEN_NOT_FOUND_VALIDATION_422)
 def update_acceptance_criterion(
     criterion_id: int, payload: AcceptanceCriterionUpdateIn,
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
@@ -1018,7 +1019,7 @@ def update_acceptance_criterion(
     return row
 
 
-@router.delete("/acceptance-criteria/{criterion_id}", responses=NOT_FOUND_404)
+@router.delete("/acceptance-criteria/{criterion_id}", responses=FORBIDDEN_NOT_FOUND_VALIDATION_422)
 def delete_acceptance_criterion(
     criterion_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user),
 ) -> dict:

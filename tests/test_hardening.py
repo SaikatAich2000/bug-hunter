@@ -684,7 +684,7 @@ def test_download_range_slice(admin_client):
     bug = admin_client.post("/api/bugs", json={"project_id": proj["id"], "title": "download bug"}).json()
     body = b"0123456789abcdef"
     att = admin_client.post(f"/api/bugs/{bug['id']}/attachments",
-                            files={"file": ("f.bin", body, "application/octet-stream")}).json()
+                            files={"file": ("f.txt", body, "text/plain")}).json()
     r = admin_client.get(f"/api/bugs/{bug['id']}/attachments/{att['id']}/download",
                          headers={"Range": "bytes=3-7"})
     assert r.status_code == 206

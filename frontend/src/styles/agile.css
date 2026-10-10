@@ -97,6 +97,9 @@ button.ag-key:hover, button.ag-key:focus-visible { color: var(--accent); text-de
 .ag-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .ag-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .ag-complete-summary { margin: 0; padding-left: 20px; }
+.ag-complete-issues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.ag-complete-issue { display: grid; grid-template-columns: 1fr minmax(140px, 200px); gap: 8px; align-items: center; }
+.ag-complete-issue-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-colors { display: flex; gap: 8px; flex-wrap: wrap; border: 0; padding: 0; margin: 0; }
 .ag-colors legend { margin-bottom: 6px; }
 .ag-swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }

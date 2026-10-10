@@ -590,11 +590,11 @@ def test_video_attachment_opens_custom_player_in_lightbox(nav_page):
     while playing, and the seek bar must always be grabbable."""
     page = nav_page
     bug_id = _seed_bug_via_page(page, "ZZ Video Bug")
-    # Upload a minimal fake mp4 so the attachment is recognized as video by content-type.
+    # Upload a minimal mp4 header (the server verifies magic bytes) so the attachment is recognized as video by content-type.
     page.evaluate(
         """async (id) => {
             const fd = new FormData();
-            const blob = new Blob([new Uint8Array([0, 0, 0, 24])], {type: 'video/mp4'});
+            const blob = new Blob([new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32])], {type: 'video/mp4'});
             fd.append('file', new File([blob], 'clip.mp4', {type: 'video/mp4'}));
             await fetch(`/api/bugs/${id}/attachments`, {method: 'POST', credentials: 'include', body: fd});
         }""",

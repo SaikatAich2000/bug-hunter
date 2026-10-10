@@ -655,7 +655,7 @@ def test_bugs_attachment_grows_past_limit_after_strip(admin_client, monkeypatch)
     }).json()
     r = admin_client.post(
         f"/api/bugs/{bug['id']}/attachments",
-        files={"file": ("pic.png", b"\x89PNG\r\n", "image/png")},
+        files={"file": ("pic.png", b"\x89PNG\r\n\x1a\n", "image/png")},
     )
     assert r.status_code == 413
 

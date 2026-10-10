@@ -197,6 +197,8 @@ def _session_state(base: str, email: str, password: str) -> dict:
     """Log in through the API once and return a Playwright storage state."""
     with httpx.Client(base_url=base, timeout=30) as c:
         c.post("/api/auth/login", json={"email": email, "password": password}).raise_for_status()
+        # The first-login welcome dialog would cover the page these journeys drive.
+        c.put("/api/me/preferences", json={"welcome_seen": True}).raise_for_status()
         cookies = [
             {"name": ck.name, "value": ck.value, "domain": "127.0.0.1", "path": "/",
              "httpOnly": True, "secure": False, "sameSite": "Lax", "expires": -1}

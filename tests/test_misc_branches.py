@@ -881,10 +881,11 @@ def test_executor_ingest_created_response_exact_fit(client):
 
 
 # app/routes/bugs.py — helpers + route edge cases
-def test_bugs_dangerous_ext_no_extension_returns_none(client):
-    from app.routes.bugs import _dangerous_upload_ext
-    assert _dangerous_upload_ext("README") is None
-    assert _dangerous_upload_ext("evil.exe") == "exe"
+def test_upload_policy_extension_check(client):
+    from app.upload_policy import check_extension
+    assert "without an extension" in check_extension("README")
+    assert ".exe" in check_extension("evil.exe")
+    assert check_extension("notes.TXT") is None
 
 
 def test_people_resolve_user_unknown_raises_400(client):
@@ -1145,7 +1146,7 @@ def test_bugs_attachment_grows_past_limit_after_strip(admin_client, monkeypatch)
     }).json()
     r = admin_client.post(
         f"/api/bugs/{bug['id']}/attachments",
-        files={"file": ("pic.png", b"\x89PNG\r\n", "image/png")},
+        files={"file": ("pic.png", b"\x89PNG\r\n\x1a\n", "image/png")},
     )
     assert r.status_code == 413
 

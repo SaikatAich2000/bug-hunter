@@ -38,7 +38,7 @@ whatever `APP_VERSION` in `.env` says, and `/api/health` reports it.
 | Sprints & Agile | Opt-in per project, Scrum-style: ranked backlog and sprint planning, the active sprint board, Epic → issue → Sub-task hierarchy, board settings, and burndown/sprint/velocity/flow reports. See [Sprints & Agile](#sprints--agile). |
 | Projects & events | Projects group your work. Events group items for a standup or review and have one or more managers. |
 | Item links | Link items together: relates, blocks, or duplicate. |
-| Comments & attachments | Rich-text comments (bold, italic, lists, code, quotes) and plain-text descriptions that keep line breaks. PDF, image and video files are stored in PostgreSQL. Pasted images become real attachments, and image metadata (EXIF) is stripped. |
+| Comments & attachments | Rich-text comments (bold, italic, lists, code, quotes) and plain-text descriptions that keep line breaks. Images, PDF, video, Office documents and txt/csv/log/zip files are stored in PostgreSQL (an allowlist checked against each file's leading bytes; see SECURITY.md). Pasted images become real attachments, and image metadata (EXIF) is stripped. |
 | Bulk actions | Change status, priority or environment, or delete, across many items at once. |
 | Bulk import | Download an Excel template, fill it in (or use CSV), and import. Every row is validated on its own and errors are reported per row. |
 | Reports | A report builder (manager/admin) that exports a multi-sheet Excel file, plus agile reports (burndown, burnup, velocity, cumulative flow, control chart, workload, scope change, epic progress). |

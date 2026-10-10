@@ -114,6 +114,83 @@ def test_secure_logout_clears_both_cookie_names(client, monkeypatch):
     assert "__Host-bh_session=" in cleared and "bh_session=" in cleared.replace("__Host-bh_session=", "")
 
 
+# --- uploads: extension allowlist verified by magic bytes ---------------------
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+_SAMPLES = {
+    "shot.png": _PNG,
+    "photo.jpg": b"\xff\xd8\xff\xe0" + b"\x00" * 16,
+    "anim.gif": b"GIF89a" + b"\x00" * 16,
+    "doc.pdf": b"%PDF-1.7\n" + b"x" * 16,
+    "clip.mp4": b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 16,
+    "spec.docx": b"PK\x03\x04" + b"\x00" * 16,
+    "sheet.xlsx": b"PK\x03\x04" + b"\x00" * 16,
+    "old.doc": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 16,
+    "notes.txt": b"plain notes\n",
+    "run.log": b"\x1b[32mok\x1b[0m line\n",
+    "rows.csv": b"a,b\n1,2\n",
+    "bundle.zip": b"PK\x03\x04" + b"\x00" * 16,
+}
+
+
+def _attach(c, bug_id, name, data, ctype="application/octet-stream"):
+    return c.post(f"/api/bugs/{bug_id}/attachments", files={"file": (name, data, ctype)})
+
+
+@pytest.fixture
+def an_item(admin_client):
+    p = _project(admin_client, "Uploads")
+    return admin_client.post("/api/bugs", json={
+        "project_id": p["id"], "title": "Needs files", "priority": "Medium",
+        "environment": "DEV"}).json()["id"]
+
+
+@pytest.mark.parametrize("name", sorted(_SAMPLES))
+def test_allowlisted_upload_with_matching_bytes_is_accepted(admin_client, an_item, name):
+    r = _attach(admin_client, an_item, name, _SAMPLES[name])
+    assert r.status_code in (200, 201), r.text
+
+
+@pytest.mark.parametrize("name,data", [
+    ("tool.exe", b"MZ\x90\x00"),
+    ("lib.so", b"\x7fELF\x02\x01"),
+    ("page.html", b"<script>alert(1)</script>"),
+    ("img.svg", b"<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>"),
+    ("app.js", b"alert(1)"),
+    ("blob.bin", b"\x01\x02\x03"),
+    ("noextension", b"hello"),
+    ("macro.docm", b"PK\x03\x04" + b"\x00" * 8),
+    ("archive.7z", b"7z\xbc\xaf\x27\x1c"),
+])
+def test_everything_off_the_allowlist_is_refused(admin_client, an_item, name, data):
+    r = _attach(admin_client, an_item, name, data)
+    assert r.status_code == 400, r.text
+    assert "can't be attached" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("name,data", [
+    ("fake.png", b"MZ\x90\x00this is not a png"),
+    ("fake.pdf", b"<html>not a pdf</html>"),
+    ("fake.zip", b"MZ\x90\x00"),
+    ("fake.mp4", b"\x7fELF\x02\x01\x01\x00\x00"),
+    ("fake.txt", b"MZ\x90\x00\x03\x00\x00\x00\x04"),
+    ("fake.csv", b"a,b\x00\x00\x01\n"),
+])
+def test_allowed_extension_with_wrong_bytes_is_refused(admin_client, an_item, name, data):
+    r = _attach(admin_client, an_item, name, data)
+    assert r.status_code == 400, r.text
+    assert "isn't a valid" in r.json()["detail"]
+
+
+def test_trailing_dot_cannot_hide_a_disallowed_extension(admin_client, an_item):
+    assert _attach(admin_client, an_item, "evil.exe.", b"MZ\x90\x00").status_code == 400
+
+
+def test_stored_content_type_comes_from_the_allowlist_not_the_client(admin_client, an_item):
+    r = _attach(admin_client, an_item, "notes.txt", b"hello", ctype="text/html")
+    assert r.status_code in (200, 201), r.text
+    assert r.json()["content_type"] == "text/plain"
+
+
 @pytest.fixture
 def boot_info_logs(caplog):
     """Listed before ``client`` so the app's INFO startup lines are captured."""

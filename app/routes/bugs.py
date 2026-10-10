@@ -73,6 +73,7 @@ from app.email_service import (
     notify_comment_added,
 )
 from app.image_strip import ImageTooLarge, strip_image_metadata
+from app.upload_policy import check_extension, verify_upload
 from app.models import (
     Activity,
     Attachment,
@@ -213,32 +214,6 @@ _ACTIVE_CONTENT_TYPES = {
 # type. SVG is absent because it's scriptable.
 _INLINE_SAFE_PREFIXES = ("image/", "video/", "audio/")
 _INLINE_SAFE_TYPES = {"application/pdf", "text/plain", "text/csv"}
-
-# Server-side denylist checked at upload time (the frontend list is advisory
-# only). The extension is taken from the filename after stripping trailing dots
-# and spaces; Windows silently strips them on download, so "evil.exe." would
-# slip past a naive suffix check. .js is omitted: JS source is a legitimate
-# attachment, and the download path already neutralizes it via octet-stream +
-# Content-Disposition: attachment.
-_DANGEROUS_UPLOAD_EXTS = frozenset({
-    "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "hta", "jar",
-    "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "psm1", "sh", "bash",
-    "app", "dmg", "pkg", "deb", "rpm", "apk", "msc", "reg", "lnk", "gadget",
-    "dll", "sys", "elf",
-})
-
-
-def _dangerous_upload_ext(filename: str) -> Optional[str]:
-    """Return the blocked extension if the filename is executable, else None.
-
-    Strips trailing dots and whitespace before checking (Windows drops them on
-    download, so "evil.exe." would otherwise bypass the check)."""
-    name = (filename or "").strip().rstrip(". \t")
-    if "." not in name:
-        return None
-    ext = name.rsplit(".", 1)[1].strip().lower()
-    return ext if ext in _DANGEROUS_UPLOAD_EXTS else None
-
 
 # The original filename lives in the DB; this sanitized copy is used only in
 # headers. RFC 6266 restricts plain filename= to US-ASCII; non-ASCII goes in
@@ -1665,22 +1640,23 @@ async def upload_attachment(
     # but before reading the body.
     _check_upload_rate(uploader.id)
 
-    # Refuse dangerous extensions before streaming the body.
-    bad_ext = _dangerous_upload_ext(file.filename or "")
-    if bad_ext is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Files of type .{bad_ext} can't be attached for security reasons.",
-        )
+    # Refuse unlisted extensions before streaming the body.
+    refusal = check_extension(file.filename or "")
+    if refusal is not None:
+        raise HTTPException(status_code=400, detail=refusal)
 
     data = await _read_upload_with_limit(file, MAX_FILE_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="This file is empty, so there's nothing to attach.")
+    try:
+        content_type = verify_upload(file.filename or "", data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
     # Strip EXIF/GPS/XMP metadata from raster images (off the event loop: a re-encode can
     # take a while). No-op for non-images and for bytes that are not a readable image.
     try:
-        data = await run_in_threadpool(strip_image_metadata, data, file.content_type)
+        data = await run_in_threadpool(strip_image_metadata, data, content_type)
     except ImageTooLarge:
         raise HTTPException(
             status_code=413,
@@ -1703,7 +1679,7 @@ async def upload_attachment(
         uploader_user_id=uploader.id,
         uploader_name=uploader.name,
         filename=(file.filename or "unnamed")[:255],
-        content_type=(file.content_type or _DEFAULT_MIME)[:120],
+        content_type=content_type,
         size_bytes=len(data),
         data=data,
     )

@@ -6,6 +6,7 @@ import App from "./App";
 import { AppProvider } from "./state/AppContext";
 import "./styles/styles.css";
 import "./styles/chatbot.css";
+import "./styles/onboarding.css";
 import "./styles/motion.css";
 
 // Theme + collapsed-sidebar state read before first render (CSP blocks inline

@@ -1,6 +1,7 @@
 /**
  * Work-items table. Data, paging, and the active-tab filter live in AppContext.
  */
+import EmptyGuide from "../onboarding/EmptyGuide";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
@@ -71,6 +72,8 @@ export default function ListView() {
     isAdmin,
     meta,
     openBugDetail,
+    openBugForm,
+    defaultNewType,
     refreshAll,
     closeBugModal,
   } = useApp();
@@ -393,6 +396,11 @@ export default function ListView() {
       </div>
       <div id="emptyState" className="empty-state" hidden={bugs.length > 0}>
         <p>No items match your filters</p>
+        <EmptyGuide
+          guide="items"
+          hint="New here? Create your first item, or clear the filters to see everything."
+          action={{ label: "+ New Item", onClick: () => openBugForm({ defaultType: activeTab !== "all" ? activeTab : defaultNewType }) }}
+        />
       </div>
       <div className="pagination" id="paginationBar">
         {/* Hidden when there's only one page. */}

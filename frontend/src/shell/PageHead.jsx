@@ -12,6 +12,7 @@ const VIEW_TITLES = {
   audit: "Audit Trail",
   sessions: "Active Sessions",
   reports: "Reports",
+  help: "Help center",
 };
 
 // "list" builds its own live summary below.
@@ -26,6 +27,7 @@ const VIEW_SUBTITLES = {
     "Every device currently signed in. Revoke a session to log that device out without touching anything else",
   reports:
     "Build a report from any combination of filters, preview it inline, then download the full data as Excel",
+  help: "Guides for tracking work, running sprints, reports, notifications and administration",
 };
 
 export default function PageHead() {

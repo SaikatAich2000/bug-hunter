@@ -3,9 +3,9 @@ Rows seeded on a real DB session; the job runs in-process with email_service.del
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
-BOOTSTRAP_EMAIL = "admin@test.local"
+from tests.conftest import BOOTSTRAP_EMAIL
 
 
 # Helpers
@@ -298,3 +298,54 @@ def test_digest_off_keeps_immediate_work_item_email(admin_client, monkeypatch):
     # With the digest off, the immediate work-item email should still fire.
     assert len(sent) == 1
     assert "New bug #2" in sent[0][0]
+
+
+# app/jobs/email_digest.py — concurrent-claim continue branch
+def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
+    # A concurrent runner stamps emailed_at inside patched _group_by_user, so the guarded UPDATE claims 0 rows.
+    from app import models
+    from app.auth import hash_password
+    from app.database import SessionLocal
+    from app.jobs import email_digest
+
+    db = SessionLocal()
+    try:
+        u = models.User(name="Digest User", email="digest@test.local", role="user",
+                        password_hash=hash_password("User12345"), is_active=True)
+        db.add(u)
+        db.flush()
+        now = datetime.now(timezone.utc)
+        n = models.Notification(
+            user_id=u.id, kind="updated", title="t", body="b",
+            created_at=now, emailed_at=None,
+        )
+        db.add(n)
+        db.commit()
+        uid = u.id
+        nid = n.id
+    finally:
+        db.close()
+
+    orig_group = email_digest._group_by_user
+
+    def racing_group(rows):
+        other = SessionLocal()
+        try:
+            other.query(models.Notification).filter(
+                models.Notification.id == nid
+            ).update({models.Notification.emailed_at: datetime.now(timezone.utc)},
+                     synchronize_session=False)
+            other.commit()
+        finally:
+            other.close()
+        return orig_group(rows)
+
+    monkeypatch.setattr(email_digest, "_group_by_user", racing_group)
+
+    db = SessionLocal()
+    try:
+        res = email_digest.run_digest(db, now=now + timedelta(minutes=1))
+    finally:
+        db.close()
+    assert res["emails_sent"] == 0  # claim lost the race, skipped
+    assert uid  # user existed

@@ -29,7 +29,9 @@ from app.auth import (
     require_manager_or_admin,
 )
 from app.database import get_db
-from app.models import Activity, Project, User, user_projects
+from app.models import (
+    Activity, Bug, Event, Project, Sprint, User, event_managers, sprint_assignees, user_projects,
+)
 from app.password_breach import is_password_breached
 from app.schemas import UserIn, UserOut, UserUpdate
 
@@ -56,6 +58,34 @@ def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail:
         actor_name=actor.name if actor else "system",
         action=action, detail=detail,
     ))
+
+
+def _log_removals(db: Session, actor: User, user: User, label: str) -> None:
+    """One activity row per item the deleted user is removed from.
+
+    The FKs null or cascade these links silently, so without this the item
+    history would show people vanishing with no explanation."""
+    def row(entity_type: str, entity_id: int, bug_id: int | None, title: str, roles: str) -> None:
+        db.add(Activity(
+            bug_id=bug_id, entity_type=entity_type, entity_id=entity_id,
+            actor_user_id=actor.id, actor_name=actor.name, action="user_removed",
+            detail=f"User {label} was deleted and removed as {roles} of '{title}'",
+        ))
+
+    bugs: dict[int, tuple[Bug, list[str]]] = {}
+    for bug in db.scalars(select(Bug).where(Bug.assignees.any(User.id == user.id))):
+        bugs.setdefault(bug.id, (bug, []))[1].append("assignee")
+    for column, role in ((Bug.reporter_id, "reporter"), (Bug.owner_id, "owner")):
+        for bug in db.scalars(select(Bug).where(column == user.id)):
+            bugs.setdefault(bug.id, (bug, []))[1].append(role)
+    for bug, roles in bugs.values():
+        row("bug", bug.id, bug.id, bug.title, " and ".join(roles))
+    for event in db.scalars(select(Event).where(Event.id.in_(
+            select(event_managers.c.event_id).where(event_managers.c.user_id == user.id)))):
+        row("event", event.id, None, event.name, "manager")
+    for sprint in db.scalars(select(Sprint).where(Sprint.id.in_(
+            select(sprint_assignees.c.sprint_id).where(sprint_assignees.c.user_id == user.id)))):
+        row("sprint", sprint.id, None, sprint.name, "assignee")
 
 
 def _like_escape(needle: str) -> str:
@@ -359,6 +389,7 @@ def delete_user(
         )
 
     label = f"{user.name} <{user.email}>"
+    _log_removals(db, actor, user, label)
     db.delete(user)
     _audit(db, actor, "user_deleted", user_id, f"Deleted user {label}")
     db.commit()

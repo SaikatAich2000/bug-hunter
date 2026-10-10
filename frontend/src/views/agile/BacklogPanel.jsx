@@ -1,6 +1,8 @@
 /** Backlog: open sprints above the ranked backlog. Drag issues
  * to rank them or to move them between sprints and the backlog; every row
  * also has a "⋯ Move to" menu, the keyboard alternative. */
+import { dragDropAnimation } from "../../lib/motion";
+import Skeleton from "../../components/Skeleton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -308,7 +310,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
     );
   };
 
-  if (!data) return planning.loading ? <div className="sprints-loading">Loading…</div> : null;
+  if (!data) return planning.loading ? <Skeleton lines={4} className="sprints-loading" /> : null;
 
   const assigneeOptions = [
     { value: "", label: "All assignees" },
@@ -422,7 +424,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
         </section>
 
         {createPortal(
-          <DragOverlay>
+          <DragOverlay dropAnimation={dragDropAnimation()}>
             {activeIssue ? (
               <div className="ag-row ag-row-overlay">
                 <TypeIcon type={activeIssue.item_type} />

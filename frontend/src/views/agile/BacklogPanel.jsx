@@ -23,7 +23,7 @@ import {
   CategoryTotals, EpicLozenge, EstimateBadge, IssueKey, PriorityIcon, StatusLozenge, SubtaskProgress, TypeIcon,
 } from "./IssueBits";
 import { AssigneeStack, defaultSprintName, formatDateRange, localToday } from "./agileShared";
-import { CompleteSprintDialog, SprintFormDialog, StartSprintDialog } from "./SprintDialogs";
+import { CompleteSprintDialog, SprintFormDialog, StartSprintDialog, deleteSprintPrompt } from "./SprintDialogs";
 import {
   BACKLOG_KEY, containerSprintId, daysRemaining, findContainer, matchesIssueFilter, moveLocally, planDrop, sprintKey,
 } from "./logic/backlog";
@@ -247,7 +247,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
   const deleteSprint = async (sprint) => {
     const count = (containers[sprintKey(sprint.id)] || []).length;
     const ok = await confirmDialog(
-      `Delete ${sprint.name}?${count ? ` Its ${count} issue${count === 1 ? "" : "s"} move to the top of the backlog.` : ""}`,
+      deleteSprintPrompt(sprint, count),
       { title: "Delete sprint", okLabel: "Delete", danger: true },
     );
     if (!ok) return;
@@ -382,7 +382,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
                 {canManage && (
                   <ActionMenu label={`Sprint actions for ${sprint.name}`} items={[
                     { label: "Edit sprint", onSelect: () => setDialog({ kind: "edit", sprint }) },
-                    sprint.state === "future" && { label: "Delete sprint", danger: true, onSelect: () => deleteSprint(sprint) },
+                    { label: "Delete sprint", danger: true, onSelect: () => deleteSprint(sprint) },
                   ]} />
                 )}
               </header>

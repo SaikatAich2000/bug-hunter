@@ -597,8 +597,7 @@ def list_bugs(
         items.append(_bug_to_out_dict(
             b,
             int(att_counts.get(b.id, 0)),
-            can_edit_bug(_user, b.reporter_id, [a.id for a in b.assignees],
-                         item_type=_item_type(b)),
+            can_edit_bug(_user, item_type=_item_type(b)),
         ))
 
     return BugListResponse.model_validate({
@@ -707,8 +706,7 @@ def get_bug(
         # Use an aggregate count, not len(all_atts): that list is capped at
         # _DETAIL_ATTACHMENTS_MAX and would under-report on busy items.
         _attachment_count(db, bug_id),
-        can_edit_bug(user, bug.reporter_id, [a.id for a in bug.assignees],
-                     item_type=_item_type(bug)),
+        can_edit_bug(user, item_type=_item_type(bug)),
     )
     payload["attachments"] = [_attachment_brief(a) for a in bug_level]
     payload["links"] = _bug_links(db, bug_id)
@@ -751,7 +749,7 @@ def create_bug(
         )
     # Only admins/managers may create Tasks/Requirements. This mirrors the
     # can_edit_bug rule so a user can't create an item they couldn't edit.
-    if not can_edit_bug(actor, actor.id, [], item_type=payload.item_type):
+    if not can_edit_bug(actor, item_type=payload.item_type):
         raise HTTPException(
             status_code=403,
             detail=f"Only admins or managers can create a {payload.item_type.lower()}.",
@@ -836,8 +834,7 @@ def create_bug(
 
     return BugOut.model_validate(_bug_to_out_dict(
         fresh, 0,
-        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees],
-                     item_type=fresh.item_type),
+        can_edit_bug(actor, item_type=fresh.item_type),
     ))
 
 
@@ -848,8 +845,7 @@ _UPDATE_TRACKED_FIELDS = [
 
 
 def _validate_update_authorization(bug: Bug, actor: User) -> None:
-    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
-                        item_type=_item_type(bug)):
+    if not can_edit_bug(actor, item_type=_item_type(bug)):
         # Regular users cannot edit Tasks or Requirements.
         noun = _item_type(bug).lower()
         raise HTTPException(
@@ -867,8 +863,7 @@ def _require_can_edit_link_endpoint(item: Bug, actor: User) -> None:
     """Require edit rights on both link endpoints. Without this, a user who can
     edit a Bug could attach or detach links on a Task/Requirement they can't
     otherwise touch."""
-    if not can_edit_bug(actor, item.reporter_id, [a.id for a in item.assignees],
-                        item_type=_item_type(item)):
+    if not can_edit_bug(actor, item_type=_item_type(item)):
         noun = _item_type(item).lower()
         raise HTTPException(
             status_code=403,
@@ -944,8 +939,7 @@ def _authorize_item_type_change(fields: dict, bug: Bug, actor: User) -> None:
             _CONVERSION_NOT_SUPPORTED_CODE,
             f"Cannot convert {_item_type(bug)} to {new_type} via /api/bugs; use /api/agile/work-items",
         )
-    if not can_edit_bug(actor, bug.reporter_id,
-                        [a.id for a in bug.assignees], item_type=new_type):
+    if not can_edit_bug(actor, item_type=new_type):
         raise HTTPException(
             status_code=403,
             detail=(
@@ -1442,8 +1436,7 @@ def update_bug(
 
     return BugOut.model_validate(_bug_to_out_dict(
         fresh, _attachment_count(db, bug_id),
-        can_edit_bug(actor, fresh.reporter_id, [a.id for a in fresh.assignees],
-                     item_type=fresh.item_type),
+        can_edit_bug(actor, item_type=fresh.item_type),
     ))
 
 
@@ -1482,7 +1475,7 @@ def delete_bug(
     if bug is None:
         raise HTTPException(status_code=404, detail=_DETAIL_BUG_NOT_FOUND)
     # Deletion is admin-only; managers can edit but not delete.
-    if not can_delete_bug(actor, item_type=_item_type(bug)):
+    if not can_delete_bug(actor):
         raise HTTPException(
             status_code=403,
             detail="Only admins can delete items.",
@@ -2250,12 +2243,11 @@ def _apply_bulk_to_bug(db: Session, bug: Bug, actor: User, payload: BulkActionIn
         return "conflict"
     action = payload.action
     if action == "delete":
-        if not can_delete_bug(actor, item_type=_item_type(bug)):
+        if not can_delete_bug(actor):
             return "skipped"
         _bulk_delete(db, bug, actor, background)
         return "updated"
-    if not can_edit_bug(actor, bug.reporter_id, [a.id for a in bug.assignees],
-                        item_type=_item_type(bug)):
+    if not can_edit_bug(actor, item_type=_item_type(bug)):
         return "skipped"
     if action == "set_status":
         return _bulk_set_status(db, bug, actor, resolved, background)

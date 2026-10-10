@@ -156,8 +156,7 @@ def _bug_to_brief(bug: Bug, actor: User, attachment_count: int = 0) -> dict:
         "attachment_count": attachment_count,
         # per-item so the SPA can hide edit where the actor lacks rights
         "can_edit": can_edit_bug(
-            actor, bug.reporter_id, [a.id for a in bug.assignees],
-            item_type=item_type,
+            actor, item_type=item_type,
         ),
     }
 

@@ -326,22 +326,15 @@ def require_manager_or_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
-def can_edit_bug(
-    user: User,
-    bug_reporter_id: Optional[int],
-    assignee_ids: list[int],
-    item_type: str = "Bug",
-) -> bool:
+def can_edit_bug(user: User, item_type: str = "Bug") -> bool:
     """Anyone may edit Bugs; Tasks/Requirements are admin/manager only."""
-    del bug_reporter_id, assignee_ids
     if item_type in ("Task", "Requirement"):
         return user.role in (ROLE_ADMIN, ROLE_MANAGER)
     return True
 
 
-def can_delete_bug(user: User, item_type: str = "Bug") -> bool:
+def can_delete_bug(user: User) -> bool:
     """Work-item deletion is admin-only for every type."""
-    del item_type
     return user.role == ROLE_ADMIN
 
 

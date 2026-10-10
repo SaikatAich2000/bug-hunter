@@ -115,10 +115,7 @@ def _check_can_edit_bug(actor: User, bug: Bug) -> Optional[str]:
     """Return None if the actor may edit this item, otherwise an error string.
     Passes the item's real type so per-type rules match PUT /api/bugs/{id}."""
     itype = getattr(bug, "item_type", None) or "Bug"
-    if not can_edit_bug(actor,
-                        bug.reporter_id,
-                        [a.id for a in bug.assignees],
-                        item_type=itype):
+    if not can_edit_bug(actor, item_type=itype):
         return f"You don't have permission to edit that {itype.lower()}"
     return None
 

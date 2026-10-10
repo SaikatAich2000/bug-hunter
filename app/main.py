@@ -339,15 +339,19 @@ def _reconcile_status_transitions(db) -> bool:
 
     Returns True when any transition row was added.
     """
-    from app.agile.workflow import reconcile_transitions
+    from app.agile.workflow import reconcile_transitions, seed_default_transitions
     from app.models import WorkflowStatus
     changed = False
     work_item_types = db.scalars(
         select(WorkflowStatus.work_item_type).where(WorkflowStatus.scope_key == "global").distinct()
     ).all()
     for work_item_type in work_item_types:
+        # A type with no transitions at all is a fresh install seeding itself, not a gap to repair.
+        seeded = seed_default_transitions(db, work_item_type)
         if reconcile_transitions(db, work_item_type):
             changed = True
+        if seeded:
+            db.commit()
     return changed
 
 

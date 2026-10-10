@@ -2,6 +2,10 @@
 session cookie, upload allowlist, lockout scope, 422 shape, documented statuses)."""
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 
 def _user(c, name, email, role="user"):
     pids = [p["id"] for p in c.get("/api/projects").json()]
@@ -42,3 +46,20 @@ def test_delete_user_logs_activity_on_each_item(admin_client):
         assert "Leaver" in removed[0]["detail"]
     rows = admin_client.get("/api/audit?entity_type=event").json()
     assert any(r["action"] == "user_removed" and r["entity_id"] == ev.json()["id"] for r in rows)
+
+
+# --- a fresh install does not "repair" the seed data it just wrote ------------
+@pytest.fixture
+def boot_info_logs(caplog):
+    """Listed before ``client`` so the app's INFO startup lines are captured."""
+    caplog.set_level(logging.INFO, logger="bug_hunter")
+
+
+def test_fresh_boot_does_not_reconcile_its_own_seed(boot_info_logs, client, caplog):
+    messages = [r.getMessage() for r in caplog.get_records("setup")]
+    assert not [m for m in messages if m.startswith("Reconciled")], messages
+    # Seeding still produced the full permissive transition set.
+    from app.database import SessionLocal
+    from app.models import WorkflowTransition
+    with SessionLocal() as db:
+        assert db.query(WorkflowTransition).count() > 0

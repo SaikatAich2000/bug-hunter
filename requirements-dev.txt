@@ -5,6 +5,8 @@
 
 # Tests
 pytest>=8.0,<10
+pytest-xdist>=3.5  # -n auto in CI
+httpx2  # starlette's TestClient backend; plain httpx there is deprecated
 
 # Browser end-to-end suites (tests/test_ui_smoke.py, tests/test_playwright_*.py,
 # marker `ui`). One-time browser download: python -m playwright install chromium

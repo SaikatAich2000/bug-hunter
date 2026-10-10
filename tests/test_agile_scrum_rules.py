@@ -326,7 +326,7 @@ def test_board_columns_update_in_place_and_validate(admin_client):
     dup = [dict(c) for c in cols]
     dup[0]["statuses"] = dup[0]["statuses"] + ["Done"]
     res = admin_client.put(f"/api/agile/boards/{board_id}/columns", json={"columns": dup, "version": board["version"]})
-    assert res.status_code == 422 and "one column only" in res.json()["detail"]
+    assert res.status_code == 422 and "one column only" in res.json()["detail"][0]["msg"]
 
     not_done_last = [dict(c) for c in cols]
     not_done_last[-1]["category"] = "in_progress"
@@ -405,7 +405,7 @@ def test_hierarchy_rules(admin_client):
     res = admin_client.post("/api/agile/work-items", json={
         "project_id": project["id"], "title": "Orphan", "item_type": "Sub-task",
     })
-    assert res.status_code == 422 and "needs a parent" in res.json()["detail"]
+    assert res.status_code == 422 and "needs a parent" in res.json()["detail"][0]["msg"]
 
     second_epic = _issue(admin_client, project["id"], "Second epic", "Epic")
     assert relink(story, epic_id=second_epic["id"]).status_code == 200

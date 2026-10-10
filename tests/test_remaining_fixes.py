@@ -114,6 +114,47 @@ def test_secure_logout_clears_both_cookie_names(client, monkeypatch):
     assert "__Host-bh_session=" in cleared and "bh_session=" in cleared.replace("__Host-bh_session=", "")
 
 
+# --- lockout: per email+IP, higher global per-email threshold ------------------
+def _login_from(client, ip, password):
+    return client.post("/api/auth/login", json={"email": ADMIN["email"], "password": password},
+                       headers={"X-Forwarded-For": ip})
+
+
+@pytest.fixture
+def behind_proxy(monkeypatch):
+    import app.config as config
+    monkeypatch.setattr(config.Settings, "TRUST_PROXY_FORWARDED_FOR", True)
+    monkeypatch.setattr(config.Settings, "TRUST_PROXY_HOP_COUNT", 1)
+
+
+def test_stranger_cannot_lock_the_account_for_its_owner(client, behind_proxy, monkeypatch):
+    from app import account_lockout
+    # Low enough to trip below the separate 8/min per-IP rate limit on /login.
+    monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_LIMIT", 3)
+    for _ in range(3):
+        assert _login_from(client, "203.0.113.9", "wrong-password-1").status_code == 401
+    # The attacker's own address is now refused ...
+    assert _login_from(client, "203.0.113.9", "wrong-password-1").status_code == 429
+    assert _login_from(client, "203.0.113.9", ADMIN["password"]).status_code == 429
+    # ... but the real owner, elsewhere, still signs in.
+    assert _login_from(client, "198.51.100.4", ADMIN["password"]).status_code == 200
+
+
+def test_failures_spread_over_many_addresses_still_lock_the_email(client, behind_proxy, monkeypatch):
+    from app import account_lockout
+    monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_LIMIT", 3)
+    monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_EMAIL_LIMIT", 6)
+    for n in range(6):
+        assert _login_from(client, f"192.0.2.{n + 1}", "wrong-password-1").status_code == 401
+    assert _login_from(client, "198.51.100.77", ADMIN["password"]).status_code == 429
+
+
+def test_email_limit_is_never_below_the_per_address_limit(client, monkeypatch):
+    from app import account_lockout
+    monkeypatch.setattr(account_lockout, "_LOGIN_FAIL_EMAIL_LIMIT", 1)
+    assert account_lockout._email_limit() >= account_lockout._LOGIN_FAIL_LIMIT
+
+
 # --- uploads: extension allowlist verified by magic bytes ---------------------
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 _SAMPLES = {

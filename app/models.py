@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -98,6 +99,20 @@ Index("idx_user_projects_project_id", user_projects.c.project_id)
 
 # Roles are enforced in app code, not DB constraints. Authoritative rules:
 # app/auth.py (can_edit_bug / can_delete_bug).
+def _one_of(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN ({', '.join(repr(v) for v in values)})"
+
+
+# Database-level guards for values the API already validates, so a script, a bad migration
+# or a direct SQL edit can't store what the app could never read back. Added to existing
+# PostgreSQL databases as NOT VALID and then validated (app/database.py).
+ROLES = ("admin", "manager", "user")
+PRIORITIES = ("Low", "Medium", "High", "Critical")
+ENVIRONMENTS = ("DEV", "UAT", "PROD")
+ITEM_TYPES = ("Bug", "Requirement", "Task", "Epic", "Story", "Sub-task")
+SPRINT_STATES = ("future", "active", "closed", "cancelled")
+
+
 ROLE_ADMIN = "admin"
 ROLE_MANAGER = "manager"
 ROLE_USER = "user"
@@ -129,7 +144,10 @@ class User(Base):
     # Case-insensitive uniqueness enforced in app code (routes/users.py
     # `_email_in_use`); a DB expression index is skipped since SQLite can't
     # reflect one (breaks the additive-index idempotency check).
-    __table_args__ = (Index("idx_users_email", "email"),)
+    __table_args__ = (
+        Index("idx_users_email", "email"),
+        CheckConstraint(_one_of("role", ROLES), name="ck_users_role"),
+    )
 
 
 # Single-use email password-reset tokens, stored as a sha256 hash never plaintext.
@@ -337,6 +355,10 @@ class Bug(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(_one_of("priority", PRIORITIES), name="ck_bugs_priority"),
+        CheckConstraint(_one_of("environment", ENVIRONMENTS), name="ck_bugs_environment"),
+        CheckConstraint(_one_of("item_type", ITEM_TYPES), name="ck_bugs_item_type"),
+        CheckConstraint("story_points IS NULL OR story_points >= 0", name="ck_bugs_story_points"),
         Index("idx_bugs_project_id", "project_id"),
         Index("idx_bugs_reporter_id", "reporter_id"),
         Index("idx_bugs_status", "status"),
@@ -530,6 +552,8 @@ class Notification(Base):
         Index("idx_notifications_emailed_at", "emailed_at"),
         # Composite lets the digest seek into the created_at window.
         Index("idx_notifications_emailed_created", "emailed_at", "created_at"),
+        # Retention purge (app/jobs/retention.py).
+        Index("idx_notifications_created_at", "created_at"),
     )
 
 
@@ -584,7 +608,11 @@ class ChatConversation(Base):
         order_by="ChatMessage.created_at, ChatMessage.id",
     )
 
-    __table_args__ = (Index("idx_chat_conv_user_id", "user_id"),)
+    __table_args__ = (
+        Index("idx_chat_conv_user_id", "user_id"),
+        # Retention purge (app/jobs/retention.py).
+        Index("idx_chat_conv_updated_at", "updated_at"),
+    )
 
 
 class ChatMessage(Base):
@@ -708,9 +736,11 @@ class Board(Base):
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
     )
+    # selectin: a board is always read with its columns, their statuses and those statuses'
+    # workflow rows; batching keeps that at three queries instead of one per mapping.
     columns: Mapped[list["BoardColumn"]] = relationship(
         "BoardColumn", back_populates="board", cascade=_CASCADE_ALL_DELETE_ORPHAN,
-        order_by="BoardColumn.position",
+        order_by="BoardColumn.position", lazy="selectin",
     )
 
     __table_args__ = (
@@ -735,6 +765,7 @@ class BoardColumn(Base):
     board: Mapped[Board] = relationship("Board", back_populates="columns")
     statuses: Mapped[list["BoardColumnStatus"]] = relationship(
         "BoardColumnStatus", back_populates="column", cascade=_CASCADE_ALL_DELETE_ORPHAN,
+        lazy="selectin",
     )
 
     __table_args__ = (
@@ -755,7 +786,7 @@ class BoardColumnStatus(Base):
         Integer, ForeignKey(_FK_WORKFLOW_STATUSES_ID, ondelete="CASCADE"), primary_key=True
     )
     column: Mapped[BoardColumn] = relationship("BoardColumn", back_populates="statuses")
-    workflow_status: Mapped[WorkflowStatus] = relationship("WorkflowStatus")
+    workflow_status: Mapped[WorkflowStatus] = relationship("WorkflowStatus", lazy="selectin")
 
     __table_args__ = (
         Index("idx_board_column_statuses_status", "workflow_status_id"),
@@ -816,6 +847,9 @@ class Sprint(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(_one_of("state", SPRINT_STATES), name="ck_sprints_state"),
+        CheckConstraint("start_date IS NULL OR end_date IS NULL OR end_date >= start_date",
+                        name="ck_sprints_dates"),
         Index("idx_sprints_unique_name", "board_id", "name_normalized", unique=True),
         Index("idx_sprints_board_id", "board_id"),
         Index("idx_sprints_project_id", "project_id"),
@@ -872,7 +906,7 @@ def _utcnow_precise() -> datetime:
 
 
 # Append-only change log of the work-item fields that agile reports replay
-# (Jira's issue changelog). Rows are written by app.agile.integrity on every
+# (the issue changelog). Rows are written by app.agile.integrity on every
 # flush that changes a tracked field, whatever the write path; nothing else
 # inserts, updates or deletes them.
 class WorkItemChange(Base):
@@ -1005,6 +1039,7 @@ class SprintCapacity(Base):
     )
 
     __table_args__ = (
+        CheckConstraint("capacity_value >= 0", name="ck_sprint_capacity_value"),
         Index("idx_sprint_capacity_unique", "sprint_id", "user_id", unique=True),
     )
 
@@ -1077,6 +1112,8 @@ class Version(Base):
     )
 
     __table_args__ = (
+        CheckConstraint("start_date IS NULL OR release_date IS NULL OR release_date >= start_date",
+                        name="ck_versions_dates"),
         Index("idx_versions_unique_name", "project_id", "name_normalized", unique=True),
         Index("idx_versions_project_id", "project_id"),
     )
@@ -1367,3 +1404,11 @@ class WorkItemBranch(Base):
         Index("idx_work_item_branches_project_id", "project_id"),
     )
 
+
+
+class AppMigration(Base):
+    """One-time data migrations that have run. Schema changes are additive and safe to repeat
+    on every boot; a data rewrite must run exactly once, and its name lands here when it does."""
+    __tablename__ = "app_migrations"
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)

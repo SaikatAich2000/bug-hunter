@@ -31,7 +31,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.database import get_db
-from app.email_service import notify_password_reset
+from app.email_service import mask_email, notify_password_reset
 from app.models import Activity, PasswordResetToken, User
 from app.models import Session as SessionRow
 from app.password_breach import is_password_breached
@@ -81,17 +81,6 @@ def _reject_if_breached(plain: str) -> None:
         )
 
 
-def _mask_email(email: str) -> str:
-    """Mask email local part for logs (``alice@x.com`` -> ``a***@x.com``); avoids PII in log stores."""
-    if not email or "@" not in email:
-        return "***"
-    local, _, domain = email.partition("@")
-    if not local:
-        return "@" + domain
-    head = local[0]
-    return f"{head}***@{domain}"
-
-
 def _client_ip(request: Request) -> str:
     """Client IP for sessions/audit. X-Forwarded-For is honoured only when
     TRUST_PROXY_FORWARDED_FOR is set (spoofable otherwise); matches the rate limiter."""
@@ -108,12 +97,31 @@ def _client_ip(request: Request) -> str:
     return ""
 
 
+def _record_failed_login(db: Session, user: User | None, email: str, ip: str, reason: str) -> None:
+    """Log every failed sign-in (email masked) and audit those on real accounts, including the
+    one that locks the account. Unknown emails are logged only, so typos never fill the audit."""
+    locked = account_lockout.record_failure(email)
+    logger.warning("Sign-in failed (%s): %s from %s", reason, mask_email(email), ip)
+    if locked:
+        logger.warning("Sign-in locked after repeated failures: %s from %s", mask_email(email), ip)
+    if user is None:
+        return
+    _audit(db, user, "login_failed", f"Failed sign-in for {user.email} from {ip or 'unknown'} ({reason})")
+    if locked:
+        _audit(db, user, "login_locked", f"Sign-in for {user.email} locked after repeated failures (last from {ip or 'unknown'})")
+    db.commit()
+
+
 @router.post("/login", response_model=MeOut, responses=AUTH_401)
 def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)) -> User:
     """Verify credentials, create a session row, and set the signed cookie.
     The cookie's `jti` maps back to the row, enabling per-session admin revocation."""
     # Check lockout before bcrypt so a login flood doesn't become a CPU flood.
-    account_lockout.check_locked(payload.email)
+    try:
+        account_lockout.check_locked(payload.email)
+    except HTTPException:
+        logger.info("Sign-in refused while locked: %s from %s", mask_email(payload.email), _client_ip(request))
+        raise
 
     # LoginIn already lowercases the email.
     user = db.scalar(select(User).where(User.email == payload.email))
@@ -124,12 +132,9 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     else:
         password_ok = verify_password(payload.password, user.password_hash)
     # Same 401 for all failures so existence/disabled status doesn't leak.
-    if user is None or not password_ok:
-        account_lockout.record_failure(payload.email)
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    if not user.is_active:
-        logger.info("Login refused: inactive account %s", _mask_email(user.email))
-        account_lockout.record_failure(payload.email)
+    if user is None or not password_ok or not user.is_active:
+        reason = "unknown account" if user is None else ("wrong password" if not password_ok else "inactive account")
+        _record_failed_login(db, user, payload.email, _client_ip(request), reason)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     # Clear the lockout bucket so transient typos don't carry forward.
@@ -164,11 +169,8 @@ def logout(request: Request, db: Session = Depends(get_db)) -> Response:
         user = db.get(User, user_id)
         if user:
             _audit(db, user, "logout", f"{user.email} logged out")
-        if jti:
-            # Only this session; the user's other sessions remain.
-            db.execute(
-                SessionRow.__table__.delete().where(SessionRow.jti == jti)
-            )
+        # Only this session; the user's other sessions remain.
+        db.execute(SessionRow.__table__.delete().where(SessionRow.jti == jti))
         db.commit()
     response = Response(status_code=204)
     clear_session_cookie(response)
@@ -246,7 +248,7 @@ def forgot_password(
         if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
             generate_reset_token()
         _audit(db, None, "password_reset_no_account",
-               f"Password reset attempted for unknown/inactive email: {_mask_email(payload.email)}")
+               f"Password reset attempted for unknown/inactive email: {mask_email(payload.email)}")
         db.commit()
         if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
             return Response(status_code=204)

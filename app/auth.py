@@ -1,7 +1,7 @@
 """Authentication primitives: bcrypt hashing, signed session cookies
 (HttpOnly + SameSite=Lax), reset tokens, and role-check dependencies.
 
-Token payload is `user_id:session_version[:jti]` — bumping session_version
+Token payload is `user_id:session_version:jti` — bumping session_version
 logs out every device; revoking a jti row logs out one device.
 """
 from __future__ import annotations
@@ -56,19 +56,18 @@ def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
 _FALLBACK_SECRET = secrets.token_hex(32)
 
 
-# bcrypt cost used when hashing passwords. Production keeps the default 12;
-# the test suite overrides BCRYPT_TEST_ROUNDS to 4 so CI does not burn most of
-# its wall-clock in password hashing (each rounds-12 hash costs ~0.3-0.6s and
-# the suite hashes/verify hundreds of times). Overriding an arbitrary low value
-# is capped at 12 so production strength can never be weakened through this.
-_TEST_BCRYPT_ROUNDS = 4
+# bcrypt cost for new hashes: 12. The test suite lowers it with BCRYPT_TEST_ROUNDS so CI
+# doesn't spend its time hashing; the override is read per call (tests set it after some app
+# modules are imported), capped at 12, and ignored in production.
 _MAX_BCRYPT_ROUNDS = 12
 
 
 def _bcrypt_rounds() -> int:
-    """Cost factor for new hashes; honour a test-only override, capped at prod strength."""
+    """Cost factor for new hashes; a test-only override never applies in production."""
+    if get_settings().is_production:
+        return _MAX_BCRYPT_ROUNDS
     try:
-        return max(1, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
+        return max(4, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
     except ValueError:
         return _MAX_BCRYPT_ROUNDS
 
@@ -98,18 +97,14 @@ def _signer() -> TimestampSigner:
     return TimestampSigner(s, salt="bh-session-v2")
 
 
-def make_session_token(user_id: int, session_version: int = 0, jti: str | None = None) -> str:
-    """Signed token of user id, session version, and optional per-session jti."""
-    if jti:
-        payload = f"{user_id}:{session_version}:{jti}"
-    else:
-        payload = f"{user_id}:{session_version}"
-    return _signer().sign(payload.encode("utf-8")).decode("utf-8")
+def make_session_token(user_id: int, session_version: int, jti: str) -> str:
+    """Signed token of user id, session version and the per-session id (jti)."""
+    return _signer().sign(f"{user_id}:{session_version}:{jti}".encode("utf-8")).decode("utf-8")
 
 
-def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
-    """Verify a session cookie; return (user_id, session_version, jti) or None.
-    jti is None for legacy pre-sessions-table tokens."""
+def parse_session_token(token: str) -> Optional[tuple[int, int, str]]:
+    """Verify a session cookie; return (user_id, session_version, jti) or None. A cookie
+    without a session id (from before per-device sessions) can't be revoked, so it is refused."""
     if not token:
         return None
     try:
@@ -121,15 +116,10 @@ def parse_session_token(token: str) -> Optional[tuple[int, int, Optional[str]]]:
     except (UnicodeDecodeError, AttributeError):
         return None
     parts = text.split(":")
-    try:
-        if len(parts) == 3:
-            return int(parts[0]), int(parts[1]), parts[2] or None
-        if len(parts) == 2:
-            return int(parts[0]), int(parts[1]), None
-        # Accept legacy single-int cookies so a deploy doesn't log everyone out.
-        if len(parts) == 1:
-            return int(parts[0]), 0, None
+    if len(parts) != 3 or not parts[2]:
         return None
+    try:
+        return int(parts[0]), int(parts[1]), parts[2]
     except ValueError:
         return None
 
@@ -144,7 +134,7 @@ def _cookie_secure(settings) -> bool:
     return bool(settings.COOKIE_SECURE) or settings.APP_BASE_URL.lower().startswith("https://")
 
 
-def set_session_cookie(response: Response, user: User, jti: str | None = None) -> None:
+def set_session_cookie(response: Response, user: User, jti: str) -> None:
     settings = get_settings()
     response.set_cookie(
         key=COOKIE_NAME,
@@ -268,14 +258,6 @@ def _user_from_request(request: Request, db: Session) -> Optional[User]:
     # session_version bump (password change/forced logout) invalidates old cookies.
     if (user.session_version or 0) != session_version:
         return None
-    # jti-less tokens pre-date the sessions table.
-    if jti is None:
-        if get_settings().SESSION_REQUIRE_JTI:
-            # Refuse cookies that can't be revoked per-device.
-            logger.info("Rejected jti-less session for user_id=%s", user_id)
-            return None
-        logger.debug("Accepting jti-less session for user_id=%s", user_id)
-        return user
     if not _validate_session_row(db, jti, user):
         return None
     return user

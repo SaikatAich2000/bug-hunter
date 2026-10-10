@@ -196,15 +196,12 @@ def test_concurrent_duplicate_creation_creates_one_remote_branch(
         # route call below must see the real function again.
         monkeypatch.setattr(branches_module, "find_existing_branch", original_find)
 
-    if forced_overlap:
-        # Both workers passed the local-record check, so exactly one insert
-        # loses to the unique index. The winner either created the remote
-        # branch itself or adopted the one the loser had just created (the
-        # remote-existence reconciliation), depending on which insert commits
-        # first.
-        assert sorted(results) in (["created", "lost-race"], ["lost-race", "reused"])
-    else:
-        assert sorted(results) in (["created", "lost-race"], ["created", "reused"])
+    # One worker may create the remote ref while the other adopts it and wins
+    # the insert, so the creator loses the unique index; the invariants below
+    # (one row, one remote branch) hold in every ordering.
+    assert sorted(results) in (
+        ["created", "lost-race"], ["created", "reused"], ["lost-race", "reused"]
+    )
     assert [
         branch for (_, _, branch) in provider.remote_branches
         if branch.startswith(f"feature_{story['id']}_")

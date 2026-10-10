@@ -65,7 +65,7 @@ class TestValidateStoryReadyRequirements:
         
         story = Bug(
             item_type="Story", title="S", description="D", project_id=project.id,
-            priority="", story_points=5, owner_id=user.id,
+            priority="High", story_points=5, owner_id=user.id,
             start_date=date(2026, 1, 1), due_date=date(2026, 12, 31)
         )
         db_session.add(story)
@@ -75,7 +75,11 @@ class TestValidateStoryReadyRequirements:
         db_session.add(crit)
         db_session.flush()
         
-        assert not _validate_story_ready_requirements(db_session, story)
+        # The CHECK constraint forbids storing an empty priority, so blank it
+        # on the transient object only.
+        with db_session.no_autoflush:
+            story.priority = ""
+            assert not _validate_story_ready_requirements(db_session, story)
 
     def test_returns_false_when_no_story_points(self, db_session, test_project_and_user):
         """Returns False if Story has no story points."""

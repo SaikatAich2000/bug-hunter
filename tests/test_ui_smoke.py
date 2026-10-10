@@ -3,12 +3,15 @@ drives a real Chromium via Playwright through the main user flows."""
 import contextlib
 import os
 import socket
+import subprocess
 import sys
 import tempfile
-import threading
 import time
+from pathlib import Path
 
 import pytest
+
+from tests.browser_support import launch
 
 # Mark the whole module `ui` so CI can skip the browser suite with `-m "not ui"`.
 pytestmark = pytest.mark.ui
@@ -22,36 +25,27 @@ def _free_port() -> int:
 
 @pytest.fixture(scope="module")
 def live_server():
-    """Boot the FastAPI app on a random port in a background thread."""
+    """Serve the app from a separate process so the test process's env and modules stay untouched."""
     db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
     db.close()
-    os.environ["DATABASE_URL"] = f"sqlite:///{db.name}"
-    os.environ["SESSION_SECRET"] = "ui_smoke"
-    os.environ["EMAIL_BACKEND"] = "disabled"
-    os.environ["BOOTSTRAP_ADMIN_EMAIL"] = "admin@ui.test"
-    os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "AdminUI1234"
-    os.environ["BOOTSTRAP_ADMIN_NAME"] = "UI Admin"
-    # Disable HIBP outbound calls. This server starts before any function-scoped
-    # monkeypatch runs, so without this the create-user flow would block on a
-    # live network round-trip.
-    os.environ["PASSWORD_BREACH_CHECK_ENABLED"] = "false"
-    # Fresh import after env vars are in place.
-    for m in list(sys.modules):
-        if m == "app" or m.startswith("app."):
-            del sys.modules[m]
-
-    import uvicorn
-
-    from app.main import app
-
     port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
-    server = uvicorn.Server(config)
-
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    # Poll until the server is ready to accept connections.
-    deadline = time.time() + 10
+    env = {
+        **os.environ,
+        "DATABASE_URL": f"sqlite:///{db.name}",
+        "SESSION_SECRET": "ui_smoke",
+        "EMAIL_BACKEND": "disabled",
+        "BOOTSTRAP_ADMIN_EMAIL": "admin@ui.test",
+        "BOOTSTRAP_ADMIN_PASSWORD": "AdminUI1234",
+        "BOOTSTRAP_ADMIN_NAME": "UI Admin",
+        # The create-user flow would otherwise block on a live HaveIBeenPwned call.
+        "PASSWORD_BREACH_CHECK_ENABLED": "false",
+    }
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",
+         "--port", str(port), "--log-level", "warning"],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+    )
+    deadline = time.time() + 20
     while time.time() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
@@ -59,12 +53,13 @@ def live_server():
         except OSError:
             time.sleep(0.1)
     else:
+        server.kill()
         raise RuntimeError("server didn't start")
 
     yield f"http://127.0.0.1:{port}"
 
-    server.should_exit = True
-    thread.join(timeout=5)
+    server.terminate()
+    server.wait(timeout=10)
     with contextlib.suppress(Exception):
         os.unlink(db.name)
 
@@ -73,7 +68,7 @@ def live_server():
 def browser():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        b = p.chromium.launch()
+        b = launch(p)
         yield b
         b.close()
 

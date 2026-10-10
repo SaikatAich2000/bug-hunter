@@ -10,7 +10,7 @@ import DOMPurify from "dompurify";
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ESC[c]);
 
-export function slugify(text) {
+function slugify(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
@@ -119,7 +119,7 @@ export function markdownToHtml(md) {
   return sanitizeGuide(html.join("\n"));
 }
 
-export function sanitizeGuide(html) {
+function sanitizeGuide(html) {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ["h1", "h2", "h3", "h4", "p", "ul", "ol", "li", "strong", "em", "code", "pre", "a",
       "blockquote", "hr", "table", "thead", "tbody", "tr", "th", "td", "br"],

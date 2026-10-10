@@ -17,3 +17,18 @@ def launch(playwright, name: str = "chromium"):
     if executable:
         options["executable_path"] = executable
     return getattr(playwright, name).launch(**options)
+
+
+def dismiss_welcome(page) -> None:
+    """Mark the first-login welcome as seen for the signed-in user and close it if it is showing.
+
+    Every browser suite that signs in as a fresh user calls this, so the dialog never covers the
+    page under test. The page must already be on the app origin with a session."""
+    page.evaluate(
+        """() => fetch('/api/me/preferences', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({welcome_seen: true}), credentials: 'include'})"""
+    )
+    later = page.get_by_role("button", name="Maybe later")
+    if later.count():
+        later.first.click()

@@ -60,13 +60,16 @@ def update_preferences(
     user: User = Depends(get_current_user),
 ) -> PreferencesOut:
     """Merge the given fields into the caller's onboarding state."""
-    row = db.get(UserPreference, user.id)
-    if row is None:
-        row = UserPreference(
-            user_id=user.id, welcome_seen=False, welcome_hidden=False,
-            tour_status="none", tour_step=0,
-        )
-        db.add(row)
+    # Create-if-missing in one statement: two simultaneous first writes would otherwise both
+    # insert and the loser would fail on the primary key.
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    db.execute(insert(UserPreference).values(
+        user_id=user.id, welcome_seen=False, welcome_hidden=False, tour_status="none", tour_step=0,
+    ).on_conflict_do_nothing(index_elements=[UserPreference.user_id]))
+    row = db.get(UserPreference, user.id, populate_existing=True)
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(row, field, value)
     db.commit()

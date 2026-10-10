@@ -7,6 +7,7 @@ import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
 import { withLoader } from "../lib/loader";
+import { exitRows } from "../lib/motion";
 import { formatDate, initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
 import BhSelect from "../components/BhSelect";
@@ -60,6 +61,8 @@ const PAGER_NOUN = {
   Requirement: "requirements",
   Task: "tasks",
 };
+
+const rowEl = (id) => document.querySelector(`tr[data-bug-id="${id}"]`);
 
 export default function ListView() {
   const {
@@ -124,7 +127,7 @@ export default function ListView() {
   const clearSelection = () => setSelected(new Set());
 
   const applyingRef = useRef(false);
-  const applyBulk = async (action, value) => {
+  const applyBulk = async (action, value, leaving = []) => {
     const ids = [...selected];
     if (!ids.length || applyingRef.current) return;  // guard double-submit
     applyingRef.current = true;
@@ -134,6 +137,7 @@ export default function ListView() {
       const b = bugs.find((x) => x.id === id);
       if (b && typeof b.version === "number") expected_versions[id] = b.version;
     }
+    const undoLeave = await exitRows(leaving);
     try {
       const res = await withLoader(
         () =>
@@ -148,6 +152,7 @@ export default function ListView() {
       closeBugModal();
       await refreshAll();
     } catch (err) {
+      undoLeave();
       toastError(err);
     } finally {
       applyingRef.current = false;
@@ -160,7 +165,7 @@ export default function ListView() {
       `Delete ${n} selected item${n === 1 ? "" : "s"}? This also deletes their comments and attachments. Cannot be undone`,
     );
     if (!ok) return;
-    await applyBulk("delete");
+    await applyBulk("delete", undefined, [...selected].map(rowEl));
   };
 
   // Use the cached row's type so the confirm prompt uses the right noun.
@@ -172,6 +177,7 @@ export default function ListView() {
       `Delete ${noun} #${bugId}? This will also delete its comments and attachments. Cannot be undone`,
     );
     if (!ok) return;
+    const undoLeave = await exitRows([rowEl(bugId)]);
     try {
       await withLoader(async () => {
         await api(`/bugs/${bugId}`, { method: "DELETE" });
@@ -180,6 +186,7 @@ export default function ListView() {
       }, `Deleting ${noun}…`);
       toast(`${itype} #${bugId} deleted`, "success");
     } catch (err) {
+      undoLeave();
       toastError(err);
     }
   };

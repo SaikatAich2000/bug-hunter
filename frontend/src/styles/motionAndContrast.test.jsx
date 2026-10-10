@@ -53,6 +53,13 @@ describe("motion.css", () => {
     }
   });
 
+  it("covers row removal, tab switches and the drag-drop settle", () => {
+    expect(block(motion, "[data-leaving]")).toMatch(/bh-row-out/);
+    expect(motion).toMatch(/\.agile-tab-panel[^{]*\{[^}]*bh-view-in/);
+    expect(motion).toMatch(/\.ag-row, \.ag-card \{ transition: opacity/);
+    expect(motion).not.toMatch(/\[data-leaving\][^{]*\{[^}]*(color|background)/);
+  });
+
   it("is loaded after the base stylesheets", () => {
     const main = readFileSync(join(dir, "..", "main.jsx"), "utf8");
     expect(main.indexOf("motion.css")).toBeGreaterThan(main.indexOf("styles.css"));

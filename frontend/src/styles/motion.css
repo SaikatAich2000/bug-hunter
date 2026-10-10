@@ -59,6 +59,12 @@
 @keyframes bh-row-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .ag-row.dragging, .ag-card.dragging { animation: none; }
 
+/* Rows being removed fade and slide out (exitRows in lib/motion.js sets the attribute, waits one --motion, then the
+   row unmounts). Sidebar collapse keeps the grid-column transition: a transform-only version would leave the
+   main column un-resized, so that one layout cost is accepted. */
+[data-leaving] { animation: bh-row-out var(--motion) var(--motion-ease) both !important; pointer-events: none; }
+@keyframes bh-row-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-12px); } }
+
 /* Cards settle back into place after a drop (dnd-kit supplies the transform; this smooths the rest). */
 .ag-row, .ag-card { transition: opacity var(--motion-fast) var(--motion-ease); }
 

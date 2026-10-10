@@ -30,7 +30,7 @@ function colAlign(col) {
 
 /** Cell value  text: Yes/No for booleans, JSON for objects, truncated at 200 chars. */
 /** Stable React key for a report result row, derived from the projected cells. */
-export function reportRowKey(columns, row) {
+function reportRowKey(columns, row) {
   return columns.map((col) => String(row?.[col.key] ?? "")).join("|");
 }
 

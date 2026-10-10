@@ -29,7 +29,7 @@ pytest.importorskip(
 
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
-from tests.browser_support import launch  # noqa: E402
+from tests.browser_support import dismiss_welcome, launch  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -117,14 +117,7 @@ def page(stack):
             }""",
             [ADMIN_EMAIL, ADMIN_PASSWORD],
         )
-        pg.evaluate(
-            """() => fetch('/api/me/preferences', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({welcome_seen: true}),
-                credentials: 'include'
-            })"""
-        )
+        dismiss_welcome(pg)
         if status != 200:
             context.close()
             browser.close()

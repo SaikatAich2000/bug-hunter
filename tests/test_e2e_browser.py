@@ -32,7 +32,7 @@ pytest.importorskip("playwright.sync_api", reason="Playwright is required for th
 import httpx
 from playwright.sync_api import expect, sync_playwright
 
-from tests.browser_support import BROWSERS, launch
+from tests.browser_support import BROWSERS, dismiss_welcome, launch
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN_EMAIL = "admin@e2e.test"
@@ -288,6 +288,7 @@ def _login(pg, base, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, *, expect_url=N
     pg.click('button[type="submit"]')
     pg.wait_for_url(expect_url or f"{base}/")
     expect(pg.locator("#accountName")).not_to_have_text("")
+    dismiss_welcome(pg)
 
 
 def _drag(pg, start, end, steps=20):
@@ -596,6 +597,52 @@ def test_sprint_lifecycle_plan_start_complete_and_report(server, open_page, admi
     expect(kpis.locator('.report-kpi:has-text("Committed at start") .report-kpi-num')).to_have_text("8")
     expect(kpis.locator(".report-kpi").nth(1).locator(".report-kpi-num")).to_have_text("5")
     expect(kpis.locator('.report-kpi:has-text("Not completed") .report-kpi-num')).to_have_text("3")
+    problems.assert_clean()
+
+
+def test_complete_sprint_sends_each_open_issue_to_its_own_destination(server, open_page, admin_state):
+    """Complete Sprint: one open issue follows the dialog default (backlog), the other is
+    overridden to the next sprint, and the planning data shows each where it was sent."""
+    base = server["base"]
+    name = f"E2E Dispositions {int(time.time() * 1000)}"
+    with _admin_api(base, admin_state) as c:
+        pid = c.post("/api/projects", json={"name": name}).json()["id"]
+        board = c.post(f"/api/agile/projects/{pid}/enable", json={}).json()["board_id"]
+        today = date.today()
+        current = c.post(f"/api/agile/sprints?board_id={board}", json={
+            "name": "Dest Current", "start_date": today.isoformat(),
+            "end_date": (today + timedelta(days=13)).isoformat(),
+        }).json()
+        c.post(f"/api/agile/sprints?board_id={board}", json={"name": "Dest Next"}).raise_for_status()
+        ids = {}
+        for title in ("Dest stays in backlog", "Dest goes to next sprint"):
+            ids[title] = c.post("/api/agile/work-items", json={
+                "project_id": pid, "title": title, "item_type": "Story", "story_points": 2,
+                "sprint_id": current["id"],
+            }).json()["id"]
+        c.post(f"/api/agile/sprints/{current['id']}/start",
+               json={"version": current["version"]}).raise_for_status()
+
+    pg, problems = open_page(admin_state)
+    _home(pg, base)
+    _open_sprints(pg, project_name=name, tab="board")
+    pg.locator('.ag-board-head button:has-text("Complete sprint")').click()
+    complete = pg.locator("#completeSprintDialog")
+    expect(complete.locator(".ag-complete-summary")).to_contain_text("2 open issues")
+    complete.locator('.ag-complete-issue:has-text("goes to next sprint") .bh-sel-btn').click()
+    pg.locator('.bh-sel-pop .bh-sel-row:has-text("Dest Next")').click()
+    with pg.expect_response(lambda r: f"/sprints/{current['id']}/complete" in r.url) as completed:
+        complete.locator('button[type="submit"]').click()
+    assert completed.value.ok, completed.value.text()
+    sent = completed.value.request.post_data_json
+    assert sent["default_destination"] == "backlog"
+    assert [d["item_id"] for d in sent["dispositions"]] == [ids["Dest goes to next sprint"]]
+
+    with _admin_api(base, admin_state) as c:
+        planning = c.get(f"/api/agile/boards/{board}/planning").json()
+    next_sprint = next(s for s in planning["sprints"] if s["name"] == "Dest Next")
+    assert [i["id"] for i in next_sprint["issues"]] == [ids["Dest goes to next sprint"]]
+    assert [i["id"] for i in planning["backlog"]] == [ids["Dest stays in backlog"]]
     problems.assert_clean()
 
 

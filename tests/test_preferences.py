@@ -28,6 +28,48 @@ def test_rejects_bad_values(admin_client):
     assert admin_client.put(URL, json={"user_id": 5}).status_code == 422
 
 
+def test_two_simultaneous_first_writes_both_succeed(admin_client):
+    """The first PUT creates the row. Two at once must not collide on the primary key."""
+    import threading
+
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import User, UserPreference
+    from app.routes.preferences import PreferencesIn, update_preferences
+
+    with SessionLocal() as db:
+        user = db.scalar(select(User))
+        db.expunge(user)
+    barrier = threading.Barrier(2)
+    outcomes: list[object] = []
+
+    def worker(payload):
+        barrier.wait()
+        with SessionLocal() as db:
+            try:
+                outcomes.append(update_preferences(payload, db, user))
+            except Exception as exc:  # noqa: BLE001 - the test asserts there are none
+                outcomes.append(exc)
+
+    threads = [
+        threading.Thread(target=worker, args=(PreferencesIn(welcome_seen=True),)),
+        threading.Thread(target=worker, args=(PreferencesIn(tour_step=3),)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert len(outcomes) == 2 and not [o for o in outcomes if isinstance(o, Exception)], outcomes
+    with SessionLocal() as db:
+        assert len(db.scalars(select(UserPreference)).all()) == 1
+
+
+def test_existing_row_is_kept_not_reset_by_the_create_step(admin_client):
+    admin_client.put(URL, json={"tour_step": 4})
+    assert admin_client.put(URL, json={"welcome_seen": True}).json()["tour_step"] == 4
+
+
 def test_state_is_per_user(client, admin_client):
     admin_client.put(URL, json={"welcome_seen": True})
     client.post("/api/users", json={

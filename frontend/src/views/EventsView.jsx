@@ -22,7 +22,7 @@ import { DATA_POLL_MS, useApp } from "../state/AppContext";
 import { itemTypeIcon as itemTypeEmoji } from "../lib/itemTypes";
 
 /** Button label for "add existing tasks", with count and plural handling. */
-export function addExistingTasksLabel(count) {
+function addExistingTasksLabel(count) {
   const shown = count || "";
   const plural = count === 1 ? "" : "s";
   return `Add ${shown} task${plural}`.trim();

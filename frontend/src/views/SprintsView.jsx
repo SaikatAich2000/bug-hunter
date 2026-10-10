@@ -16,7 +16,7 @@ import { agileApi, notifyAgileChanged } from "./agile/agileApi";
 import { useAgileProject } from "./agile/useAgileProject";
 import "../styles/agile.css";
 
-export const SPRINT_TABS = [
+const SPRINT_TABS = [
   { key: "backlog", icon: "📋", label: "Backlog" },
   { key: "board", icon: "📌", label: "Active sprint" },
   { key: "hierarchy", icon: "🌳", label: "Epics" },

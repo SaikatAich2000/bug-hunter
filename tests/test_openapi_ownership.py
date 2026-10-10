@@ -47,6 +47,8 @@ OPERATION_OWNERS: dict[tuple[str, str], list[str]] = {
     ("DELETE", "/api/notifications"): ["tests/test_notifications.py"],
     ("GET", "/api/push"): ["tests/test_push.py"],
     ("POST", "/api/push"): ["tests/test_push.py"],
+    ("GET", "/api/me/preferences"): ["tests/test_preferences.py"],
+    ("PUT", "/api/me/preferences"): ["tests/test_preferences.py"],
     ("GET", "/api/agile/boards"): ["tests/test_agile_foundation.py"],
     ("PUT", "/api/agile/boards"): ["tests/test_agile_foundation.py"],
     ("POST", "/api/agile/boards"): ["tests/test_agile_foundation.py"],

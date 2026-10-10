@@ -72,6 +72,7 @@ from app.routes import (
     events,
     git,
     notifications,
+    preferences,
     projects,
     push,
     reports,
@@ -1136,6 +1137,7 @@ app.include_router(audit.router)
 app.include_router(sessions.router)
 app.include_router(notifications.router)
 app.include_router(push.router)
+app.include_router(preferences.router)
 app.include_router(agile.router)
 app.include_router(agile_board.router)
 app.include_router(agile_planning.router)

@@ -1412,3 +1412,27 @@ class AppMigration(Base):
     __tablename__ = "app_migrations"
     name: Mapped[str] = mapped_column(String(100), primary_key=True)
     applied_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
+
+
+TOUR_STATUSES = ("none", "running", "dismissed", "done")
+
+
+class UserPreference(Base):
+    """Per-user onboarding state (welcome screen, product tour) so it follows the person across
+    browsers instead of living in one browser's localStorage. One row per user, created lazily."""
+    __tablename__ = "user_preferences"
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey(_FK_USERS_ID, ondelete="CASCADE"), primary_key=True
+    )
+    welcome_seen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    welcome_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tour_status: Mapped[str] = mapped_column(String(20), nullable=False, default="none")
+    tour_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(_one_of("tour_status", TOUR_STATUSES), name="ck_user_preferences_tour_status"),
+        CheckConstraint("tour_step >= 0", name="ck_user_preferences_tour_step"),
+    )

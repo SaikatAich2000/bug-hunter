@@ -1,9 +1,9 @@
-"""Optional in-process scheduler for the daily email digest.
+"""In-process scheduler: the daily retention run and the optional email digest.
 
-When ``EMAIL_DIGEST_CRON`` holds a standard 5-field cron expression the app
-runs ``app.jobs.email_digest`` on that schedule with no host cron or Task
-Scheduler needed. An empty expression (the default) leaves scheduling to an
-external runner.
+Retention (``app.jobs.retention``) runs a few minutes after boot and then daily, unless
+RETENTION_JOB_ENABLED is off. When ``EMAIL_DIGEST_CRON`` holds a standard 5-field cron
+expression the app runs ``app.jobs.email_digest`` on that schedule with no host cron or Task
+Scheduler needed. An empty expression (the default) leaves the digest to an external runner.
 
 No external dependencies: a small cron parser plus one asyncio task that
 wakes at the top of every minute. Errors (bad expression, unknown timezone,
@@ -184,6 +184,31 @@ async def _loop(schedule: CronSchedule, tz: tzinfo) -> None:
 
 
 _task: asyncio.Task | None = None
+_retention_task: asyncio.Task | None = None
+# First retention run a few minutes after boot (not during a rolling deploy's warm-up), then daily.
+_RETENTION_FIRST_DELAY_SECONDS = 300
+_RETENTION_INTERVAL_SECONDS = 24 * 3600
+
+
+async def _retention_loop() -> None:
+    from app.jobs.retention import run_once
+
+    await asyncio.sleep(_RETENTION_FIRST_DELAY_SECONDS)
+    while True:
+        try:
+            await asyncio.to_thread(run_once)
+        except Exception:  # noqa: BLE001 — a failed run must not kill the loop
+            logger.exception("Retention run failed; will retry tomorrow.")
+        await asyncio.sleep(_RETENTION_INTERVAL_SECONDS)
+
+
+def start_retention() -> None:
+    """Start the daily retention loop (from a running event loop, e.g. the FastAPI lifespan)."""
+    global _retention_task
+    if not get_settings().RETENTION_JOB_ENABLED:
+        return
+    if _retention_task is None or _retention_task.done():
+        _retention_task = asyncio.create_task(_retention_loop())
 
 
 def start() -> None:
@@ -235,13 +260,21 @@ def start() -> None:
 
 
 async def stop() -> None:
-    """Cancel the scheduler task on shutdown. Safe when never started."""
-    global _task
-    if _task is None:
-        return
-    _task.cancel()
-    # return_exceptions=True lets gather capture the task's CancelledError as
+    """Cancel this event loop's scheduler tasks on shutdown. Safe when never started."""
+    global _task, _retention_task
+    loop = asyncio.get_running_loop()
+
+    def _ours(task: asyncio.Task | None) -> bool:
+        return task is not None and getattr(task, "get_loop", lambda: loop)() is loop
+
+    tasks = [t for t in (_task, _retention_task) if _ours(t)]
+    for t in tasks:
+        t.cancel()
+    # return_exceptions=True lets gather capture the tasks' CancelledError as
     # a result rather than swallowing it, so a cancellation targeting stop()
     # itself still propagates normally.
-    await asyncio.gather(_task, return_exceptions=True)
-    _task = None
+    await asyncio.gather(*tasks, return_exceptions=True)
+    if _ours(_task):
+        _task = None
+    if _ours(_retention_task):
+        _retention_task = None

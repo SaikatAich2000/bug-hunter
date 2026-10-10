@@ -56,19 +56,18 @@ def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
 _FALLBACK_SECRET = secrets.token_hex(32)
 
 
-# bcrypt cost used when hashing passwords. Production keeps the default 12;
-# the test suite overrides BCRYPT_TEST_ROUNDS to 4 so CI does not burn most of
-# its wall-clock in password hashing (each rounds-12 hash costs ~0.3-0.6s and
-# the suite hashes/verify hundreds of times). Overriding an arbitrary low value
-# is capped at 12 so production strength can never be weakened through this.
-_TEST_BCRYPT_ROUNDS = 4
+# bcrypt cost for new hashes: 12. The test suite lowers it with BCRYPT_TEST_ROUNDS so CI
+# doesn't spend its time hashing; the override is read per call (tests set it after some app
+# modules are imported), capped at 12, and ignored in production.
 _MAX_BCRYPT_ROUNDS = 12
 
 
 def _bcrypt_rounds() -> int:
-    """Cost factor for new hashes; honour a test-only override, capped at prod strength."""
+    """Cost factor for new hashes; a test-only override never applies in production."""
+    if get_settings().is_production:
+        return _MAX_BCRYPT_ROUNDS
     try:
-        return max(1, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
+        return max(4, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
     except ValueError:
         return _MAX_BCRYPT_ROUNDS
 

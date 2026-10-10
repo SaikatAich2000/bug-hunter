@@ -8,6 +8,7 @@ import asyncio
 import logging
 import weakref
 from collections.abc import AsyncGenerator, Callable
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
@@ -415,6 +416,65 @@ def _preserve_legacy_html_descriptions(conn) -> None:
         logger.exception("legacy description preservation failed; descriptions were not copied")
 
 
+def _run_once(conn, name: str, migrate: Callable[[object], None]) -> None:
+    """Run a data migration exactly once per database (recorded in app_migrations). Callers
+    hold the migration lock, so two replicas never run the same one."""
+    done = conn.execute(text("SELECT 1 FROM app_migrations WHERE name = :n"), {"n": name}).first()
+    if done is not None:
+        return
+    try:
+        with conn.begin_nested():
+            migrate(conn)
+            conn.execute(
+                text("INSERT INTO app_migrations (name, applied_at) VALUES (:n, :t)"),
+                {"n": name, "t": datetime.now(timezone.utc).replace(microsecond=0)},
+            )
+    except SQLAlchemyError:
+        # Rolled back and not recorded, so the next boot retries it; serving continues.
+        logger.exception("data migration %s failed; it will be retried on the next start", name)
+        return
+    logger.info("data migration %s applied", name)
+
+
+def _flatten_legacy_html_descriptions(conn) -> None:
+    """Rewrite 3.x HTML descriptions (already copied to description_legacy_html) as the plain
+    text 4.0 shows, so every description is stored exactly as it is displayed."""
+    from app.schemas import rich_text_to_plain
+
+    rows = conn.execute(text(
+        "SELECT id, description FROM bugs WHERE description_legacy_html IS NOT NULL "
+        "AND description = description_legacy_html"
+    )).all()
+    for bug_id, html in rows:
+        conn.execute(text("UPDATE bugs SET description = :d WHERE id = :i"),
+                     {"d": rich_text_to_plain(html), "i": bug_id})
+    if rows:
+        logger.info("Converted %d rich-text description(s) to plain text", len(rows))
+
+
+def _unescape_plain_text_fields(conn) -> None:
+    """Sprint goals, blocked reasons and epic notes used to be stored HTML-escaped (a typed
+    ``>`` showed as ``&gt;``); they are plain text now, stored as typed."""
+    import html
+
+    for table, key, column in (("sprints", "id", "goal"), ("bugs", "id", "blocked_reason"),
+                               ("epic_details", "epic_id", "summary_note")):
+        rows = conn.execute(text(
+            f"SELECT {key}, {column} FROM {table} WHERE {column} LIKE :amp"  # noqa: S608 - fixed names
+        ), {"amp": "%&%"}).all()
+        for row_id, value in rows:
+            plain = html.unescape(value)
+            if plain != value:
+                conn.execute(text(f"UPDATE {table} SET {column} = :v WHERE {key} = :i"),  # noqa: S608
+                             {"v": plain, "i": row_id})
+
+
+def _plain_text_storage(conn) -> None:
+    _preserve_legacy_html_descriptions(conn)
+    _flatten_legacy_html_descriptions(conn)
+    _unescape_plain_text_fields(conn)
+
+
 def _add_missing_agile_columns(conn, inspector, bug_cols: set[str]) -> None:
     _add_missing_project_agile_columns(conn, inspector)
     if bug_cols:
@@ -601,7 +661,7 @@ def init_db(on_migrated: Callable[[], None] | None = None) -> bool:
             _seed_global_workflow_statuses(conn)
         with engine.begin() as conn:
             _backfill_bug_display_id(conn)
-            _preserve_legacy_html_descriptions(conn)
+            _run_once(conn, "plain_text_storage_v1", _plain_text_storage)
             _align_agile_hierarchy(conn)
         if on_migrated is not None:
             on_migrated()
@@ -630,7 +690,7 @@ def init_db(on_migrated: Callable[[], None] | None = None) -> bool:
             _add_missing_indexes(conn)
             _seed_global_workflow_statuses(conn)
             _backfill_bug_display_id(conn)
-            _preserve_legacy_html_descriptions(conn)
+            _run_once(conn, "plain_text_storage_v1", _plain_text_storage)
             _align_agile_hierarchy(conn)
             # All DDL commits together; seeding uses its own session and must
             # see the tables, so it runs after this commit, still under the lock.

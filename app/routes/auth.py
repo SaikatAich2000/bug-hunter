@@ -161,9 +161,8 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
 @router.post("/logout", status_code=204)
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
     """Clear the session cookie and its server-side row; always 204 (idempotent)."""
-    from app.auth import COOKIE_NAME, parse_session_token
-    token = request.cookies.get(COOKIE_NAME, "")
-    parsed = parse_session_token(token)
+    from app.auth import parse_session_token, session_cookie_value
+    parsed = parse_session_token(session_cookie_value(request))
     if parsed:
         user_id, _version, jti = parsed
         user = db.get(User, user_id)

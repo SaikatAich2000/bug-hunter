@@ -13,7 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api_docs import BAD_REQUEST_NOT_FOUND_404 as NOT_FOUND_400
-from app.auth import COOKIE_NAME, parse_session_token, require_admin
+from app.auth import (
+    COOKIE_NAME,  # noqa: F401  (legacy cookie name, addressed through this module by tests)
+    parse_session_token,
+    require_admin,
+    session_cookie_value,
+)
 from app.database import get_db
 from app.models import Activity, User
 from app.models import Session as SessionRow
@@ -34,8 +39,7 @@ def _audit(db: Session, actor: User, action: str, detail: str, entity_id: int | 
 
 def _is_current(request: Request, sess: SessionRow) -> bool:
     """True when the row matches the caller's cookie — labels it and blocks self-revoke."""
-    token = request.cookies.get(COOKIE_NAME, "")
-    parsed = parse_session_token(token)
+    parsed = parse_session_token(session_cookie_value(request))
     if not parsed:
         return False
     _uid, _ver, jti = parsed

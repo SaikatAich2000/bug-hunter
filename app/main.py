@@ -39,10 +39,11 @@ from sqlalchemy.orm import Session as OrmSession
 from starlette.datastructures import MutableHeaders
 
 from app.auth import (
-    COOKIE_NAME,
+    COOKIE_NAME,  # noqa: F401  (legacy cookie name, addressed through this module by tests)
     hash_password,
     new_jti,
     parse_session_token,
+    session_cookie_value,
     set_session_cookie,
     trusted_forwarded_ip,
 )
@@ -946,8 +947,7 @@ def _has_valid_session(request: Request) -> bool:
     Must check revocation, not just the signature — accepting a revoked cookie
     here makes / and /login.html redirect-loop each other.
     """
-    token = request.cookies.get(COOKIE_NAME, "")
-    parsed = parse_session_token(token)
+    parsed = parse_session_token(session_cookie_value(request))
     if parsed is None:
         return False
     user_id, _session_version, jti = parsed

@@ -84,6 +84,7 @@ from app.models import (
     User,
     WorkItemBranch,
 )
+from app.people import reject_inactive, require_project_members, resolve_user, resolve_users
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
     ALLOWED_ITEM_TYPES,
@@ -339,38 +340,6 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
         item_type=_item_type(bug),
         event_name=bug.event.name if getattr(bug, "event", None) else None,
     )
-
-
-def _resolve_users(db: Session, user_ids: list[int]) -> list[User]:
-    if not user_ids: return []
-    rows = db.scalars(select(User).where(User.id.in_(user_ids))).all()
-    found = {u.id for u in rows}
-    missing = set(user_ids) - found
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Unknown user ids: {sorted(missing)}")
-    return list(rows)
-
-
-def _resolve_user(db: Session, user_id: int | None) -> User | None:
-    if user_id is None: return None
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=400, detail=f"User {user_id} does not exist")
-    return user
-
-
-def _reject_inactive(users: list[User], noun: str = "user") -> None:
-    """Reject new assignments to deactivated accounts.
-
-    A disabled user can't log in, so notifications would be dead-ends. Existing
-    references are left in place; only new additions are checked.
-    """
-    inactive = sorted((u.name for u in users if not u.is_active))
-    if inactive:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot assign a deactivated {noun}: {', '.join(inactive)}",
-        )
 
 
 # Human-readable labels for each link type, as (outgoing, incoming) pairs.
@@ -838,12 +807,14 @@ def create_bug(
                 status_code=403,
                 detail="You can only file items as yourself",
             )
-        reporter = _resolve_user(db, payload.reporter_id)
+        reporter = resolve_user(db, payload.reporter_id)
     else:
         reporter = actor
 
-    assignees = _resolve_users(db, payload.assignee_ids)
-    _reject_inactive([reporter, *assignees])
+    assignees = resolve_users(db, payload.assignee_ids)
+    reject_inactive([reporter, *assignees])
+    require_project_members(db, assignees, payload.project_id)
+    require_project_members(db, [reporter], payload.project_id, noun="reporter")
 
     if payload.event_id is not None:
         _assert_event_accessible(db, accessible, payload.event_id)
@@ -1289,8 +1260,8 @@ def _apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int]
         bug.reporter_id = None
         new_reporter_label = "—"
     else:
-        new_reporter = _resolve_user(db, new_reporter_id)
-        _reject_inactive([new_reporter], "reporter")
+        new_reporter = resolve_user(db, new_reporter_id)
+        reject_inactive([new_reporter], "reporter")
         bug.reporter_id = new_reporter.id
         new_reporter_label = new_reporter.name if new_reporter else "—"
     if old_reporter_label == new_reporter_label and old_reporter_label != "—":
@@ -1307,7 +1278,7 @@ def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]
     can notify both sides (removal is as worth notifying as a new assignment)."""
     if assignee_ids is None:
         return [], []
-    new_users = _resolve_users(db, assignee_ids)
+    new_users = resolve_users(db, assignee_ids)
     old_users = list(bug.assignees)
     old_ids = {a.id for a in old_users}
     new_ids = {u.id for u in new_users}
@@ -1317,7 +1288,7 @@ def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]
         return [], []
     added = [u for u in new_users if u.id in added_ids]
     removed = [u for u in old_users if u.id in removed_ids]
-    _reject_inactive(added)
+    reject_inactive(added)
     old_names = sorted(a.name for a in old_users)
     new_names = sorted(u.name for u in new_users)
     changes.append((
@@ -1327,6 +1298,16 @@ def _apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]
     ))
     bug.assignees = new_users
     return added, removed
+
+
+def _require_people_on_project(db: Session, bug: Bug, project_moved: bool, added: list[User],
+                               reporter_changed: bool) -> None:
+    """Everyone newly attached to the item must be able to see its project; after a project
+    move that means everyone still attached."""
+    assignees = list(bug.assignees) if project_moved else added
+    require_project_members(db, assignees, bug.project_id)
+    if project_moved or reporter_changed:
+        require_project_members(db, [bug.reporter], bug.project_id, noun="reporter")
 
 
 def _persist_update(db: Session, bug: Bug, actor: User,
@@ -1466,6 +1447,7 @@ def update_bug(
         # Planning work into or out of a sprint is backlog management, the
         # same permission the board's move endpoint requires.
         require_permission(actor, MANAGE_BACKLOG)
+    project_moved = "project_id" in fields and fields["project_id"] != bug.project_id
     _detach_for_project_move(db, bug, fields, actor)
     sprint_requested = "sprint_id" in fields
     new_sprint_id = fields.pop("sprint_id", None)
@@ -1480,6 +1462,7 @@ def update_bug(
     if reporter_actually_changes:
         _apply_reporter_change(bug, db, new_reporter_id, changes)
     newly_assigned, newly_removed = _apply_assignee_diff(bug, db, assignee_ids, changes)
+    _require_people_on_project(db, bug, project_moved, newly_assigned, reporter_actually_changes)
 
     if changes or newly_assigned or newly_removed:
         _stage_update_notifications(

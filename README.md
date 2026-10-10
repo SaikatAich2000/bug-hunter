@@ -106,8 +106,8 @@ the list it sits in. The conversion runs once and is safe to repeat.
 ## Architecture
 
 - **Backend:** FastAPI, SQLAlchemy 2.x and Pydantic 2. PostgreSQL 16 in production; SQLite for tests and quick local runs.
-- **Frontend:** React 18 in plain JavaScript (JSX), built with Vite into `app/static`, which FastAPI serves directly. Tested with Vitest and linted with ESLint.
-- **Packaging:** Docker Compose runs the app and its own PostgreSQL. The image is built on `python:3.12-slim`, and the frontend is compiled in a throwaway `node:20-slim` stage.
+- **Frontend:** React 19 in plain JavaScript (JSX), built with Vite into `app/static`, which FastAPI serves directly. Tested with Vitest and linted with ESLint.
+- **Packaging:** Docker Compose runs the app and its own PostgreSQL. The image is built on `python:3.12-slim`, and the frontend is compiled in a throwaway `node:22-slim` stage.
 - **Sleuth:** pure-Python rules and a TF-IDF classifier, plus an optional local LLM and an optional cloud LLM with tool calling.
 
 ```
@@ -157,7 +157,7 @@ doesn't clash with a local PostgreSQL install. Data lives in the named volume
 
 For a clean rebuild, run `BUILD_CLEAN=1 ./deploy.sh`. Behind a corporate proxy or
 air gap, set `BASE_IMAGE` in `.env` to an internal mirror, or pre-load
-`python:3.12-slim` and `node:20-slim` with `docker save | docker load`.
+`python:3.12-slim` and `node:22-slim` with `docker save | docker load`.
 
 ### First login
 

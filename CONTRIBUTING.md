@@ -110,7 +110,7 @@ PW_BROWSERS=chromium,firefox,webkit python -m pytest tests/test_e2e_browser.py -
 `tests/test_e2e_browser.py` boots its own server, seeds data through the API
 and fails on any page error, browser console error or HTTP 5xx, not only on
 its explicit assertions. Its accessibility tests inject axe-core from
-`frontend/node_modules`, so run `npm ci` first. New UI work should come with a
+`frontend/node_modules`, so run `npm ci` first (Node 22, see `.nvmrc`). New UI work should come with a
 workflow test there, and new views should be added to its axe checks.
 
 ### Lint & security

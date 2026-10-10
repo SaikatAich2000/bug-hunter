@@ -55,7 +55,7 @@ export default function ProjectModal() {
     try {
       await withLoader(
         async () => {
-          let saved = null;
+          let saved;
           if (id) {
             saved = await api(`/projects/${id}`, { method: "PUT", json: payload });
           } else {

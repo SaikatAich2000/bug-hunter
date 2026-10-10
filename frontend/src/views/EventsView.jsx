@@ -544,7 +544,7 @@ export default function EventsView() {
     });
   };
 
-  let itemsContent = null;
+  let itemsContent;
   if (detailLoading || !detail) {
     itemsContent = <div className="muted">Loading…</div>;
   } else if (allItems.length === 0) {

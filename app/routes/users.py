@@ -30,7 +30,15 @@ from app.auth import (
 )
 from app.database import get_db
 from app.models import (
-    Activity, Bug, Event, Project, Sprint, User, event_managers, sprint_assignees, user_projects,
+    Activity,
+    Bug,
+    Event,
+    Project,
+    Sprint,
+    User,
+    event_managers,
+    sprint_assignees,
+    user_projects,
 )
 from app.password_breach import is_password_breached
 from app.schemas import UserIn, UserOut, UserUpdate

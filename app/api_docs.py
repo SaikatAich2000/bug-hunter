@@ -94,3 +94,11 @@ FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_503: Final = _doc(403, 404, 409, 422, 50
 FORBIDDEN_NOT_FOUND_429: Final = _doc(403, 404, 429)
 #: Codes an endpoint family raises: 404, 500.
 NOT_FOUND_500: Final = _doc(404, 500)
+#: The caller's role or project membership does not allow the action.
+FORBIDDEN_403: Final = _doc(403)
+#: Codes an endpoint family raises: 403, 404, 422.
+FORBIDDEN_NOT_FOUND_VALIDATION_422: Final = _doc(403, 404, 422)
+#: Codes an endpoint family raises: 403, 404, 409, 422.
+FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422: Final = _doc(403, 404, 409, 422)
+#: Codes an endpoint family raises: 400, 403, 404, 409, 422.
+BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422: Final = _doc(400, 403, 404, 409, 422)

@@ -46,7 +46,7 @@ from app.api_docs import (
     BAD_REQUEST_422,
     BAD_REQUEST_FORBIDDEN_422,
     BAD_REQUEST_FORBIDDEN_CONFLICT_NOT_FOUND_404,
-    BAD_REQUEST_FORBIDDEN_NOT_FOUND_422,
+    BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422,
     BAD_REQUEST_FORBIDDEN_NOT_FOUND_PAYLOAD_TOO_LARGE_429,
     FORBIDDEN_NOT_FOUND_429,
     NOT_FOUND_404,
@@ -73,7 +73,6 @@ from app.email_service import (
     notify_comment_added,
 )
 from app.image_strip import ImageTooLarge, strip_image_metadata
-from app.upload_policy import check_extension, verify_upload
 from app.models import (
     Activity,
     Attachment,
@@ -113,6 +112,7 @@ from app.schemas import (
     normalize_choice,
     statuses_for_type,
 )
+from app.upload_policy import check_extension, verify_upload
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 
@@ -1358,7 +1358,7 @@ def _schedule_update_notifications(background: BackgroundTasks, snap: BugSnapsho
         )
 
 
-@router.put("/{bug_id}", responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_422)
+@router.put("/{bug_id}", responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def update_bug(
     bug_id: int,
     payload: BugUpdate,

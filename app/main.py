@@ -1153,9 +1153,10 @@ app.include_router(chatbot_router)
 async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse:
     # Preserve headers attached by the raiser (Retry-After on 429,
     # WWW-Authenticate on 401); FastAPI's default handler drops them.
+    detail = _validation_detail(exc.detail) if exc.status_code == 422 else exc.detail
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": detail},
         headers=getattr(exc, "headers", None) or None,
     )
 
@@ -1181,6 +1182,24 @@ def _validation_error_out(err: dict) -> dict:
     return {"type": err.get("type", "value_error"), "loc": loc, "msg": msg}
 
 
+def _validation_detail(detail) -> list[dict]:
+    """A 422 raised by hand (a message string, or a dict) in the same list shape as a
+    schema validation error, so clients parse every 422 one way."""
+    if isinstance(detail, list):
+        return [
+            {"type": str(e.get("type", "value_error")), "loc": list(e.get("loc") or ["request"]),
+             "msg": str(e.get("msg", ""))} if isinstance(e, dict) else _single_error(str(e))
+            for e in detail
+        ]
+    if isinstance(detail, dict):
+        return [_single_error(str(detail.get("message") or detail.get("msg") or detail))]
+    return [_single_error(str(detail))]
+
+
+def _single_error(msg: str) -> dict:
+    return {"type": "value_error", "loc": ["request"], "msg": msg}
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
@@ -1200,10 +1219,9 @@ async def out_of_range_handler(request: Request, exc: Exception) -> JSONResponse
         request.method, request.url.path, type(exc).__name__,
     )
     # Same shape as FastAPI's own 422 (documented as HTTPValidationError).
-    return JSONResponse(status_code=422, content={"detail": [{
-        "type": "value_error", "loc": ["request"],
-        "msg": "A value in the request is out of range.", "input": None,
-    }]})
+    return JSONResponse(status_code=422, content={
+        "detail": [_single_error("A value in the request is out of range.")],
+    })
 
 
 @app.exception_handler(Exception)

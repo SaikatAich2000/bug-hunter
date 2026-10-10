@@ -114,6 +114,103 @@ def test_secure_logout_clears_both_cookie_names(client, monkeypatch):
     assert "__Host-bh_session=" in cleared and "bh_session=" in cleared.replace("__Host-bh_session=", "")
 
 
+# --- every status code a route can raise is documented ---------------------------
+def _raised_codes(fn, seen=None, depth=0):
+    """Status codes of HTTPException(...) raised by ``fn`` and the app functions it calls by name."""
+    import ast
+    import inspect
+    import textwrap
+
+    seen = set() if seen is None else seen
+    if fn in seen or depth > 4:
+        return set()
+    seen.add(fn)
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError):
+        return set()
+    scope = getattr(fn, "__globals__", {})
+    codes: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+        if name == "HTTPException":
+            for kw in node.keywords:
+                if kw.arg == "status_code" and isinstance(kw.value, ast.Constant):
+                    codes.add(kw.value.value)
+        elif isinstance(node.func, ast.Name):
+            target = scope.get(node.func.id)
+            if inspect.isfunction(target) and target.__module__.startswith("app."):
+                codes |= _raised_codes(target, seen, depth + 1)
+    return codes
+
+
+def test_every_status_a_route_raises_is_documented(client):
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+
+    documented = app.openapi()["paths"]
+    gaps = []
+    for top in app.routes:
+        routes = getattr(getattr(top, "original_router", None), "routes", [top])
+        for route in routes:
+            if not isinstance(route, APIRoute) or not route.path.startswith("/api"):
+                continue
+            listed = set()
+            for method in route.methods:
+                listed |= {int(c) for c in documented[route.path][method.lower()]["responses"] if c.isdigit()}
+            missing = _raised_codes(route.endpoint) - listed
+            if missing:
+                gaps.append(f"{sorted(route.methods)} {route.path}: {sorted(missing)}")
+    assert not gaps, "undocumented status codes:\n" + "\n".join(gaps)
+
+
+# --- every 422 has the same shape ----------------------------------------------
+def _assert_422_shape(response):
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert isinstance(detail, list) and detail, detail
+    for entry in detail:
+        assert set(entry) == {"type", "loc", "msg"}, entry
+        assert isinstance(entry["type"], str) and isinstance(entry["loc"], list)
+        assert isinstance(entry["msg"], str) and entry["msg"]
+
+
+def test_422_from_body_validation_has_the_common_shape(admin_client):
+    _assert_422_shape(admin_client.post("/api/bugs", json={"title": ""}))
+
+
+def test_422_from_out_of_range_value_has_the_common_shape(admin_client):
+    _assert_422_shape(admin_client.get(f"/api/bugs/{10 ** 30}"))
+
+
+@pytest.mark.parametrize("detail,expected_msg", [
+    ("Dates must be YYYY-MM-DD", "Dates must be YYYY-MM-DD"),
+    ({"message": "Not allowed here", "code": "x"}, "Not allowed here"),
+    ({"code": "x"}, "{'code': 'x'}"),
+    ([{"type": "value_error", "loc": ["body", "x"], "msg": "bad", "input": "secret"}], "bad"),
+])
+def test_422_raised_by_routes_is_normalised(client, detail, expected_msg):
+    from fastapi import HTTPException
+
+    from app.main import app
+
+    def boom():
+        raise HTTPException(status_code=422, detail=detail)
+
+    app.add_api_route("/api/_422_probe", boom)
+    r = client.get("/api/_422_probe")
+    _assert_422_shape(r)
+    assert r.json()["detail"][0]["msg"] == expected_msg
+
+
+def test_non_422_errors_keep_their_detail(client):
+    r = client.get("/api/auth/me")
+    assert r.status_code == 401 and r.json()["detail"] == "Not authenticated"
+
+
 # --- lockout: per email+IP, higher global per-email threshold ------------------
 def _login_from(client, ip, password):
     return client.post("/api/auth/login", json={"email": ADMIN["email"], "password": password},

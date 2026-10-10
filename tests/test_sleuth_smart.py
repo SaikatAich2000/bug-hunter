@@ -3,13 +3,6 @@ enum-word guard, quoted-search precedence, "did you mean" suggestions, and the u
 """
 from __future__ import annotations
 
-import os
-
-# Disable the cloud layer and point at a throwaway DB so imports never touch a real database.
-os.environ.setdefault("SLEUTH_CLOUD_ENABLED", "0")
-os.environ.setdefault("DATABASE_URL", "sqlite:///./_sleuth_smart_test.db")
-os.environ.setdefault("SESSION_SECRET", "x" * 32)
-
 from app.chatbot import nlu  # noqa: E402
 from app.chatbot.executor import _did_you_mean, _handle_unknown  # noqa: E402
 

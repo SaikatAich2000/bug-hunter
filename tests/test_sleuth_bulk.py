@@ -3,27 +3,6 @@ non-admin writes (single or bulk) get action_denied while reads keep working (te
 """
 from __future__ import annotations
 
-import os as _os
-import sys as _sys
-
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-
-import os
-import tempfile
-
-_tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-_tmp.close()
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
-os.environ["SESSION_SECRET"] = "test-secret-bulk-only"
-os.environ["SLEUTH_CLOUD_ENABLED"] = "0"
-
-# Purge app.* so this file gets a fresh import bound to its own DB (avoids "no such table").
-import sys as _sys_purge
-
-for _m in list(_sys_purge.modules):
-    if _m == "app" or _m.startswith("app."):
-        del _sys_purge.modules[_m]
-
 from app import models
 from app.auth import hash_password
 from app.chatbot import actions, executor

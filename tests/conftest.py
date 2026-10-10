@@ -114,6 +114,18 @@ _TEST_ENV = {
 }
 os.environ.update(_TEST_ENV)
 
+# Settings are read once at import, but a few modules re-read these per call, and
+# unit tests without a fixture expect the developer's own values. So they are set
+# for the import and re-applied by `_fresh_db`, not left in the environment.
+_FIXTURE_ENV = {
+    k: _TEST_ENV[k]
+    for k in (
+        "DATABASE_URL", "EMAIL_BACKEND", "SESSION_SECRET", "BOOTSTRAP_ADMIN_EMAIL",
+        "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_NAME", "APP_NAME",
+        "PASSWORD_BREACH_CHECK_ENABLED", "WEB_PUSH_ENABLED", "AUTO_LOGIN_ENABLED",
+    )
+}
+
 
 @atexit.register
 def _cleanup_session_resources() -> None:
@@ -134,6 +146,7 @@ def _cleanup_session_resources() -> None:
 _CONTAINERS = (dict, list, set, deque)
 _SCALARS = (int, float, str, bytes, bool, type(None))
 _baseline: dict = {}
+_MISSING = object()
 
 
 def _copy_container(value):
@@ -165,7 +178,10 @@ def _is_app_instance(value) -> bool:
 
 def _capture_module_state(module) -> dict:
     """Containers and scalars bound at module level, plus containers on app-owned singletons."""
-    state: dict = {"containers": {}, "scalars": {}, "objects": {}}
+    state: dict = {
+        "bindings": {k: v for k, v in vars(module).items() if not k.startswith("__")},
+        "containers": {}, "scalars": {}, "objects": {},
+    }
     for name, value in list(vars(module).items()):
         if name.startswith("__"):
             continue
@@ -195,6 +211,10 @@ def _restore_pairs(pairs: dict) -> None:
 
 
 def _restore_module_state(module, state: dict) -> None:
+    # Undoes importlib.reload() and direct `module.attr = fake` assignments.
+    for name, value in state["bindings"].items():
+        if vars(module).get(name, _MISSING) is not value:
+            setattr(module, name, value)
     _restore_pairs(state["containers"])
     for name, value in state["scalars"].items():
         if vars(module).get(name, value) != value:
@@ -236,6 +256,8 @@ def _app_runtime():
     import app.main as main  # noqa: F401  (side effect: builds the app against the session DB)
 
     _import_all_app_modules()
+    for key in _FIXTURE_ENV:
+        os.environ.pop(key, None)
     from app.config import Settings, get_settings
 
     _baseline["modules"] = {
@@ -249,6 +271,7 @@ def _app_runtime():
     _baseline["settings_obj"] = get_settings()
     _baseline["settings_obj_dict"] = dict(vars(get_settings()))
     _baseline["overrides"] = dict(main.app.dependency_overrides)
+    _baseline["routes"] = list(main.app.router.routes)
     yield
     _baseline.clear()
 
@@ -308,12 +331,15 @@ def _isolate(_app_runtime):
     """Roll every kind of leaked in-process state back after each test."""
     yield
     _restore_sys_modules()
-    _restore_settings()
     for name, mod in _baseline["modules"].items():
         _restore_module_state(mod, _baseline["state"][name])
+    _restore_settings()
     main = _baseline["modules"]["app.main"]
     main.app.dependency_overrides.clear()
     main.app.dependency_overrides.update(_baseline["overrides"])
+    if main.app.router.routes != _baseline["routes"]:  # a test registered a throwaway route
+        main.app.router.routes[:] = _baseline["routes"]
+        main.app.openapi_schema = None
     _baseline["modules"]["app.database"].engine.dispose()
 
 
@@ -361,9 +387,12 @@ def _drop_foreign_tables(engine, base) -> None:
 
 
 @pytest.fixture
-def _fresh_db(_isolate):
+def _fresh_db(_isolate, monkeypatch):
     """Empty every table (schema kept) so the test sees a freshly installed database."""
     from app.database import Base, engine
+
+    for key, value in _FIXTURE_ENV.items():
+        monkeypatch.setenv(key, value)
 
     engine.dispose()  # drop pooled connections a previous test may have left mid-transaction
     _drop_foreign_tables(engine, Base)  # e.g. legacy tables a migration test created

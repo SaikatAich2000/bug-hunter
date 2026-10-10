@@ -4,7 +4,8 @@
  * moves focus into it (to an element marked `data-autofocus`, else the card
  * itself), Tab and Shift+Tab stay inside it, and closing it returns focus to
  * where it was. */
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { MOTION_MS, prefersReducedMotion } from "../lib/motion";
 
 const FOCUSABLE = [
   "a[href]", "button:not([disabled])", "input:not([disabled]):not([type=hidden])", "select:not([disabled])",
@@ -31,6 +32,23 @@ export default function Modal({
   const titleId = useId();
   const cardRef = useRef(null);
   const returnTo = useRef(null);
+
+  // Closing plays the exit animation before `hidden` applies; reduced motion skips it entirely.
+  const [closing, setClosing] = useState(false);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      setClosing(false);
+      return undefined;
+    }
+    if (!wasOpen.current) return undefined;
+    wasOpen.current = false;
+    if (prefersReducedMotion()) return undefined;
+    setClosing(true);
+    const timer = setTimeout(() => setClosing(false), MOTION_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -70,7 +88,7 @@ export default function Modal({
   };
 
   return (
-    <div className="modal" id={id} hidden={!open} data-bh-modal>
+    <div className="modal" id={id} hidden={!open && !closing} data-closing={!open && closing ? "" : undefined} data-bh-modal>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Tab trap for the dialog */}
       <div
         ref={cardRef}

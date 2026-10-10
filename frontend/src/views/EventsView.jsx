@@ -2,6 +2,7 @@
  * Events view — list mode (card grid, debounced search, date filter) and
  * detail mode (one event + filterable item table).
  */
+import EmptyGuide from "../onboarding/EmptyGuide";
 import {
   useCallback,
   useEffect,
@@ -623,6 +624,10 @@ export default function EventsView() {
               No events yet. Click <strong>+ New Event</strong> to create one — a standup, a
               sprint meeting, whatever you want to track
             </p>
+            <EmptyGuide
+              guide="items"
+              action={canManage ? { label: "+ New Event", onClick: () => setModal({ open: true, event: null }) } : null}
+            />
           </div>
         </div>
 

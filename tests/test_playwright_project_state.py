@@ -117,6 +117,14 @@ def page(stack):
             }""",
             [ADMIN_EMAIL, ADMIN_PASSWORD],
         )
+        pg.evaluate(
+            """() => fetch('/api/me/preferences', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({welcome_seen: true}),
+                credentials: 'include'
+            })"""
+        )
         if status != 200:
             context.close()
             browser.close()

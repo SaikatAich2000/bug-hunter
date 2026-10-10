@@ -87,6 +87,12 @@ def _login(page, base_url, email="admin@ui.test", password="AdminUI1234"):
         "() => document.getElementById('accountName')?.textContent?.trim().length > 0",
         timeout=5000,
     )
+    # First-login welcome dialog: dismiss it so it does not cover the page under test.
+    later = page.get_by_role("button", name="Maybe later")
+    try:
+        later.click(timeout=2000)
+    except Exception:  # noqa: BLE001 - already dismissed or not shown for this user
+        pass
 
 
 # When the inline comment <form> is nested inside the bug-modal <form>, the

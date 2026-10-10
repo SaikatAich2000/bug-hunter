@@ -36,7 +36,6 @@ from app.email_service import (
 from app.models import (
     ROLE_ADMIN,
     ROLE_MANAGER,
-    Activity,
     Attachment,
     Bug,
     Event,
@@ -51,6 +50,7 @@ from app.schemas import (
     EventOut,
     EventUpdate,
 )
+from app.services.audit import audit
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
@@ -61,15 +61,7 @@ def _log(
     db: Session, event_id: int | None, actor: User | None,
     action: str, detail: str,
 ) -> None:
-    db.add(Activity(
-        bug_id=None,
-        entity_type="event",
-        entity_id=event_id,
-        actor_user_id=actor.id if actor else None,
-        actor_name=actor.name if actor else "system",
-        action=action,
-        detail=detail,
-    ))
+    audit(db, actor, "event", event_id, action, detail)
 
 
 def _user_brief(u: User) -> dict:

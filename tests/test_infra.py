@@ -1130,7 +1130,8 @@ def test_cov_digest_main_returns_zero_on_success(admin_client, monkeypatch):
 
     db = _session()
     admin_id = _uid(db, "admin@test.local")
-    from app.models import Notification, _utcnow
+    from app.models import Notification
+    from app.util import utcnow as _utcnow
     n = Notification(user_id=admin_id, kind="assigned",
                      title="Assigned to Bug #1", body="x assigned you",
                      actor_name="Actor")
@@ -1187,7 +1188,7 @@ def test_cov_digest_render_links_and_other_category(admin_client):
 
 def test_cov_digest_run_digest_empty_returns_zeroes(admin_client):
     from app.jobs.email_digest import run_digest
-    from app.models import _utcnow
+    from app.util import utcnow as _utcnow
     db = _session()
     stats = run_digest(db, now=_utcnow(), lookback_hours=1)
     db.close()

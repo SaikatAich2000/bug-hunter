@@ -20,9 +20,10 @@ from app.auth import (
     session_cookie_value,
 )
 from app.database import get_db
-from app.models import Activity, User
 from app.models import Session as SessionRow
+from app.models import User
 from app.schemas import SessionOut
+from app.services.audit import audit
 
 logger = logging.getLogger("bug_hunter.sessions")
 
@@ -30,11 +31,7 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 def _audit(db: Session, actor: User, action: str, detail: str, entity_id: int | None = None) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type="session", entity_id=entity_id,
-        actor_user_id=actor.id, actor_name=actor.name,
-        action=action, detail=detail,
-    ))
+    audit(db, actor, "session", entity_id, action, detail)
 
 
 def _is_current(request: Request, sess: SessionRow) -> bool:

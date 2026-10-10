@@ -27,7 +27,6 @@ from app.api_docs import (
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import (
-    Activity,
     Bug,
     Component,
     EpicDetail,
@@ -54,6 +53,7 @@ from app.schemas import (
     VersionUpdateIn,
     display_id_for,
 )
+from app.services.audit import audit as _audit
 
 router = APIRouter(prefix="/api/agile", tags=["agile-taxonomy"])
 
@@ -63,13 +63,6 @@ _DETAIL_PROJECT_NOT_FOUND = "Project not found"
 _DETAIL_AGILE_NOT_ENABLED = "Agile is not enabled for this project"
 _DETAIL_NOT_FOUND = "Not found"
 _DETAIL_VERSION_CONFLICT = "This was modified by someone else; reload and retry"
-
-
-def _audit(db: Session, actor: User, entity_type: str, entity_id: int, action: str, detail: str) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type=entity_type, entity_id=entity_id,
-        actor_user_id=actor.id, actor_name=actor.name, action=action, detail=detail,
-    ))
 
 
 # Nullable epic fields a PUT may clear with an explicit null (a removed date or

@@ -9,7 +9,7 @@ from tests._attachments import insert_attachment
 # 1. Chatbot Excel formula defang
 class TestChatbotExcelDefang:
     def test_defang_helper(self, client):
-        from app.chatbot.excel import _defang_formula_text
+        from app.util import defang_formula as _defang_formula_text
         assert _defang_formula_text("=cmd|'/c calc'!A1") == "'=cmd|'/c calc'!A1"
         assert _defang_formula_text("+1") == "'+1"
         assert _defang_formula_text("-1") == "'-1"

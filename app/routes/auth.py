@@ -32,7 +32,7 @@ from app.auth import (
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import mask_email, notify_password_reset
-from app.models import Activity, PasswordResetToken, User
+from app.models import PasswordResetToken, User
 from app.models import Session as SessionRow
 from app.password_breach import is_password_breached
 from app.schemas import (
@@ -42,6 +42,7 @@ from app.schemas import (
     MeOut,
     ResetPasswordIn,
 )
+from app.services.audit import audit
 
 logger = logging.getLogger("bug_hunter.auth")
 
@@ -63,12 +64,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _DETAIL_INVALID_RESET_TOKEN = "Invalid or expired reset token"
 
 def _audit(db: Session, actor: User | None, action: str, detail: str, entity_id: int | None = None) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type="auth", entity_id=entity_id,
-        actor_user_id=actor.id if actor else None,
-        actor_name=actor.name if actor else "system",
-        action=action, detail=detail,
-    ))
+    audit(db, actor, "auth", entity_id, action, detail)
 
 
 def _reject_if_breached(plain: str) -> None:

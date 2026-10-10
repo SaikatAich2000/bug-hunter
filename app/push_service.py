@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from app import fcm_transport
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import PushSubscription, _utcnow
+from app.models import PushSubscription
+from app.util import utcnow
 
 if TYPE_CHECKING:
     from fastapi import BackgroundTasks
@@ -71,7 +72,7 @@ def register(
     """Upsert a device's FCM token for ``user_id`` in one statement: insert it, or refresh it
     in place if it is already this user's. A token bound to another account raises
     ``PushTokenConflict`` (a replayed token must not redirect someone else's pushes)."""
-    now = _utcnow()
+    now = utcnow()
     fields = {"platform": platform or "web", "user_agent": (user_agent or "")[:400], "last_seen_at": now}
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert

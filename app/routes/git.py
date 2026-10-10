@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
@@ -72,7 +71,6 @@ from app.git.provider import (
 from app.models import (
     ROLE_ADMIN,
     ROLE_MANAGER,
-    Activity,
     Bug,
     Project,
     ProjectGitConfig,
@@ -91,6 +89,8 @@ from app.schemas import (
     GitProviderRepositoryOut,
     GitWorkItemBranchesOut,
 )
+from app.services.audit import audit
+from app.util import utcnow
 
 logger = logging.getLogger("bug_hunter.routes.git")
 
@@ -153,9 +153,6 @@ _BRANCH_ERROR_STATUS: dict[str, int] = {
     branch_svc.BRANCH_ALREADY_REMOVED: status.HTTP_409_CONFLICT,
 }
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(microsecond=0)
-
 def _repo_full_name(repository: ProjectRepository) -> str:
     if repository.owner:
         return f"{repository.owner}/{repository.name}"
@@ -166,12 +163,7 @@ def _is_project_admin(user: User) -> bool:
     return user.role in (ROLE_ADMIN, ROLE_MANAGER)
 
 def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail: str) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type="git_branch", entity_id=entity_id,
-        actor_user_id=getattr(actor, "id", None),
-        actor_name=getattr(actor, "name", "") or "system",
-        action=action, detail=detail,
-    ))
+    audit(db, actor, "git_branch", entity_id, action, detail)
 
 def _translate_provider_error(exc: GitProviderError) -> HTTPException:
     """Map a provider failure to an HTTP status; ``detail`` is already sanitized."""
@@ -402,7 +394,7 @@ def _repository_identity_from_provider(
             ),
             active=True,
             branch_creation_enabled=True,
-            last_checked_at=_now(),
+            last_checked_at=utcnow(),
         )
         db.add(repository)
         try:
@@ -437,7 +429,7 @@ def _repository_identity_from_provider(
         repository.owner = metadata.owner
     if metadata.url and (repository.url or "") != metadata.url:
         repository.url = metadata.url
-    repository.last_checked_at = _now()
+    repository.last_checked_at = utcnow()
     if changed:
         _audit(
             db, None, "git_repository_identity_updated", repository.id,
@@ -660,7 +652,7 @@ def _record_connection_result(
     if config is None:
         return
     config.connection_status = "ok" if ok else "error"
-    config.last_checked_at = _now()
+    config.last_checked_at = utcnow()
     config.last_error = "" if ok else sanitize_provider_message(message)
     config.version += 1
     db.flush()
@@ -684,7 +676,7 @@ def _draft_test_failed(
     db.commit()
     return {
         "ok": False, "status": "error", "message": message,
-        "target": "", "checked_at": _now(), "error_code": code,
+        "target": "", "checked_at": utcnow(), "error_code": code,
     }
 
 
@@ -713,7 +705,7 @@ def test_git_connection(
     settings = get_settings()
     if draft is None:
         provider = build_provider(config)
-        checked_at = _now()
+        checked_at = utcnow()
         try:
             target = provider.validate_connection()
         except GitProviderError as exc:
@@ -761,7 +753,7 @@ def test_git_connection(
         db.commit()
         return {
             "ok": False, "status": "error", "message": "Git base URL is required",
-            "target": "", "checked_at": _now(), "error_code": INVALID_BASE_URL,
+            "target": "", "checked_at": utcnow(), "error_code": INVALID_BASE_URL,
         }
     if not draft_branch:
         _audit(
@@ -775,7 +767,7 @@ def test_git_connection(
         return {
             "ok": False, "status": "error",
             "message": "Default base branch is required",
-            "target": "", "checked_at": _now(), "error_code": INVALID_BASE_BRANCH,
+            "target": "", "checked_at": utcnow(), "error_code": INVALID_BASE_BRANCH,
         }
     if draft_branch and not is_valid_branch_name(draft_branch):
         _audit(
@@ -789,7 +781,7 @@ def test_git_connection(
         return {
             "ok": False, "status": "error",
             "message": "Default base branch is not a valid git branch name",
-            "target": "", "checked_at": _now(),
+            "target": "", "checked_at": utcnow(),
             "error_code": INVALID_BASE_BRANCH,
         }
     if draft.credential:
@@ -806,7 +798,7 @@ def test_git_connection(
     provider = build_provider(
         config, base_url=draft_base, organization=draft_org, token=draft_token,
     )
-    checked_at = _now()
+    checked_at = utcnow()
     try:
         target = provider.validate_connection()
     except GitProviderError as exc:
@@ -1282,7 +1274,7 @@ def _remove_branch_record(
             # Auth/rate-limit/TLS/timeout/5xx: the record stays Active with a
             # sanitized error so a safe retry remains possible.
             row.last_error = sanitize_provider_message(exc.message)
-            row.last_checked_at = _now()
+            row.last_checked_at = utcnow()
             db.commit()
             raise _translate_provider_error(exc) from exc
         # Exact 404 from a provider that raises instead of returning False:
@@ -1290,14 +1282,14 @@ def _remove_branch_record(
         already_absent = True
     row.status = branch_svc.STATUS_DELETED
     row.version += 1
-    row.removed_at = _now()
+    row.removed_at = utcnow()
     row.removed_by_id = actor.id
     row.removed_by_name = actor.name
     row.removal_reason = (
         _REMOVAL_REASON_RECONCILED if already_absent else _REMOVAL_REASON
     )
     row.last_error = ""
-    row.last_checked_at = _now()
+    row.last_checked_at = utcnow()
     db.flush()
     _audit(
         db, actor, "git_branch_removed", row.id,

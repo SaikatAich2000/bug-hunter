@@ -34,7 +34,6 @@ from app.api_docs import (
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import (
-    Activity,
     Board,
     Bug,
     Project,
@@ -56,6 +55,7 @@ from app.schemas import (
     WorkItemTaxonomyIn,
     WorkItemTransitionIn,
 )
+from app.services.audit import audit as _audit
 
 router = APIRouter(prefix="/api/agile", tags=["agile-board"])
 logger = logging.getLogger("bug_hunter.agile_board")
@@ -64,13 +64,6 @@ _DETAIL_BOARD_NOT_FOUND = "Sprint Board not found"
 _DETAIL_ITEM_NOT_FOUND = "Work item not found"
 _DETAIL_VERSION_CONFLICT = "Item was modified by someone else; reload and retry"
 _DETAIL_FILTER_NOT_FOUND = "Quick filter not found"
-
-
-def _audit(db: Session, actor: User, entity_type: str, entity_id: int, action: str, detail: str) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type=entity_type, entity_id=entity_id,
-        actor_user_id=actor.id, actor_name=actor.name, action=action, detail=detail,
-    ))
 
 
 def _get_board_or_404(db: Session, board_id: int, user: User) -> Board:

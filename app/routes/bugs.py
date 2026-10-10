@@ -112,7 +112,9 @@ from app.schemas import (
     normalize_choice,
     statuses_for_type,
 )
+from app.services.audit import audit
 from app.upload_policy import check_extension, verify_upload
+from app.util import like_escape
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 
@@ -364,15 +366,8 @@ def _log(
     db: Session, bug_id: int | None, actor: User | None, action: str, detail: str,
     entity_type: str = "bug", entity_id: int | None = None,
 ) -> None:
-    db.add(Activity(
-        bug_id=bug_id,
-        entity_type=entity_type,
-        entity_id=entity_id if entity_id is not None else bug_id,
-        actor_user_id=actor.id if actor else None,
-        actor_name=actor.name if actor else "system",
-        action=action,
-        detail=detail,
-    ))
+    audit(db, actor, entity_type, entity_id if entity_id is not None else bug_id,
+          action, detail, bug_id=bug_id)
 
 
 def _eager_bug() -> "select":
@@ -438,15 +433,6 @@ def _assert_attachment_in_scope(db: Session, accessible, bug_id: int) -> None:
         raise HTTPException(status_code=404, detail=_DETAIL_ATTACHMENT_NOT_FOUND)
 
 
-def _like_escape(needle: str) -> str:
-    """Escape SQL LIKE wildcards so user-typed `_` and `%` match literally."""
-    return (
-        needle.replace("\\", "\\\\")
-              .replace("%", "\\%")
-              .replace("_", "\\_")
-    )
-
-
 def _normalize_choice_list(values: Optional[list[str]], allowed: list[str], label: str) -> list[str]:
     """Normalize a multi-valued enum query param; strip empties, reject unknowns with 400."""
     if not values:
@@ -475,7 +461,7 @@ def _apply_q_filter(stmt, count_stmt, q: str):
         return stmt, count_stmt
     # Use the cleaned string for the LIKE pattern so leading/trailing spaces in
     # the raw query (e.g. "?q=  needle  ") don't prevent any match.
-    like = f"%{_like_escape(q_clean.lower())}%"
+    like = f"%{like_escape(q_clean.lower())}%"
     clause = or_(
         func.lower(Bug.title).like(like, escape="\\"),
         func.lower(Bug.description).like(like, escape="\\"),
@@ -2222,15 +2208,10 @@ def _delete_item(db: Session, bug: Bug, actor: User, note: str = "") -> int:
     db.flush()
     for item in doomed:
         db.delete(item)
-        db.add(Activity(
-            bug_id=None, entity_type="bug", entity_id=item.id,
-            actor_user_id=actor.id, actor_name=actor.name,
-            action="bug_deleted",
-            detail=(
-                f"Deleted {_item_type(item).lower()} #{item.id}: {item.title}"
-                + (f" (sub-task of #{bug_id})" if item is not bug else "")
-                + note
-            ),
+        audit(db, actor, "bug", item.id, "bug_deleted", (
+            f"Deleted {_item_type(item).lower()} #{item.id}: {item.title}"
+            + (f" (sub-task of #{bug_id})" if item is not bug else "")
+            + note
         ))
     return len(subtasks)
 

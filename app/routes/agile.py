@@ -40,7 +40,7 @@ from app.api_docs import (
 )
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import AcceptanceCriterion, Activity, Board, Bug, Project, Sprint, User
+from app.models import AcceptanceCriterion, Board, Bug, Project, Sprint, User
 from app.people import reject_inactive, require_project_members, resolve_users
 from app.schemas import (
     AcceptanceCriterionIn,
@@ -67,6 +67,7 @@ from app.schemas import (
     WorkItemHierarchyIn,
     WorkItemTaskFlagsIn,
 )
+from app.services.audit import audit as _audit
 
 router = APIRouter(prefix="/api/agile", tags=["agile"])
 
@@ -116,13 +117,6 @@ def _apply_task_flag_updates(item: Bug, payload: WorkItemTaskFlagsIn) -> bool:
     if payload.blocked is False:
         item.blocked_reason = ""
     return payload.blocked is not None and payload.blocked != was_blocked
-
-
-def _audit(db: Session, actor: User, entity_type: str, entity_id: int, action: str, detail: str) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type=entity_type, entity_id=entity_id,
-        actor_user_id=actor.id, actor_name=actor.name, action=action, detail=detail,
-    ))
 
 
 def _get_project_or_404(db: Session, project_id: int, user: User) -> Project:

@@ -25,7 +25,7 @@ def section(t):
 def seed():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    memstore._clear_all_for_test()
+    memstore._sessions.clear()
     db = SessionLocal()
     try:
         admin = models.User(name="Admin", email="admin@example.com",
@@ -278,12 +278,12 @@ def test_concurrent_users_isolated() -> None:
 
 def test_memory_edge_cases() -> None:
     section("Memory: TTL eviction, max sessions, reset")
-    memstore._clear_all_for_test()
+    memstore._sessions.clear()
 
     # Fill past the cap via direct API calls and verify it holds.
     for i in range(1, 250):
         memstore.remember_bug(i, i * 10)
-    sessions = memstore._all_sessions_for_test()
+    sessions = memstore._sessions
     check("memory: capped at 200 sessions",
           len(sessions) <= 200, f"got {len(sessions)}")
 

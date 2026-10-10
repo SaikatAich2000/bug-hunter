@@ -154,12 +154,6 @@ def fetch_staged(token: str, owner_id: int) -> Optional[tuple[bytes, str]]:
         return payload, filename
 
 
-def clear_all_for_test() -> None:
-    """Hook for tests; never called from production code paths."""
-    with _cache_lock:
-        _cache.clear()
-
-
 __all__ = [
     "ExcelGenerationError",
     "stage_workbook",

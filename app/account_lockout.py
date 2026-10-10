@@ -9,7 +9,6 @@ and bounded by _LOCKOUT_BUCKETS_MAX.
 """
 from __future__ import annotations
 
-import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -17,19 +16,13 @@ from threading import Lock
 
 from fastapi import HTTPException
 
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)) or str(default))
-    except ValueError:
-        return default
-
+from app.config import env_int
 
 # All limits overridable via env vars.
-_LOGIN_FAIL_LIMIT = _env_int("LOGIN_FAIL_LIMIT", 10)
-_LOGIN_FAIL_EMAIL_LIMIT = _env_int("LOGIN_FAIL_EMAIL_LIMIT", 50)
-_LOGIN_FAIL_WINDOW_SECONDS = _env_int("LOGIN_FAIL_WINDOW_SECONDS", 900)  # 15 min
-_LOGIN_LOCKOUT_SECONDS = _env_int("LOGIN_LOCKOUT_SECONDS", 900)          # 15 min
+_LOGIN_FAIL_LIMIT = env_int("LOGIN_FAIL_LIMIT", 10)
+_LOGIN_FAIL_EMAIL_LIMIT = env_int("LOGIN_FAIL_EMAIL_LIMIT", 50)
+_LOGIN_FAIL_WINDOW_SECONDS = env_int("LOGIN_FAIL_WINDOW_SECONDS", 900)  # 15 min
+_LOGIN_LOCKOUT_SECONDS = env_int("LOGIN_LOCKOUT_SECONDS", 900)          # 15 min
 _LOCKOUT_BUCKETS_MAX = 10_000
 
 
@@ -140,8 +133,3 @@ def clear(email: str, ip: str = "") -> None:
         _buckets.pop(_pair_key(email, ip), None)
         _buckets.pop(_key(email), None)
 
-
-def _reset_for_tests() -> None:
-    """Wipe all state between test cases."""
-    with _lock:
-        _buckets.clear()

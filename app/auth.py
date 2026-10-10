@@ -10,7 +10,6 @@ import base64
 import hashlib
 import ipaddress
 import logging
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -24,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.agile.integrity import set_actor
-from app.config import get_settings
+from app.config import env_str, get_settings
 from app.database import get_db
 from app.models import (
     ROLE_ADMIN,
@@ -70,7 +69,7 @@ def _bcrypt_rounds() -> int:
     if get_settings().is_production:
         return _MAX_BCRYPT_ROUNDS
     try:
-        return max(4, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
+        return max(4, min(int(env_str("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
     except ValueError:
         return _MAX_BCRYPT_ROUNDS
 

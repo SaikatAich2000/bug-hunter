@@ -20,7 +20,7 @@ def seed_fresh() -> tuple[int, int, int, int]:
     """Re-seed and return (admin_id, alice_id, bob_id, bug1_id)."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    memstore._clear_all_for_test()
+    memstore._sessions.clear()
     db = SessionLocal()
     try:
         admin = models.User(name="Admin Person", email="admin@example.com",

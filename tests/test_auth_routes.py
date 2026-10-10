@@ -230,7 +230,7 @@ def test_cov_login_inactive_user_blocked(client, admin_client):
 def test_cov_login_lockout_returns_429(client):
     """A full lockout bucket returns 429 before bcrypt verify (bucket pre-filled for determinism)."""
     from app import account_lockout
-    account_lockout._reset_for_tests()
+    account_lockout._buckets.clear()
     try:
         for _ in range(account_lockout._LOGIN_FAIL_LIMIT):
             account_lockout.record_failure(BOOTSTRAP_EMAIL, "testclient")  # TestClient's peer address
@@ -241,7 +241,7 @@ def test_cov_login_lockout_returns_429(client):
         assert res.status_code == 429
         assert res.headers.get("Retry-After")
     finally:
-        account_lockout._reset_for_tests()
+        account_lockout._buckets.clear()
 
 
 # logout branches

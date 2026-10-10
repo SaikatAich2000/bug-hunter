@@ -70,8 +70,7 @@ describe("OnboardingHost", () => {
     serve(FRESH);
     render(<OnboardingHost />);
     fireEvent.click(await screen.findByRole("button", { name: "Take the tour" }));
-    expect(puts()[0]).toEqual({ welcome_seen: true });
-    expect(puts()[1]).toEqual({ tour_status: "running", tour_step: 0 });
+    expect(puts()[0]).toEqual({ welcome_seen: true, tour_status: "running", tour_step: 0 });
     expect(setView).toHaveBeenCalledWith("list");
     fireEvent.click(await screen.findByRole("button", { name: "Next" }));
     expect(puts().at(-1)).toEqual({ tour_step: 1 });

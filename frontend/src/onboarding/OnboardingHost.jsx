@@ -47,10 +47,11 @@ export default function OnboardingHost() {
     return () => { cancelled = true; };
   }, []);
 
-  const startTour = useCallback((step = 0) => {
+  // One request: two concurrent first writes for the same user would race on creating the row.
+  const startTour = useCallback((step = 0, extra = {}) => {
     setWelcomeOpen(false);
     setView("list");
-    void save({ tour_status: "running", tour_step: step });
+    void save({ ...extra, tour_status: "running", tour_step: step });
   }, [save, setView]);
 
   useEffect(() => onOnboarding(({ action }) => {
@@ -73,7 +74,7 @@ export default function OnboardingHost() {
       <WelcomeModal
         open={welcomeOpen}
         name={currentUser.name}
-        onTour={(dontShow) => { void save(seen(dontShow)); startTour(0); }}
+        onTour={(dontShow) => startTour(0, seen(dontShow))}
         onHelp={(dontShow) => { setWelcomeOpen(false); void save(seen(dontShow)); openGuide(null); }}
         onLater={(dontShow) => {
           setWelcomeOpen(false);

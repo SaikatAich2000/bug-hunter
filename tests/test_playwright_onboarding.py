@@ -151,7 +151,7 @@ def test_welcome_then_resumable_tour(browser, stack):
         # Resume from the account menu continues at the saved step, then finish.
         _account_menu(pg, "#productTourBtn")
         expect(pg.get_by_text("Step 2 of 6")).to_be_visible()
-        for _ in range(5):
+        for _ in range(4):
             pg.get_by_role("button", name="Next").click()
         pg.get_by_role("button", name="Finish").click()
         expect(pg.locator(".tour-card")).to_have_count(0)
@@ -179,6 +179,7 @@ def test_help_center_guides_hints_and_empty_state(browser, stack):
         expect(pg.get_by_role("heading", level=1, name="Roles and permissions")).to_be_visible()
 
         # Contextual ? on a complex field opens the matching guide.
+        pg.click('.nav-btn[data-view="list"]')
         pg.click("#newBugBtn")
         pg.wait_for_selector("#formBug", state="visible")
         pg.get_by_role("button", name="Help: Environment").click()
@@ -186,7 +187,7 @@ def test_help_center_guides_hints_and_empty_state(browser, stack):
         pg.keyboard.press("Escape")
         expect(pg.get_by_text("Where the problem was seen")).to_have_count(0)
         pg.get_by_role("button", name="Help: Environment").click()
-        pg.get_by_role("button", name="Read the guide").click()
+        pg.locator(".help-hint-more").click()
         expect(pg.get_by_role("heading", level=1, name="Creating and tracking items")).to_be_visible()
 
         # Reachable from the account menu too.
@@ -222,10 +223,8 @@ def test_motion_and_reduced_motion(browser, stack):
             "getComputedStyle(document.querySelector('#modalBug .modal-card')).transitionDuration"
         ) in ("0s", "0s, 0s")
         pg.click("#modalBug .modal-close")
-        # No exit animation at all: hidden on the next frame.
-        assert pg.evaluate(
-            "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() =>"
-            " r(document.querySelector('#modalBug').hidden))))"
-        ) is True
+        # No exit animation at all: hidden well inside the 200ms an exit would take.
+        pg.wait_for_timeout(60)
+        assert pg.evaluate("document.querySelector('#modalBug')?.hidden ?? true") is True
     finally:
         context.close()

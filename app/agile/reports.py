@@ -323,19 +323,133 @@ def _live_completion(db: Session, members: set[int], done: set[str], history: Hi
     return completed, members - completed
 
 
+_TRACKED_FIELDS = ("created", "sprint", "status", "story_points", "original_estimate")
+
+
+def _standard_items(items: dict[int, Bug]) -> dict[int, Bug]:
+    return {i: item for i, item in items.items() if item.item_type in STANDARD_TYPES}
+
+
+class _Replay:
+    """Replays a started sprint's change history, tracking the running remaining /
+    scope / completed totals and recording the events that moved them."""
+
+    def __init__(self, analysis: SprintAnalysis, history: History, start: datetime):
+        self.a = analysis
+        self.history = history
+        self.done = analysis.done
+        self.sid = str(analysis.sprint.id)
+        self.states = {i: IssueState.at(history, i, start) for i in analysis.items}
+        self.remaining = self.scope = self.completed = 0.0
+        # Issues already done when the sprint started were completed outside it:
+        # they are not part of the commitment.
+        analysis.completed_outside.update(
+            i for i, st in self.states.items() if self.member(st) and st.status in self.done
+        )
+        analysis.committed = {
+            i: self.estimate(st) for i, st in self.states.items()
+            if self.member(st) and i not in analysis.completed_outside
+        }
+        for i, st in self.states.items():
+            self._add(self.contribution(i, st))
+        analysis.series.append((start, self.remaining, self.scope, self.completed))
+
+    def member(self, st: IssueState) -> bool:
+        return st.exists and st.sprint == self.sid
+
+    def estimate(self, st: IssueState) -> float:
+        return statistic_value(self.a.mode, st.points, st.minutes)
+
+    def contribution(self, item_id: int, st: IssueState) -> tuple[float, float, float]:
+        # Work completed outside the sprint is listed apart and never burns.
+        if not self.member(st) or item_id in self.a.completed_outside:
+            return 0.0, 0.0, 0.0
+        value = self.estimate(st)
+        finished = st.status in self.done
+        return (0.0 if finished else value), value, (value if finished else 0.0)
+
+    def _add(self, delta: tuple[float, float, float]) -> None:
+        self.remaining += delta[0]
+        self.scope += delta[1]
+        self.completed += delta[2]
+
+    def apply(self, change: Change) -> None:
+        if change.item_id not in self.states or change.field not in _TRACKED_FIELDS:
+            return
+        if change.reason in _SIDE_EFFECT_REASONS and change.field == "sprint":
+            return
+        item_id = change.item_id
+        st = self.states[item_id]
+        before = self.contribution(item_id, st)
+        was_member, was_done, estimate_before = self.member(st), st.status in self.done, self.estimate(st)
+        if change.field == "created":
+            self.states[item_id] = st = IssueState.at(self.history, item_id, change.at)
+        else:
+            st.apply(change)
+        is_member, is_done = self.member(st), st.status in self.done
+        label = _event_label(change.field, was_member, is_member, was_done, is_done)
+        label = self._track_scope(label, item_id, st, estimate_before, is_done)
+        if change.field == "status" and is_member and was_done and not is_done:
+            self._reopened(item_id)
+        after = self.contribution(item_id, st)
+        delta = (after[0] - before[0], after[1] - before[1], after[2] - before[2])
+        self._add(delta)
+        if label is not None and any(delta):
+            self._record(change, label, delta[0])
+
+    def _track_scope(self, label, item_id: int, st: IssueState, estimate_before: float, is_done: bool):
+        a, outside = self.a, self.a.completed_outside
+        if label in (EVENT_ADDED, EVENT_CREATED):
+            if item_id not in a.committed:
+                a.added.add(item_id)
+            if is_done:
+                outside.add(item_id)
+            a.removed.pop(item_id, None)
+        elif label == EVENT_REMOVED:
+            if item_id in outside:
+                outside.discard(item_id)
+            else:
+                a.removed[item_id] = estimate_before
+        elif label == EVENT_ESTIMATE:
+            if self.estimate(st) == estimate_before:
+                return None
+            a.estimate_change_count += 1
+        return label
+
+    def _reopened(self, item_id: int) -> None:
+        """Reopened during the sprint: it is now work of this sprint."""
+        a = self.a
+        if item_id in a.completed_outside:
+            a.completed_outside.discard(item_id)
+            if item_id not in a.committed:
+                a.added.add(item_id)
+
+    def _record(self, change: Change, label: str, delta_remaining: float) -> None:
+        a = self.a
+        item = a.items[change.item_id]
+        a.series.append((change.at, self.remaining, self.scope, self.completed))
+        a.events.append({
+            "at": change.at, "work_item_id": item.id, "display_id": _display(item),
+            "title": item.title, "event": label, "change": round(delta_remaining, 2),
+            "actor_id": change.actor_id,
+            "remaining": round(self.remaining, 2),
+            "scope_change": label in (EVENT_ADDED, EVENT_REMOVED,
+                                      EVENT_ESTIMATE, EVENT_CREATED),
+        })
+
+
 def analyze_sprint(db: Session, sprint: Sprint, board: Board) -> SprintAnalysis:
-    mode = board.estimation_mode
     done = done_status_values(db, board)
     start, planned_end, end = sprint_window(sprint, board)
-    analysis = SprintAnalysis(sprint=sprint, board=board, mode=mode, done=done,
+    analysis = SprintAnalysis(sprint=sprint, board=board, mode=board.estimation_mode, done=done,
                               start=start, planned_end=planned_end, end=end)
     items = sprint_candidates(db, sprint)
     analysis.items = {i.id: i for i in items}
     if start is None or end is None:
-        analysis.items = {i: item for i, item in analysis.items.items() if item.item_type in STANDARD_TYPES}
+        analysis.items = _standard_items(analysis.items)
         return analysis
     if sprint.started_at is None:
-        analysis.items = {i: item for i, item in analysis.items.items() if item.item_type in STANDARD_TYPES}
+        analysis.items = _standard_items(analysis.items)
         return _analyze_legacy(db, analysis)
 
     history = History(db, items)
@@ -344,107 +458,31 @@ def analyze_sprint(db: Session, sprint: Sprint, board: Board) -> SprintAnalysis:
     analysis.items = {
         i: item for i, item in analysis.items.items() if history.value(i, "item_type", end) in STANDARD_TYPES
     }
-    sid = str(sprint.id)
-    states = {i: IssueState.at(history, i, start) for i in analysis.items}
-    outside = analysis.completed_outside
-
-    def member(st: IssueState) -> bool:
-        return st.exists and st.sprint == sid
-
-    def estimate(st: IssueState) -> float:
-        return statistic_value(mode, st.points, st.minutes)
-
-    def contribution(item_id: int, st: IssueState) -> tuple[float, float, float]:
-        # Work completed outside the sprint is listed apart and never burns.
-        if not member(st) or item_id in outside:
-            return 0.0, 0.0, 0.0
-        value = estimate(st)
-        finished = st.status in done
-        return (0.0 if finished else value), value, (value if finished else 0.0)
-
-    # Issues already done when the sprint started were completed outside it:
-    # they are not part of the commitment.
-    outside.update(i for i, st in states.items() if member(st) and st.status in done)
-    analysis.committed = {i: estimate(st) for i, st in states.items() if member(st) and i not in outside}
-    remaining = scope = completed = 0.0
-    for i, st in states.items():
-        r, sc, c = contribution(i, st)
-        remaining, scope, completed = remaining + r, scope + sc, completed + c
-    analysis.series.append((start, remaining, scope, completed))
-
+    replay = _Replay(analysis, history, start)
     for change in history.between(start, end):
-        if change.item_id not in states:
-            continue
-        if change.field not in ("created", "sprint", "status", "story_points", "original_estimate"):
-            continue
-        if change.reason in _SIDE_EFFECT_REASONS and change.field == "sprint":
-            continue
-        item_id = change.item_id
-        st = states[item_id]
-        before = contribution(item_id, st)
-        was_member, was_done, estimate_before = member(st), st.status in done, estimate(st)
-        if change.field == "created":
-            states[item_id] = st = IssueState.at(history, item_id, change.at)
-        else:
-            st.apply(change)
-        is_member, is_done = member(st), st.status in done
-        label = _event_label(change.field, was_member, is_member, was_done, is_done)
-        if label in (EVENT_ADDED, EVENT_CREATED):
-            if item_id not in analysis.committed:
-                analysis.added.add(item_id)
-            if is_done:
-                outside.add(item_id)
-            analysis.removed.pop(item_id, None)
-        elif label == EVENT_REMOVED:
-            if item_id in outside:
-                outside.discard(item_id)
-            else:
-                analysis.removed[item_id] = estimate_before
-        elif label == EVENT_ESTIMATE:
-            if estimate(st) == estimate_before:
-                label = None
-            else:
-                analysis.estimate_change_count += 1
-        if change.field == "status" and is_member and was_done and not is_done and item_id in outside:
-            # Reopened during the sprint: it is now work of this sprint.
-            outside.discard(item_id)
-            if item_id not in analysis.committed:
-                analysis.added.add(item_id)
-        after = contribution(item_id, st)
-        delta_remaining = after[0] - before[0]
-        remaining, scope, completed = (
-            remaining + delta_remaining, scope + (after[1] - before[1]), completed + (after[2] - before[2]),
-        )
-        if label is None or (delta_remaining == 0 and after[1] == before[1] and after[2] == before[2]):
-            continue
-        item = analysis.items[item_id]
-        analysis.series.append((change.at, remaining, scope, completed))
-        analysis.events.append({
-            "at": change.at, "work_item_id": item.id, "display_id": _display(item),
-            "title": item.title, "event": label, "change": round(delta_remaining, 2),
-            "actor_id": change.actor_id,
-            "remaining": round(remaining, 2),
-            "scope_change": label in (EVENT_ADDED, EVENT_REMOVED,
-                                      EVENT_ESTIMATE, EVENT_CREATED),
-        })
+        replay.apply(change)
+    _finish_analysis(db, analysis, replay, end)
+    return analysis
 
-    members = {i for i, st in states.items() if member(st)}
+
+def _finish_analysis(db: Session, analysis: SprintAnalysis, replay: _Replay, end: datetime) -> None:
+    sprint = analysis.sprint
+    members = {i for i, st in replay.states.items() if replay.member(st)}
     recorded = _completion_from_records(db, sprint) if sprint.state == "closed" else None
     if recorded is not None:
         analysis.completed, analysis.incomplete = recorded
     else:
-        analysis.completed, analysis.incomplete = _live_completion(db, members, done, history, end)
+        analysis.completed, analysis.incomplete = _live_completion(db, members, analysis.done, replay.history, end)
     analysis.completed &= set(analysis.items)
     analysis.incomplete &= set(analysis.items)
     analysis.removed = {i: v for i, v in analysis.removed.items()
                         if i not in analysis.completed and i not in analysis.incomplete}
-    analysis.estimate_at_end = {i: estimate(states[i]) for i in analysis.items}
+    analysis.estimate_at_end = {i: replay.estimate(replay.states[i]) for i in analysis.items}
     # The last point uses the sprint report's completion rule (an issue with
     # an open Sub-task is not done), so the charts and the report agree.
     end_completed = analysis.total(analysis.completed_inside)
-    end_remaining = analysis.total(analysis.incomplete - outside)
+    end_remaining = analysis.total(analysis.incomplete - analysis.completed_outside)
     analysis.series.append((end, end_remaining, end_completed + end_remaining, end_completed))
-    return analysis
 
 
 def _analyze_legacy(db: Session, analysis: SprintAnalysis) -> SprintAnalysis:

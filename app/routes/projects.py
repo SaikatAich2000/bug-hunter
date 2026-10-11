@@ -18,8 +18,9 @@ from app.agile import boards as boards_svc
 from app.api_docs import CONFLICT_409, NOT_FOUND_404, NOT_FOUND_CONFLICT_409
 from app.auth import get_current_user, require_admin, require_manager_or_admin
 from app.database import get_db
-from app.models import ROLE_ADMIN, Activity, Bug, Project, User
+from app.models import ROLE_ADMIN, Bug, Project, User
 from app.schemas import ProjectCreateIn, ProjectIn, ProjectOut
+from app.services.audit import audit
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -27,11 +28,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 _DETAIL_PROJECT_NOT_FOUND = "Project not found"
 
 def _audit(db: Session, actor: User, action: str, entity_id: int, detail: str) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type="project", entity_id=entity_id,
-        actor_user_id=actor.id, actor_name=actor.name,
-        action=action, detail=detail,
-    ))
+    audit(db, actor, "project", entity_id, action, detail)
 
 
 @router.get("", response_model=list[ProjectOut])

@@ -42,6 +42,8 @@ from app.models import (
 )
 from app.password_breach import is_password_breached
 from app.schemas import UserIn, UserOut, UserUpdate
+from app.services.audit import audit
+from app.util import like_escape
 
 
 def _reject_if_breached(plain: str) -> None:
@@ -60,12 +62,7 @@ _DETAIL_USER_NOT_FOUND = "User not found"
 _DETAIL_EMAIL_EXISTS = "Email already exists"
 
 def _audit(db: Session, actor: User | None, action: str, entity_id: int, detail: str) -> None:
-    db.add(Activity(
-        bug_id=None, entity_type="user", entity_id=entity_id,
-        actor_user_id=actor.id if actor else None,
-        actor_name=actor.name if actor else "system",
-        action=action, detail=detail,
-    ))
+    audit(db, actor, "user", entity_id, action, detail)
 
 
 def _log_removals(db: Session, actor: User, user: User, label: str) -> None:
@@ -95,14 +92,6 @@ def _log_removals(db: Session, actor: User, user: User, label: str) -> None:
             select(sprint_assignees.c.sprint_id).where(sprint_assignees.c.user_id == user.id)))):
         row("sprint", sprint.id, None, sprint.name, "assignee")
 
-
-def _like_escape(needle: str) -> str:
-    """Escape LIKE wildcards; pair with escape='\\\\' on the LIKE clause."""
-    return (
-        needle.replace("\\", "\\\\")
-              .replace("%", "\\%")
-              .replace("_", "\\_")
-    )
 
 
 def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> bool:
@@ -170,7 +159,7 @@ def list_users(
         stmt = stmt.where(User.is_active.is_(True))
     if q:
         # name/email only — searching role would let anyone enumerate admins
-        like = f"%{_like_escape(q.lower())}%"
+        like = f"%{like_escape(q.lower())}%"
         stmt = stmt.where(or_(
             func.lower(User.name).like(like, escape="\\"),
             func.lower(User.email).like(like, escape="\\"),

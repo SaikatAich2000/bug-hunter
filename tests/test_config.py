@@ -26,73 +26,73 @@ def test_load_dotenv_ok(monkeypatch):
     assert "path" in seen
 
 
-# _env_bool
+# env_bool
 def test_env_bool_truthy_falsy(monkeypatch):
     monkeypatch.setenv("X_BOOL", "Yes")
-    assert config._env_bool("X_BOOL") is True
+    assert config.env_bool("X_BOOL") is True
     monkeypatch.setenv("X_BOOL", "OFF")
-    assert config._env_bool("X_BOOL") is False
+    assert config.env_bool("X_BOOL") is False
 
 
 def test_env_bool_missing_returns_default(monkeypatch):
     monkeypatch.delenv("X_BOOL", raising=False)
-    assert config._env_bool("X_BOOL", default=True) is True
-    assert config._env_bool("X_BOOL", default=False) is False
+    assert config.env_bool("X_BOOL", default=True) is True
+    assert config.env_bool("X_BOOL", default=False) is False
 
 
 def test_env_bool_garbage_returns_default(monkeypatch):
     # Unrecognized value must not silently flip a default-on security control.
     monkeypatch.setenv("X_BOOL", "enabled")
-    assert config._env_bool("X_BOOL", default=True) is True
+    assert config.env_bool("X_BOOL", default=True) is True
     monkeypatch.setenv("X_BOOL", "secure")
-    assert config._env_bool("X_BOOL", default=False) is False
+    assert config.env_bool("X_BOOL", default=False) is False
 
 
-# _env_int
+# env_int
 def test_env_int_valid_and_missing(monkeypatch):
     monkeypatch.setenv("X_INT", "42")
-    assert config._env_int("X_INT", 1) == 42
+    assert config.env_int("X_INT", 1) == 42
     monkeypatch.delenv("X_INT", raising=False)
-    assert config._env_int("X_INT", 7) == 7
+    assert config.env_int("X_INT", 7) == 7
 
 
 def test_env_int_float_string_tolerated(monkeypatch):
     monkeypatch.setenv("X_INT", "3600.0")
-    assert config._env_int("X_INT", 1) == 3600
+    assert config.env_int("X_INT", 1) == 3600
 
 
 def test_env_int_garbage_uses_default(monkeypatch):
     monkeypatch.setenv("X_INT", "ten")
-    assert config._env_int("X_INT", 9) == 9
+    assert config.env_int("X_INT", 9) == 9
 
 
 def test_env_int_clamps_minimum(monkeypatch):
     monkeypatch.setenv("X_INT", "-5")
-    assert config._env_int("X_INT", 1, minimum=0) == 0
+    assert config.env_int("X_INT", 1, minimum=0) == 0
 
 
-# _env_float
+# env_float
 def test_env_float_valid_and_missing(monkeypatch):
     monkeypatch.setenv("X_F", "2.5")
-    assert config._env_float("X_F", 1.0) == 2.5
+    assert config.env_float("X_F", 1.0) == 2.5
     monkeypatch.delenv("X_F", raising=False)
-    assert config._env_float("X_F", 1.5) == 1.5
+    assert config.env_float("X_F", 1.5) == 1.5
 
 
 def test_env_float_garbage_uses_default(monkeypatch):
     monkeypatch.setenv("X_F", "notanumber")
-    assert config._env_float("X_F", 1.0) == 1.0
+    assert config.env_float("X_F", 1.0) == 1.0
 
 
 def test_env_float_rejects_non_finite(monkeypatch):
     for bad in ("inf", "-inf", "nan"):
         monkeypatch.setenv("X_F", bad)
-        assert config._env_float("X_F", 3.0) == 3.0
+        assert config.env_float("X_F", 3.0) == 3.0
 
 
 def test_env_float_clamps_minimum(monkeypatch):
     monkeypatch.setenv("X_F", "-1")
-    assert config._env_float("X_F", 1.0, minimum=0.0) == 0.0
+    assert config.env_float("X_F", 1.0, minimum=0.0) == 0.0
 
 
 # Settings.SMTP_PASSWORD
@@ -311,61 +311,61 @@ def test_app_version_is_read_from_the_environment(monkeypatch):
 
 
 def test_env_bool_accepts_yes_true_1(monkeypatch):
-    """_env_bool accepts 'yes', 'true', '1' (case-insensitive)."""
+    """env_bool accepts 'yes', 'true', '1' (case-insensitive)."""
     monkeypatch.setenv("TEST_BOOL_YES", "yes")
     monkeypatch.setenv("TEST_BOOL_TRUE", "TRUE")
     monkeypatch.setenv("TEST_BOOL_ONE", "1")
-    assert config._env_bool("TEST_BOOL_YES", False) is True
-    assert config._env_bool("TEST_BOOL_TRUE", False) is True
-    assert config._env_bool("TEST_BOOL_ONE", False) is True
+    assert config.env_bool("TEST_BOOL_YES", False) is True
+    assert config.env_bool("TEST_BOOL_TRUE", False) is True
+    assert config.env_bool("TEST_BOOL_ONE", False) is True
 
 
 def test_env_bool_accepts_no_false_0(monkeypatch):
-    """_env_bool accepts 'no', 'false', '0' (case-insensitive)."""
+    """env_bool accepts 'no', 'false', '0' (case-insensitive)."""
     monkeypatch.setenv("TEST_BOOL_NO", "no")
     monkeypatch.setenv("TEST_BOOL_FALSE", "FALSE")
     monkeypatch.setenv("TEST_BOOL_ZERO", "0")
-    assert config._env_bool("TEST_BOOL_NO", True) is False
-    assert config._env_bool("TEST_BOOL_FALSE", True) is False
-    assert config._env_bool("TEST_BOOL_ZERO", True) is False
+    assert config.env_bool("TEST_BOOL_NO", True) is False
+    assert config.env_bool("TEST_BOOL_FALSE", True) is False
+    assert config.env_bool("TEST_BOOL_ZERO", True) is False
 
 
 def test_env_bool_defaults_to_fallback():
-    """_env_bool uses fallback when env var is not set."""
-    assert config._env_bool("NONEXISTENT_BOOL_VAR_XYZ", True) is True
-    assert config._env_bool("NONEXISTENT_BOOL_VAR_XYZ", False) is False
+    """env_bool uses fallback when env var is not set."""
+    assert config.env_bool("NONEXISTENT_BOOL_VAR_XYZ", True) is True
+    assert config.env_bool("NONEXISTENT_BOOL_VAR_XYZ", False) is False
 
 
 def test_env_int_parses_valid_integers(monkeypatch):
-    """_env_int parses valid integer strings."""
+    """env_int parses valid integer strings."""
     monkeypatch.setenv("TEST_INT_POS", "42")
     monkeypatch.setenv("TEST_INT_NEG", "-10")
-    assert config._env_int("TEST_INT_POS", 0) == 42
-    assert config._env_int("TEST_INT_NEG", 0) == -10
+    assert config.env_int("TEST_INT_POS", 0) == 42
+    assert config.env_int("TEST_INT_NEG", 0) == -10
 
 
 def test_env_int_defaults_on_invalid(monkeypatch):
-    """_env_int defaults on invalid or missing values."""
-    assert config._env_int("NONEXISTENT_INT_VAR_XYZ", 99) == 99
+    """env_int defaults on invalid or missing values."""
+    assert config.env_int("NONEXISTENT_INT_VAR_XYZ", 99) == 99
     # Invalid int should default (it's caught silently)
     monkeypatch.setenv("INVALID_INT", "not_a_number")
-    assert config._env_int("INVALID_INT", 88) == 88
+    assert config.env_int("INVALID_INT", 88) == 88
 
 
 def test_env_float_parses_valid_floats(monkeypatch):
-    """_env_float parses valid float strings."""
+    """env_float parses valid float strings."""
     monkeypatch.setenv("TEST_FLOAT_POS", "3.14")
     monkeypatch.setenv("TEST_FLOAT_NEG", "-2.71")
-    assert config._env_float("TEST_FLOAT_POS", 0.0) == 3.14
-    assert config._env_float("TEST_FLOAT_NEG", 0.0) == -2.71
+    assert config.env_float("TEST_FLOAT_POS", 0.0) == 3.14
+    assert config.env_float("TEST_FLOAT_NEG", 0.0) == -2.71
 
 
 def test_env_float_defaults_on_invalid(monkeypatch):
-    """_env_float defaults on invalid or missing values."""
-    assert config._env_float("NONEXISTENT_FLOAT_VAR_XYZ", 9.9) == 9.9
+    """env_float defaults on invalid or missing values."""
+    assert config.env_float("NONEXISTENT_FLOAT_VAR_XYZ", 9.9) == 9.9
     # Invalid float should default
     monkeypatch.setenv("INVALID_FLOAT", "not_a_float")
-    assert config._env_float("INVALID_FLOAT", 7.7) == 7.7
+    assert config.env_float("INVALID_FLOAT", 7.7) == 7.7
 
 
 def test_is_production_detects_environment():

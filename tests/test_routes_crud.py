@@ -417,7 +417,8 @@ def test_bugs_reject_overflow_ids_raises_422(client):
     # An id filter outside the int4 range is a clean 422.
     from fastapi import HTTPException
 
-    from app.routes.bugs import _MAX_PK_INT, _reject_overflow_ids
+    from app.services.bug_query import reject_overflow_ids as _reject_overflow_ids
+    from app.util import MAX_PK_INT as _MAX_PK_INT
     with pytest.raises(HTTPException) as ei:
         _reject_overflow_ids(reporter_id=_MAX_PK_INT + 1)
     assert ei.value.status_code == 422
@@ -429,7 +430,7 @@ def test_bugs_directional_link_reaches_multi_hop(client):
 
     from app import models
     from app.database import SessionLocal
-    from app.routes.bugs import _directional_link_reaches
+    from app.services.bug_links import directional_link_reaches as _directional_link_reaches
 
     db = SessionLocal()
     try:
@@ -469,7 +470,7 @@ def test_bugs_directional_link_reaches_diamond_revisits_node(client):
 
     from app import models
     from app.database import SessionLocal
-    from app.routes.bugs import _directional_link_reaches
+    from app.services.bug_links import directional_link_reaches as _directional_link_reaches
 
     db = SessionLocal()
     try:
@@ -506,7 +507,7 @@ def test_bugs_directional_link_reaches_diamond_revisits_node(client):
 
 def test_bugs_reject_updated_at_drift_aware_current(client):
     # tz-aware current_updated skips naive coercion; same instant, no conflict.
-    from app.routes.bugs import _reject_if_updated_at_drifted
+    from app.services.bug_update import reject_if_updated_at_drifted as _reject_if_updated_at_drifted
     aware = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
     _reject_if_updated_at_drifted(aware.isoformat(), aware)
 
@@ -664,7 +665,7 @@ def test_bugs_reload_link_missing_raises_409(client):
     # A concurrently deleted row (db.scalar returns None) must give a clean 409.
     from fastapi import HTTPException
 
-    from app.routes.bugs import _reload_link
+    from app.services.bug_links import reload_link as _reload_link
 
     class _FakeDB:
         def scalar(self, _stmt):
@@ -715,7 +716,7 @@ def test_bugs_insert_link_race_returns_existing(admin_client, monkeypatch):
             s.close()
         return row, False  # created=False
 
-    monkeypatch.setattr(bugs_mod, "_insert_link_or_existing", lost_race)
+    monkeypatch.setattr(bugs_mod, "insert_link_or_existing", lost_race)
     # Fresh (source, target, type) so _find_existing is None and our patched helper runs.
     again = admin_client.post(f"/api/bugs/{a['id']}/links", json={
         "target_bug_id": b["id"], "link_type": "duplicate",

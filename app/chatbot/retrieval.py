@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.access import scope_bug_query
 from app.models import Bug
+from app.util import like_escape
 
 _STOPWORDS = frozenset({
     "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are",
@@ -50,11 +51,6 @@ def keywords(message: str, *, max_terms: int = _MAX_TERMS) -> list[str]:
     return out
 
 
-def _like_escape(term: str) -> str:
-    """Escape LIKE wildcards so a term is matched literally."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def _snippet(text: str, terms: list[str]) -> str:
     """A short excerpt of `text`, centered on the earliest matching term."""
     body = " ".join((text or "").split())
@@ -86,7 +82,7 @@ def retrieve_bugs(db: Session, message: str, *,
         return []
     clauses = []
     for t in terms:
-        like = f"%{_like_escape(t)}%"
+        like = f"%{like_escape(t)}%"
         clauses.append(func.lower(Bug.title).like(like, escape="\\"))
         clauses.append(func.lower(Bug.description).like(like, escape="\\"))
     # Scope before order_by/limit so the candidate window is within the actor's reach.

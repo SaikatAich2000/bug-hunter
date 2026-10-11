@@ -19,7 +19,7 @@ from app.database import Base, SessionLocal, engine
 def db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    memstore._clear_all_for_test()
+    memstore._sessions.clear()
     s = SessionLocal()
     try:
         admin = models.User(name="Admin", email="admin@example.com", role="admin",

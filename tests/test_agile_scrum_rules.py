@@ -8,8 +8,9 @@ import pytest
 
 from app.auth import hash_password
 from app.models import ROLE_ADMIN, AcceptanceCriterion, Bug, Project, User
-from app.routes.agile import _apply_task_flag_updates, _validate_story_ready_requirements
 from app.schemas import WorkItemTaskFlagsIn
+from app.services.agile_items import apply_task_flag_updates as _apply_task_flag_updates
+from app.services.agile_items import validate_story_ready_requirements as _validate_story_ready_requirements
 
 # --- helpers ---------------------------------------------------------------
 

@@ -334,7 +334,7 @@ def test_executor() -> None:
 
 def test_excel() -> None:
     section("Excel cache + generation")
-    excel.clear_all_for_test()
+    excel._cache.clear()
     rows = [
         {"id": 1, "title": "Foo", "project": "P", "status": "New",
          "priority": "High", "environment": "PROD", "reporter": "alice",

@@ -10,7 +10,6 @@ import base64
 import hashlib
 import ipaddress
 import logging
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -24,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.agile.integrity import set_actor
-from app.config import get_settings
+from app.config import env_str, get_settings
 from app.database import get_db
 from app.models import (
     ROLE_ADMIN,
@@ -70,7 +69,7 @@ def _bcrypt_rounds() -> int:
     if get_settings().is_production:
         return _MAX_BCRYPT_ROUNDS
     try:
-        return max(4, min(int(os.getenv("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
+        return max(4, min(int(env_str("BCRYPT_TEST_ROUNDS", "") or _MAX_BCRYPT_ROUNDS), _MAX_BCRYPT_ROUNDS))
     except ValueError:
         return _MAX_BCRYPT_ROUNDS
 
@@ -327,22 +326,15 @@ def require_manager_or_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
-def can_edit_bug(
-    user: User,
-    bug_reporter_id: Optional[int],
-    assignee_ids: list[int],
-    item_type: str = "Bug",
-) -> bool:
+def can_edit_bug(user: User, item_type: str = "Bug") -> bool:
     """Anyone may edit Bugs; Tasks/Requirements are admin/manager only."""
-    del bug_reporter_id, assignee_ids
     if item_type in ("Task", "Requirement"):
         return user.role in (ROLE_ADMIN, ROLE_MANAGER)
     return True
 
 
-def can_delete_bug(user: User, item_type: str = "Bug") -> bool:
+def can_delete_bug(user: User) -> bool:
     """Work-item deletion is admin-only for every type."""
-    del item_type
     return user.role == ROLE_ADMIN
 
 

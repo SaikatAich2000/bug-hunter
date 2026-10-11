@@ -41,6 +41,7 @@ from app.schemas import (
     WorkloadReportOut,
     display_id_for,
 )
+from app.util import defang_formula
 
 router = APIRouter(prefix="/api/agile/reports", tags=["agile-reports"])
 
@@ -57,8 +58,6 @@ _EXPORTABLE_REPORTS = (
 # Longest window the day-by-day flow/control reports accept; each day is
 # reconstructed from history, so an unbounded range is an easy way to pin a CPU.
 _MAX_REPORT_RANGE_DAYS = 366
-# Spreadsheet apps execute a cell that starts with one of these as a formula.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _validate_date_range(date_from: str, date_to: str) -> None:
@@ -78,9 +77,7 @@ def _validate_date_range(date_from: str, date_to: str) -> None:
 
 def _csv_safe(value):
     """Neutralise spreadsheet formula injection in exported text cells."""
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
-        return "'" + value
-    return value
+    return defang_formula(value) if isinstance(value, str) else value
 
 
 def _get_sprint_and_board(db: Session, sprint_id: int, user: User):

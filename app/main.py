@@ -5,7 +5,6 @@ import hashlib
 import html
 import json
 import logging
-import os
 import time
 from collections import deque
 from collections.abc import Callable
@@ -48,7 +47,7 @@ from app.auth import (
     trusted_forwarded_ip,
 )
 from app.chatbot.router import router as chatbot_router
-from app.config import get_settings
+from app.config import env_int, env_str, get_settings
 from app.database import (
     DEFAULT_PROJECT_COLOR,
     DEFAULT_PROJECT_DESCRIPTION,
@@ -1247,6 +1246,6 @@ if __name__ == "__main__":
     import uvicorn
     # Default to loopback. Set UVICORN_HOST=0.0.0.0 in containers where the
     # container boundary and reverse proxy make it safe to bind all interfaces.
-    _host = os.getenv("UVICORN_HOST", "127.0.0.1")
-    _port = int(os.getenv("UVICORN_PORT", "8000"))
+    _host = env_str("UVICORN_HOST", "127.0.0.1")
+    _port = env_int("UVICORN_PORT", 8000)
     uvicorn.run("app.main:app", host=_host, port=_port, reload=False)

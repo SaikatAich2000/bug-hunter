@@ -1130,7 +1130,8 @@ def test_cov_digest_main_returns_zero_on_success(admin_client, monkeypatch):
 
     db = _session()
     admin_id = _uid(db, "admin@test.local")
-    from app.models import Notification, _utcnow
+    from app.models import Notification
+    from app.util import utcnow as _utcnow
     n = Notification(user_id=admin_id, kind="assigned",
                      title="Assigned to Bug #1", body="x assigned you",
                      actor_name="Actor")
@@ -1187,7 +1188,7 @@ def test_cov_digest_render_links_and_other_category(admin_client):
 
 def test_cov_digest_run_digest_empty_returns_zeroes(admin_client):
     from app.jobs.email_digest import run_digest
-    from app.models import _utcnow
+    from app.util import utcnow as _utcnow
     db = _session()
     stats = run_digest(db, now=_utcnow(), lookback_hours=1)
     db.close()
@@ -1489,17 +1490,17 @@ def test_cov_database_add_missing_indexes_handles_introspection_error(monkeypatc
 
 # account_lockout._reclaim_buckets
 def test_reclaim_deletes_idle_bucket():
-    account_lockout._reset_for_tests()
+    account_lockout._buckets.clear()
     # Idle: unlocked (locked_until 0) and no in-window failures → reclaimed.
     account_lockout._buckets["idle@x"] = account_lockout._Bucket(
         fails=deque(), locked_until=0.0)
     account_lockout._reclaim_buckets(1000.0)
     assert "idle@x" not in account_lockout._buckets
-    account_lockout._reset_for_tests()
+    account_lockout._buckets.clear()
 
 
 def test_reclaim_evicts_soonest_expiring_when_all_locked(monkeypatch):
-    account_lockout._reset_for_tests()
+    account_lockout._buckets.clear()
     monkeypatch.setattr(account_lockout, "_LOCKOUT_BUCKETS_MAX", 2)
     # Two locked buckets (locked_until in the future, recent fails so neither is idle).
     account_lockout._buckets["a@x"] = account_lockout._Bucket(
@@ -1510,7 +1511,7 @@ def test_reclaim_evicts_soonest_expiring_when_all_locked(monkeypatch):
     # No idle buckets: reclaim falls back to evicting the soonest-to-expire (a@x).
     assert "a@x" not in account_lockout._buckets
     assert "b@x" in account_lockout._buckets
-    account_lockout._reset_for_tests()
+    account_lockout._buckets.clear()
 
 
 # auth.trusted_forwarded_ip — empty input guard (line 79)

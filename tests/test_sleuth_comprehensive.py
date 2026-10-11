@@ -23,7 +23,7 @@ def section(t):
 def seed():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    memstore._clear_all_for_test()
+    memstore._sessions.clear()
     db = SessionLocal()
     try:
         admin = models.User(name="Admin", email="admin@example.com",

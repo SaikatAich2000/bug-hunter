@@ -2764,20 +2764,20 @@ def test_cov_ask_graceful_on_executor_crash(admin_client, monkeypatch):
 def test_cov_excel_evict_expired(client):
     """excel.py:69 — _evict_expired_locked removes entries whose expiry has passed."""
     from app.chatbot import excel
-    excel.clear_all_for_test()
+    excel._cache.clear()
     now = 10_000.0
     excel._cache["dead"] = (b"x", "a.xlsx", now - 1, 1)
     excel._cache["live"] = (b"y", "b.xlsx", now + 1000, 1)
     excel._evict_expired_locked(now)  # 69: pops 'dead'
     assert "dead" not in excel._cache
     assert "live" in excel._cache
-    excel.clear_all_for_test()
+    excel._cache.clear()
 
 
 def test_cov_excel_evict_oldest_over_cap(client):
     """excel.py:77-78 - at capacity the soonest-expiring entry is dropped."""
     from app.chatbot import excel
-    excel.clear_all_for_test()
+    excel._cache.clear()
     cap = excel._MAX_ENTRIES
     base = 50_000.0
     # Fill to capacity; 'tok0' has the earliest expiry.
@@ -2787,7 +2787,7 @@ def test_cov_excel_evict_oldest_over_cap(client):
     excel._evict_oldest_locked()  # 77 (len check) + 78 (pop oldest)
     assert "tok0" not in excel._cache
     assert len(excel._cache) == cap - 1
-    excel.clear_all_for_test()
+    excel._cache.clear()
 
 
 def test_cov_excel_build_workbook_unavailable(client, monkeypatch):
@@ -2801,7 +2801,7 @@ def test_cov_excel_build_workbook_unavailable(client, monkeypatch):
 def test_cov_excel_fetch_staged_empty_token_and_expired(client, monkeypatch):
     """excel.py:200 (falsy token) + 209-210 (expired pop); the sweep is no-opped to isolate the defensive guard."""
     from app.chatbot import excel
-    excel.clear_all_for_test()
+    excel._cache.clear()
 
     # 200 — falsy token short-circuits to None.
     assert excel.fetch_staged("", 1) is None
@@ -2814,7 +2814,7 @@ def test_cov_excel_fetch_staged_empty_token_and_expired(client, monkeypatch):
     excel._cache["stale_tok"] = (b"data", "f.xlsx", frozen - 1, 1)
     assert excel.fetch_staged("stale_tok", 1) is None   # expired -> popped
     assert "stale_tok" not in excel._cache              # confirmed gone
-    excel.clear_all_for_test()
+    excel._cache.clear()
 
 
 # redaction.py

@@ -602,13 +602,13 @@ def test_throughput_truncated_flag(admin_client, monkeypatch):
 def test_env_int_garbage_and_clamp(monkeypatch):
     from app import config
     monkeypatch.setenv("BH_TEST_INT", "not-a-number")
-    assert config._env_int("BH_TEST_INT", 7) == 7
+    assert config.env_int("BH_TEST_INT", 7) == 7
     monkeypatch.setenv("BH_TEST_INT", "0")
-    assert config._env_int("BH_TEST_INT", 7, minimum=3) == 3
+    assert config.env_int("BH_TEST_INT", 7, minimum=3) == 3
     monkeypatch.setenv("BH_TEST_FLOAT", "xx")
-    assert config._env_float("BH_TEST_FLOAT", 1.5) == pytest.approx(1.5)
+    assert config.env_float("BH_TEST_FLOAT", 1.5) == pytest.approx(1.5)
     monkeypatch.setenv("BH_TEST_FLOAT", "-2")
-    assert config._env_float("BH_TEST_FLOAT", 0.5, minimum=0.0) == pytest.approx(0.0)
+    assert config.env_float("BH_TEST_FLOAT", 0.5, minimum=0.0) == pytest.approx(0.0)
 
 
 # scheduler — "N/step" expands to a series, not a single value
@@ -1241,7 +1241,7 @@ def test_event_item_can_edit_per_user(admin_client):
 
 # Spreadsheet formula defang must also catch leading-whitespace and newline forms.
 def test_spreadsheet_defang_handles_whitespace_and_newline():
-    from app.chatbot.excel import _defang_formula_text as defang_excel
+    from app.util import defang_formula as defang_excel
     from app.reports.xlsx import _defang_formula_text as defang_xlsx
     for defang in (defang_xlsx, defang_excel):
         assert defang(" =1+1").startswith("'")    # leading space then formula

@@ -31,3 +31,6 @@ def defang_formula(s: str) -> str:
     if s[0] in _FORMULA_TRIGGERS or (stripped and stripped[0] in _FORMULA_TRIGGERS):
         return "'" + s
     return s
+
+# Largest value an int4 primary key can hold; ids above it can never match a row.
+MAX_PK_INT = 2**31 - 1

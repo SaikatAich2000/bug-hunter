@@ -237,7 +237,7 @@ def test_insert_link_or_existing_returns_existing_on_conflict(admin_client):
 
     from app.database import SessionLocal
     from app.models import BugLink
-    from app.routes.bugs import _insert_link_or_existing
+    from app.services.bug_links import insert_link_or_existing as _insert_link_or_existing
     db = SessionLocal()
     try:
         def refetch():
@@ -260,7 +260,7 @@ def test_insert_link_or_existing_reraises_when_gone(admin_client):
 
     from app.database import SessionLocal
     from app.models import BugLink
-    from app.routes.bugs import _insert_link_or_existing
+    from app.services.bug_links import insert_link_or_existing as _insert_link_or_existing
     db = SessionLocal()
     try:
         dup = BugLink(source_bug_id=a_id, target_bug_id=b_id, link_type="relates")
@@ -1047,9 +1047,9 @@ def test_sleuth_field_validation(admin_client):
 # Staged actions expire after the confirm window to prevent stale confirmations.
 def test_pending_action_expires_after_confirm_window(client):
     import app.chatbot.memory as mm
-    mm.store._clear_all_for_test()
+    mm.store._sessions.clear()
     mm.store.stage_pending(1, {"kind": "set_status"})
-    sess = mm.store._all_sessions_for_test()[1]
+    sess = mm.store._sessions[1]
     sess.pending_staged_at -= (mm._CONFIRM_TTL_SECONDS + 10)   # backdate past window
     assert mm.store.take_pending(1) is None                     # stale → dropped
     # A fresh proposal is still returned immediately.
@@ -1156,7 +1156,7 @@ def test_expected_version_negative_is_422(admin_client):
 def test_optimistic_check_noop_when_row_vanished(client):
     # Concurrent-delete race: locked read returns nothing -> check is a no-op.
     from app.database import SessionLocal
-    from app.routes.bugs import _enforce_optimistic_concurrency
+    from app.services.bug_update import enforce_optimistic_concurrency as _enforce_optimistic_concurrency
     db = SessionLocal()
     try:
         _enforce_optimistic_concurrency(db, 999999, 5, None)   # must not raise

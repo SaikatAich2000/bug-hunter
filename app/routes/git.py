@@ -45,7 +45,6 @@ from app.git.branches import BranchCreationError, BranchTarget
 from app.git.github import HOST_NOT_ALLOWED_MESSAGE, GitHubEnterpriseProvider, parse_base_url
 from app.git.naming import (
     display_id_for_branch,
-    is_valid_branch_name,
     supports_branch_creation,
 )
 from app.git.provider import (
@@ -89,6 +88,7 @@ from app.schemas import (
     GitProviderRepositoryOut,
     GitWorkItemBranchesOut,
 )
+from app.services import git_connection
 from app.services.audit import audit
 from app.util import utcnow
 
@@ -646,40 +646,6 @@ def update_git_config(
     db.refresh(config)
     return _config_out(config)
 
-def _record_connection_result(
-    db: Session, config: ProjectGitConfig | None, *, ok: bool, message: str
-) -> None:
-    if config is None:
-        return
-    config.connection_status = "ok" if ok else "error"
-    config.last_checked_at = utcnow()
-    config.last_error = "" if ok else sanitize_provider_message(message)
-    config.version += 1
-    db.flush()
-
-_OTHER_SERVER_MESSAGE = (
-    "Enter an access token to test a different Git server: a saved token is only "
-    "sent to the server it was saved for."
-)
-
-
-def _draft_test_failed(
-    db: Session, actor: User, project: Project, config: ProjectGitConfig | None,
-    code: str, message: str,
-) -> dict:
-    _audit(
-        db, actor, "git_connection_test_failed",
-        config.id if config is not None else project.id,
-        f"Connection test failed for project '{project.name}' ({code}): {message} "
-        "[draft values were not saved]",
-    )
-    db.commit()
-    return {
-        "ok": False, "status": "error", "message": message,
-        "target": "", "checked_at": utcnow(), "error_code": code,
-    }
-
-
 @router.post("/projects/{project_id}/config/test", response_model=GitConnectionTestOut, responses=NOT_FOUND_404)
 def test_git_connection(
     project_id: int,
@@ -702,129 +668,9 @@ def test_git_connection(
     """
     project = _get_project_or_404(db, project_id, actor)
     config = _get_config_row(db, project_id)
-    settings = get_settings()
     if draft is None:
-        provider = build_provider(config)
-        checked_at = utcnow()
-        try:
-            target = provider.validate_connection()
-        except GitProviderError as exc:
-            _record_connection_result(db, config, ok=False, message=exc.message)
-            _audit(
-                db, actor, "git_connection_test_failed",
-                config.id if config is not None else project.id,
-                "Connection test failed for project "
-                f"'{project.name}' ({exc.code}): {exc.message}",
-            )
-            db.commit()
-            return {
-                "ok": False, "status": "error", "message": exc.message,
-                "target": "", "checked_at": checked_at, "error_code": exc.code,
-            }
-        _record_connection_result(db, config, ok=True, message="")
-        _audit(
-            db, actor, "git_connection_tested",
-            config.id if config is not None else project.id,
-            "Connection test succeeded for project "
-            f"'{project.name}' (target={target})",
-        )
-        db.commit()
-        return {
-            "ok": True, "status": "ok", "message": f"Connected to {target}",
-            "target": target, "checked_at": checked_at, "error_code": "",
-        }
-    draft_base = None if draft.base_url is None else (draft.base_url or "").strip()
-    draft_org = None if draft.organization is None else (draft.organization or "").strip()
-    if draft.default_base_branch is None:
-        if config is not None and (config.default_base_branch or "").strip():
-            draft_branch = (config.default_base_branch or "").strip()
-        else:
-            draft_branch = (settings.GITHUB_DEFAULT_BASE_BRANCH or "").strip()
-    else:
-        draft_branch = (draft.default_base_branch or "").strip()
-    if not draft_base:
-        _audit(
-            db, actor, "git_connection_test_failed",
-            config.id if config is not None else project.id,
-            "Connection test failed for project "
-            f"'{project.name}' ({INVALID_BASE_URL}): blank base URL "
-            "[draft values were not saved]",
-        )
-        db.commit()
-        return {
-            "ok": False, "status": "error", "message": "Git base URL is required",
-            "target": "", "checked_at": utcnow(), "error_code": INVALID_BASE_URL,
-        }
-    if not draft_branch:
-        _audit(
-            db, actor, "git_connection_test_failed",
-            config.id if config is not None else project.id,
-            "Connection test failed for project "
-            f"'{project.name}' ({INVALID_BASE_BRANCH}): blank base branch "
-            "[draft values were not saved]",
-        )
-        db.commit()
-        return {
-            "ok": False, "status": "error",
-            "message": "Default base branch is required",
-            "target": "", "checked_at": utcnow(), "error_code": INVALID_BASE_BRANCH,
-        }
-    if draft_branch and not is_valid_branch_name(draft_branch):
-        _audit(
-            db, actor, "git_connection_test_failed",
-            config.id if config is not None else project.id,
-            "Connection test failed for project "
-            f"'{project.name}' ({INVALID_BASE_BRANCH}): invalid base branch "
-            "[draft values were not saved]",
-        )
-        db.commit()
-        return {
-            "ok": False, "status": "error",
-            "message": "Default base branch is not a valid git branch name",
-            "target": "", "checked_at": utcnow(),
-            "error_code": INVALID_BASE_BRANCH,
-        }
-    if draft.credential:
-        draft_token: str | None = draft.credential
-    else:
-        try:
-            draft_token = credential_svc.resolve_token(config, draft_base)
-        except GitProviderError as exc:
-            return _draft_test_failed(db, actor, project, config, exc.code, exc.message)
-        if draft_token is None and credential_svc.credentials_configured(config):
-            return _draft_test_failed(
-                db, actor, project, config, NOT_CONFIGURED, _OTHER_SERVER_MESSAGE,
-            )
-    provider = build_provider(
-        config, base_url=draft_base, organization=draft_org, token=draft_token,
-    )
-    checked_at = utcnow()
-    try:
-        target = provider.validate_connection()
-    except GitProviderError as exc:
-        _audit(
-            db, actor, "git_connection_test_failed",
-            config.id if config is not None else project.id,
-            "Connection test failed for project "
-            f"'{project.name}' ({exc.code}): {exc.message} "
-            "[draft values were not saved]",
-        )
-        db.commit()
-        return {
-            "ok": False, "status": "error", "message": exc.message,
-            "target": "", "checked_at": checked_at, "error_code": exc.code,
-        }
-    _audit(
-        db, actor, "git_connection_tested",
-        config.id if config is not None else project.id,
-        "Connection test succeeded for project "
-        f"'{project.name}' (target={target}) [draft values were not saved]",
-    )
-    db.commit()
-    return {
-        "ok": True, "status": "ok", "message": f"Connected to {target}",
-        "target": target, "checked_at": checked_at, "error_code": "",
-    }
+        return git_connection.check_saved(db, actor, project, config, build_provider)
+    return git_connection.check_draft(db, actor, project, config, draft, build_provider)
 
 # =====================================================================
 # 3. Read-only repository discovery (no selection, no persistence)

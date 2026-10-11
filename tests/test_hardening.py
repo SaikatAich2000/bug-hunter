@@ -1241,8 +1241,8 @@ def test_event_item_can_edit_per_user(admin_client):
 
 # Spreadsheet formula defang must also catch leading-whitespace and newline forms.
 def test_spreadsheet_defang_handles_whitespace_and_newline():
-    from app.util import defang_formula as defang_excel
     from app.reports.xlsx import _defang_formula_text as defang_xlsx
+    from app.util import defang_formula as defang_excel
     for defang in (defang_xlsx, defang_excel):
         assert defang(" =1+1").startswith("'")    # leading space then formula
         assert defang("\n=cmd").startswith("'")    # leading newline

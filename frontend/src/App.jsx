@@ -11,8 +11,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
-      const open = document.querySelectorAll(".modal:not([hidden]):not([data-closing])");
-      const top = open[open.length - 1];
+      const open = [...document.querySelectorAll(".modal:not([hidden]):not([data-closing])")];
+      const top = open.at(-1);
       if (!top) return;
       const t = e.target;
       const inField = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);

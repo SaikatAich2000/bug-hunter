@@ -6,6 +6,8 @@ number of issues, so a 500-issue sprint costs the same round trips as a
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,10 +15,11 @@ from app.agile.boards import column_status_values, done_status_values, ordered_c
 from app.agile.itemtypes import STANDARD_TYPES, SUBTASK
 from app.agile.taxonomy import category_of, epic_progress_many, status_categories
 from app.auth import can_edit_bug
+from app.config import get_settings
 from app.models import Board, Bug, EpicDetail, Label, Project, Sprint, User, WorkItemLabel
 from app.schemas import CANONICAL_STATUSES, display_id_for
 
-BACKLOG_DEFAULT_LIMIT = 300
+BACKLOG_DEFAULT_LIMIT = get_settings().BACKLOG_DEFAULT_LIMIT
 _STATUS_ORDER = {value: n for n, value in enumerate(CANONICAL_STATUSES)}
 
 
@@ -74,40 +77,45 @@ def issue_payloads(
     labels = _labels_for(db, ids)
     stats = _subtask_stats(db, [i.id for i in items if i.item_type in STANDARD_TYPES], done)
     parents = _parents(db, items)
-    out = []
-    for item in items:
-        parent = parents.get(item.parent_id) if item.parent_id is not None else None
-        total, finished = stats.get(item.id, (0, 0))
-        out.append({
-            "id": item.id,
-            "display_id": display_ref(item),
-            "title": item.title,
-            "item_type": item.item_type or "Bug",
-            "status": item.status,
-            # The board's last column decides "done", whatever the category.
-            "status_category": "done" if item.status in done else category_of(categories, item),
-            "priority": item.priority,
-            "story_points": float(item.story_points) if item.story_points is not None else None,
-            "original_estimate_minutes": item.original_estimate_minutes,
-            "assignees": item.assignees,
-            "epic_id": item.epic_id,
-            "parent_id": item.parent_id,
-            "parent_display_id": display_ref(parent) if parent else None,
-            "parent_title": parent.title if parent else None,
-            "subtask_count": total,
-            "subtasks_done": finished,
-            "flagged": bool(item.flagged),
-            "blocked": bool(item.blocked),
-            "labels": labels.get(item.id, []),
-            "sprint_id": item.sprint_id,
-            "rank": item.rank,
-            "due_date": item.due_date,
-            "updated_at": item.updated_at,
-            "version": item.version,
-            "can_edit": can_edit_bug(viewer, item_type=item.item_type or "Bug"),
-            "column_id": column_of.get(item.status) if column_of is not None else None,
-        })
-    return out
+    return [
+        _issue_payload(item, viewer, categories, done, labels.get(item.id, []),
+                       stats.get(item.id, (0, 0)), parents.get(item.parent_id), column_of)
+        for item in items
+    ]
+
+
+def _issue_payload(item: Bug, viewer: User, categories: dict, done: set[str], labels: list,
+                   subtasks: tuple[int, int], parent: Bug | None, column_of: dict[str, int] | None) -> dict:
+    total, finished = subtasks
+    return {
+        "id": item.id,
+        "display_id": display_ref(item),
+        "title": item.title,
+        "item_type": item.item_type or "Bug",
+        "status": item.status,
+        # The board's last column decides "done", whatever the category.
+        "status_category": "done" if item.status in done else category_of(categories, item),
+        "priority": item.priority,
+        "story_points": float(item.story_points) if item.story_points is not None else None,
+        "original_estimate_minutes": item.original_estimate_minutes,
+        "assignees": item.assignees,
+        "epic_id": item.epic_id,
+        "parent_id": item.parent_id,
+        "parent_display_id": display_ref(parent) if parent else None,
+        "parent_title": parent.title if parent else None,
+        "subtask_count": total,
+        "subtasks_done": finished,
+        "flagged": bool(item.flagged),
+        "blocked": bool(item.blocked),
+        "labels": labels,
+        "sprint_id": item.sprint_id,
+        "rank": item.rank,
+        "due_date": item.due_date,
+        "updated_at": item.updated_at,
+        "version": item.version,
+        "can_edit": can_edit_bug(viewer, item_type=item.item_type or "Bug"),
+        "column_id": column_of.get(item.status) if column_of is not None else None,
+    }
 
 
 def epic_briefs(db: Session, project_id: int) -> list[dict]:
@@ -144,6 +152,19 @@ def _issues_query():
     return select(Bug).options(selectinload(Bug.assignees))
 
 
+def _sprint_cards(db: Session, sprint: Sprint) -> list[Bug]:
+    items = list(db.scalars(
+        _issues_query().where(
+            Bug.sprint_id == sprint.id, Bug.item_type.in_((*STANDARD_TYPES, SUBTASK)),
+        ).order_by(Bug.rank, Bug.id)
+    ).all())
+    # Sub-tasks have no rank of their own; keep them in their parent's order.
+    order = {i.id: n for n, i in enumerate(items) if i.item_type in STANDARD_TYPES}
+    items.sort(key=lambda i: (order.get(i.parent_id if i.item_type == SUBTASK else i.id, 1 << 30),
+                              i.item_type == SUBTASK, i.id))
+    return items
+
+
 def board_view(db: Session, board: Board, sprint: Sprint | None, viewer: User) -> dict:
     active = list(db.scalars(
         select(Sprint).where(Sprint.board_id == board.id, Sprint.state == "active")
@@ -155,17 +176,7 @@ def board_view(db: Session, board: Board, sprint: Sprint | None, viewer: User) -
     placement = status_to_column(board)
     column_of = {status: col.id for status, col in placement.items()}
     done = done_status_values(db, board)
-    items: list[Bug] = []
-    if sprint is not None:
-        items = list(db.scalars(
-            _issues_query().where(
-                Bug.sprint_id == sprint.id, Bug.item_type.in_((*STANDARD_TYPES, SUBTASK)),
-            ).order_by(Bug.rank, Bug.id)
-        ).all())
-        # Sub-tasks have no rank of their own; keep them in their parent's order.
-        order = {i.id: n for n, i in enumerate(items) if i.item_type in STANDARD_TYPES}
-        items.sort(key=lambda i: (order.get(i.parent_id if i.item_type == SUBTASK else i.id, 1 << 30),
-                                  i.item_type == SUBTASK, i.id))
+    items = _sprint_cards(db, sprint) if sprint is not None else []
     payloads = issue_payloads(db, items, viewer, done=done, column_of=column_of)
     by_column: dict[int, list[dict]] = {c.id: [] for c in columns}
     unmapped = []
@@ -251,27 +262,53 @@ def epic_rows(db: Session, epics: list[Bug]) -> list[dict]:
     } if ids else {}
     progress = epic_progress_many(db, ids)
     categories = status_categories(db)
-    out = []
-    for epic in epics:
-        detail = details.get(epic.id)
-        out.append({
-            "id": epic.id, "display_id": display_ref(epic), "title": epic.title,
-            "description": epic.description or "", "status": epic.status,
-            "status_category": category_of(categories, epic), "project_id": epic.project_id,
-            "color": detail.color if detail else "",
-            "owner_id": detail.owner_id if detail else None,
-            "start_date": detail.start_date if detail else None,
-            "target_date": detail.target_date if detail else None,
-            "health": detail.health if detail else "unknown",
-            "summary_note": detail.summary_note if detail else "",
-            "archived": bool(detail.archived) if detail else False,
-            "version": detail.version if detail else 1,
-            "progress": progress[epic.id],
-        })
-    return out
+    return [
+        _epic_row(epic, details.get(epic.id), category_of(categories, epic), progress[epic.id])
+        for epic in epics
+    ]
+
+
+# What an Epic without a details row reads as.
+_NO_EPIC_DETAIL = SimpleNamespace(
+    color="", owner_id=None, start_date=None, target_date=None, health="unknown",
+    summary_note="", archived=False, version=1,
+)
+
+
+def _epic_row(epic: Bug, detail, status_category: str, progress: dict) -> dict:
+    detail = detail or _NO_EPIC_DETAIL
+    return {
+        "id": epic.id, "display_id": display_ref(epic), "title": epic.title,
+        "description": epic.description or "", "status": epic.status,
+        "status_category": status_category, "project_id": epic.project_id,
+        "color": detail.color, "owner_id": detail.owner_id,
+        "start_date": detail.start_date, "target_date": detail.target_date,
+        "health": detail.health, "summary_note": detail.summary_note,
+        "archived": bool(detail.archived), "version": detail.version,
+        "progress": progress,
+    }
 
 
 HIERARCHY_UNPARENTED_LIMIT = 200
+
+
+def _hierarchy_scope(stmt, needle: str | None, hide_status: set[str] | None):
+    """Narrow a hierarchy query to a title/key search and, optionally, away from done statuses."""
+    if needle:
+        stmt = stmt.where(func.lower(Bug.title).like(needle) | func.lower(func.coalesce(Bug.display_id, "")).like(needle))
+    if hide_status:
+        stmt = stmt.where(Bug.status.not_in(hide_status))
+    return stmt
+
+
+def _subtasks_of(db: Session, parent_ids: list[int]) -> list[Bug]:
+    out: list[Bug] = []
+    for n in range(0, len(parent_ids), 500):
+        out.extend(db.scalars(
+            _issues_query().where(Bug.parent_id.in_(parent_ids[n:n + 500]), Bug.item_type == SUBTASK)
+            .order_by(Bug.id)
+        ).all())
+    return out
 
 
 def hierarchy_view(
@@ -289,11 +326,7 @@ def hierarchy_view(
     needle = f"%{q.strip().lower()}%" if q.strip() else None
 
     def scoped(stmt):
-        if needle:
-            stmt = stmt.where(func.lower(Bug.title).like(needle) | func.lower(func.coalesce(Bug.display_id, "")).like(needle))
-        if not include_done and done:
-            stmt = stmt.where(Bug.status.not_in(done))
-        return stmt
+        return _hierarchy_scope(stmt, needle, None if include_done else done)
 
     in_epics = list(db.scalars(scoped(
         _issues_query().where(Bug.epic_id.in_(epic_ids), Bug.item_type.in_(STANDARD_TYPES))
@@ -307,12 +340,7 @@ def hierarchy_view(
     ).order_by(Bug.rank.is_(None), Bug.rank, Bug.id).limit(HIERARCHY_UNPARENTED_LIMIT)).all())
     issues = in_epics + unparented
     parent_ids = [i.id for i in issues]
-    subtasks = []
-    for n in range(0, len(parent_ids), 500):
-        subtasks.extend(db.scalars(
-            _issues_query().where(Bug.parent_id.in_(parent_ids[n:n + 500]), Bug.item_type == SUBTASK)
-            .order_by(Bug.id)
-        ).all())
+    subtasks = _subtasks_of(db, parent_ids)
     payloads = issue_payloads(db, issues + subtasks, viewer, done=done)
     by_id = {p["id"]: p for p in payloads}
     sprints = list(db.scalars(

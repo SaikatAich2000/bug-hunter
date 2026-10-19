@@ -274,8 +274,10 @@ class TestCommentSanitiserBlocksUnsafe:
 
     def test_script_tag_is_stripped(self, admin_client, bug):
         got = self._comment(admin_client, bug["id"], "<p>before<script>alert(1)</script>after</p>")
-        assert "<script" not in got.lower() and "</script" not in got.lower()
-        assert "before" in got and "after" in got
+        assert "<script" not in got.lower()
+        assert "</script" not in got.lower()
+        assert "before" in got
+        assert "after" in got
 
     def test_javascript_url_in_anchor_is_stripped(self, admin_client, bug):
         got = self._comment(admin_client, bug["id"], '<p><a href="javascript:alert(1)">x</a></p>')
@@ -431,13 +433,15 @@ class TestHardening:
     """Pin security hardening so an accidental revert is caught early."""
 
     def test_uvicorn_host_defaults_to_loopback(self):
-        """app/main.py's __main__ block must not hard-bind 0.0.0.0."""
+        """The bind host comes from settings.UVICORN_HOST, whose code default is loopback."""
         from pathlib import Path
-        src = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
-        assert 'env_str("UVICORN_HOST"' in src, (
-            "Bind host must come from UVICORN_HOST env var, not be hard-coded"
+        app_dir = Path(__file__).resolve().parents[1] / "app"
+        main_src = (app_dir / "main.py").read_text(encoding="utf-8")
+        cfg_src = (app_dir / "config.py").read_text(encoding="utf-8")
+        assert "host=settings.UVICORN_HOST" in main_src, (
+            "Bind host must come from UVICORN_HOST, not be hard-coded"
         )
-        assert '"127.0.0.1"' in src, (
+        assert 'os.getenv("UVICORN_HOST", "127.0.0.1")' in cfg_src, (
             "Default UVICORN_HOST should be the loopback address"
         )
 

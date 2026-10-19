@@ -26,8 +26,8 @@ class ExcelGenerationError(Exception):
     """Raised when the workbook can't be built (e.g. openpyxl missing)."""
 
 
-_TTL_SECONDS = 30 * 60
-_MAX_ENTRIES = 50  # hard cap; oldest evicted when exceeded
+_TTL_SECONDS = get_settings().SLEUTH_EXPORT_TTL_SECONDS
+_MAX_ENTRIES = get_settings().SLEUTH_EXPORT_MAX_ENTRIES  # hard cap; oldest evicted
 
 
 _cache_lock = threading.Lock()

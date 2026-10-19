@@ -12,8 +12,9 @@ def _check():
 
 @pytest.mark.parametrize("pw", ["legacy-default", "LEGACY-DEFAULT", "changeme", "ChangeMe"])
 def test_no_password_bypasses_the_policy(pw):
+    check = _check()
     with pytest.raises(ValueError):
-        _check()(pw)
+        check(pw)
 
 
 def test_default_rules_unchanged():

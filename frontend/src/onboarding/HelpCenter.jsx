@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { markdownToHtml, headingsOf } from "../lib/markdown";
 import { GUIDES, findGuide, searchGuides } from "./guides";
-import { onGuideRequested, takePendingGuide } from "./onboardingBus";
-import { emitOnboarding } from "./onboardingBus";
+import { emitOnboarding, onGuideRequested, takePendingGuide } from "./onboardingBus";
 
 export default function HelpCenter() {
   const [query, setQuery] = useState("");
@@ -82,7 +81,7 @@ export default function HelpCenter() {
               </li>
             ))}
           </ul>
-          {shown.length === 0 && <p className="help-none muted" role="status">No guide matches &ldquo;{query}&rdquo;.</p>}
+          {shown.length === 0 && <output className="help-none muted">No guide matches &ldquo;{query}&rdquo;.</output>}
         </nav>
         <div className="help-side-actions">
           <button type="button" className="btn ghost" onClick={() => emitOnboarding("tour")}>Take the product tour</button>
@@ -105,7 +104,7 @@ export default function HelpCenter() {
           </nav>
         )}
         {/* html comes from markdownToHtml, which escapes and sanitizes it */}
-        <div className="help-md" onClick={onArticleClick} role="presentation" dangerouslySetInnerHTML={{ __html: html }} />
+        <div className="help-md" onClick={onArticleClick} role="presentation" /* NOSONAR S6819: click delegation on rendered guide HTML (links); not an image */ dangerouslySetInnerHTML={{ __html: html }} />
       </article>
     </section>
   );

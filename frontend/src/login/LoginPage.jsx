@@ -19,6 +19,13 @@ function detailMessage(data, fallback) {
   return fallback;
 }
 
+function onToggleTheme() {
+  const cur = document.documentElement.dataset.theme;
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem("theme", next);
+}
+
 export default function LoginPage() {
   const appName = getAppName();
   const [view, setView] = useState("login");
@@ -54,13 +61,6 @@ export default function LoginPage() {
     e.preventDefault();
     hideAlerts();
     setView("login");
-  }
-
-  function onToggleTheme() {
-    const cur = document.documentElement.dataset.theme;
-    const next = cur === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem("theme", next);
   }
 
   async function onLoginSubmit(e) {

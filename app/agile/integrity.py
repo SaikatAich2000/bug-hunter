@@ -51,7 +51,8 @@ def set_actor(session: Session, user_id: int | None) -> None:
     session.info[ACTOR_KEY] = user_id
 
 
-class change_reason:  # noqa: N801 - used as a context manager, reads like a statement
+# Used as a context manager, so the lowercase name reads like a statement.
+class change_reason:
     """Tag the changes flushed inside the block, e.g. ``with change_reason(db, "sprint_completed"):``."""
 
     def __init__(self, session: Session, reason: str) -> None:
@@ -180,6 +181,37 @@ def _reopened_in_closed_sprint(session: Session, item, done_cache: dict) -> bool
     return bool(done) and item.status not in done
 
 
+def _enforce_epic(session: Session, item, last_rank: dict) -> None:
+    item.sprint_id = item.parent_id = item.epic_id = None
+    _ensure_ranked(session, item, last_rank)
+
+
+def _enforce_subtask(session: Session, item) -> None:
+    # Sub-tasks are ordered under their parent, never in a list.
+    item.rank = item.rank_scope = None
+    _derive_from_parent(session, item)
+
+
+def _enforce_standard(session: Session, item, last_rank: dict, done_cache: dict) -> list:
+    """Rank a standard issue; returns the Sub-tasks to re-derive when its placement changed."""
+    if item.parent_id is not None:
+        logger.warning("Clearing parent_id on %s #%s: only Sub-tasks have a parent",
+                       item.item_type or "Bug", item.id)
+        item.parent_id = None
+    if _reopened_in_closed_sprint(session, item, done_cache):
+        item.sprint_id = None
+    _ensure_ranked(session, item, last_rank)
+    moved = item.id is not None and any(
+        _changed(item, attr) for attr in ("sprint_id", "epic_id", "project_id", "item_type")
+    )
+    if not moved:
+        return []
+    children = [c for c in _children_of(session, item) if is_subtask(c.item_type)]
+    for child in children:
+        _derive_from_parent(session, child)
+    return children
+
+
 def _enforce(session: Session, items: list) -> list:
     """Apply the derivation rules; returns every item touched (inputs plus
     cascaded Sub-tasks) so their changes are logged in the same flush."""
@@ -196,33 +228,11 @@ def _enforce(session: Session, items: list) -> list:
         touched.append(item)
         item_type = item.item_type or "Bug"
         if is_epic(item_type):
-            if item.sprint_id is not None:
-                item.sprint_id = None
-            if item.parent_id is not None:
-                item.parent_id = None
-            if item.epic_id is not None:
-                item.epic_id = None
-            _ensure_ranked(session, item, last_rank)
+            _enforce_epic(session, item, last_rank)
         elif is_subtask(item_type):
-            # Sub-tasks are ordered under their parent, never in a list.
-            if item.rank is not None or item.rank_scope is not None:
-                item.rank = item.rank_scope = None
-            _derive_from_parent(session, item)
+            _enforce_subtask(session, item)
         elif is_standard(item_type):
-            if item.parent_id is not None:
-                logger.warning("Clearing parent_id on %s #%s: only Sub-tasks have a parent",
-                               item_type, item.id)
-                item.parent_id = None
-            if _reopened_in_closed_sprint(session, item, done_cache):
-                item.sprint_id = None
-            _ensure_ranked(session, item, last_rank)
-            if item.id is not None and any(
-                _changed(item, attr) for attr in ("sprint_id", "epic_id", "project_id", "item_type")
-            ):
-                for child in _children_of(session, item):
-                    if is_subtask(child.item_type):
-                        _derive_from_parent(session, child)
-                        queue.append(child)
+            queue.extend(_enforce_standard(session, item, last_rank, done_cache))
     return touched
 
 
@@ -238,21 +248,26 @@ def _log_changes(session: Session, new_items: list, dirty_items: list) -> None:
             actor_id=actor_id, reason=reason,
         ))
     for item in dirty_items:
-        state = inspect(item)
-        for attr, field in TRACKED_FIELDS.items():
-            history = state.attrs[attr].history
-            if not history.has_changes():
-                continue
-            old = history.deleted[0] if history.deleted else None
-            new = history.added[0] if history.added else None
-            old_text, new_text = format_value(old), format_value(new)
-            if old_text == new_text:
-                continue
+        for field, old_text, new_text in _field_changes(item):
             session.add(WorkItemChange(
                 work_item=item, project_id=item.project_id, field=field,
                 old_value=old_text, new_value=new_text,
                 actor_id=actor_id, reason=reason,
             ))
+
+
+def _field_changes(item):
+    """(field, old, new) for each tracked attribute whose displayed value really changed."""
+    state = inspect(item)
+    for attr, field in TRACKED_FIELDS.items():
+        history = state.attrs[attr].history
+        if not history.has_changes():
+            continue
+        old = history.deleted[0] if history.deleted else None
+        new = history.added[0] if history.added else None
+        old_text, new_text = format_value(old), format_value(new)
+        if old_text != new_text:
+            yield field, old_text, new_text
 
 
 def register(session_factory) -> None:

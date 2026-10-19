@@ -9,9 +9,9 @@ export default function ChipPicker({ items, selected, onToggle, disabled, id }) 
         <span className="chip-empty">— none available —</span>
       ) : (
         items.map((item) => (
-          <span
+          <span // NOSONAR S6819: styled inline chip inside a row; a <button> would need a reset of the row styling
             key={item.id}
-            role="button"
+            role="button" /* NOSONAR S6819: styled inline label inside a clickable row; a <button> would need a reset of the row styling */
             tabIndex={disabled ? -1 : 0}
             aria-pressed={selectedSet.has(item.id)}
             aria-disabled={disabled || undefined}

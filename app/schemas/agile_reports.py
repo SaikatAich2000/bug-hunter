@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from app.schemas.agile_planning import ReadinessCheckOut
 from app.schemas.agile_taxonomy import EpicProgressOut
 
+_DEFAULT_STATISTIC_LABEL = "Story points"
+
 
 class ReportIssueOut(BaseModel):
     id: int
@@ -30,7 +32,7 @@ class SprintReportOut(BaseModel):
     state: str
     goal: str
     estimation_mode: str
-    statistic_label: str = "Story points"
+    statistic_label: str = _DEFAULT_STATISTIC_LABEL
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     started_at: Optional[datetime] = None
@@ -99,7 +101,7 @@ class BurndownReportOut(BaseModel):
     sprint_name: str = ""
     state: str = ""
     estimation_mode: str
-    statistic_label: str = "Story points"
+    statistic_label: str = _DEFAULT_STATISTIC_LABEL
     start: Optional[datetime] = None
     planned_end: Optional[datetime] = None
     end: Optional[datetime] = None
@@ -154,7 +156,7 @@ class EpicReportOut(BaseModel):
     title: str
     status: str = ""
     estimation_mode: str = "story_points"
-    statistic_label: str = "Story points"
+    statistic_label: str = _DEFAULT_STATISTIC_LABEL
     progress: EpicProgressOut
     sprints: list[EpicSprintRowOut] = Field(default_factory=list)
     done: list[ReportIssueOut] = Field(default_factory=list)
@@ -284,7 +286,7 @@ class VelocityReportOut(BaseModel):
     """The Velocity Chart: commitment vs completed for recent closed sprints."""
     board_id: int
     estimation_mode: str
-    statistic_label: str = "Story points"
+    statistic_label: str = _DEFAULT_STATISTIC_LABEL
     average_committed: float = 0
     average_completed: float = 0
     points: list[VelocityPointOut] = Field(default_factory=list)

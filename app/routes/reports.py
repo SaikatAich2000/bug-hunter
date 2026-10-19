@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.access import accessible_project_ids
-from app.api_docs import BAD_REQUEST_400, EXPORT_ERRORS, XLSX_FILE_200
+from app.api_docs import BAD_REQUEST_400, XLSX_FILE_200_EXPORT_ERRORS
 from app.auth import require_manager_or_admin
 from app.config import get_settings
 from app.database import get_db
@@ -111,7 +111,8 @@ def _build_filters(payload: ReportRunIn) -> Filters:
 
 def _run_or_400(payload: ReportRunIn, db: Session, user: User):
     if payload.report_key not in REPORT_CATALOG:
-        raise HTTPException(
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(  # NOSONAR(S8415)
             status_code=400,
             detail=(
                 f"Unknown report '{payload.report_key}'. "
@@ -124,7 +125,8 @@ def _run_or_400(payload: ReportRunIn, db: Session, user: User):
     try:
         return run_report(payload.report_key, filters, db), filters
     except UnknownReportError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc  # NOSONAR(S8415)
 
 
 @router.post("/run", responses=BAD_REQUEST_400)
@@ -159,7 +161,7 @@ def _safe_filename(report_key: str, label: str) -> str:
     return f"bug-hunter-report-{base}-{stamp}.xlsx"
 
 
-@router.post("/export.xlsx", response_class=Response, responses={**XLSX_FILE_200, **EXPORT_ERRORS})
+@router.post("/export.xlsx", response_class=Response, responses=XLSX_FILE_200_EXPORT_ERRORS)
 def export_xlsx(
     payload: ReportRunIn,
     db: Session = Depends(get_db),

@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Optional
 
 import bcrypt
@@ -101,7 +102,12 @@ def _signer() -> TimestampSigner:
 
 def _sealer() -> Fernet:
     """Encrypts the cookie payload so the user id is not readable by the client."""
-    secret = get_settings().SESSION_SECRET or _FALLBACK_SECRET
+    return _sealer_for(get_settings().SESSION_SECRET or _FALLBACK_SECRET)
+
+
+@lru_cache(maxsize=4)
+def _sealer_for(secret: str) -> Fernet:
+    """Key derivation and Fernet setup run once per secret, not on every request."""
     key = hashlib.sha256(b"bh-session-v3:" + secret.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(key))
 
@@ -236,7 +242,7 @@ def purge_consumed_reset_tokens(db: Session) -> int:
 
 
 # Throttle last_seen_at writes; per-request updates would be a hot write.
-_LAST_SEEN_THROTTLE_SECONDS = 60
+_LAST_SEEN_THROTTLE_SECONDS = get_settings().LAST_SEEN_THROTTLE_SECONDS
 
 
 def _delete_expired_session(db: Session, sess: SessionRow, jti: str) -> None:
@@ -264,10 +270,9 @@ def _maybe_bump_last_seen(db: Session, sess: SessionRow, now: datetime, jti: str
         db.rollback()
 
 
-def _validate_session_row(db: Session, jti: str, user: User) -> bool:
-    """True iff the jti's session row is valid for this user; also prunes
-    expired rows and refreshes last_seen_at."""
-    sess = db.scalar(select(SessionRow).where(SessionRow.jti == jti))
+def _session_row_usable(db: Session, sess: Optional[SessionRow], jti: str, user: User) -> bool:
+    """True iff the fetched session row belongs to this user and has not expired; also
+    prunes an expired row and refreshes last_seen_at."""
     if sess is None or sess.user_id != user.id:
         return False
     now = datetime.now(timezone.utc)
@@ -281,18 +286,31 @@ def _validate_session_row(db: Session, jti: str, user: User) -> bool:
     return True
 
 
+def _validate_session_row(db: Session, jti: str, user: User) -> bool:
+    """True iff the jti's session row is valid for this user."""
+    return _session_row_usable(db, db.scalar(select(SessionRow).where(SessionRow.jti == jti)), jti, user)
+
+
 def _user_from_request(request: Request, db: Session) -> Optional[User]:
     parsed = parse_session_token(session_cookie_value(request))
     if parsed is None:
         return None
     user_id, session_version, jti = parsed
-    user = db.get(User, user_id)
-    if user is None or not user.is_active:
+    # One round trip for the user and the session row it names (was two queries).
+    row = db.execute(
+        select(User, SessionRow)
+        .outerjoin(SessionRow, (SessionRow.user_id == User.id) & (SessionRow.jti == jti))
+        .where(User.id == user_id)
+    ).first()
+    if row is None:
+        return None
+    user, sess = row
+    if not user.is_active:
         return None
     # session_version bump (password change/forced logout) invalidates old cookies.
     if (user.session_version or 0) != session_version:
         return None
-    if not _validate_session_row(db, jti, user):
+    if not _session_row_usable(db, sess, jti, user):
         return None
     return user
 

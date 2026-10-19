@@ -27,6 +27,8 @@
 }
 
 * { box-sizing: border-box; }
+/* <output> carries role=status; it is inline by default but used as a block notice. */
+output { display: block; }
 
 /* [hidden] must be forced: component rules like `.filter-bar { display: flex }` otherwise silently override the UA default, which let a hidden filter-bar leak onto the Audit page. */
 [hidden] { display: none !important; }
@@ -715,7 +717,6 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   /* Wrap long project / team names in full instead of truncating with "…". */
   white-space: normal;
   overflow-wrap: anywhere;
-  word-break: break-word;
   cursor: pointer;
   padding: 2px 4px;
   margin: -2px -4px;
@@ -1355,7 +1356,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   width: 1%;
   white-space: nowrap;
 }
-.bug-table td.col-project   { max-width: 200px; white-space: normal; word-break: break-word; }
+.bug-table td.col-project   { max-width: 200px; white-space: normal; overflow-wrap: anywhere; }
 .bug-table td.col-event     { max-width: 220px; white-space: normal; }
 .bug-table td.col-assignees { max-width: 280px; white-space: normal; }
 /* Title is the greedy column, expanding to fill leftover space; inner .title-text wraps and is line-clamped to 2 lines. */
@@ -1441,7 +1442,6 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   -webkit-box-orient: vertical;
   overflow: hidden;
   white-space: normal;
-  word-break: break-word;
   overflow-wrap: anywhere;
   line-height: 1.35;
 }
@@ -1524,8 +1524,6 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .report-kpi { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
 .report-kpi-num { font-size: 24px; font-weight: 700; color: var(--accent); }
 .report-points { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: var(--text-muted); }
-.reports-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
-.reports-table th, .reports-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 @media print {
   .sprints-toolbar { display: none; }
 }
@@ -1849,7 +1847,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   color: var(--text-muted);
   font-size: 12px;
   margin-top: 4px;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .audit-time {
   color: var(--text-faint);
@@ -1943,7 +1941,6 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   letter-spacing: 0;
   min-width: 0;
   flex: 1;
-  word-break: break-word;
   overflow-wrap: anywhere;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
@@ -2307,7 +2304,7 @@ input[type="checkbox"]:checked::after {
 .comment-time { color: var(--text-faint); font-size: 11px; }
 .comment-body {
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   color: var(--text);
   line-height: 1.6;
   margin-bottom: 8px;
@@ -2352,7 +2349,7 @@ input[type="checkbox"]:checked::after {
   color: var(--text-muted);
   font-size: 12px;
   margin-top: 2px;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .activity-time {
   color: var(--text-faint);
@@ -2793,13 +2790,13 @@ input[type="checkbox"]:checked::after {
   height: 40px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.14);
+  background: #3a3f4d;  /* solid, so the white glyph keeps its contrast whatever the overlay behind is */
   color: #fff;
   font-size: 18px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
-.video-lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
+.video-lightbox-close:hover { background: #4d5364; }
 .video-lightbox-title {
   position: absolute;
   top: 22px;
@@ -3088,10 +3085,10 @@ input[type="checkbox"]:checked::after {
 /* Phone landscape & smaller — improve touch targets and modal density. */
 @media (max-width: 600px) {
   /* Bigger tap targets (Apple HIG / Material ~44px); overlay icon buttons are absolutely positioned so growing them won't reflow. */
-  .icon-btn { width: 40px; height: 40px; min-height: 40px; }
+  .icon-btn { width: 44px; height: 44px; min-height: 44px; }
   .notif-del, .attach-staged-remove { width: 36px; height: 36px; }
   .bh-date-clear { width: 28px; height: 28px; }
-  .btn, .ms-btn, .chip { min-height: 38px; }
+  .btn, .ms-btn, .chip { min-height: 44px; }
   /* Tighten chips so the assignee picker still fits two-per-row. */
   .chip { padding: 6px 10px; }
   /* Filter-bar wraps onto two rows on phones; keep margin tight. */
@@ -3279,6 +3276,7 @@ input[type="checkbox"]:checked::after {
 }
 .auth-submit {
   width: 100%;
+  min-height: 44px;
   padding: 12px 16px;
   font-weight: 600;
   font-size: 15px;
@@ -3438,7 +3436,7 @@ input[type="checkbox"]:checked::after {
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 2px;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .session-line3 {
   font-size: 11px;
@@ -4737,9 +4735,11 @@ body.is-loading .events-detail-mode {
   min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  margin-top: 8px;
   color: var(--text);
 }
 .reports-table th, .reports-table td {
+  text-align: left;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-soft);
   vertical-align: top;

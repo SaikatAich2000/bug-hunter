@@ -172,14 +172,16 @@ def test_burndown_series_matches_the_hand_computed_one(two_week_sprint):
         ("Estimate changed", 5), ("Issue reopened", 3), ("Issue completed", -3), ("Issue completed", -13),
     ]
     assert [e["scope_change"] for e in report["events"]] == [False, True, True, True, False, False, False]
-    assert report["committed_estimate"] == 16 and report["remaining_estimate"] == 2
+    assert report["committed_estimate"] == 16
+    assert report["remaining_estimate"] == 2
 
 
 def test_guideline_is_flat_over_the_weekend(two_week_sprint):
     s = two_week_sprint
     report = s["client"].get(f"/api/agile/reports/burndown?sprint_id={s['sprint']['id']}").json()
     guide = {g["at"][:19]: g["value"] for g in report["guideline"]}
-    assert report["guideline"][0]["value"] == 16 and report["guideline"][-1]["value"] == 0
+    assert report["guideline"][0]["value"] == 16
+    assert report["guideline"][-1]["value"] == 0
     assert report["guideline"][-1]["at"].startswith("2026-03-14T00:00:00")
     assert guide["2026-03-07T00:00:00"] == guide["2026-03-09T00:00:00"]    # Sat + Sun flat
     assert guide["2026-03-06T00:00:00"] > guide["2026-03-07T00:00:00"]     # Friday burns
@@ -234,7 +236,8 @@ def test_daily_report_is_the_state_at_the_end_of_that_day(two_week_sprint):
     assert sorted(r["work_item_id"] for r in daily["items"]) == sorted([s["a"]["id"], s["c"]["id"], s["d"]["id"]])
     assert (daily["done_count"], daily["todo_count"]) == (1, 2)
     assert (daily["completed_estimate"], daily["remaining_estimate"]) == (3, 10)
-    assert daily["scope_removed_today"] == 1 and daily["scope_added_today"] == 0
+    assert daily["scope_removed_today"] == 1
+    assert daily["scope_added_today"] == 0
     tuesday = s["client"].get(
         f"/api/agile/reports/daily?sprint_id={s['sprint']['id']}&report_date=2026-03-03"
     ).json()
@@ -278,7 +281,8 @@ def test_cumulative_flow_and_control_chart(admin_client):
     assert [(e["work_item_id"], e["cycle_time_days"], e["lead_time_days"]) for e in chart["entries"]] == [
         (x["id"], 3.0, 4.04),
     ]
-    assert chart["average_days"] == 3.0 and chart["count"] == 1
+    assert chart["average_days"] == 3.0
+    assert chart["count"] == 1
     assert y["id"] not in [e["work_item_id"] for e in chart["entries"]]
 
 
@@ -295,7 +299,8 @@ def test_epic_report_shows_progress_per_sprint(admin_client):
     _status(client, one["id"], "Done")
     _complete(client, sprint["id"])
     report = client.get(f"/api/agile/reports/epic/{epic['id']}").json()
-    assert report["progress"]["child_count"] == 2 and report["progress"]["completed_child_count"] == 1
+    assert report["progress"]["child_count"] == 2
+    assert report["progress"]["completed_child_count"] == 1
     assert (report["progress"]["total_estimate"], report["progress"]["completed_estimate"]) == (8, 5)
     assert [r["id"] for r in report["done"]] == [one["id"]]
     assert [r["id"] for r in report["todo"]] == [two["id"]]

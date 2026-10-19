@@ -37,7 +37,6 @@ import {
   ActivityRow,
   AttachmentCard,
   StagedTile,
-  canEditItemType,
   errorMessage,
   isoToday,
   itemTypeEmoji,
@@ -47,7 +46,31 @@ import {
   statusesForType,
   useStagedFiles,
 } from "./bug/helpers";
+import { canEditItem, eventOptionsFor, headingFor, reporterFor, statusOptionsFor } from "./bug/itemView";
+import { UNPLANNED_TYPES, agileOffMessage, dueOutsideSprintMessage, payloadProblem, unsentFilesProblem } from "./bug/saveRules";
 const NO_EVENT_OPTION = { value: "", label: "— No event —" };
+
+function eventOptionLabel(ev) {
+  if (ev.scheduled_for) return `${ev.name} · ${ev.scheduled_for}`;
+  return ev.name;
+}
+
+/** Known parents by id, extended with newly loaded ones. */
+function withParents(prev, items) {
+  return { ...prev, ...Object.fromEntries(items.map((p) => [String(p.id), p])) };
+}
+
+/** "ALP-12 Title": the key (or #id) followed by the title. */
+function parentLabel(p) {
+  const key = p.display_id || `#${p.id}`;
+  return `${key} ${p.title}`;
+}
+
+/** First entry of the parent picker: what to do, or why there is nothing to pick. */
+function parentPlaceholder(optionCount, query) {
+  if (optionCount) return "— select the parent issue —";
+  return query ? "No matching issues" : "No issues in this project yet";
+}
 const SELECT_PLACEHOLDER = { value: "", label: "— select —" };
 
 /** Mirrors ALLOWED_LINK_TYPES in app/schemas.py. */
@@ -174,7 +197,7 @@ export default function BugModal() {
   const commentDrop = useFileDrop((files) => commentStaged.addFiles(files));
 
   // Create is always editable; edit prefers server can_edit, falling back to the role heuristic.
-  const canEditThis = isEdit ? (bug.can_edit ?? canEditItemType(currentUser.role, bug.item_type)) : true;
+  const canEditThis = canEditItem(isEdit, bug, currentUser);
   const readOnly = isEdit && !canEditThis;
 
   function seedEditForm() {
@@ -225,11 +248,6 @@ export default function BugModal() {
   function seedFormFields() {
     if (bug) seedEditForm();
     else seedCreateForm();
-  }
-
-  function eventOptionLabel(ev) {
-    if (ev.scheduled_for) return `${ev.name} · ${ev.scheduled_for}`;
-    return ev.name;
   }
 
   function seedEventOptions() {
@@ -344,7 +362,7 @@ export default function BugModal() {
           if (cancelled) return;
           const items = res?.items || [];
           setParentOptions(items);
-          setKnownParents((prev) => ({ ...prev, ...Object.fromEntries(items.map((p) => [String(p.id), p])) }));
+          setKnownParents((prev) => withParents(prev, items));
         })
         .catch(() => {
           if (!cancelled) setParentOptions([]);
@@ -437,13 +455,7 @@ export default function BugModal() {
 
   // Keep any status the item already holds even if invalid for the type — flagged "(legacy)".
   const validStatuses = statusesForType(meta, itemType);
-  const statusOpts = [
-    SELECT_PLACEHOLDER,
-    ...validStatuses.map((s) => ({ value: s, label: s })),
-  ];
-  if (status && !validStatuses.includes(status)) {
-    statusOpts.push({ value: status, label: `${status} (legacy)` });
-  }
+  const statusOpts = statusOptionsFor(SELECT_PLACEHOLDER, validStatuses, status);
 
   // Same-table conversions only. Edit mode offers exactly the types the backend
   // accepts for a reclassification (Bug/Requirement/Task/User Story) and keeps
@@ -476,27 +488,16 @@ export default function BugModal() {
   ];
 
   // Show the current event by name if the list hasn't loaded yet.
-  const eventOpts =
-    eventId && bug?.event_name && !eventOptions.some((o) => o.value === eventId)
-      ? [...eventOptions, { value: eventId, label: bug.event_name }]
-      : eventOptions;
+  const eventOpts = eventOptionsFor(eventOptions, eventId, bug);
 
   // Reporter is fixed — inject the original reporter when it isn't the current user.
   const me = currentUser;
-  const reporterOption =
-    isEdit && bug.reporter && bug.reporter.id !== me.id
-      ? bug.reporter
-      : { id: me.id, name: me.name, email: me.email };
-  const reporterId = isEdit && bug.reporter ? bug.reporter.id : me.id;
+  const { option: reporterOption, id: reporterId } = reporterFor(isEdit, bug, me);
 
   // Only people who can open the item's project can be assigned (the server refuses others).
   const assigneeItems = projectPeopleItems(users, projectId, assigneeIds);
 
-  const headType = isEdit ? bug.item_type || "Bug" : defaultType || defaultNewType || "Bug";
-  const headTitle = isEdit
-    ? `${itemTypeEmoji(headType)} ${headType} #${bug.id}`
-    : "New Item";
-  const headSubtitle = isEdit ? bug.title || "" : "";
+  const { title: headTitle, subtitle: headSubtitle } = headingFor({ isEdit, bug, defaultType, defaultNewType });
 
   // Edit: pasted images upload immediately as bug-level attachments. Create: staged until save.
   const onDescPaste = async (f) => {
@@ -796,10 +797,6 @@ export default function BugModal() {
     );
   }
 
-  function parentLabel(p) {
-    return `${p.display_id || `#${p.id}`} ${p.title}`;
-  }
-
   /** Hierarchy fields: Parent for a Sub-task, Epic for a standard issue. */
   function renderParentField() {
     if (itemType === "Epic") return null;
@@ -822,7 +819,7 @@ export default function BugModal() {
             onChange={setParentPick}
             disabled={readOnly}
             options={[
-              { value: "", label: options.length ? "— select the parent issue —" : (parentQuery ? "No matching issues" : "No issues in this project yet") },
+              { value: "", label: parentPlaceholder(options.length, parentQuery) },
               ...options.map((p) => ({ value: String(p.id), label: parentLabel(p) })),
             ]}
           />
@@ -843,7 +840,7 @@ export default function BugModal() {
           disabled={readOnly}
           options={[
             { value: "", label: "— No epic —" },
-            ...epics.map((ep) => ({ value: String(ep.id), label: `${ep.display_id || `#${ep.id}`} ${ep.title}` })),
+            ...epics.map((ep) => ({ value: String(ep.id), label: parentLabel(ep) })),
           ]}
         />
       </div>
@@ -886,187 +883,157 @@ export default function BugModal() {
     }
   };
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    const id = bugId;
-    // New items use the current user ; edits preserve the original.
+  // New items use the current user; edits preserve the original reporter.
+  const buildPayload = () => {
     const reporterFromForm = isEdit ? bug.reporter?.id ?? null : null;
     const reporterFromMe = currentUser.id || null;
-    const payload = {
+    const sendVersion = expectedVersionForSave({ isEdit: Boolean(bugId), version: expectedVersionRef.current }) != null;
+    return {
       project_id: Number.parseInt(projectId, 10),
       title: title.trim(),
       description: plainTextFromHtml(descRef.current?.getHtml() ?? ""),
-      reporter_id: id ? reporterFromForm || reporterFromMe : reporterFromMe,
+      reporter_id: bugId ? reporterFromForm || reporterFromMe : reporterFromMe,
       item_type: itemType || "Bug",
       status,
       priority,
       environment,
       due_date: dueDate || null,
-      // Empty or "0" → null so the server treats it  explicit unlink.
+      // Empty or "0" → null so the server treats it as an explicit unlink.
       event_id: eventId && eventId !== "0" ? Number.parseInt(eventId, 10) : null,
       assignee_ids: assigneeIds,
       // Optimistic concurrency: send the opened version so the server 409s on a concurrent edit.
-      ...(expectedVersionForSave({ isEdit: Boolean(id), version: expectedVersionRef.current }) != null
-        ? { expected_version: expectedVersionRef.current }
-        : {}),
+      ...(sendVersion ? { expected_version: expectedVersionRef.current } : {}),
     };
+  };
+
+  /** Remember the version a step returned, so a retry after a later failed step does not conflict. */
+  const trackVersion = (updated) => {
+    expectedVersionRef.current = updated?.version ?? expectedVersionRef.current;
+    return updated;
+  };
+
+  const putHierarchy = async (id, version, change) => trackVersion(await api(
+    `/agile/work-items/${id}/hierarchy`, { method: "PUT", json: { ...change, version } },
+  ));
+
+  /** Epic / parent changes of an edited item; returns the latest server copy. */
+  const applyHierarchyChanges = async (id, saved, payload) => {
+    let updated = saved;
+    const standard = !UNPLANNED_TYPES.includes(updated?.item_type || payload.item_type);
+    if (standard && String(epicPick || "") !== String(bug?.epic_id || "")) {
+      updated = await putHierarchy(id, updated.version, { epic_id: epicPick ? Number(epicPick) : null });
+    }
+    if (itemType === "Sub-task" && parentPick && String(parentPick) !== String(bug?.parent_id || "")) {
+      updated = await putHierarchy(id, updated.version, { parent_id: Number(parentPick) });
+    }
+    return { updated, standard };
+  };
+
+  const saveExisting = async (id, payload, sprintPickValid) => {
+    const result = await withLoader(async () => {
+      // Each step returns the new version; keep it, so if a later step fails the
+      // dialog stays open and Save can be retried without a version conflict.
+      const saved = trackVersion(await api(`/bugs/${id}`, { method: "PUT", json: payload }));
+      const { updated, standard } = await applyHierarchyChanges(id, saved, payload);
+      if (canManage && standard && sprintPickValid && String(sprintPick) !== String(bug?.sprint_id || "")) {
+        await api(`/agile/sprints/${sprintPick}/items`, { method: "POST", json: { item_ids: [id] } });
+      }
+      closeBugModal();
+      await refreshAll();
+      return updated;
+    }, "Saving changes…");
+    toast(`${result?.item_type || payload.item_type || "Bug"} #${id} updated`, "success");
+    notifyAgileChanged();
+  };
+
+  /** Warn (do not block) when the due date falls outside the picked sprint; true means go on. */
+  const confirmDueDate = async (payload) => {
+    const sprint = sprintPick ? availableSprints.find((s) => String(s.id) === String(sprintPick)) : null;
+    const message = dueOutsideSprintMessage(sprint, payload.due_date);
+    if (!message) return true;
+    return confirmDialog(message, { title: "Due date outside Sprint range", okLabel: "Add anyway", danger: false });
+  };
+
+  /** POST the item, then upload staged files; per-file failures toast but do not roll back the create. */
+  const postNewItem = async (payload, sprintIdForCreate, epicIdForCreate) => {
+    await withLoader(async () => {
+      let created;
+      // Agile create paths place the item in the sprint themselves; only
+      // the legacy /bugs create needs the follow-up sprint assignment.
+      let needsSprintAdd = false;
+      if (["Epic", "Story", "Sub-task"].includes(itemType)) {
+        created = await api("/agile/work-items", { method: "POST", json: {
+          project_id: payload.project_id, title: payload.title, description: payload.description,
+          item_type: itemType, sprint_id: sprintIdForCreate, status: payload.status,
+          priority: payload.priority, end_date: payload.due_date,
+          assignee_ids: payload.assignee_ids,
+          parent_id: itemType === "Sub-task" ? Number(parentPick) : null,
+          epic_id: epicIdForCreate,
+        } });
+      } else {
+        created = await api("/bugs", { method: "POST", json: payload });
+        needsSprintAdd = Boolean(sprintIdForCreate);
+        if (epicIdForCreate && created?.id) await putHierarchy(created.id, created.version, { epic_id: epicIdForCreate });
+      }
+      await toastAfterCreate(created, created?.item_type || payload.item_type || "Bug", createStaged.files.map((s) => s.file));
+      if (needsSprintAdd && created?.id) {
+        try {
+          await api(`/agile/sprints/${sprintIdForCreate}/items`, { method: "POST", json: { item_ids: [created.id] } });
+        } catch (err) {
+          toastError(err);
+        }
+      }
+      createStaged.clear();
+      closeBugModal();
+      await refreshAll();
+      notifyAgileChanged();
+    }, "Creating item…");
+  };
+
+  const createNew = async (payload, sprintPickValid) => {
+    if (!(await confirmDueDate(payload))) return;
+    if (itemType === "Sub-task" && !parentPick) {
+      toast("Pick the parent issue this Sub-task belongs to", "error");
+      return;
+    }
+    // Only standard issues are planned into sprints.
+    const planned = !UNPLANNED_TYPES.includes(itemType);
+    await postNewItem(
+      payload,
+      canManage && sprintPickValid && planned ? Number(sprintPick) : null,
+      epicPick && planned ? Number(epicPick) : null,
+    );
+  };
+
+  /** An Agile-only create is refused while the project's Agile surface is off: say why and offer the switch. */
+  const reportSubmitError = (err) => {
+    if (!bugId && AGILE_ITEM_TYPES.includes(itemType) && err?.status === 404) {
+      setProjectAgile(false);
+      toast(agileOffMessage(itemTypeLabel(itemType), canManage), "error");
+      return;
+    }
+    toastError(err);
+  };
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const payload = buildPayload();
     // Persist the chosen type so the next new-item modal defaults to it.
-    if (!id) setDefaultNewType(payload.item_type || "Bug");
-    if (!payload.project_id) {
-      toast("Please pick a project", "error");
+    if (!bugId) setDefaultNewType(payload.item_type || "Bug");
+    // Create uploads staged files in-flow; on edit, staged-but-never-uploaded files must not be dropped.
+    const problem = payloadProblem(payload)
+      ?? (bugId ? unsentFilesProblem(bugAttachStaged.files.length, commentStaged.files.length) : null);
+    if (problem) {
+      toast(problem, "error");
       return;
     }
-    if (!payload.title) {
-      toast("Title is required", "error");
-      return;
-    }
-    if (!payload.reporter_id) {
-      toast("Reporter is required", "error");
-      return;
-    }
-
-    // Guard staged-but-never-uploaded files (edit mode only; create uploads them in-flow).
-    if (id) {
-      if (bugAttachStaged.files.length > 0) {
-        const n = bugAttachStaged.files.length;
-        toast(
-          `You have ${n} attachment${n > 1 ? "s" : ""} that ${n > 1 ? "haven't" : "hasn't"} been uploaded yet. ` +
-            'Click "Upload" in the Attachments section, or remove ' +
-            `${n > 1 ? "them" : "it"}, before saving.`,
-          "error",
-        );
-        return;
-      }
-      if (commentStaged.files.length > 0) {
-        const n = commentStaged.files.length;
-        toast(
-          `You have ${n} file${n > 1 ? "s" : ""} attached to a comment you haven't posted yet. ` +
-            'Click "Post" to add the comment, or remove ' +
-            `${n > 1 ? "them" : "it"}, before saving.`,
-          "error",
-        );
-        return;
-      }
-    }
-
     // Only a sprint offered for this item's project counts (never a stale pick).
     const sprintPickValid = Boolean(sprintPick) && availableSprints.some((sp) => String(sp.id) === String(sprintPick));
-    // refreshAll() keeps the Work Items list in sync after the modal closes.
     try {
-      if (id) {
-        const result = await withLoader(async () => {
-          // Each step returns the new version; keep it, so if a later step
-          // fails the dialog stays open and Save can be retried without a
-          // version conflict on the part that already went through.
-          let updated = await api(`/bugs/${id}`, { method: "PUT", json: payload });
-          expectedVersionRef.current = updated?.version ?? expectedVersionRef.current;
-          const standard = !["Epic", "Sub-task"].includes(updated?.item_type || payload.item_type);
-          if (standard && String(epicPick || "") !== String(bug?.epic_id || "")) {
-            updated = await api(`/agile/work-items/${id}/hierarchy`, {
-              method: "PUT", json: { epic_id: epicPick ? Number(epicPick) : null, version: updated.version },
-            });
-            expectedVersionRef.current = updated?.version ?? expectedVersionRef.current;
-          }
-          if (itemType === "Sub-task" && parentPick && String(parentPick) !== String(bug?.parent_id || "")) {
-            updated = await api(`/agile/work-items/${id}/hierarchy`, {
-              method: "PUT", json: { parent_id: Number(parentPick), version: updated.version },
-            });
-            expectedVersionRef.current = updated?.version ?? expectedVersionRef.current;
-          }
-          if (canManage && standard && sprintPickValid && String(sprintPick) !== String(bug?.sprint_id || "")) {
-            await api(`/agile/sprints/${sprintPick}/items`, {
-              method: "POST", json: { item_ids: [id] },
-            });
-          }
-          closeBugModal();
-          await refreshAll();
-          return updated;
-        }, "Saving changes…");
-        const utype = result?.item_type || payload.item_type || "Bug";
-        toast(`${utype} #${id} updated`, "success");
-        notifyAgileChanged();
-      } else {
-        // Warn (don't block) if the due date falls outside the picked Sprint's
-        // date range before creating — matches the same guard used elsewhere
-        // when assigning existing items to a Sprint.
-        if (sprintPick) {
-          const sprint = availableSprints.find((s) => String(s.id) === String(sprintPick));
-          const due = payload.due_date;
-          const outOfRange = sprint && due && (
-            (sprint.start_date && due < sprint.start_date) || (sprint.end_date && due > sprint.end_date)
-          );
-          if (outOfRange) {
-            const ok = await confirmDialog(
-              `This item's due date (${due}) falls outside "${sprint.name}"'s sprint window ` +
-              `(${sprint.start_date || "?"} – ${sprint.end_date || "?"}). Add it to this sprint anyway?`,
-              { title: "Due date outside Sprint range", okLabel: "Add anyway", danger: false },
-            );
-            if (!ok) return;
-          }
-        }
-        if (itemType === "Sub-task" && !parentPick) {
-          toast("Pick the parent issue this Sub-task belongs to", "error");
-          return;
-        }
-        // Only standard issues are planned into sprints (Sub-tasks follow
-        // their parent, Epics span sprints).
-        const sprintIdForCreate = canManage && sprintPickValid && !["Epic", "Sub-task"].includes(itemType)
-          ? Number(sprintPick) : null;
-        const epicIdForCreate = epicPick && !["Epic", "Sub-task"].includes(itemType) ? Number(epicPick) : null;
-        // POST the item, then upload staged files; per-file failures toast but don't roll back the create.
-        await withLoader(async () => {
-          let created;
-          // Agile create paths place the item in the sprint themselves; only
-          // the legacy /bugs create needs the follow-up sprint assignment.
-          let needsSprintAdd = false;
-          if (["Epic", "Story", "Sub-task"].includes(itemType)) {
-            created = await api("/agile/work-items", { method: "POST", json: {
-              project_id: payload.project_id, title: payload.title, description: payload.description,
-              item_type: itemType, sprint_id: sprintIdForCreate, status: payload.status,
-              priority: payload.priority, end_date: payload.due_date,
-              assignee_ids: payload.assignee_ids,
-              parent_id: itemType === "Sub-task" ? Number(parentPick) : null,
-              epic_id: epicIdForCreate,
-            }});
-          } else {
-            created = await api("/bugs", { method: "POST", json: payload });
-            needsSprintAdd = Boolean(sprintIdForCreate);
-            if (epicIdForCreate && created?.id) {
-              await api(`/agile/work-items/${created.id}/hierarchy`, {
-                method: "PUT", json: { epic_id: epicIdForCreate, version: created.version },
-              });
-            }
-          }
-          const ctype = created?.item_type || payload.item_type || "Bug";
-          const files = createStaged.files.map((s) => s.file);
-          await toastAfterCreate(created, ctype, files);
-          if (needsSprintAdd && created?.id) {
-            try {
-              await api(`/agile/sprints/${sprintIdForCreate}/items`, { method: "POST", json: { item_ids: [created.id] } });
-            } catch (err) {
-              toastError(err);
-            }
-          }
-          createStaged.clear();
-          closeBugModal();
-          await refreshAll();
-          notifyAgileChanged();
-        }, "Creating item…");
-      }
+      if (bugId) await saveExisting(bugId, payload, sprintPickValid);
+      else await createNew(payload, sprintPickValid);
     } catch (err) {
-      // An Agile-only create is refused while the project's Agile surface is off;
-      // surface the reason plus the switch instead of a bare "not found".
-      if (!id && AGILE_ITEM_TYPES.includes(itemType) && err?.status === 404) {
-        setProjectAgile(false);
-        toast(
-          `Agile is not enabled for this project, so ${itemTypeLabel(itemType)} items `
-            + "cannot be created yet."
-            + (canManage ? " Use “Enable Agile” above." : " Ask a manager or admin to enable it."),
-          "error",
-        );
-        return;
-      }
-      toastError(err);
+      reportSubmitError(err);
     }
   };
 
@@ -1197,9 +1164,501 @@ export default function BugModal() {
     );
   };
 
+  const renderCreateAttachSection = () => (
+      <section
+        className="bug-section bug-create-attach-section"
+        id="bugCreateAttachSection"
+        hidden={isEdit}
+      >
+        <div
+          className={`comment-form attach-dropzone${createDrop.dragging ? " is-dragging" : ""}`}
+          {...createDrop.dropProps}
+        >
+          <div className="attach-drop-hint">Drop files to attach</div>
+          <div className="comment-form-row">
+            <label className="comment-attach-btn" title="Attach files">
+              📎 <span id="createFileLabel">{stagedLabel(createStaged.files.length, "Attach files")}</span>
+              <input
+                type="file"
+                multiple
+                id="createBugFiles"
+                aria-label="Attachments for new bug"
+                onChange={(e) => {
+                  // Reset value so re-picking the same file fires onChange again.
+                  createStaged.addFiles(e.currentTarget.files ?? []);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <div className="attach-staged-list" id="createFilePreview">
+              {createStaged.files.map((s, i) => (
+                <StagedTile
+                  key={s.url}
+                  staged={s}
+                  bucket="createBug"
+                  idx={i}
+                  onRemove={() => createStaged.removeAt(i)}
+                />
+              ))}
+            </div>
+          </div>
+          <p className="muted small create-attach-hint">
+            Files attach to the item itself. Add more later via the Add-attachment button or via comments
+          </p>
+        </div>
+      </section>
+  );
+
+  const renderAttachmentsSection = () => (
+      <section
+        className={`bug-section${canEditThis && bugAttachDrop.dragging ? " attach-dropzone is-dragging" : ""}`}
+        id="bugAttachmentsSection"
+        hidden={!isEdit}
+        {...(canEditThis ? bugAttachDrop.dropProps : {})}
+      >
+        {canEditThis && <div className="attach-drop-hint">Drop files to attach</div>}
+        <div className="bug-section-head">
+          <h3>
+            Attachments{" "}
+            <span className="muted small" id="attachmentsCount">
+              {bug?.attachments.length ? `(${bug.attachments.length})` : ""}
+            </span>
+          </h3>
+          <label
+            className="comment-attach-btn bug-attach-add-btn"
+            id="bugAttachAddLabel"
+            title="Add an attachment to this item"
+            hidden={!isEdit || !canEditThis}
+          >
+            📎 <span id="bugAttachAddText">{stagedLabel(bugAttachStaged.files.length, "Add attachment")}</span>
+            <input
+              type="file"
+              multiple
+              id="bugAttachAddInput"
+              aria-label="Add an attachment to this item"
+              onChange={(e) => {
+                bugAttachStaged.addFiles(e.currentTarget.files ?? []);
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </div>
+        <div className="attach-staged-list" id="bugAttachAddPreview">
+          {bugAttachStaged.files.map((s, i) => (
+            <StagedTile
+              key={s.url}
+              staged={s}
+              bucket="bugAttach"
+              idx={i}
+              onRemove={() => bugAttachStaged.removeAt(i)}
+            />
+          ))}
+          {bugAttachStaged.files.length > 0 && (
+            <div className="attach-staged-actions">
+              <button
+                type="button"
+                className="btn primary attach-staged-upload"
+                onClick={() => {
+                  withLoader(flushBugAttach, "Uploading attachment(s)…").catch(toastError);
+                }}
+              >
+                Upload {bugAttachStaged.files.length} file
+                {bugAttachStaged.files.length > 1 ? "s" : ""}
+              </button>
+              <button
+                type="button"
+                className="btn ghost attach-staged-cancel"
+                onClick={() => bugAttachStaged.clear()}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="attachment-grid" id="bugAttachmentsGrid">
+          {bug?.attachments.map((a) => (
+            <AttachmentCard
+              key={a.id}
+              att={a}
+              bugId={bug.id}
+              deletable={isAdmin}
+              onDelete={(attId) => void onDeleteAttachment(attId)}
+            />
+          ))}
+        </div>
+        <div
+          className="bug-attach-empty muted small"
+          id="bugAttachEmpty"
+          hidden={!bug || bug.attachments.length > 0 || !canEditThis}
+        >
+          No attachments yet. Click <strong>📎 Add attachment</strong> above to upload one
+        </div>
+      </section>
+  );
+
+  const renderCommentsSection = () => (
+      <section className="bug-section" id="bugCommentsSection" hidden={!isEdit}>
+        <h3>
+          Comments{" "}
+          <span className="muted small" id="commentsCount">
+            {bug ? `(${bug.comments.length})` : ""}
+          </span>
+        </h3>
+        <div
+          id="bugCommentsList"
+          className="bug-comments-list"
+          hidden={!bug || bug.comments.length === 0}
+        >
+          {bug?.comments.map((c) => renderComment(c))}
+        </div>
+        <div
+          className={`comment-form attach-dropzone${commentDrop.dragging ? " is-dragging" : ""}`}
+          id="commentForm"
+          hidden={readOnly}
+          aria-label="Add a comment"
+          {...commentDrop.dropProps}
+        >
+          <div className="attach-drop-hint">Drop files to attach</div>
+          <RichEditor
+            ref={commentRef}
+            textareaId="commentBody"
+            ariaLabel="New comment"
+            placeholder="Add a comment, attach a file, or both (Ctrl/Cmd+Enter to post)"
+            onCtrlEnter={(e) => {
+              e.preventDefault();
+              void onPostComment();
+            }}
+            onPasteFile={onComposerPaste}
+          />
+          <div className="comment-form-row">
+            <label className="comment-attach-btn" title="Attach files">
+              📎 <span id="fileLabel">{stagedLabel(commentStaged.files.length, "Attach files")}</span>
+              <input
+                type="file"
+                multiple
+                id="commentFiles"
+                onChange={(e) => {
+                  commentStaged.addFiles(e.currentTarget.files ?? []);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <div className="attach-staged-list" id="filePreview">
+              {commentStaged.files.map((s, i) => (
+                <StagedTile
+                  key={s.url}
+                  staged={s}
+                  bucket="comment"
+                  idx={i}
+                  onRemove={() => commentStaged.removeAt(i)}
+                />
+              ))}
+            </div>
+            {commentStaged.files.length > 0 && (
+              <button
+                type="button"
+                className="btn ghost attach-staged-cancel"
+                style={{ marginLeft: "auto" }}
+                onClick={() => commentStaged.clear()}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn primary"
+              id="commentPostBtn"
+              style={commentStaged.files.length > 0 ? undefined : { marginLeft: "auto" }}
+              onClick={() => void onPostComment()}
+            >
+              Post
+            </button>
+          </div>
+        </div>
+      </section>
+  );
+
+  const renderLinksSection = () => (
+      <section className="bug-section bug-links-section" id="bugLinksSection" hidden={!isEdit}>
+        <h3>
+          Linked items{" "}
+          <span className="muted small" id="linksCount">
+            {bug ? `(${bug.links.length})` : ""}
+          </span>
+        </h3>
+        {bug && bug.links.length > 0 ? (
+          <div className="bug-links-list" id="bugLinksList">
+            {bug.links.map((link) => (
+              <div className="bug-link-row" data-link-id={link.id} key={link.id}>
+                <span className="bug-link-rel">{link.label}</span>
+                <button
+                  type="button"
+                  className="bug-link-target"
+                  title={`Open #${link.other_bug_id}`}
+                  onClick={() => void openBugDetail(link.other_bug_id)}
+                >
+                  <span className="inline-type" data-type={link.other_bug_item_type}>
+                    {itemTypeEmoji(link.other_bug_item_type)}
+                  </span>{" "}
+                  #{link.other_bug_id} {link.other_bug_title}
+                </button>
+                <span className="badge" data-status={link.other_bug_status}>
+                  {link.other_bug_status}
+                </span>
+                {canEditThis && (
+                  <button
+                    type="button"
+                    className="icon-btn danger bug-link-remove"
+                    title="Remove link"
+                    aria-label="Remove link"
+                    onClick={() => void onRemoveLink(link.id)}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="no-content">No linked items yet</p>
+        )}
+        {canEditThis && (
+          <div className="bug-link-add" id="bugLinkAdd">
+            <div className="bug-link-add-type">
+              <BhSelect
+                name="link_type"
+                ariaLabel="Link type"
+                value={linkType}
+                onChange={setLinkType}
+                options={LINK_TYPE_OPTS}
+              />
+            </div>
+            <div className="bug-link-add-target">
+              <ItemPicker
+                selected={linkTargets}
+                onChange={setLinkTargets}
+                excludeIds={[
+                  ...(bugId != null ? [bugId] : []),
+                  ...(bug?.links.map((l) => l.other_bug_id) ?? []),
+                ]}
+              />
+            </div>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={linkTargets.length === 0}
+              onClick={() => void onAddLink()}
+            >
+              Link{linkTargets.length > 1 ? ` ${linkTargets.length}` : ""}
+            </button>
+          </div>
+        )}
+      </section>
+  );
+
+  const renderActivitySection = () => (
+      <section
+        className="bug-section bug-activity-section"
+        id="bugActivitySection"
+        hidden={!isEdit}
+      >
+        <details>
+          <summary>
+            Activity history{" "}
+            <span className="muted small" id="activityCount">
+              {bug ? `(${bug.activities.length})` : ""}
+            </span>
+          </summary>
+          <div id="bugActivityList" className="bug-activity-list">
+            {bug && bug.activities.length > 0 ? (
+              bug.activities.map((a) => <ActivityRow key={a.id} activity={a} />)
+            ) : (
+              <p className="no-content">No activity yet</p>
+            )}
+          </div>
+        </details>
+      </section>
+  );
+
+  const renderMetaSidebar = () => (
+      <aside className="bug-modal-side" aria-label="Work item metadata">
+        <div className="field" aria-labelledby="bugTypeLabel">
+          <span id="bugTypeLabel">
+            Type <em>*</em>
+          </span>
+          <BhSelect
+            name="item_type"
+            ariaLabel="Type"
+            value={itemType}
+            onChange={(v) => setItemType(v)}
+            options={itemTypeOpts}
+            disabled={readOnly}
+          />
+          {agileTypesBlocked && (
+            <small className="hint" id="bugTypeAgileHint">
+              Agile is not enabled for this project, so{" "}
+              {AGILE_ITEM_TYPES.map(itemTypeLabel).join(", ")} items cannot be created yet.{" "}
+              {canManage ? (
+                <button
+                  type="button"
+                  className="btn ghost"
+                  id="bugEnableAgileBtn"
+                  onClick={enableAgileForProject}
+                  disabled={enableAgileBusy}
+                >
+                  {enableAgileBusy ? "Enabling…" : "Enable Agile"}
+                </button>
+              ) : (
+                "Ask a manager or admin to enable Agile for it."
+              )}
+            </small>
+          )}
+        </div>
+        <div className="field" aria-labelledby="bugProjectLabel">
+          <span id="bugProjectLabel">
+            Project <em>*</em>
+          </span>
+          <BhSelect
+            name="project_id"
+            ariaLabel="Project"
+            value={projectId}
+            onChange={setProjectId}
+            options={projectOpts}
+            disabled={readOnly}
+          />
+        </div>
+        {renderParentField()}
+        <div className="field" aria-labelledby="bugStatusLabel">
+          <span id="bugStatusLabel">Status</span>
+          <BhSelect
+            name="status"
+            ariaLabel="Status"
+            value={status}
+            onChange={setStatus}
+            options={statusOpts}
+            disabled={readOnly}
+          />
+        </div>
+        <div className="field" aria-labelledby="bugPriorityLabel">
+          <span id="bugPriorityLabel">Priority</span>
+          <BhSelect
+            name="priority"
+            ariaLabel="Priority"
+            value={priority}
+            onChange={setPriority}
+            options={priorityOpts}
+            disabled={readOnly}
+          />
+        </div>
+        <div className="field" aria-labelledby="bugEnvLabel">
+          <span id="bugEnvLabel">Environment</span>
+          <HelpHint label="Environment" guide="items">Where the problem was seen: DEV, UAT or PROD. It is used by bugs and filters the list.</HelpHint>
+          <BhSelect
+            name="environment"
+            ariaLabel="Environment"
+            value={environment}
+            onChange={setEnvironment}
+            options={environmentOpts}
+            disabled={readOnly}
+          />
+        </div>
+        <div className="field" aria-labelledby="bugReporterLabel">
+          <span id="bugReporterLabel">Reporter</span>
+          {/* Fixed to current user (or original reporter on edit); disabled, id comes from state. Hand-rolled so the reporter-select class survives (BhSelect can't add classes). */}
+          <div className="bh-sel-wrap">
+            <select
+              className="bh-sel-native reporter-select"
+              name="reporter_id"
+              aria-labelledby="bugReporterLabel"
+              disabled
+              value={String(reporterId)}
+              onChange={() => undefined}
+            >
+              <option value="">— select —</option>
+              <option value={String(reporterOption.id)} title={reporterOption.email}>
+                {reporterOption.name}
+              </option>
+            </select>
+            <button
+              type="button"
+              className="bh-sel-btn is-disabled"
+              aria-haspopup="listbox"
+              aria-expanded={false}
+              disabled
+            >
+              <span className="bh-sel-label">{reporterOption.name}</span>
+            </button>
+          </div>
+        </div>
+        <fieldset className="field">
+          <legend>Assignees</legend>
+          <ChipPicker
+            id="assigneePicker"
+            items={assigneeItems}
+            selected={assigneeIds}
+            disabled={readOnly}
+            onToggle={(uid) =>
+              setAssigneeIds((prev) =>
+                prev.includes(uid) ? prev.filter((x) => x !== uid) : [...prev, uid],
+              )
+            }
+          />
+        </fieldset>
+        <div className="field" aria-labelledby="bugEventLabel">
+          <span id="bugEventLabel">Event</span>
+          <BhSelect
+            name="event_id"
+            ariaLabel="Event"
+            value={eventId}
+            onChange={setEventId}
+            options={eventOpts}
+            disabled={readOnly}
+          />
+        </div>
+        <div className="field" aria-labelledby="bugDueLabel">
+          <span id="bugDueLabel">Due date</span>
+          <BhDateInput
+            name="due_date"
+            ariaLabel="Due date"
+            value={dueDate}
+            onChange={setDueDate}
+            disabled={readOnly}
+          />
+        </div>
+
+        {/* Sprint tracking — any Bug/Requirement/Task can be added to a
+            Sprint here, not just Stories. Create-mode
+            defaults to the project's active Sprint and
+            applies the pick right after the item is created. */}
+        {renderSprintField()}
+
+        {/* Timestamps — visible in edit mode only */}
+        <div className="bug-side-meta" id="bugSideMeta" hidden={!isEdit}>
+          <div className="bug-side-meta-row">
+            <span className="k">Created</span>
+            <span className="v" id="bugMetaCreated">
+              {bug ? formatDate(bug.created_at) : "—"}
+            </span>
+          </div>
+          <div className="bug-side-meta-row">
+            <span className="k">Updated</span>
+            <span className="v" id="bugMetaUpdated">
+              {bug ? formatDate(bug.updated_at) : "—"}
+            </span>
+          </div>
+        </div>
+      </aside>
+  );
+
   return (
     <div className="modal" id="modalBug" hidden={!open}>
-      <div className="modal-card xxl">
+      <div // NOSONAR S6819: the card lives in the shared .modal overlay that App's Escape/focus handling targets; a native <dialog> would need its own top-layer and focus model
+        className="modal-card xxl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modalBugTitle"
+        tabIndex={-1}
+      >
         <div className="modal-head">
           <div className="bug-modal-head-left">
             <h2 id="modalBugTitle">{headTitle}</h2>
@@ -1280,487 +1739,25 @@ export default function BugModal() {
               </div>
 
               {/* Attachments for new items — staged and uploaded after the POST. */}
-              <section
-                className="bug-section bug-create-attach-section"
-                id="bugCreateAttachSection"
-                hidden={isEdit}
-              >
-                <div
-                  className={`comment-form attach-dropzone${createDrop.dragging ? " is-dragging" : ""}`}
-                  {...createDrop.dropProps}
-                >
-                  <div className="attach-drop-hint">Drop files to attach</div>
-                  <div className="comment-form-row">
-                    <label className="comment-attach-btn" title="Attach files">
-                      📎 <span id="createFileLabel">{stagedLabel(createStaged.files.length, "Attach files")}</span>
-                      <input
-                        type="file"
-                        multiple
-                        id="createBugFiles"
-                        aria-label="Attachments for new bug"
-                        onChange={(e) => {
-                          // Reset value so re-picking the same file fires onChange again.
-                          createStaged.addFiles(e.currentTarget.files ?? []);
-                          e.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
-                    <div className="attach-staged-list" id="createFilePreview">
-                      {createStaged.files.map((s, i) => (
-                        <StagedTile
-                          key={s.url}
-                          staged={s}
-                          bucket="createBug"
-                          idx={i}
-                          onRemove={() => createStaged.removeAt(i)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  <p className="muted small create-attach-hint">
-                    Files attach to the item itself. Add more later via the Add-attachment button or via comments
-                  </p>
-                </div>
-              </section>
+              {renderCreateAttachSection()}
 
               {/* Bug-level attachments (edit mode); drop files here to stage. */}
-              <section
-                className={`bug-section${canEditThis && bugAttachDrop.dragging ? " attach-dropzone is-dragging" : ""}`}
-                id="bugAttachmentsSection"
-                hidden={!isEdit}
-                {...(canEditThis ? bugAttachDrop.dropProps : {})}
-              >
-                {canEditThis && <div className="attach-drop-hint">Drop files to attach</div>}
-                <div className="bug-section-head">
-                  <h3>
-                    Attachments{" "}
-                    <span className="muted small" id="attachmentsCount">
-                      {bug?.attachments.length ? `(${bug.attachments.length})` : ""}
-                    </span>
-                  </h3>
-                  <label
-                    className="comment-attach-btn bug-attach-add-btn"
-                    id="bugAttachAddLabel"
-                    title="Add an attachment to this item"
-                    hidden={!isEdit || !canEditThis}
-                  >
-                    📎 <span id="bugAttachAddText">{stagedLabel(bugAttachStaged.files.length, "Add attachment")}</span>
-                    <input
-                      type="file"
-                      multiple
-                      id="bugAttachAddInput"
-                      aria-label="Add an attachment to this item"
-                      onChange={(e) => {
-                        bugAttachStaged.addFiles(e.currentTarget.files ?? []);
-                        e.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                </div>
-                <div className="attach-staged-list" id="bugAttachAddPreview">
-                  {bugAttachStaged.files.map((s, i) => (
-                    <StagedTile
-                      key={s.url}
-                      staged={s}
-                      bucket="bugAttach"
-                      idx={i}
-                      onRemove={() => bugAttachStaged.removeAt(i)}
-                    />
-                  ))}
-                  {bugAttachStaged.files.length > 0 && (
-                    <div className="attach-staged-actions">
-                      <button
-                        type="button"
-                        className="btn primary attach-staged-upload"
-                        onClick={() => {
-                          withLoader(flushBugAttach, "Uploading attachment(s)…").catch(toastError);
-                        }}
-                      >
-                        Upload {bugAttachStaged.files.length} file
-                        {bugAttachStaged.files.length > 1 ? "s" : ""}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn ghost attach-staged-cancel"
-                        onClick={() => bugAttachStaged.clear()}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <div className="attachment-grid" id="bugAttachmentsGrid">
-                  {bug?.attachments.map((a) => (
-                    <AttachmentCard
-                      key={a.id}
-                      att={a}
-                      bugId={bug.id}
-                      deletable={isAdmin}
-                      onDelete={(attId) => void onDeleteAttachment(attId)}
-                    />
-                  ))}
-                </div>
-                <div
-                  className="bug-attach-empty muted small"
-                  id="bugAttachEmpty"
-                  hidden={!bug || bug.attachments.length > 0 || !canEditThis}
-                >
-                  No attachments yet. Click <strong>📎 Add attachment</strong> above to upload one
-                </div>
-              </section>
+              {renderAttachmentsSection()}
 
               {/* Comments — visible in edit and read-only view. Composer is a <div>, not a <form> (HTML5 forbids nesting). */}
-              <section className="bug-section" id="bugCommentsSection" hidden={!isEdit}>
-                <h3>
-                  Comments{" "}
-                  <span className="muted small" id="commentsCount">
-                    {bug ? `(${bug.comments.length})` : ""}
-                  </span>
-                </h3>
-                <div
-                  id="bugCommentsList"
-                  className="bug-comments-list"
-                  hidden={!bug || bug.comments.length === 0}
-                >
-                  {bug?.comments.map((c) => renderComment(c))}
-                </div>
-                <div
-                  className={`comment-form attach-dropzone${commentDrop.dragging ? " is-dragging" : ""}`}
-                  id="commentForm"
-                  hidden={readOnly}
-                  aria-label="Add a comment"
-                  {...commentDrop.dropProps}
-                >
-                  <div className="attach-drop-hint">Drop files to attach</div>
-                  <RichEditor
-                    ref={commentRef}
-                    textareaId="commentBody"
-                    ariaLabel="New comment"
-                    placeholder="Add a comment, attach a file, or both (Ctrl/Cmd+Enter to post)"
-                    onCtrlEnter={(e) => {
-                      e.preventDefault();
-                      void onPostComment();
-                    }}
-                    onPasteFile={onComposerPaste}
-                  />
-                  <div className="comment-form-row">
-                    <label className="comment-attach-btn" title="Attach files">
-                      📎 <span id="fileLabel">{stagedLabel(commentStaged.files.length, "Attach files")}</span>
-                      <input
-                        type="file"
-                        multiple
-                        id="commentFiles"
-                        onChange={(e) => {
-                          commentStaged.addFiles(e.currentTarget.files ?? []);
-                          e.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
-                    <div className="attach-staged-list" id="filePreview">
-                      {commentStaged.files.map((s, i) => (
-                        <StagedTile
-                          key={s.url}
-                          staged={s}
-                          bucket="comment"
-                          idx={i}
-                          onRemove={() => commentStaged.removeAt(i)}
-                        />
-                      ))}
-                    </div>
-                    {commentStaged.files.length > 0 && (
-                      <button
-                        type="button"
-                        className="btn ghost attach-staged-cancel"
-                        style={{ marginLeft: "auto" }}
-                        onClick={() => commentStaged.clear()}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn primary"
-                      id="commentPostBtn"
-                      style={commentStaged.files.length > 0 ? undefined : { marginLeft: "auto" }}
-                      onClick={() => void onPostComment()}
-                    >
-                      Post
-                    </button>
-                  </div>
-                </div>
-              </section>
+              {renderCommentsSection()}
 
               {/* Linked items — inverse phrasing computed server-side. */}
-              <section className="bug-section bug-links-section" id="bugLinksSection" hidden={!isEdit}>
-                <h3>
-                  Linked items{" "}
-                  <span className="muted small" id="linksCount">
-                    {bug ? `(${bug.links.length})` : ""}
-                  </span>
-                </h3>
-                {bug && bug.links.length > 0 ? (
-                  <div className="bug-links-list" id="bugLinksList">
-                    {bug.links.map((link) => (
-                      <div className="bug-link-row" data-link-id={link.id} key={link.id}>
-                        <span className="bug-link-rel">{link.label}</span>
-                        <button
-                          type="button"
-                          className="bug-link-target"
-                          title={`Open #${link.other_bug_id}`}
-                          onClick={() => void openBugDetail(link.other_bug_id)}
-                        >
-                          <span className="inline-type" data-type={link.other_bug_item_type}>
-                            {itemTypeEmoji(link.other_bug_item_type)}
-                          </span>{" "}
-                          #{link.other_bug_id} {link.other_bug_title}
-                        </button>
-                        <span className="badge" data-status={link.other_bug_status}>
-                          {link.other_bug_status}
-                        </span>
-                        {canEditThis && (
-                          <button
-                            type="button"
-                            className="icon-btn danger bug-link-remove"
-                            title="Remove link"
-                            aria-label="Remove link"
-                            onClick={() => void onRemoveLink(link.id)}
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="no-content">No linked items yet</p>
-                )}
-                {canEditThis && (
-                  <div className="bug-link-add" id="bugLinkAdd">
-                    <div className="bug-link-add-type">
-                      <BhSelect
-                        name="link_type"
-                        ariaLabel="Link type"
-                        value={linkType}
-                        onChange={setLinkType}
-                        options={LINK_TYPE_OPTS}
-                      />
-                    </div>
-                    <div className="bug-link-add-target">
-                      <ItemPicker
-                        selected={linkTargets}
-                        onChange={setLinkTargets}
-                        excludeIds={[
-                          ...(bugId != null ? [bugId] : []),
-                          ...(bug?.links.map((l) => l.other_bug_id) ?? []),
-                        ]}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      disabled={linkTargets.length === 0}
-                      onClick={() => void onAddLink()}
-                    >
-                      Link{linkTargets.length > 1 ? ` ${linkTargets.length}` : ""}
-                    </button>
-                  </div>
-                )}
-              </section>
+              {renderLinksSection()}
 
               <GitBranchesPanel targetType="work-item" targetId={bugId} visible={isEdit} itemType={bug?.item_type || itemType} />
 
               {/* Activity — collapsible */}
-              <section
-                className="bug-section bug-activity-section"
-                id="bugActivitySection"
-                hidden={!isEdit}
-              >
-                <details>
-                  <summary>
-                    Activity history{" "}
-                    <span className="muted small" id="activityCount">
-                      {bug ? `(${bug.activities.length})` : ""}
-                    </span>
-                  </summary>
-                  <div id="bugActivityList" className="bug-activity-list">
-                    {bug && bug.activities.length > 0 ? (
-                      bug.activities.map((a) => <ActivityRow key={a.id} activity={a} />)
-                    ) : (
-                      <p className="no-content">No activity yet</p>
-                    )}
-                  </div>
-                </details>
-              </section>
+              {renderActivitySection()}
             </div>
 
             {/* Side column — metadata */}
-            <aside className="bug-modal-side" aria-label="Work item metadata">
-              <div className="field" aria-labelledby="bugTypeLabel">
-                <span id="bugTypeLabel">
-                  Type <em>*</em>
-                </span>
-                <BhSelect
-                  name="item_type"
-                  ariaLabel="Type"
-                  value={itemType}
-                  onChange={(v) => setItemType(v)}
-                  options={itemTypeOpts}
-                  disabled={readOnly}
-                />
-                {agileTypesBlocked && (
-                  <small className="hint" id="bugTypeAgileHint">
-                    Agile is not enabled for this project, so{" "}
-                    {AGILE_ITEM_TYPES.map(itemTypeLabel).join(", ")} items cannot be created yet.{" "}
-                    {canManage ? (
-                      <button
-                        type="button"
-                        className="btn ghost"
-                        id="bugEnableAgileBtn"
-                        onClick={enableAgileForProject}
-                        disabled={enableAgileBusy}
-                      >
-                        {enableAgileBusy ? "Enabling…" : "Enable Agile"}
-                      </button>
-                    ) : (
-                      "Ask a manager or admin to enable Agile for it."
-                    )}
-                  </small>
-                )}
-              </div>
-              <div className="field" aria-labelledby="bugProjectLabel">
-                <span id="bugProjectLabel">
-                  Project <em>*</em>
-                </span>
-                <BhSelect
-                  name="project_id"
-                  ariaLabel="Project"
-                  value={projectId}
-                  onChange={setProjectId}
-                  options={projectOpts}
-                  disabled={readOnly}
-                />
-              </div>
-              {renderParentField()}
-              <div className="field" aria-labelledby="bugStatusLabel">
-                <span id="bugStatusLabel">Status</span>
-                <BhSelect
-                  name="status"
-                  ariaLabel="Status"
-                  value={status}
-                  onChange={setStatus}
-                  options={statusOpts}
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="field" aria-labelledby="bugPriorityLabel">
-                <span id="bugPriorityLabel">Priority</span>
-                <BhSelect
-                  name="priority"
-                  ariaLabel="Priority"
-                  value={priority}
-                  onChange={setPriority}
-                  options={priorityOpts}
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="field" aria-labelledby="bugEnvLabel">
-                <span id="bugEnvLabel">Environment</span>
-                <HelpHint label="Environment" guide="items">Where the problem was seen: DEV, UAT or PROD. It is used by bugs and filters the list.</HelpHint>
-                <BhSelect
-                  name="environment"
-                  ariaLabel="Environment"
-                  value={environment}
-                  onChange={setEnvironment}
-                  options={environmentOpts}
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="field" aria-labelledby="bugReporterLabel">
-                <span id="bugReporterLabel">Reporter</span>
-                {/* Fixed to current user (or original reporter on edit); disabled, id comes from state. Hand-rolled so the reporter-select class survives (BhSelect can't add classes). */}
-                <div className="bh-sel-wrap">
-                  <select
-                    className="bh-sel-native reporter-select"
-                    name="reporter_id"
-                    aria-labelledby="bugReporterLabel"
-                    disabled
-                    value={String(reporterId)}
-                    onChange={() => undefined}
-                  >
-                    <option value="">— select —</option>
-                    <option value={String(reporterOption.id)} title={reporterOption.email}>
-                      {reporterOption.name}
-                    </option>
-                  </select>
-                  <button
-                    type="button"
-                    className="bh-sel-btn is-disabled"
-                    aria-haspopup="listbox"
-                    aria-expanded={false}
-                    disabled
-                  >
-                    <span className="bh-sel-label">{reporterOption.name}</span>
-                  </button>
-                </div>
-              </div>
-              <fieldset className="field">
-                <legend>Assignees</legend>
-                <ChipPicker
-                  id="assigneePicker"
-                  items={assigneeItems}
-                  selected={assigneeIds}
-                  disabled={readOnly}
-                  onToggle={(uid) =>
-                    setAssigneeIds((prev) =>
-                      prev.includes(uid) ? prev.filter((x) => x !== uid) : [...prev, uid],
-                    )
-                  }
-                />
-              </fieldset>
-              <div className="field" aria-labelledby="bugEventLabel">
-                <span id="bugEventLabel">Event</span>
-                <BhSelect
-                  name="event_id"
-                  ariaLabel="Event"
-                  value={eventId}
-                  onChange={setEventId}
-                  options={eventOpts}
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="field" aria-labelledby="bugDueLabel">
-                <span id="bugDueLabel">Due date</span>
-                <BhDateInput
-                  name="due_date"
-                  ariaLabel="Due date"
-                  value={dueDate}
-                  onChange={setDueDate}
-                  disabled={readOnly}
-                />
-              </div>
-
-              {/* Sprint tracking — any Bug/Requirement/Task can be added to a
-                  Sprint here, not just Stories. Create-mode
-                  defaults to the project's active Sprint and
-                  applies the pick right after the item is created. */}
-              {renderSprintField()}
-
-              {/* Timestamps — visible in edit mode only */}
-              <div className="bug-side-meta" id="bugSideMeta" hidden={!isEdit}>
-                <div className="bug-side-meta-row">
-                  <span className="k">Created</span>
-                  <span className="v" id="bugMetaCreated">
-                    {bug ? formatDate(bug.created_at) : "—"}
-                  </span>
-                </div>
-                <div className="bug-side-meta-row">
-                  <span className="k">Updated</span>
-                  <span className="v" id="bugMetaUpdated">
-                    {bug ? formatDate(bug.updated_at) : "—"}
-                  </span>
-                </div>
-              </div>
-            </aside>
+            {renderMetaSidebar()}
           </div>
 
           <div className="modal-foot">

@@ -12,7 +12,7 @@ import { toast, toastError } from "../lib/toast";
 import { withLoader } from "../lib/loader";
 import { formatDate, initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
-import { DATA_POLL_MS } from "../state/AppContext";
+import { dataPollMs } from "../lib/pollConfig";
 /** Short browser/OS hint from a full UA string. */
 function shortenUserAgent(ua) {
   if (!ua) return "Unknown";
@@ -57,7 +57,7 @@ export default function SessionsView() {
   // Quiet (no toast per tick), paused while the tab is hidden, fires on refocus.
   useEffect(() => {
     const tick = () => { if (!document.hidden) void refreshSessions(true); };
-    const id = setInterval(tick, DATA_POLL_MS);
+    const id = setInterval(tick, dataPollMs());
     document.addEventListener("visibilitychange", tick);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", tick); };
   }, [refreshSessions]);

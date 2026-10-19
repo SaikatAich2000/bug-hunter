@@ -18,6 +18,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import Activity, Bug, Project, User
 from app.schemas import (
     ALLOWED_ENVIRONMENTS,
@@ -32,7 +33,7 @@ logger = logging.getLogger("bug_hunter.sleuth.ingest")
 # Hard cap on items per upload — bounds the DB against a runaway spreadsheet.
 MAX_SPECS = 500
 # Soft cap on uploaded document size; the route also enforces the body limit.
-MAX_DOC_BYTES = 5 * 1024 * 1024  # 5 MB of text/spreadsheet is plenty
+MAX_DOC_BYTES = get_settings().SLEUTH_INGEST_MAX_BYTES
 
 
 # Synonym maps so the parser accepts various spellings of priority/type/env.

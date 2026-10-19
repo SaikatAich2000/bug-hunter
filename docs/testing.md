@@ -79,6 +79,40 @@ Dependabot opens weekly update PRs for pip, npm, Actions and Docker.
 
 Every job except Sonar and the push runs with plain commands and no secrets, so you can reproduce it locally.
 
+## SonarQube
+
+`sonar-project.properties` scans `app` and `frontend/src` (tests in `tests/`). Excluded: the
+generated bundle and vendored libraries (`app/static/**`), `node_modules`, caches, fonts and
+images. Vitest specs under `frontend/src` are declared as tests. Coverage inputs are
+`coverage.xml` (pytest-cov) and `frontend/coverage/lcov.info` (Vitest); JUnit goes in via
+`junit.xml,junit-parts/*.xml`.
+
+```bash
+scripts/sonar-server-up.ps1                 # local SonarQube in Docker (Windows)
+export SONAR_TOKEN=...                      # PowerShell: $env:SONAR_TOKEN = "..."
+python scripts/sonar_gate.py apply          # create/refresh the bug-hunter-gate quality gate
+scripts/sonar-scan.sh                       # or scripts/sonar-scan.ps1
+```
+
+The scan scripts run pytest with coverage and Vitest first, then the scanner in Docker, and wait for
+the gate (`-Dsonar.qualitygate.wait=true`). The token is read only from the `SONAR_TOKEN`
+environment variable (never a file or a committed value); `SONAR_HOST_URL` defaults to
+`http://localhost:9000`. `sonar.projectVersion` comes from `APP_VERSION`. Shell scripts must keep
+LF endings (`.gitattributes`: `*.sh text eol=lf`); CRLF breaks them inside Linux containers.
+
+Gate: coverage at least 80% overall and on new code, security rating A, zero vulnerabilities,
+plus Sonar way's new-code conditions. Hotspot review is not a gate condition.
+
+## Verified results
+
+Last full verification of this release:
+
+| Check | Result |
+|---|---|
+| SonarQube (`bug-hunter-gate`) | passed: 0 bugs, 0 vulnerabilities, 0 code smells, 0 security hotspots; combined coverage 95.5%; duplication 0.5% |
+| Schemathesis against the OpenAPI schema | zero 5xx responses |
+| Backup / restore / rollback drill | backup taken, data deleted, restore verified; rolling back to the previous `APP_VERSION` kept the data |
+
 ## Adding tests
 
 - New route: a test in the matching `tests/test_*.py`; new schema: a validator and a test.

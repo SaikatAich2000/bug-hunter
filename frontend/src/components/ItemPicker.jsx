@@ -147,13 +147,13 @@ export default function ItemPicker({
     if (results.length === 0) {
       return <div className="item-picker-empty muted">No matching items</div>;
     }
-    return results.map((it, i) => {
+    return <>{results.map((it, i) => {
       const checked = selectedIds.has(it.id);
       return (
-        <button
+        <button // NOSONAR S6819: combobox listbox option; <option> is only valid inside a native <select>
           type="button"
           key={it.id}
-          role="option"
+          role="option" /* NOSONAR S6819: combobox listbox option; <option> is only valid inside a native <select> */
           aria-selected={checked}
           className={`item-picker-row${i === activeIdx ? " is-active" : ""}${checked ? " is-checked" : ""}`}
           onMouseEnter={() => setActiveIdx(i)}
@@ -172,7 +172,7 @@ export default function ItemPicker({
           </span>
         </button>
       );
-    });
+    })}</>;
   };
 
   return (
@@ -244,7 +244,7 @@ export default function ItemPicker({
             }}
             onKeyDown={onKeyDown}
           />
-          <div className="item-picker-list" role="listbox" aria-multiselectable="true" id={listboxId}>
+          <div className="item-picker-list" role="listbox" /* NOSONAR S6819: popup of a custom combobox; a native <select multiple> cannot be searched or filtered */ aria-multiselectable="true" id={listboxId}>
             {renderResults()}
           </div>
         </div>

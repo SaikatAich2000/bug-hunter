@@ -19,7 +19,8 @@ export default function TypeTabs() {
     Bug: byType["Bug"] ?? 0,
     Requirement: byType["Requirement"] ?? 0,
     Task: byType["Task"] ?? 0,
-    all: (byType["Bug"] ?? 0) + (byType["Requirement"] ?? 0) + (byType["Task"] ?? 0),
+    // "All" counts every type (Story, Epic, Sub-task have no tab of their own).
+    all: Object.values(byType).reduce((sum, n) => sum + n, 0),
   };
 
   return (

@@ -10,6 +10,7 @@ from app.chatbot import rag
 def _settings(**over):
     base = {
         "GEMINI_API_KEY": "k",
+        "GEMINI_API_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",
         "GEMINI_EMBED_MODEL": "text-embedding-004",
         "SLEUTH_CLOUD_TIMEOUT_S": 5,
         "SLEUTH_RAG_ENABLED": True,

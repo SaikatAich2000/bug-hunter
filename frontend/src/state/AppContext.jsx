@@ -14,6 +14,7 @@ import { getAppName } from "../lib/branding";
 import { toast, toastError } from "../lib/toast";
 import { showLocalNotification } from "../lib/push";
 import { parseDeepLink } from "../lib/deepLink";
+import { applyPollConfig, dataPollMs, sessionPollMs } from "../lib/pollConfig";
 import {
   isStaleProjectResponse,
   normalizeProjects,
@@ -78,9 +79,6 @@ export function useApp() {
 const PAGE_SIZE = 20;
 // Background refresh cadence. An idle tab costs about nine requests a minute; anything the
 // user changes refreshes at once, and other people's changes show within these intervals.
-const SESSION_POLL_MS = 30_000;
-/** Shared poll interval for list, stats, open modal, and per-view pollers. */
-export const DATA_POLL_MS = 30_000;
 /** Users and projects change rarely; edits made here update the lists immediately. */
 const DIRECTORY_POLL_MS = 120_000;
 const POLL_FAILED_NOTICE = "Can't reach the server. Retrying…";
@@ -125,7 +123,7 @@ export function AppProvider({
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
 
-  const [view, setRawView] = useState("list");
+  const [rawView, setRawView] = useState("list");
   // Set by ReportsView's "View Sprint Reports" link; SprintsView reads and
   // clears this once on mount to open its Sprint Report tab directly.
   const [sprintsDeepLinkTab, setSprintsDeepLinkTab] = useState(null);
@@ -133,13 +131,13 @@ export function AppProvider({
   const [eventDeepLinkId, setEventDeepLinkId] = useState(null);
   // True once boot has loaded session data (gates notification deep links).
   const [booted, setBooted] = useState(false);
-  const [activeTab, setRawActiveTab] = useState(() => {
+  const [rawActiveTab, setRawActiveTab] = useState(() => {
     const t = readLs("activeTab", "all");
     return ["all", "Bug", "Requirement", "Task"].includes(t)
       ? t
       : "all";
   });
-  const [defaultNewType, setRawDefaultNewType] = useState(() => {
+  const [rawDefaultNewType, setRawDefaultNewType] = useState(() => {
     const t = readLs("defaultNewType", "Bug");
     return ["Bug", "Requirement", "Task"].includes(t)
       ? t
@@ -150,7 +148,7 @@ export function AppProvider({
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const [filters, setRawFilters] = useState(EMPTY_FILTERS);
+  const [rawFilters, setRawFilters] = useState(EMPTY_FILTERS);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => readLs("sidebarCollapsed", "0") === "1",
@@ -166,17 +164,17 @@ export function AppProvider({
   const [unreadCount, setUnreadCount] = useState(0);
 
   // Refs let stable callbacks/pollers read latest values without stale closures.
-  const filtersRef = useRef(filters);
+  const filtersRef = useRef(rawFilters);
   const notificationsRef = useRef(notifications);
   const pageRef = useRef(page);
-  const tabRef = useRef(activeTab);
+  const tabRef = useRef(rawActiveTab);
   // Synced after each commit (never during render) so stable callbacks and
   // pollers read the latest values without stale closures.
   useEffect(() => {
-    filtersRef.current = filters;
+    filtersRef.current = rawFilters;
     notificationsRef.current = notifications;
     pageRef.current = page;
-    tabRef.current = activeTab;
+    tabRef.current = rawActiveTab;
   });
 
   // Poll signatures: skip state commits (and re-renders) on unchanged data.
@@ -381,7 +379,10 @@ export function AppProvider({
           loadProjects(),
         ]);
         setHealth(h);
-        if (m && Array.isArray(m.statuses)) setMeta({ ...FALLBACK_META, ...m });
+        if (m && Array.isArray(m.statuses)) {
+          applyPollConfig(m);
+          setMeta({ ...FALLBACK_META, ...m });
+        }
       } catch (err) {
         toastError(err);
       }
@@ -400,7 +401,7 @@ export function AppProvider({
       return;
     }
     void refreshBugs();
-  }, [page, filters, activeTab, refreshBugs]);
+  }, [page, rawFilters, rawActiveTab, refreshBugs]);
 
   // Tab change additionally refreshes stats.
   const firstTabEffect = useRef(true);
@@ -410,7 +411,7 @@ export function AppProvider({
       return;
     }
     void refreshStats();
-  }, [activeTab, refreshStats]);
+  }, [rawActiveTab, refreshStats]);
 
   useEffect(() => {
     // Session poll + on tab focus; the unread count rides the same tick. A 401 has already
@@ -426,8 +427,8 @@ export function AppProvider({
         return c.unread;
       });
     };
-    return startPoller(tick, SESSION_POLL_MS, pollNotices);
-  }, []);
+    return startPoller(tick, sessionPollMs(), pollNotices);
+  }, [meta]); // restart once /api/meta delivers the server intervals
 
   // Live refs so the pollers call the latest callbacks without re-registering.
   const refreshBugsRef = useRef(refreshBugs);
@@ -442,8 +443,8 @@ export function AppProvider({
     const refresh = () => Promise.all([
       refreshBugsRef.current({ quiet: true }), refreshStatsRef.current({ quiet: true }),
     ]);
-    return startPoller(refresh, DATA_POLL_MS, pollNotices);
-  }, []);
+    return startPoller(refresh, dataPollMs(), pollNotices);
+  }, [meta]);
 
   // Directory polls separately so bug saves don't double-fetch users/projects.
   const loadDirRef = useRef({ loadUsers, loadProjects });
@@ -583,7 +584,7 @@ export function AppProvider({
     const tick = () => {
       if (!document.hidden) void reloadBugModalRef.current();
     };
-    const id = setInterval(tick, DATA_POLL_MS);
+    const id = setInterval(tick, dataPollMs());
     document.addEventListener("visibilitychange", tick);
     return () => {
       clearInterval(id);
@@ -708,15 +709,15 @@ export function AppProvider({
       projects,
       stats,
       health,
-      view,
+      view: rawView,
       setView,
       sprintsDeepLinkTab,
       eventDeepLinkId,
       setEventDeepLinkId,
       setSprintsDeepLinkTab,
-      activeTab,
+      activeTab: rawActiveTab,
       setActiveTab,
-      defaultNewType,
+      defaultNewType: rawDefaultNewType,
       setDefaultNewType,
       bugs,
       page,
@@ -724,7 +725,7 @@ export function AppProvider({
       pageSize: PAGE_SIZE,
       total,
       totalPages,
-      filters,
+      filters: rawFilters,
       setFilters,
       clearFilters,
       sidebarCollapsed,
@@ -762,10 +763,10 @@ export function AppProvider({
       isAdmin: currentUser.role === "admin",
     }),
     [
-      currentUser, meta, users, projects, stats, health, view, setView,
+      currentUser, meta, users, projects, stats, health, rawView, setView,
       sprintsDeepLinkTab, setSprintsDeepLinkTab, eventDeepLinkId,
-      activeTab, setActiveTab, defaultNewType, setDefaultNewType, bugs, page,
-      total, totalPages, filters, setFilters, clearFilters, sidebarCollapsed,
+      rawActiveTab, setActiveTab, rawDefaultNewType, setDefaultNewType, bugs, page,
+      total, totalPages, rawFilters, setFilters, clearFilters, sidebarCollapsed,
       toggleSidebarCollapsed, refreshBugs, refreshStats, refreshAll, loadUsers,
       loadProjects, upsertProject, bugModal, openBugForm, openBugDetail, reloadBugModal,
       closeBugModal, projectModal, openProjectForm, closeProjectModal,

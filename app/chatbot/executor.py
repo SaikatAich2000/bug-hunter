@@ -67,7 +67,7 @@ class Response:
 _CHAT_LIST_CAP = 500
 _CHAT_CONTEXT_CAP = 2000
 # Above this, bulk actions are refused rather than staged behind one "yes".
-_BULK_ACTION_CAP = 500
+_BULK_ACTION_CAP = get_settings().SLEUTH_BULK_ACTION_CAP
 _WRITE_DENIED_SUMMARY = "Write not permitted"
 
 

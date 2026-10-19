@@ -14,10 +14,11 @@ from datetime import timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import IdempotencyKey
 from app.util import utcnow
 
-EXPIRY_HOURS = 24
+EXPIRY_HOURS = get_settings().IDEMPOTENCY_EXPIRY_HOURS
 
 
 class IdempotencyConflict(Exception):

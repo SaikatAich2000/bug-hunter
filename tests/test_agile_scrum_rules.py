@@ -99,7 +99,8 @@ def test_start_sprint_sets_dates_and_the_exact_start_instant(admin_client):
     _add(admin_client, sprint["id"], story["id"])
     started = _start(admin_client, sprint["id"], name="Launch sprint", goal="Ship it")
     assert started["state"] == "active"
-    assert started["name"] == "Launch sprint" and started["goal"] == "Ship it"
+    assert started["name"] == "Launch sprint"
+    assert started["goal"] == "Ship it"
     assert started["started_at"] is not None
     start = date.fromisoformat(started["start_date"])
     assert date.fromisoformat(started["end_date"]) == start + timedelta(days=13)
@@ -109,13 +110,15 @@ def test_empty_or_second_sprint_cannot_start(admin_client):
     project, board_id = _project(admin_client, "Start Rules Suite")
     empty = _sprint(admin_client, board_id, "Empty")
     res = admin_client.post(f"/api/agile/sprints/{empty['id']}/start", json={"version": empty["version"]})
-    assert res.status_code == 409 and "without issues" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "without issues" in res.json()["detail"]
     first, second = _sprint(admin_client, board_id, "First"), _sprint(admin_client, board_id, "Second")
     _add(admin_client, first["id"], _issue(admin_client, project["id"], "Issue A")["id"])
     _add(admin_client, second["id"], _issue(admin_client, project["id"], "Issue B")["id"])
     _start(admin_client, first["id"])
     res = admin_client.post(f"/api/agile/sprints/{second['id']}/start", json={"version": second["version"]})
-    assert res.status_code == 409 and "already active" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "already active" in res.json()["detail"]
 
 
 def test_start_rejects_an_end_before_the_start(admin_client):
@@ -149,7 +152,8 @@ def test_completed_issues_stay_in_the_closed_sprint(admin_client):
     # A finished issue in a closed sprint cannot be re-planned from there.
     future = _sprint(admin_client, board_id, "Next")
     res = admin_client.post(f"/api/agile/sprints/{future['id']}/items", json={"item_ids": [done["id"]]})
-    assert res.status_code == 409 and "closed sprint" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "closed sprint" in res.json()["detail"]
 
 
 def test_a_parent_with_open_subtasks_is_not_complete(admin_client):
@@ -222,7 +226,8 @@ def test_carry_over_is_tagged_so_reports_do_not_count_it_as_removal(admin_client
         ).order_by(WorkItemChange.id).all()
         assert moves[-1].reason == "sprint_completed"
     report = admin_client.get(f"/api/agile/reports/sprint/{sprint['id']}").json()
-    assert report["removed"] == [] and [r["id"] for r in report["not_completed"]] == [a["id"]]
+    assert report["removed"] == []
+    assert [r["id"] for r in report["not_completed"]] == [a["id"]]
 
 
 # --- the backlog ----------------------------------------------------------------
@@ -237,7 +242,8 @@ def test_backlog_holds_open_standard_issues_only(admin_client):
     epic = _issue(admin_client, project["id"], "Epic", "Epic")
     sub = _issue(admin_client, project["id"], "Sub", "Sub-task", parent_id=story["id"])
     ids = _backlog_ids(admin_client, board_id)
-    assert story["id"] in ids and task["id"] in ids
+    assert story["id"] in ids
+    assert task["id"] in ids
     for hidden in (done["id"], epic["id"], sub["id"]):
         assert hidden not in ids
     row = next(i for i in _planning(admin_client, board_id)["backlog"] if i["id"] == story["id"])
@@ -279,7 +285,8 @@ def test_moves_refuse_subtasks_epics_and_foreign_neighbours(admin_client):
     foreign = _issue(admin_client, other["id"], "Foreign")
     for item_id, message in ((sub["id"], "moves with its parent"), (epic["id"], "Epics are not planned")):
         res = admin_client.post(f"/api/agile/boards/{board_id}/move", json={"item_ids": [item_id]})
-        assert res.status_code == 409 and message in res.json()["detail"]
+        assert res.status_code == 409
+        assert message in res.json()["detail"]
     res = admin_client.post(f"/api/agile/boards/{board_id}/move", json={
         "item_ids": [story["id"]], "before_id": foreign["id"],
     })
@@ -328,13 +335,15 @@ def test_board_columns_update_in_place_and_validate(admin_client):
     assert res.status_code == 200, res.text
     after = res.json()
     assert [c["id"] for c in after["columns"]] == ids_before
-    assert after["columns"][0]["name"] == "Backlog" and after["columns"][1]["wip_limit"] == 3
+    assert after["columns"][0]["name"] == "Backlog"
+    assert after["columns"][1]["wip_limit"] == 3
 
     board, cols = _columns(admin_client, board_id)
     dup = [dict(c) for c in cols]
     dup[0]["statuses"] = dup[0]["statuses"] + ["Done"]
     res = admin_client.put(f"/api/agile/boards/{board_id}/columns", json={"columns": dup, "version": board["version"]})
-    assert res.status_code == 422 and "one column only" in res.json()["detail"][0]["msg"]
+    assert res.status_code == 422
+    assert "one column only" in res.json()["detail"][0]["msg"]
 
     not_done_last = [dict(c) for c in cols]
     not_done_last[-1]["category"] = "in_progress"
@@ -413,7 +422,8 @@ def test_hierarchy_rules(admin_client):
     res = admin_client.post("/api/agile/work-items", json={
         "project_id": project["id"], "title": "Orphan", "item_type": "Sub-task",
     })
-    assert res.status_code == 422 and "needs a parent" in res.json()["detail"][0]["msg"]
+    assert res.status_code == 422
+    assert "needs a parent" in res.json()["detail"][0]["msg"]
 
     second_epic = _issue(admin_client, project["id"], "Second epic", "Epic")
     assert relink(story, epic_id=second_epic["id"]).status_code == 200
@@ -425,7 +435,8 @@ def test_deleting_an_issue_deletes_its_subtasks(admin_client):
     story = _issue(admin_client, project["id"], "Story")
     subs = [_issue(admin_client, project["id"], f"Sub {n}", "Sub-task", parent_id=story["id"]) for n in (1, 2)]
     res = admin_client.delete(f"/api/bugs/{story['id']}")
-    assert res.status_code == 200 and "2 sub-task" in res.json()["message"]
+    assert res.status_code == 200
+    assert "2 sub-task" in res.json()["message"]
     for sub in subs:
         assert admin_client.get(f"/api/bugs/{sub['id']}").status_code == 404
 
@@ -454,7 +465,8 @@ def test_hierarchy_view_returns_the_epic_tree(admin_client):
     assert tree["epics"][0]["progress"]["total_estimate"] == 5
     issues = {i["id"]: i for i in tree["issues"]}
     assert set(issues) == {story["id"], loose["id"], closed["id"]}
-    assert issues[story["id"]]["epic_id"] == epic["id"] and issues[story["id"]]["subtask_count"] == 1
+    assert issues[story["id"]]["epic_id"] == epic["id"]
+    assert issues[story["id"]]["subtask_count"] == 1
     assert [s["id"] for s in tree["subtasks"]] == [sub["id"]]
     assert tree["unparented_total"] == 2
     open_only = admin_client.get(f"/api/agile/projects/{project['id']}/hierarchy?include_done=false").json()
@@ -775,3 +787,221 @@ class TestApplyTaskFlagUpdates:
         assert task.blocked is True  # Unchanged
         assert task.blocked_reason == "Updated reason"
         assert blocked_changed is False
+
+
+# --- item-field routes: ready-for-sprint, dates, task flags, acceptance criteria ---
+
+def _admin_id(client):
+    return client.get("/api/auth/me").json()["id"]
+
+
+def test_ready_for_sprint_needs_every_mandatory_field_and_a_current_version(admin_client):
+    project, _board = _project(admin_client, "Ready Gate")
+    story = _issue(admin_client, project["id"], "Gate", description="why", story_points=3,
+                   start_date="2026-01-01", end_date="2026-01-09", assignee_ids=[_admin_id(admin_client)])
+    url = f"/api/agile/work-items/{story['id']}/ready-for-sprint"
+
+    # No acceptance criterion yet.
+    refused = admin_client.put(url, json={"ready_for_sprint": True, "version": story["version"]})
+    assert refused.status_code == 422
+    admin_client.post(f"/api/agile/work-items/{story['id']}/acceptance-criteria", json={"description": "It works"})
+
+    assert admin_client.put(url, json={"ready_for_sprint": True, "version": story["version"] + 5}).status_code == 409
+    ready = admin_client.put(url, json={"ready_for_sprint": True, "version": story["version"]})
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["ready_for_sprint"] is True
+    # Clearing the flag never needs the requirements.
+    cleared = admin_client.put(url, json={"ready_for_sprint": False, "version": ready.json()["version"]})
+    assert cleared.json()["ready_for_sprint"] is False
+
+
+def test_ready_for_sprint_is_for_stories_only(admin_client):
+    project, _board = _project(admin_client, "Ready Types")
+    epic = _issue(admin_client, project["id"], "An epic", item_type="Epic")
+    res = admin_client.put(f"/api/agile/work-items/{epic['id']}/ready-for-sprint",
+                           json={"ready_for_sprint": True, "version": epic["version"]})
+    assert res.status_code == 422
+    missing = admin_client.put("/api/agile/work-items/999999/ready-for-sprint",
+                               json={"ready_for_sprint": True, "version": 1})
+    assert missing.status_code == 404
+
+
+def test_work_item_dates_are_changed_only_through_the_dates_route(admin_client):
+    project, _board = _project(admin_client, "Dates")
+    story = _issue(admin_client, project["id"], "Dated")
+    url = f"/api/agile/work-items/{story['id']}/dates"
+
+    stale = admin_client.put(url, json={"start_date": "2026-02-01", "end_date": "2026-02-09", "version": story["version"] + 3})
+    assert stale.status_code == 409
+    res = admin_client.put(url, json={"start_date": "2026-02-01", "end_date": "2026-02-09", "version": story["version"]})
+    assert res.status_code == 200, res.text
+    assert (res.json()["start_date"], res.json()["end_date"]) == ("2026-02-01", "2026-02-09")
+    assert admin_client.put(url, json={"start_date": "soon", "version": res.json()["version"]}).status_code == 422
+    assert admin_client.put("/api/agile/work-items/999999/dates", json={"version": 1}).status_code == 404
+
+
+def test_task_flags_require_a_reason_and_audit_each_change(admin_client):
+    project, _board = _project(admin_client, "Flags")
+    story = _issue(admin_client, project["id"], "Flaggable")
+    url = f"/api/agile/work-items/{story['id']}/task-flags"
+
+    assert admin_client.put(url, json={"blocked": True, "version": story["version"]}).status_code == 422
+    assert admin_client.put(url, json={"mandatory": True, "version": story["version"] + 2}).status_code == 409
+    blocked = admin_client.put(url, json={"blocked": True, "blocked_reason": "Waiting on API",
+                                          "mandatory": True, "version": story["version"]})
+    assert blocked.status_code == 200, blocked.text
+    assert blocked.json()["blocked"] is True
+    unblocked = admin_client.put(url, json={"blocked": False, "version": blocked.json()["version"]})
+    assert unblocked.json()["blocked"] is False
+    actions = {a["action"] for a in admin_client.get("/api/audit").json()}
+    assert {"item_blocked", "item_unblocked", "mandatory_changed"} <= actions
+
+    epic = _issue(admin_client, project["id"], "Not flaggable", item_type="Epic")
+    refused = admin_client.put(f"/api/agile/work-items/{epic['id']}/task-flags",
+                               json={"mandatory": True, "version": epic["version"]})
+    assert refused.status_code == 422
+
+
+def test_acceptance_criteria_lifecycle(admin_client):
+    project, _board = _project(admin_client, "Criteria")
+    story = _issue(admin_client, project["id"], "With criteria")
+    base = f"/api/agile/work-items/{story['id']}/acceptance-criteria"
+
+    created = admin_client.post(base, json={"description": "  Shows the total  ", "required": False})
+    assert created.status_code == 201, created.text
+    criterion = created.json()
+    assert criterion["description"] == "Shows the total"
+    assert admin_client.post(base, json={"description": "   "}).status_code == 422
+    assert [c["id"] for c in admin_client.get(base).json()] == [criterion["id"]]
+
+    url = f"/api/agile/acceptance-criteria/{criterion['id']}"
+    updated = admin_client.put(url, json={"met": True, "required": True})
+    assert updated.status_code == 200
+    assert (updated.json()["met"], updated.json()["required"]) == (True, True)
+    assert admin_client.delete(url).status_code == 200
+    assert admin_client.get(base).json() == []
+    assert admin_client.put(url, json={"met": True}).status_code == 404
+    assert admin_client.delete(url).status_code == 404
+    assert admin_client.get("/api/agile/work-items/999999/acceptance-criteria").status_code == 404
+    assert admin_client.post("/api/agile/work-items/999999/acceptance-criteria",
+                             json={"description": "x"}).status_code == 404
+
+
+# --- board routes: lookups, WIP limits, estimates, taxonomy, quick filters ---------------
+
+def _move(client, item_id, status, **extra):
+    version = client.get(f"/api/bugs/{item_id}").json().get("version", 1)
+    return client.post(f"/api/agile/work-items/{item_id}/transition",
+                       json={"to_status": status, "version": version, **extra})
+
+
+def test_board_lookups_hide_other_boards_and_disabled_projects(admin_client):
+    project, board_id = _project(admin_client, "Lookups A")
+    other, other_board = _project(admin_client, "Lookups B")
+    foreign_sprint = _sprint(admin_client, other_board, "Elsewhere")
+
+    assert admin_client.get("/api/agile/boards/999999/view").status_code == 404
+    assert admin_client.get("/api/agile/boards/999999/planning").status_code == 404
+    assert admin_client.get(f"/api/agile/boards/{board_id}/view?sprint_id=999999").status_code == 404
+    assert admin_client.get(f"/api/agile/boards/{board_id}/view?sprint_id={foreign_sprint['id']}").status_code == 404
+    moved = admin_client.post(f"/api/agile/boards/{board_id}/move",
+                              json={"item_ids": [1], "sprint_id": foreign_sprint["id"]})
+    assert moved.status_code == 404
+    assert admin_client.get("/api/agile/projects/999999/hierarchy").status_code == 404
+    assert admin_client.get("/api/agile/sprints/999999").status_code == 404
+    assert admin_client.get("/api/agile/reports/sprint/999999").status_code == 404
+
+    story = _issue(admin_client, project["id"], "Before disable")
+    sprint = _sprint(admin_client, board_id, "Orphan")
+    assert admin_client.post(f"/api/agile/projects/{project['id']}/disable").status_code == 200
+    for url in (f"/api/agile/boards/{board_id}", f"/api/agile/boards/{board_id}/view",
+                f"/api/agile/sprints/{sprint['id']}", f"/api/agile/projects/{project['id']}/hierarchy",
+                f"/api/agile/reports/sprint/{sprint['id']}"):
+        assert admin_client.get(url).status_code == 404, url
+    assert admin_client.get(f"/api/agile/reports/burndown?sprint_id={sprint['id']}").status_code == 404
+    assert story["id"]
+    assert other["id"]
+
+
+def test_transitions_enforce_versions_and_wip_limits(admin_client):
+    project, board_id = _project(admin_client, "Wip Limits")
+    first = _issue(admin_client, project["id"], "First in progress")
+    second = _issue(admin_client, project["id"], "Second in progress")
+    board, cols = _columns(admin_client, board_id)
+    cols[1]["wip_limit"], cols[1]["min_cards"], cols[1]["wip_enforcement"] = 1, 1, "block"
+    assert admin_client.put(f"/api/agile/boards/{board_id}/columns",
+                            json={"columns": cols, "version": board["version"]}).status_code == 200
+
+    stale = admin_client.post(f"/api/agile/work-items/{first['id']}/transition",
+                              json={"to_status": "In Progress", "version": first["version"] + 9})
+    assert stale.status_code == 409
+    assert _move(admin_client, 999999, "In Progress").status_code == 404
+    assert _move(admin_client, first["id"], "In Progress").status_code == 200
+    assert _move(admin_client, first["id"], "No Such Status").status_code == 422
+
+    blocked = _move(admin_client, second["id"], "In Progress")
+    assert blocked.status_code == 400
+    assert "WIP limit" in blocked.json()["detail"]
+    no_reason = _move(admin_client, second["id"], "In Progress", override_wip=True)
+    assert no_reason.status_code == 422
+    assert "override_reason" in str(no_reason.json()["detail"])
+    assert _move(admin_client, second["id"], "In Progress", override_wip=True,
+                 override_reason="Customer escalation").status_code == 200
+
+    board, cols = _columns(admin_client, board_id)
+    cols[1]["wip_enforcement"] = "warn"
+    assert admin_client.put(f"/api/agile/boards/{board_id}/columns",
+                            json={"columns": cols, "version": board["version"]}).status_code == 200
+    third = _issue(admin_client, project["id"], "Third in progress")
+    warned = _move(admin_client, third["id"], "In Progress")
+    assert warned.status_code == 400
+    assert "acknowledge" in warned.json()["detail"]
+    assert _move(admin_client, third["id"], "In Progress", acknowledged=True).status_code == 200
+
+
+def test_a_board_without_a_default_cannot_transition(admin_client, db_session):
+    project, board_id = _project(admin_client, "No Default")
+    story = _issue(admin_client, project["id"], "Stranded")
+    from app.models import Board
+
+    db_session.query(Board).filter_by(id=board_id).update({"is_default": False})
+    db_session.commit()
+    assert _move(admin_client, story["id"], "In Progress").status_code == 404
+
+
+def test_estimates_and_taxonomy_reject_stale_or_invalid_edits(admin_client):
+    project, _board_id = _project(admin_client, "Estimates")
+    story = _issue(admin_client, project["id"], "Estimable")
+    epic = _issue(admin_client, project["id"], "Not estimable", item_type="Epic")
+
+    stale = admin_client.put(f"/api/agile/work-items/{story['id']}/estimate",
+                             json={"story_points": 5, "version": story["version"] + 3})
+    assert stale.status_code == 409
+    refused = admin_client.put(f"/api/agile/work-items/{epic['id']}/estimate",
+                               json={"story_points": 5, "version": epic["version"]})
+    assert refused.status_code == 422
+
+    stale_tax = admin_client.put(f"/api/agile/work-items/{story['id']}/taxonomy",
+                                 json={"label_ids": [], "version": story["version"] + 3})
+    assert stale_tax.status_code == 409
+    unknown = admin_client.put(f"/api/agile/work-items/{story['id']}/taxonomy",
+                               json={"label_ids": [999999], "component_ids": [999999], "version": story["version"]})
+    assert unknown.status_code == 422
+
+
+def test_quick_filters_can_be_edited_and_removed(admin_client):
+    _project_row, board_id = _project(admin_client, "Quick Filters")
+    created = admin_client.post(f"/api/agile/boards/{board_id}/quick-filters",
+                                json={"name": "Mine", "filter_json": {"assignee": "me"}})
+    assert created.status_code == 201, created.text
+    qf = created.json()
+    url = f"/api/agile/quick-filters/{qf['id']}"
+
+    renamed = admin_client.put(url, json={"name": "Only mine", "is_shared": False, "position": 5,
+                                          "filter_json": {"assignee": "me"}, "version": qf["version"]})
+    assert renamed.status_code == 200, renamed.text
+    assert (renamed.json()["name"], renamed.json()["is_shared"]) == ("Only mine", False)
+    assert admin_client.put(url, json={"name": "Late", "version": qf["version"]}).status_code == 409
+    assert admin_client.put("/api/agile/quick-filters/999999", json={"name": "x", "version": 1}).status_code == 404
+    assert admin_client.delete(url).status_code == 200
+    assert admin_client.delete(url).status_code == 404

@@ -4,6 +4,8 @@ re-activation.
 """
 from __future__ import annotations
 
+import pytest
+
 
 def _make_project(admin_client, name="Apollo"):
     res = admin_client.post("/api/projects", json={"name": name, "description": "", "color": "#c9764f"})
@@ -229,3 +231,124 @@ def test_project_update_cannot_toggle_agile_without_a_board(admin_client):
     )
     assert enable.status_code == 200
     assert enable.json()["board_id"] is not None
+
+
+# --- board provisioning and reconciliation (service level) --------------------------
+
+def _agile_project(db, name="Board Unit"):
+    from app.agile import boards as boards_svc
+    from app.auth import hash_password
+    from app.models import ROLE_ADMIN, Project, User
+
+    project = Project(name=name, color="#123456")
+    actor = User(email=f"{name.replace(' ', '').lower()}@unit.test", name="Unit", role=ROLE_ADMIN,
+                 password_hash=hash_password("p"))
+    db.add_all([project, actor])
+    db.flush()
+    board = boards_svc.activate_agile_for_project(db, project, actor, {})
+    project.agile_enabled = True
+    db.flush()
+    return project, actor, board
+
+
+def test_enabling_agile_ranks_the_issues_the_project_already_had(admin_client):
+    project = admin_client.post("/api/projects", json={"name": "Legacy Ranks", "color": "#c9764f"}).json()
+    ids = [admin_client.post("/api/bugs", json={"project_id": project["id"], "title": f"Old {n}"}).json()["id"]
+           for n in (1, 2, 3)]
+    board_id = admin_client.post(f"/api/agile/projects/{project['id']}/enable",
+                                 json={"feature_flags": {}}).json()["board_id"]
+    backlog = admin_client.get(f"/api/agile/boards/{board_id}/backlog").json()
+    assert [i["id"] for i in backlog] == ids
+    assert all(i["rank"] for i in backlog)
+
+
+def test_a_lost_activation_race_returns_the_winners_board(db_session, monkeypatch):
+    from app.agile import boards as boards_svc
+
+    project, actor, board = _agile_project(db_session, "Race")
+    real = boards_svc.get_default_board
+    calls = []
+
+    def _first_call_sees_nothing(db, pid):
+        calls.append(pid)
+        return None if len(calls) == 1 else real(db, pid)
+
+    monkeypatch.setattr(boards_svc, "get_default_board", _first_call_sees_nothing)
+    db_session.commit()
+    assert boards_svc.activate_agile_for_project(db_session, project, actor, {}).id == board.id
+
+
+def test_activation_refuses_a_status_category_without_a_default_column(db_session):
+    from app.agile import boards as boards_svc
+    from app.models import Project, WorkflowStatus
+
+    db_session.add(WorkflowStatus(scope_key="global", work_item_type="Bug", key="review_x",
+                                  persisted_status_value="Review X", name="Review X", category="review"))
+    project = Project(name="No Column", color="#123456")
+    from app.auth import hash_password
+    from app.models import ROLE_ADMIN, User
+
+    actor = User(email="nocol@unit.test", name="U", role=ROLE_ADMIN, password_hash=hash_password("p"))
+    db_session.add_all([project, actor])
+    db_session.flush()
+    with pytest.raises(boards_svc.AgileActivationError, match="review_x"):
+        boards_svc.activate_agile_for_project(db_session, project, actor, {})
+
+
+def test_testing_column_is_restored_on_older_boards(db_session):
+    from app.agile import boards as boards_svc
+    from app.models import BoardColumn, BoardColumnStatus
+
+    _project, _actor, board = _agile_project(db_session, "Older Board")
+    assert boards_svc.reconcile_testing_column(db_session, board) is False
+
+    testing = next(c for c in board.columns if c.category == "testing")
+    mapped = list(testing.statuses)
+    testing_id = testing.id
+    db_session.query(BoardColumnStatus).filter_by(board_column_id=testing_id).delete()
+    db_session.expire_all()
+    assert boards_svc.reconcile_testing_column(db_session, board) is True  # statuses re-mapped
+    db_session.expire_all()
+    assert boards_svc.reconcile_testing_column(db_session, board) is False
+
+    db_session.query(BoardColumnStatus).filter_by(board_column_id=testing_id).delete()
+    db_session.query(BoardColumn).filter_by(id=testing_id).delete()
+    db_session.expire_all()
+    assert not any(c.category == "testing" for c in board.columns)
+    assert boards_svc.reconcile_testing_column(db_session, board) is True
+    db_session.expire_all()
+    ordered = [c.category for c in boards_svc.ordered_columns(board)]
+    assert ordered == ["todo", "in_progress", "testing", "done"]
+    restored = db_session.query(BoardColumn).filter_by(board_id=board.id, category="testing").all()
+    assert len(restored) == 1
+    assert db_session.query(BoardColumnStatus).filter_by(board_column_id=restored[0].id).count() == len(mapped)
+
+
+def test_status_mappings_are_reconciled_per_category(db_session):
+    from app.agile import boards as boards_svc
+
+    _project, _actor, board = _agile_project(db_session, "Mappings")
+    assert boards_svc.reconcile_board_status_mappings(db_session, board) is False
+    todo = next(c for c in board.columns if c.category == "todo")
+    from app.models import BoardColumnStatus
+
+    dropped = todo.statuses[0]
+    db_session.query(BoardColumnStatus).filter_by(
+        board_column_id=dropped.board_column_id, workflow_status_id=dropped.workflow_status_id).delete()
+    db_session.expire_all()
+    assert boards_svc.reconcile_board_status_mappings(db_session, board) is True
+    db_session.expire_all()
+    assert boards_svc.reconcile_board_status_mappings(db_session, board) is False
+
+
+def test_done_statuses_fall_back_to_terminal_ones_when_the_last_column_is_empty(db_session):
+    from app.agile import boards as boards_svc
+
+    _project, _actor, board = _agile_project(db_session, "Empty Last")
+    last = boards_svc.ordered_columns(board)[-1]
+    from app.models import BoardColumnStatus
+
+    db_session.query(BoardColumnStatus).filter_by(board_column_id=last.id).delete()
+    db_session.expire_all()
+    done = boards_svc.done_status_values(db_session, board)
+    assert "Done" in done

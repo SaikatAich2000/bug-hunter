@@ -74,8 +74,8 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
 
 # Per-user rate limit (Excel export does real CPU work, unlike the rule engine).
-_RATE_WINDOW_SECONDS = 60
-_RATE_MAX_REQUESTS = 30   # 30 chat asks / minute / user
+_RATE_WINDOW_SECONDS = get_settings().RATE_USER_WINDOW_SECONDS
+_RATE_MAX_REQUESTS = get_settings().RATE_CHAT_MAX
 _rate_state: dict[int, list[float]] = {}
 _rate_lock = threading.Lock()  # sync endpoints run in a thread pool
 

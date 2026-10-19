@@ -104,7 +104,8 @@ def test_sprints_view_has_the_scrum_tabs():
 
 def test_backlog_ranks_by_drag_through_the_move_endpoint():
     src = _read(AGILE_DIR / "BacklogPanel.jsx")
-    assert "DndContext" in src and "useSortable" in src
+    assert "DndContext" in src
+    assert "useSortable" in src
     assert "agileApi.move(" in src
     # Keyboard users can rank too.
     assert "KeyboardSensor" in src

@@ -68,7 +68,9 @@ def test_secure_login_uses_host_prefixed_cookie(client, monkeypatch):
     assert r.status_code == 200
     host = [c for c in _set_cookies(r) if c.startswith("__Host-bh_session=")]
     assert len(host) == 1, _set_cookies(r)
-    assert "Secure" in host[0] and "Path=/" in host[0] and "Domain" not in host[0]
+    assert "Secure" in host[0]
+    assert "Path=/" in host[0]
+    assert "Domain" not in host[0]
     # The unprefixed name is only ever cleared, never set to a session.
     assert not [c for c in _set_cookies(r) if c.startswith("bh_session=") and not c.startswith('bh_session="";')
                 and "Max-Age=0" not in c]
@@ -89,8 +91,9 @@ def test_session_cookie_value_does_not_expose_user_id(client):
     uid = r.json()["id"]
     token = client.cookies.get("bh_session")
     # The old format was a readable signed "uid:version:jti"; this must not be.
+    signer = auth._signer()
     with pytest.raises(BadSignature):
-        auth._signer().unsign(token)
+        signer.unsign(token)
     assert f"{uid}:" not in token
     assert auth.parse_session_token(token)[0] == uid
 
@@ -111,7 +114,8 @@ def test_secure_logout_clears_both_cookie_names(client, monkeypatch):
     _secure_cookies(monkeypatch)
     r = client.post("/api/auth/logout")
     cleared = " ".join(_set_cookies(r))
-    assert "__Host-bh_session=" in cleared and "bh_session=" in cleared.replace("__Host-bh_session=", "")
+    assert "__Host-bh_session=" in cleared
+    assert "bh_session=" in cleared.replace("__Host-bh_session=", "")
 
 
 # --- every status code a route can raise is documented ---------------------------
@@ -171,11 +175,14 @@ def test_every_status_a_route_raises_is_documented(client):
 def _assert_422_shape(response):
     assert response.status_code == 422, response.text
     detail = response.json()["detail"]
-    assert isinstance(detail, list) and detail, detail
+    assert isinstance(detail, list), detail
+    assert detail, detail
     for entry in detail:
         assert set(entry) == {"type", "loc", "msg"}, entry
-        assert isinstance(entry["type"], str) and isinstance(entry["loc"], list)
-        assert isinstance(entry["msg"], str) and entry["msg"]
+        assert isinstance(entry["type"], str)
+        assert isinstance(entry["loc"], list)
+        assert isinstance(entry["msg"], str)
+        assert entry["msg"]
 
 
 def test_422_from_body_validation_has_the_common_shape(admin_client):
@@ -208,7 +215,8 @@ def test_422_raised_by_routes_is_normalised(client, detail, expected_msg):
 
 def test_non_422_errors_keep_their_detail(client):
     r = client.get("/api/auth/me")
-    assert r.status_code == 401 and r.json()["detail"] == "Not authenticated"
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Not authenticated"
 
 
 # --- lockout: per email+IP, higher global per-email threshold ------------------

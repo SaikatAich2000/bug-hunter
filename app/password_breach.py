@@ -11,12 +11,12 @@ import logging
 
 import httpx
 
-from app.config import env_bool
+from app.config import env_bool, get_settings
 
 logger = logging.getLogger("bug_hunter.password_breach")
 
-_API_URL = "https://api.pwnedpasswords.com/range/"
-_TIMEOUT_SECONDS = 3.0
+_API_URL = get_settings().HIBP_API_URL
+_TIMEOUT_SECONDS = get_settings().HIBP_TIMEOUT_SECONDS
 
 def _is_enabled() -> bool:
     return env_bool("PASSWORD_BREACH_CHECK_ENABLED", True)
@@ -24,6 +24,7 @@ def _is_enabled() -> bool:
 
 def _sha1_hex(plain: str) -> str:
     # SHA-1 is the HIBP k-anonymity lookup key, not a credential hash (that's bcrypt).
+    # Why: SHA-1 is mandated by the Pwned Passwords k-anonymity API; it is not used to protect anything.
     return hashlib.sha1(plain.encode("utf-8"), usedforsecurity=False).hexdigest().upper()  # nosec B324  # NOSONAR(S4790)
 
 

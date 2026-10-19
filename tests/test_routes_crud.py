@@ -746,9 +746,14 @@ def _orphan_link(admin_client, *, drop="other"):
     victim = b["id"] if drop == "other" else a["id"]
     db = SessionLocal()
     try:
-        db.execute(text("PRAGMA foreign_keys = OFF"))
+        # Orphan the link: switch FK enforcement off for this session only.
+        pg = db.get_bind().dialect.name == "postgresql"
+        db.execute(text("SET session_replication_role = replica" if pg else "PRAGMA foreign_keys = OFF"))
         db.execute(delete(Bug).where(Bug.id == victim))
         db.commit()
+        if pg:
+            db.execute(text("SET session_replication_role = DEFAULT"))
+            db.commit()
     finally:
         db.close()
     return a["id"], link["id"]

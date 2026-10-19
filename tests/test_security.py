@@ -552,7 +552,8 @@ class TestPasswordBreachCheck:
     def _force_match(pw: str) -> str:
         """HIBP /range/ body whose suffix matches SHA-1(pw)."""
         import hashlib
-        digest = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()  # NOSONAR
+        # Why: SHA-1 is mandated by the Pwned Passwords k-anonymity API; it is not used to protect anything.
+        digest = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()  # NOSONAR(S4790)
         return f"{digest[5:]}:9999\n"
 
     def test_unit_no_password_is_exempt_from_the_breach_check(self):
@@ -720,7 +721,8 @@ class TestFailedSignInTrail:
             res = admin_client.post("/api/auth/login", json={"email": "nobody@test.local", "password": "wrong-one"})
             assert res.status_code == 401
         logs = " ".join(r.message for r in caplog.records)
-        assert "target@test.local" not in logs and "t***@test.local" in logs
+        assert "target@test.local" not in logs
+        assert "t***@test.local" in logs
         assert "Sign-in locked after repeated failures" in logs
         admin_client.post("/api/auth/login", json={"email": "admin@test.local", "password": "x"})
         account_lockout._buckets.clear()
@@ -728,7 +730,8 @@ class TestFailedSignInTrail:
         assert admin_client.post("/api/auth/login", json={
             "email": BOOTSTRAP_EMAIL, "password": BOOTSTRAP_PASSWORD}).status_code == 200
         actions = [a["action"] for a in admin_client.get("/api/audit?q=target@test.local").json()]
-        assert actions.count("login_failed") == 3 and "login_locked" in actions
+        assert actions.count("login_failed") == 3
+        assert "login_locked" in actions
         assert not any("nobody@test.local" in a["detail"] for a in admin_client.get("/api/audit").json())
 
     def test_every_response_carries_a_request_id(self, client):

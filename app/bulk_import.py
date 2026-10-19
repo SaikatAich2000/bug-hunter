@@ -73,8 +73,8 @@ def _ensure_openpyxl() -> None:
 # well-formed. 1000 rows comfortably covers the "500 bugs" use case with
 # headroom; MAX_IMPORT_FILE_BYTES keeps a garbage/huge upload from being
 # fully buffered.
-MAX_IMPORT_ROWS = 1000
-MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
+MAX_IMPORT_ROWS = get_settings().IMPORT_MAX_ROWS
+MAX_IMPORT_FILE_BYTES = get_settings().IMPORT_MAX_FILE_BYTES
 _MAX_SCAN_ROWS = MAX_IMPORT_ROWS + 20
 _MAX_REPORTED = 200
 # bugs.title is VARCHAR(200); PostgreSQL rejects anything longer.

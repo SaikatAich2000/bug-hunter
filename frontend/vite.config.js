@@ -33,10 +33,10 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: Number(process.env.VITE_DEV_PORT) || 5173,
     proxy: {
       // npm run dev → proxy API calls to a locally-running backend.
-      "/api": { target: "http://localhost:8765", changeOrigin: false },
+      "/api": { target: process.env.VITE_DEV_API_TARGET || "http://localhost:8765", changeOrigin: false },
     },
   },
 });

@@ -26,7 +26,8 @@ def test_out_of_range_ids_are_rejected_not_crashed(admin_client, method, path):
     r = getattr(admin_client, method)(path)
     assert r.status_code == 422, (r.status_code, r.text)
     detail = r.json()["detail"]
-    assert isinstance(detail, list) and detail[0]["msg"] == "A value in the request is out of range."
+    assert isinstance(detail, list)
+    assert detail[0]["msg"] == "A value in the request is out of range."
 
 
 def test_out_of_range_id_in_json_body_is_rejected(admin_client):
@@ -88,7 +89,8 @@ def test_daily_report_rejects_impossible_dates_cleanly(admin_client, bad):
     sprint = admin_client.post(f"/api/agile/sprints?board_id={board}", json={"name": "Sprint A"}).json()
     r = admin_client.get(f"/api/agile/reports/daily?sprint_id={sprint['id']}&report_date={bad}")
     assert r.status_code == 422
-    assert "strptime" not in r.text and "does not match format" not in r.text
+    assert "strptime" not in r.text
+    assert "does not match format" not in r.text
 
 
 def test_validation_errors_never_echo_the_submitted_value(client):
@@ -105,7 +107,8 @@ def test_validation_messages_read_naturally(admin_client):
     res = admin_client.post("/api/bugs", json={"project_id": pid, "title": "x" * 1000})
     assert res.status_code == 422
     msg = res.json()["detail"][0]["msg"]
-    assert msg.startswith("Title: ") and "Value error" not in msg
+    assert msg.startswith("Title: ")
+    assert "Value error" not in msg
     res = admin_client.post("/api/users", json={
         "name": "Weak", "email": "weak@test.local", "role": "user", "password": "short",
     })
@@ -145,7 +148,7 @@ def test_names_and_titles_are_single_line(admin_client):
     pid = res.json()["id"]
     bug = admin_client.post("/api/bugs", json={"project_id": pid, "title": "Line\x0bbreak\x07title"}).json()
     assert bug["title"] == "Line break title"
-    # And the spreadsheet export of such data no longer fails.
+    # The spreadsheet export of such data must not fail.
     res = admin_client.post("/api/reports/export.xlsx", json={"report_key": "item_detail", "filters": {}})
     assert res.status_code == 200, res.text
 
@@ -209,6 +212,15 @@ def test_board_timezone_must_be_a_real_zone(admin_client):
     assert good.json()["timezone"] == "Asia/Kolkata"
 
 
+def test_validate_timezone_rejects_names_the_filesystem_rejects():
+    import pytest
+
+    from app.schemas.common import validate_timezone
+    for bad in ("Europe", "J" + chr(0xfb) + "`A-?~", "a" + chr(0) + "b", "../etc"):
+        with pytest.raises(ValueError, match="not a known timezone"):
+            validate_timezone(bad)
+
+
 def test_quick_filter_json_is_capped(admin_client):
     pid = admin_client.get("/api/projects").json()[0]["id"]
     assert admin_client.post(f"/api/agile/projects/{pid}/enable", json={}).status_code == 200
@@ -231,9 +243,9 @@ def test_database_refuses_values_the_app_could_never_read(admin_client):
     for statement in ("UPDATE bugs SET priority = 'Urgent!!' WHERE id = :i",
                       "UPDATE bugs SET story_points = -3 WHERE id = :i",
                       "UPDATE users SET role = 'root' WHERE id = 1"):
+        stmt = text(statement)
         with SessionLocal() as db, pytest.raises(IntegrityError):
-            db.execute(text(statement), {"i": bug["id"]})
-            db.commit()
+            db.execute(stmt, {"i": bug["id"]})
 
 
 def test_app_name_cannot_inject_markup_or_script(client, monkeypatch):
@@ -244,9 +256,23 @@ def test_app_name_cannot_inject_markup_or_script(client, monkeypatch):
     monkeypatch.setattr(main.settings, "APP_NAME", 'R&D </title><script>x()</script> "Q\'s"')
     main._html_cache.clear()
     page = client.get("/login.html").text
-    assert "<script>x()</script>" not in page and "R&amp;D &lt;/title&gt;" in page
+    assert "<script>x()</script>" not in page
+    assert "R&amp;D &lt;/title&gt;" in page
     monkeypatch.setattr(main.settings, "WEB_PUSH_ENABLED", True)
     monkeypatch.setattr(main.settings, "FIREBASE_API_KEY", "k")
     sw = client.get("/firebase-messaging-sw.js").text
     assert "n.title || " + json.dumps(main.settings.APP_NAME) + "," in sw
     main._html_cache.clear()
+
+
+def test_malformed_json_body_400_is_documented(admin_client):
+    r = admin_client.post("/api/projects", content=bytes([0xC3, 0x28]), headers={"content-type": "application/json"})
+    assert r.status_code == 400
+    spec = admin_client.get("/openapi.json").json()
+    assert "400" in spec["paths"]["/api/projects"]["post"]["responses"]
+
+
+def test_rate_limited_credential_endpoints_document_429(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    for path in ("login", "change-password", "forgot-password", "reset-password"):
+        assert "429" in paths[f"/api/auth/{path}"]["post"]["responses"], path

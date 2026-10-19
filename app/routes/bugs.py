@@ -23,7 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from app import bulk_import, notification_service
@@ -35,7 +35,7 @@ from app.access import (
 from app.agile.permissions import MANAGE_BACKLOG, require_permission
 from app.agile.workflow import record_status_change
 from app.api_docs import (
-    ATTACHMENT_FILE_200,
+    ATTACHMENT_FILE_200_NOT_FOUND_404,
     BAD_REQUEST_400,
     BAD_REQUEST_413,
     BAD_REQUEST_422,
@@ -46,8 +46,7 @@ from app.api_docs import (
     FORBIDDEN_NOT_FOUND_429,
     NOT_FOUND_404,
     NOT_FOUND_FORBIDDEN_403,
-    SERVER_ERROR_500,
-    XLSX_FILE_200,
+    XLSX_FILE_200_SERVER_ERROR_500,
 )
 from app.auth import (
     can_delete_attachment,
@@ -58,6 +57,7 @@ from app.auth import (
     get_current_user,
     require_manager_or_admin,
 )
+from app.config import get_settings
 from app.database import get_db
 from app.email_service import (
     BugSnapshot,
@@ -73,6 +73,9 @@ from app.models import (
     Bug,
     BugLink,
     Comment,
+    Event,
+    Project,
+    Sprint,
     User,
 )
 from app.people import reject_inactive, require_project_members, resolve_user, resolve_users
@@ -162,7 +165,13 @@ router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 _DEFAULT_MIME = "application/octet-stream"
 
 
-MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per attachment
+MAX_FILE_BYTES = get_settings().MAX_ATTACHMENT_BYTES  # per attachment
+
+
+def _too_large_detail(limit: int) -> str:
+    """413 message; a sub-MB cap (MAX_ATTACHMENT_BYTES) must not read "0 MB"."""
+    size = f"{limit // (1024 * 1024)} MB" if limit >= 1024 * 1024 else f"{max(limit // 1024, 1)} KB"
+    return f"This file is too large. The largest file you can attach is {size}."
 
 # int4 max; larger numeric search tokens are treated as free text (avoids DataError).
 
@@ -170,8 +179,8 @@ MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per attachment
 _UPLOAD_CHUNK = 1024 * 1024
 
 # Per-user upload rate limit; stops chained 50 MB POSTs from bloating the DB.
-_UPLOAD_RATE_WINDOW_SECONDS = 60
-_UPLOAD_RATE_MAX = 20
+_UPLOAD_RATE_WINDOW_SECONDS = get_settings().RATE_USER_WINDOW_SECONDS
+_UPLOAD_RATE_MAX = get_settings().RATE_UPLOAD_MAX
 _upload_buckets: dict[int, deque] = {}
 _upload_rate_lock = threading.Lock()
 
@@ -179,8 +188,8 @@ _upload_rate_lock = threading.Lock()
 _UPLOAD_BUCKETS_MAX = 5_000
 
 # Per-user comment rate limit; each comment fans out notifications/emails (amplification risk).
-_COMMENT_RATE_WINDOW_SECONDS = 60
-_COMMENT_RATE_MAX = 30
+_COMMENT_RATE_WINDOW_SECONDS = get_settings().RATE_USER_WINDOW_SECONDS
+_COMMENT_RATE_MAX = get_settings().RATE_COMMENT_MAX
 _comment_buckets: dict[int, deque] = {}
 _comment_rate_lock = threading.Lock()
 
@@ -338,6 +347,13 @@ def _attachment_count(db: Session, bug_id: int) -> int:
     ) or 0
 
 
+def _paging(page: int = 1, page_size: int = get_settings().PAGE_SIZE_DEFAULT) -> tuple[int, int]:
+    """Validated (page, page_size) query parameters."""
+    if page < 1 or page_size < 1 or page_size > get_settings().PAGE_SIZE_MAX:
+        raise HTTPException(status_code=400, detail="Invalid pagination parameters")
+    return page, page_size
+
+
 @router.get("", responses=BAD_REQUEST_422)
 def list_bugs(
     project_id: Optional[list[int]] = Query(default=None),
@@ -350,15 +366,13 @@ def list_bugs(
     event_id: Optional[int] = None,
     due_date: Optional[str] = None,
     q: Optional[str] = Query(default=None, max_length=200),
-    page: int = 1,
-    page_size: int = 50,
+    paging: tuple[int, int] = Depends(_paging),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> BugListResponse:
     """List bugs with optional filters. Enum filters accept repeated params
     (?status=New&status=Resolved); a single value is matched with .in_()."""
-    if page < 1 or page_size < 1 or page_size > 200:
-        raise HTTPException(status_code=400, detail="Invalid pagination parameters")
+    page, page_size = paging
     reject_overflow_ids(
         reporter_id=reporter_id, event_id=event_id,
         project_id=project_id, assignee_id=assignee_id,
@@ -373,8 +387,16 @@ def list_bugs(
     project_ids = [p for p in (project_id or []) if p]
     assignee_ids = [a for a in (assignee_id or []) if a]
 
+    # Many-to-one parents ride on the page query; assignees (a collection) stay one selectin.
     stmt, count_stmt = apply_list_filters(
-        _eager_bug(), select(func.count(Bug.id)),
+        select(Bug).options(
+            joinedload(Bug.project).load_only(Project.name),
+            joinedload(Bug.reporter).load_only(User.name, User.email, User.role),
+            joinedload(Bug.event).load_only(Event.name),
+            joinedload(Bug.sprint).load_only(Sprint.name),
+            selectinload(Bug.assignees),
+        ),
+        select(func.count(Bug.id)),
         statuses=statuses, priorities=priorities, environments=environments,
         item_types=item_types, project_ids=project_ids, assignee_ids=assignee_ids,
         reporter_id=reporter_id, due_date=due_date, event_id=event_id, q=q,
@@ -391,29 +413,22 @@ def list_bugs(
     # Skip the DB query when the page is past the end; avoids a huge OFFSET
     # scan for requests like ?page=10000000.
     if total and offset >= total:
-        bugs: list[Bug] = []
+        rows: list = []
     else:
-        stmt = stmt.order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(page_size).offset(offset)
-        bugs = list(db.scalars(stmt).all())
+        # The attachment count is a column of the page query, not a second round trip.
+        att_count = (
+            select(func.count(Attachment.id)).where(Attachment.bug_id == Bug.id).scalar_subquery()
+        )
+        stmt = (
+            stmt.add_columns(att_count)
+            .order_by(Bug.updated_at.desc(), Bug.id.desc()).limit(page_size).offset(offset)
+        )
+        rows = db.execute(stmt).all()
 
-    # Batch attachment counts in one query to avoid N+1.
-    bug_ids_in_page = [b.id for b in bugs]
-    if bug_ids_in_page:
-        att_counts = dict(db.execute(
-            select(Attachment.bug_id, func.count(Attachment.id))
-            .where(Attachment.bug_id.in_(bug_ids_in_page))
-            .group_by(Attachment.bug_id)
-        ).all())
-    else:
-        att_counts = {}
-
-    items = []
-    for b in bugs:
-        items.append(_bug_to_out_dict(
-            b,
-            int(att_counts.get(b.id, 0)),
-            can_edit_bug(_user, item_type=work_item_type(b)),
-        ))
+    items = [
+        _bug_to_out_dict(b, int(n or 0), can_edit_bug(_user, item_type=work_item_type(b)))
+        for b, n in rows
+    ]
 
     return BugListResponse.model_validate({
         "items": items,
@@ -424,7 +439,7 @@ def list_bugs(
 
 
 @router.get("/import/template.xlsx", response_class=Response,
-            responses={**XLSX_FILE_200, **SERVER_ERROR_500})
+            responses=XLSX_FILE_200_SERVER_ERROR_500)
 def download_import_template(
     _user: User = Depends(require_manager_or_admin),
 ) -> Response:
@@ -545,6 +560,37 @@ def get_bug(
     return BugDetail.model_validate(payload)
 
 
+def _resolve_reporter(db: Session, reporter_id: int | None, actor: User) -> User:
+    """Only admins/managers can set an explicit reporter; everyone else files as themselves."""
+    if reporter_id is None or reporter_id == actor.id:
+        return actor
+    if actor.role not in ("admin", "manager"):
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=403, detail="You can only file items as yourself")  # NOSONAR(S8415)
+    return resolve_user(db, reporter_id)
+
+
+def _notify_created(db: Session, background: BackgroundTasks, bug: Bug, actor: User,
+                    reporter: User, assignees: list[User]) -> None:
+    """In-app notifications, written on the caller's session so they commit with the bug."""
+    itype = work_item_type(bug).lower()
+    assignee_ids = [a.id for a in assignees]
+    # No exclude here: a self-assignment still notifies the actor.
+    notification_service.notify(
+        db, assignee_ids, kind="assigned", background=background,
+        title=f"Assigned to {itype} #{bug.id}",
+        body=f"{actor.name} assigned you to “{bug.title}”.",
+        bug_id=bug.id, actor_name=actor.name,
+    )
+    if reporter.id != actor.id and reporter.id not in assignee_ids:
+        notification_service.notify(
+            db, [reporter.id], kind="reported", background=background,
+            title=f"You're the reporter on {itype} #{bug.id}",
+            body=f"{actor.name} filed “{bug.title}” with you as reporter.",
+            bug_id=bug.id, actor_name=actor.name,
+        )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_422)
 def create_bug(
     payload: BugCreate,
@@ -570,17 +616,7 @@ def create_bug(
             detail=f"Only admins or managers can create a {payload.item_type.lower()}.",
         )
 
-    # Only admins/managers can set an explicit reporter; everyone else files as
-    # themselves.
-    if payload.reporter_id is not None and payload.reporter_id != actor.id:
-        if actor.role not in ("admin", "manager"):
-            raise HTTPException(
-                status_code=403,
-                detail="You can only file items as yourself",
-            )
-        reporter = resolve_user(db, payload.reporter_id)
-    else:
-        reporter = actor
+    reporter = _resolve_reporter(db, payload.reporter_id, actor)
 
     assignees = resolve_users(db, payload.assignee_ids)
     reject_inactive([reporter, *assignees])
@@ -617,23 +653,7 @@ def create_bug(
             db, bug.id, actor, "assignees_added",
             f"Bug #{bug.id} '{bug.title}' assigned to: {names}",
         )
-    # Write in-app notifications on this session so they commit with the bug.
-    _itype = work_item_type(bug).lower()
-    assignee_ids = [a.id for a in assignees]
-    # No exclude here: a self-assignment still notifies the actor.
-    notification_service.notify(
-        db, assignee_ids, kind="assigned", background=background,
-        title=f"Assigned to {_itype} #{bug.id}",
-        body=f"{actor.name} assigned you to “{bug.title}”.",
-        bug_id=bug.id, actor_name=actor.name,
-    )
-    if reporter.id != actor.id and reporter.id not in assignee_ids:
-        notification_service.notify(
-            db, [reporter.id], kind="reported", background=background,
-            title=f"You're the reporter on {_itype} #{bug.id}",
-            body=f"{actor.name} filed “{bug.title}” with you as reporter.",
-            bug_id=bug.id, actor_name=actor.name,
-        )
+    _notify_created(db, background, bug, actor, reporter, assignees)
     db.commit()
 
     fresh = db.scalar(_eager_bug().where(Bug.id == bug.id))
@@ -651,6 +671,28 @@ def create_bug(
         fresh, 0,
         can_edit_bug(actor, item_type=fresh.item_type),
     ))
+
+
+def _guard_conversion(db, bug, actor, fields, conversion) -> None:
+    """Authorize (and audit) an item-type change; a refused conversion leaves the item untouched."""
+    if conversion is None:
+        authorize_item_type_change(fields, bug, actor)
+        return
+    try:
+        assert_no_active_branch_for_conversion(db, bug)
+        authorize_item_type_change(fields, bug, actor)
+    except HTTPException as exc:
+        audit_conversion_failure(db, bug, actor, conversion, exc)
+        raise
+    audit_conversion(db, bug, actor, conversion, "conversion_requested")
+
+
+def _require_reporter_permission(actor: User, changing: bool) -> None:
+    if changing and actor.role not in ("admin", "manager"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins or managers can change the reporter",
+        )
 
 
 @router.put("/{bug_id}", responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
@@ -682,17 +724,7 @@ def update_bug(
     # preserved. The guards run before any attribute is applied so a refused
     # conversion leaves the item completely untouched.
     conversion = conversion_change(fields, bug)
-    if conversion is not None:
-        try:
-            assert_no_active_branch_for_conversion(db, bug)
-            authorize_item_type_change(fields, bug, actor)
-        except HTTPException as exc:
-            audit_conversion_failure(db, bug, actor, conversion, exc)
-            raise
-    else:
-        authorize_item_type_change(fields, bug, actor)
-    if conversion is not None:
-        audit_conversion(db, bug, actor, conversion, "conversion_requested")
+    _guard_conversion(db, bug, actor, fields, conversion)
     assignee_ids = fields.pop("assignee_ids", None)
     has_reporter_in_payload = "reporter_id" in fields
     new_reporter_id = fields.pop("reporter_id", None)
@@ -700,11 +732,7 @@ def update_bug(
     reporter_actually_changes = (
         has_reporter_in_payload and new_reporter_id != bug.reporter_id
     )
-    if reporter_actually_changes and actor.role not in ("admin", "manager"):
-        raise HTTPException(
-            status_code=403,
-            detail="Only admins or managers can change the reporter",
-        )
+    _require_reporter_permission(actor, reporter_actually_changes)
     # A reclassification must not rename an item people already reference, so
     # freeze the pre-conversion id before the new item_type is applied.
     preserve_display_id_on_type_change(fields, bug)
@@ -877,10 +905,7 @@ async def _read_upload_with_limit(file: UploadFile, limit: int) -> bytes:
         if len(buf) > limit:
             raise HTTPException(
                 status_code=413,
-                detail=(
-                    "This file is too large. The largest file you can attach "
-                    f"is {limit // (1024 * 1024)} MB."
-                ),
+                detail=_too_large_detail(limit),
             )
     return bytes(buf)
 
@@ -937,10 +962,7 @@ async def upload_attachment(
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=(
-                "This file is too large. The largest file you can attach "
-                f"is {MAX_FILE_BYTES // (1024 * 1024)} MB."
-            ),
+            detail=_too_large_detail(MAX_FILE_BYTES),
         )
 
     att = Attachment(
@@ -1004,7 +1026,7 @@ def _parse_range(header: str | None, size: int) -> Optional[tuple[int, int]]:
 
 
 @router.get("/{bug_id}/attachments/{att_id}/download", response_class=Response,
-            responses={**ATTACHMENT_FILE_200, **NOT_FOUND_404})
+            responses=ATTACHMENT_FILE_200_NOT_FOUND_404)
 def download_attachment(
     bug_id: int, att_id: int,
     request: Request,

@@ -140,9 +140,11 @@ def test_s3_estimate_before_start_and_remove_readd(admin_client):
     bd = _bd(c, s["id"])
     rem = [pt["remaining"] for pt in bd["points"]]
     assert rep["committed_estimate"] == 13
-    assert rep["added_count"] == 0 and rep["removed_count"] == 0
+    assert rep["added_count"] == 0
+    assert rep["removed_count"] == 0
     assert rep["estimate_change_count"] == 0
-    assert rem[:3] == [13, 8, 10] and rem[-1] == 10
+    assert rem[:3] == [13, 8, 10]
+    assert rem[-1] == 10
     assert rep["incomplete_estimate"] == 10
 
 
@@ -223,7 +225,8 @@ def test_s5_board_timezone_dst_and_subsecond_start(admin_client):
     assert bd["non_working_days"] == ["2026-03-07", "2026-03-08"]
     assert bd["points"][0]["remaining"] == 16
     d = c.get(f"/api/agile/reports/daily?sprint_id={s['id']}&report_date=2026-03-02").json()
-    assert d["completed_estimate"] == 10 and d["completed_estimate_today"] == 10
+    assert d["completed_estimate"] == 10
+    assert d["completed_estimate_today"] == 10
     d3 = c.get(f"/api/agile/reports/daily?sprint_id={s['id']}&report_date=2026-03-03").json()
     assert d3["completed_estimate_today"] == 0
 
@@ -250,7 +253,8 @@ def test_s6_control_chart_reopened_issue_is_one_dot(admin_client):
     ch = c.get(f"/api/agile/reports/control-chart?board_id={bid}&date_from=2026-03-01&date_to=2026-03-31").json()
     got = [(e["completed_at"][:10], e["cycle_time_days"]) for e in ch["entries"]]
     assert ch["count"] == 1
-    assert got[0][0] == "2026-03-06" and got[0][1] in (4.0, 3.0)
+    assert got[0][0] == "2026-03-06"
+    assert got[0][1] in (4.0, 3.0)
 
 
 # ---------------------------------------------------------------- S7
@@ -339,7 +343,8 @@ def test_s11_empty_sprint_all_removed(admin_client):
     _remove(c, s["id"], a["id"])
     _complete(c, s["id"])
     rep, bd = _sr(c, s["id"]), _bd(c, s["id"])
-    assert rep["committed_estimate"] == 3 and rep["removed_count"] == 1
+    assert rep["committed_estimate"] == 3
+    assert rep["removed_count"] == 1
     assert bd["remaining_estimate"] == 0
     for key in ("sprint", "burndown", "scope-change"):
         r = c.post(f"/api/agile/reports/export?report_key={key}&sprint_id={s['id']}")
@@ -364,7 +369,8 @@ def test_s12_cfd_json_and_csv_honour_include_subtasks(admin_client):
                      f"&date_from={today}&date_to={today}&include_subtasks={flag}")
         assert res.status_code == 200, res.text
         rows = list(csv.DictReader(io.StringIO(res.text)))
-        assert rows and list(rows[0])[0] == "date"
+        assert rows
+        assert list(rows[0])[0] == "date"
         assert sum(int(v) for k, v in rows[-1].items() if k != "date") == expected
 
 
@@ -388,7 +394,8 @@ def test_s13_issue_done_before_start_and_created_in_sprint(admin_client):
     n = _issue(c, p["id"], "Issue N", 4, sprint_id=s["id"])
     clock.at("2026-03-03T10:00:00")
     rep, bd = _sr(c, s["id"]), _bd(c, s["id"])
-    assert rep["added_count"] == 1 and rep["added_estimate"] == 4
+    assert rep["added_count"] == 1
+    assert rep["added_estimate"] == 4
     # Z was done before the sprint started: completed outside it, not part
     # of the commitment, and the guideline starts at what is left (A).
     assert rep["committed_estimate"] == 3
@@ -417,7 +424,8 @@ def test_s14_daily_completed_today_with_same_day_reopen(admin_client):
     _status(c, a["id"], "In Progress")
     clock.at("2026-03-03T15:00:00")
     d = c.get(f"/api/agile/reports/daily?sprint_id={s['id']}&report_date=2026-03-03").json()
-    assert d["completed_estimate"] == 0 and d["remaining_estimate"] == 3
+    assert d["completed_estimate"] == 0
+    assert d["remaining_estimate"] == 3
     assert d["completed_estimate_today"] == 0
 
 
@@ -448,7 +456,8 @@ def test_s15_legacy_sprint_without_history(admin_client):
     assert rep["history_complete"] is False
     assert (rep["committed_estimate"], rep["completed_estimate"], rep["incomplete_estimate"],
             rep["removed_estimate"], rep["added_count"]) == (8, 3, 2, 5, 1)
-    assert bd["remaining_estimate"] == 2 and bd["scope_estimate"] == 5
+    assert bd["remaining_estimate"] == 2
+    assert bd["scope_estimate"] == 5
 
 
 def test_s16_burndown_days_are_the_boards_days_as_instants(admin_client):
@@ -475,3 +484,80 @@ def test_s16_burndown_days_are_the_boards_days_as_instants(admin_client):
     # The sprint is still running, so the chart reaches today; its planned
     # week has the weekend off.
     assert [d for d, v in days.items() if not v["working"] and d <= "2026-03-08"] == ["2026-03-07", "2026-03-08"]
+
+
+def _legacy_sprint(c, name):
+    """A closed sprint predating the change log: A done, B removed, D added and left unfinished."""
+    p, bid = _project(c, name)
+    a = _issue(c, p["id"], "Issue A", 3)
+    b = _issue(c, p["id"], "Issue B", 5)
+    d = _issue(c, p["id"], "Issue D", 2)
+    s = _sprint(c, bid, f"{name} Sprint", "2026-03-02", "2026-03-13")
+    _add(c, s["id"], a["id"], b["id"])
+    _start(c, s["id"])
+    _remove(c, s["id"], b["id"])
+    _add(c, s["id"], d["id"])
+    _status(c, a["id"], "Done")
+    _complete(c, s["id"])
+    from app.database import SessionLocal
+    from app.models import Sprint
+
+    with SessionLocal() as db:
+        db.get(Sprint, s["id"]).started_at = None
+        db.commit()
+    return p, bid, s, (a, b, d)
+
+
+def test_legacy_sprint_scope_changes_come_from_its_event_rows(admin_client):
+    c = admin_client
+    _p, _bid, s, (_a, b, d) = _legacy_sprint(c, "Legacy Scope")
+    entries = c.get(f"/api/agile/reports/scope-change?sprint_id={s['id']}").json()["entries"]
+    legacy = [(e["work_item_id"], e["event_type"], e["change"], e["actor_name"]) for e in entries]
+    assert (b["id"], "removed", 0.0, "") in legacy
+    assert (d["id"], "added", 0.0, "") in legacy
+
+
+def test_legacy_sprint_in_item_count_mode_counts_each_issue_once(admin_client):
+    c = admin_client
+    _p, bid, s, _items = _legacy_sprint(c, "Legacy Count")
+    board = c.get(f"/api/agile/boards/{bid}").json()
+    res = c.put(f"/api/agile/boards/{bid}", json={"estimation_mode": "item_count", "version": board["version"]})
+    assert res.status_code == 200, res.text
+    rep = _sr(c, s["id"])
+    assert rep["history_complete"] is False
+    assert (rep["completed_estimate"], rep["removed_estimate"]) == (1, 1)
+
+
+def test_an_open_legacy_sprint_is_judged_by_where_its_issues_stand(admin_client):
+    from app.database import SessionLocal
+    from app.models import Sprint
+
+    c = admin_client
+    p, bid = _project(c, "Open Legacy")
+    a = _issue(c, p["id"], "Done one", 3)
+    d = _issue(c, p["id"], "Open one", 2)
+    s = _sprint(c, bid, "Open Legacy Sprint", "2026-03-02", "2026-03-13")
+    _add(c, s["id"], a["id"], d["id"])
+    _start(c, s["id"])
+    _status(c, a["id"], "Done")
+    with SessionLocal() as db:
+        db.get(Sprint, s["id"]).started_at = None
+        db.commit()
+    rep = _sr(c, s["id"])
+    assert rep["history_complete"] is False
+    assert [r["id"] for r in rep["completed"]] == [a["id"]]
+    assert [r["id"] for r in rep["not_completed"]] == [d["id"]]
+
+
+def test_workload_counts_each_assignee_and_their_capacity(admin_client):
+    c = admin_client
+    p, bid = _project(c, "Workload Units")
+    me = c.get("/api/auth/me").json()
+    a = _issue(c, p["id"], "Mine 1", 3, assignee_ids=[me["id"]])
+    b = _issue(c, p["id"], "Mine 2", 2, assignee_ids=[me["id"]])
+    _issue(c, p["id"], "Nobody's", 1)
+    s = _sprint(c, bid, "Workload Sprint", "2026-03-02", "2026-03-13")
+    _add(c, s["id"], a["id"], b["id"])
+    entries = c.get(f"/api/agile/reports/workload?sprint_id={s['id']}").json()["entries"]
+    mine = next(e for e in entries if e["user_name"] == me["name"])
+    assert (mine["assigned_count"], mine["assigned_estimate"]) == (2, 5)

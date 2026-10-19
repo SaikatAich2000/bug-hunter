@@ -7,7 +7,8 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { toastError } from "../lib/toast";
 import { activityIcon, formatDate } from "../lib/format";
-import { DATA_POLL_MS, useApp } from "../state/AppContext";
+import { dataPollMs } from "../lib/pollConfig";
+import { useApp } from "../state/AppContext";
 // 300 rows/page: light first paint, within the backend cap.
 const AUDIT_PAGE_SIZE = 300;
 
@@ -113,7 +114,7 @@ export default function AuditView() {
       if (loadedCountRef.current > AUDIT_PAGE_SIZE) return; // user paged back; don't collapse
       void fetchAudit(true);
     };
-    const id = setInterval(refresh, DATA_POLL_MS);
+    const id = setInterval(refresh, dataPollMs());
     document.addEventListener("visibilitychange", refresh);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", refresh); };
   }, [fetchAudit]);

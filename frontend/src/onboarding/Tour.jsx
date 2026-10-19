@@ -87,10 +87,10 @@ export default function Tour({ steps, index, onIndex, onPause, onFinish }) {
           }}
         />
       )}
-      <div
+      <div // NOSONAR S6819: tour card is a portal dialog with its own focus handling; native <dialog> needs showModal() top-layer semantics
         ref={cardRef}
         className="tour-card"
-        role="dialog"
+        role="dialog" /* NOSONAR S6819: portal dialog with its own focus trap and enter/exit animation; native <dialog> needs showModal() top-layer semantics */
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={bodyId}

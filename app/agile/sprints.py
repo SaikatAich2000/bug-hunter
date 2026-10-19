@@ -25,10 +25,11 @@ from app.agile.boards import done_status_values, normalize_name
 from app.agile.integrity import change_reason
 from app.agile.itemtypes import STANDARD_TYPES, SUBTASK, is_epic, is_standard, is_subtask
 from app.agile.ranking import RankExhausted, ranks_between, spaced_ranks
+from app.config import get_settings
 from app.models import Board, Bug, Sprint, SprintItemHistory, User
 from app.util import utcnow, utcnow_precise
 
-DEFAULT_SPRINT_DAYS = 14
+DEFAULT_SPRINT_DAYS = get_settings().DEFAULT_SPRINT_DAYS
 CLOSED_STATES = ("closed", "cancelled")
 
 
@@ -62,7 +63,7 @@ def sprint_item_counts(db: Session, sprint_ids: list[int]) -> dict[int, int]:
         .where(Bug.sprint_id.in_(sprint_ids), Bug.item_type.in_(STANDARD_TYPES))
         .group_by(Bug.sprint_id)
     ).all()
-    return {sprint_id: count for sprint_id, count in rows}
+    return dict(rows)
 
 
 def sprint_item_count(db: Session, sprint_id: int) -> int:
@@ -81,6 +82,13 @@ def sprint_issues(db: Session, sprint_id: int) -> list[Bug]:
     ).all())
 
 
+def _next_date(clear: bool, given: str | None, current: str | None) -> str | None:
+    """A sprint date after an edit: cleared, replaced by ``given``, or left as it is."""
+    if clear:
+        return None
+    return given if given is not None else current
+
+
 def _check_dates(start_date: str | None, end_date: str | None) -> None:
     if start_date and end_date and end_date < start_date:
         raise SprintLifecycleError("The sprint's end date cannot be before its start date")
@@ -91,7 +99,7 @@ def next_sprint_name(db: Session, board: Board) -> str:
     count = db.scalar(select(func.count(Sprint.id)).where(Sprint.board_id == board.id)) or 0
     # "Mobile Board" -> "Mobile Sprint 3"; the default "Sprint Board" -> "Sprint 3", never
     # "Sprint Sprint 3".
-    base = re.sub(r"\s*\bsprints?$", "", (board.name or "").removesuffix(" Board").strip(), flags=re.I)
+    base = re.sub(r"\bsprints?$", "", (board.name or "").removesuffix(" Board").strip(), flags=re.I).strip()
     prefix = f"{base} Sprint" if base else "Sprint"
     taken = set(db.scalars(select(Sprint.name_normalized).where(Sprint.board_id == board.id)).all())
     n = count + 1
@@ -141,8 +149,8 @@ def update_sprint(
         raise SprintLifecycleError("A closed or deleted sprint cannot be edited")
     if (clear_start or clear_end) and sprint.state == "active":
         raise SprintLifecycleError("An active sprint keeps its start and end dates")
-    new_start = None if clear_start else (start_date if start_date is not None else sprint.start_date)
-    new_end = None if clear_end else (end_date if end_date is not None else sprint.end_date)
+    new_start = _next_date(clear_start, start_date, sprint.start_date)
+    new_end = _next_date(clear_end, end_date, sprint.end_date)
     _check_dates(new_start, new_end)
     if name is not None:
         sprint.name = name
@@ -194,6 +202,21 @@ def _neighbour(db: Session, project_id: int, scope: str, item_id: int | None, mo
     return other
 
 
+def _gap_bounds(db: Session, others, before: Bug | None, after: Bug | None, default: str):
+    """The (lower, upper) rank the moved issues go between; None is an open end."""
+    if before is None and after is None:
+        if default == "top":
+            return None, db.scalar(others.order_by(Bug.rank).limit(1))
+        return db.scalar(others.order_by(Bug.rank.desc()).limit(1)), None
+    if before is not None and after is not None:
+        if before.rank > after.rank:
+            raise SprintLifecycleError("Those two issues are not next to each other")
+        return before.rank, after.rank
+    if before is not None:
+        return before.rank, db.scalar(others.where(Bug.rank > before.rank).order_by(Bug.rank).limit(1))
+    return db.scalar(others.where(Bug.rank < after.rank).order_by(Bug.rank.desc()).limit(1)), after.rank
+
+
 def _place(
     db: Session, items: list[Bug], scope: str, project_id: int,
     before_id: int | None, after_id: int | None, default: str,
@@ -213,19 +236,7 @@ def _place(
     others = select(Bug.rank).where(
         Bug.rank_scope == scope, Bug.rank.is_not(None), Bug.id.not_in(moving), Bug.item_type.in_(STANDARD_TYPES),
     )
-    if before is not None or after is not None:
-        lo = before.rank if before else None
-        hi = after.rank if after else None
-        if before is not None and after is None:
-            hi = db.scalar(others.where(Bug.rank > before.rank).order_by(Bug.rank).limit(1))
-        if after is not None and before is None:
-            lo = db.scalar(others.where(Bug.rank < after.rank).order_by(Bug.rank.desc()).limit(1))
-        if before is not None and after is not None and before.rank > after.rank:
-            raise SprintLifecycleError("Those two issues are not next to each other")
-    elif default == "top":
-        lo, hi = None, db.scalar(others.order_by(Bug.rank).limit(1))
-    else:
-        lo, hi = db.scalar(others.order_by(Bug.rank.desc()).limit(1)), None
+    lo, hi = _gap_bounds(db, others, before, after, default)
     try:
         tokens = ranks_between(lo, hi, len(items))
     except RankExhausted:
@@ -293,6 +304,16 @@ def lock_sprints(db: Session, sprint_ids) -> None:
         ).all()
 
 
+def _require_not_in_closed_sprint(db: Session, item: Bug, new_sprint_id: int | None) -> None:
+    """A finished issue stays in its closed sprint for the reports; only unfinished work is re-planned from there."""
+    old = item.sprint_id
+    if old is None or old == new_sprint_id:
+        return
+    old_sprint = db.get(Sprint, old)
+    if old_sprint is not None and old_sprint.state in CLOSED_STATES:
+        raise SprintLifecycleError(f"Issue #{item.id} belongs to the closed sprint '{old_sprint.name}'")
+
+
 def move_items(
     db: Session, project_id: int, item_ids: list[int], target: Sprint | None, actor: User,
     before_id: int | None = None, after_id: int | None = None,
@@ -312,14 +333,7 @@ def move_items(
     new_sprint_id = target.id if target is not None else None
     for item in items:
         old = item.sprint_id
-        if old is not None and old != new_sprint_id:
-            old_sprint = db.get(Sprint, old)
-            if old_sprint is not None and old_sprint.state in CLOSED_STATES:
-                # A finished issue stays in its closed sprint for the reports;
-                # only unfinished work can be re-planned from there.
-                raise SprintLifecycleError(
-                    f"Issue #{item.id} belongs to the closed sprint '{old_sprint.name}'"
-                )
+        _require_not_in_closed_sprint(db, item, new_sprint_id)
         _record_membership(db, item, old, new_sprint_id, actor)
         item.sprint_id = new_sprint_id
     default = "bottom" if target is not None else "top"
@@ -425,6 +439,42 @@ def _destination_sprint(db: Session, sprint: Sprint, target_id: int | None) -> S
     return target
 
 
+def _resolve_destination(
+    db: Session, sprint: Sprint, board: Board, actor: User, destination: str, target_id: int | None,
+    created: list[Sprint], new_sprint_name: str | None,
+) -> Sprint | None:
+    """Where one unfinished issue goes; the "new sprint" is created once and shared (kept in ``created``)."""
+    if destination == "backlog":
+        return None
+    if destination == "new_sprint":
+        if not created:
+            name = (new_sprint_name or "").strip() or next_sprint_name(db, board)
+            created.append(create_sprint(db, board, actor, name, "", None, None))
+        return created[0]
+    if destination == "sprint":
+        return _destination_sprint(db, sprint, target_id)
+    raise SprintLifecycleError(f"Unknown destination '{destination}'")
+
+
+def _carry_over(db: Session, sprint: Sprint, actor: User, plan: list[tuple[Bug, Sprint | None]]) -> None:
+    by_target: dict[int | None, list[Bug]] = {}
+    for item, target in plan:
+        db.add(SprintItemHistory(
+            sprint_id=sprint.id, work_item_id=item.id, event_type="carried_over",
+            from_sprint_id=sprint.id, to_sprint_id=target.id if target else None,
+            actor_id=actor.id, new_estimate=item.story_points,
+            occurred_at=sprint.completed_at,
+        ))
+        by_target.setdefault(target.id if target else None, []).append(item)
+    for target_id, items in by_target.items():
+        target = db.get(Sprint, target_id) if target_id else None
+        scope = sprint_scope(target.id) if target else backlog_scope(sprint.project_id)
+        for item in items:
+            item.sprint_id = target.id if target else None
+        # Carried-over work goes to the top of where it lands, in its old order.
+        _place(db, items, scope, sprint.project_id, None, None, "top")
+
+
 def complete_sprint(
     db: Session, sprint: Sprint, actor: User, closing_note: str,
     dispositions: dict[int, tuple[str, int | None]],
@@ -447,25 +497,15 @@ def complete_sprint(
             f"Destinations were given for issues that are finished or not in this sprint: {sorted(extraneous)}"
         )
 
-    new_sprint: Sprint | None = None
-
-    def resolve(item: Bug) -> Sprint | None:
-        nonlocal new_sprint
-        destination, target_id = dispositions.get(item.id, (default_destination, default_target_sprint_id))
-        if destination == "backlog":
-            return None
-        if destination == "new_sprint":
-            if new_sprint is None:
-                name = (new_sprint_name or "").strip() or next_sprint_name(db, board)
-                new_sprint = create_sprint(db, board, actor, name, "", None, None)
-            return new_sprint
-        if destination == "sprint":
-            return _destination_sprint(db, sprint, target_id)
-        raise SprintLifecycleError(f"Unknown destination '{destination}'")
+    created: list[Sprint] = []
 
     # Resolve every destination before changing anything, so a bad request
     # leaves the sprint untouched.
-    plan = [(item, resolve(item)) for item in incomplete]
+    plan = []
+    for item in incomplete:
+        destination, target_id = dispositions.get(item.id, (default_destination, default_target_sprint_id))
+        plan.append((item, _resolve_destination(
+            db, sprint, board, actor, destination, target_id, created, new_sprint_name)))
 
     sprint.completed_at = utcnow_precise()
     for item in complete:
@@ -475,26 +515,33 @@ def complete_sprint(
             occurred_at=sprint.completed_at,
         ))
     with change_reason(db, "sprint_completed"):
-        by_target: dict[int | None, list[Bug]] = {}
-        for item, target in plan:
-            db.add(SprintItemHistory(
-                sprint_id=sprint.id, work_item_id=item.id, event_type="carried_over",
-                from_sprint_id=sprint.id, to_sprint_id=target.id if target else None,
-                actor_id=actor.id, new_estimate=item.story_points,
-                occurred_at=sprint.completed_at,
-            ))
-            by_target.setdefault(target.id if target else None, []).append(item)
-        for target_id, items in by_target.items():
-            target = db.get(Sprint, target_id) if target_id else None
-            scope = sprint_scope(target.id) if target else backlog_scope(sprint.project_id)
-            for item in items:
-                item.sprint_id = target.id if target else None
-            # Carried-over work goes to the top of where it lands, in its old order.
-            _place(db, items, scope, sprint.project_id, None, None, "top")
+        _carry_over(db, sprint, actor, plan)
     sprint.state = "closed"
     sprint.completed_by_id = actor.id
     db.flush()
     return sprint
+
+
+def _log_removed(db: Session, sprint: Sprint, actor: User, item: Bug, target: Sprint | None) -> None:
+    db.add(SprintItemHistory(
+        sprint_id=sprint.id, work_item_id=item.id, event_type="removed",
+        from_sprint_id=sprint.id, to_sprint_id=target.id if target else None,
+        actor_id=actor.id, old_estimate=item.story_points,
+    ))
+
+
+def _return_issues(db: Session, sprint: Sprint, actor: User, plan: list, *, was_active: bool) -> None:
+    """Move a deleted sprint's issues to their destinations (top of each list), logging removals when it was running."""
+    by_target: dict[int | None, list[Bug]] = {}
+    for item, target in plan:
+        target_id = target.id if target else None
+        if was_active:
+            _log_removed(db, sprint, actor, item, target)
+        item.sprint_id = target_id
+        by_target.setdefault(target_id, []).append(item)
+    for target_id, items in by_target.items():
+        scope = sprint_scope(target_id) if target_id else backlog_scope(sprint.project_id)
+        _place(db, items, scope, sprint.project_id, None, None, "top")
 
 
 def cancel_sprint(
@@ -514,24 +561,11 @@ def cancel_sprint(
     plan = []
     for item in issues:
         destination, target_id = dispositions.get(item.id, (default_destination, default_target_sprint_id))
-        target = _destination_sprint(db, sprint, target_id) if destination == "sprint" else None
         if destination not in ("backlog", "sprint"):
             raise SprintLifecycleError(f"Unknown destination '{destination}'")
-        plan.append((item, target))
-    was_active = sprint.state == "active"
+        plan.append((item, _destination_sprint(db, sprint, target_id) if destination == "sprint" else None))
     with change_reason(db, "sprint_deleted"):
-        for item, target in plan:
-            if was_active:
-                db.add(SprintItemHistory(
-                    sprint_id=sprint.id, work_item_id=item.id, event_type="removed",
-                    from_sprint_id=sprint.id, to_sprint_id=target.id if target else None,
-                    actor_id=actor.id, old_estimate=item.story_points,
-                ))
-            item.sprint_id = target.id if target else None
-        for target_id in {t.id if t else None for _, t in plan}:
-            items = [i for i, t in plan if (t.id if t else None) == target_id]
-            scope = sprint_scope(target_id) if target_id else backlog_scope(sprint.project_id)
-            _place(db, items, scope, sprint.project_id, None, None, "top")
+        _return_issues(db, sprint, actor, plan, was_active=sprint.state == "active")
     sprint.state = "cancelled"
     sprint.cancelled_at = utcnow()
     db.flush()

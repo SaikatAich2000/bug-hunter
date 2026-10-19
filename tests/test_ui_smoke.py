@@ -312,8 +312,8 @@ def _api_admin(live_server):
     """Return an authenticated httpx client for seeding test data via the API."""
     import httpx
     creds = {
-        "email": os.environ["BOOTSTRAP_ADMIN_EMAIL"],
-        "password": os.environ["BOOTSTRAP_ADMIN_PASSWORD"],
+        "email": "admin@ui.test",
+        "password": "AdminUI1234",
     }
     c = httpx.Client(base_url=live_server)
     c.post("/api/auth/login", json=creds)

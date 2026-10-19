@@ -4,6 +4,7 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.complexipy_cache
 
 # Local DBs / envs / build artefacts
 *.db
@@ -24,6 +25,8 @@ env
 coverage.xml
 htmlcov/
 junit.xml
+junit-parts/
+.scannerwork/
 test-results/
 playwright-report/
 .playwright-mcp/
@@ -73,7 +76,6 @@ models/
 # Docs / VCS
 .git
 .gitignore
-README.md
 *.md
 
 # OS noise

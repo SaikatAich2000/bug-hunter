@@ -47,7 +47,8 @@ def test_projects_are_deduplicated_and_case_insensitively_sorted():
     assert "normalizeProjects" in src
     helper = _read(SRC / "lib" / "projectList.js")
     assert "byId.has(row.id)" in helper
-    assert "localeCompare" in helper and "toLowerCase()" in helper
+    assert "localeCompare" in helper
+    assert "toLowerCase()" in helper
 
 
 def test_upsert_project_is_an_immutable_id_deduplicated_upsert():

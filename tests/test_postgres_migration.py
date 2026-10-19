@@ -95,7 +95,8 @@ def test_upgrade_adds_every_missing_column_and_index(scratch_db):
     assert out.returncode == 0, out.stderr[-2000:]
     assert "PROBLEMS []" in out.stdout, out.stdout
     assert "LEGACY <p>Old <b>rich</b> text</p>" in out.stdout, out.stdout
-    assert "LOG WARNING" not in out.stdout and "LOG ERROR" not in out.stdout, out.stdout
+    assert "LOG WARNING" not in out.stdout, out.stdout
+    assert "LOG ERROR" not in out.stdout, out.stdout
 
 
 # Legacy agile data (Collections, Features, sub-tasks without a valid parent,

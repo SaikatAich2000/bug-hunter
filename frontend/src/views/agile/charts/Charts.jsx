@@ -70,7 +70,7 @@ export function SprintChart({ report, kind = "burndown", unitLabel }) {
     const maxY = Math.max(1, ...series.map((p) => Math.max(p.remaining, p.scope, p.completed)), ...guide.map((g) => g.y));
     const yTicks = niceTicks(0, maxY, 5);
     const x = linearScale([start, Math.max(end, start + 3_600_000)], [M.left, W - M.right]);
-    const y = linearScale([0, yTicks[yTicks.length - 1]], [H - M.bottom, M.top]);
+    const y = linearScale([0, yTicks.at(-1)], [H - M.bottom, M.top]);
     const xTicks = report.days?.length ? boardDayTicks(report.days, 10, [start, end]) : dayTicks(start, end, 10);
     return { series, guide, committed, x, y, yTicks, xTicks, start, end };
   }, [report]);
@@ -85,9 +85,12 @@ export function SprintChart({ report, kind = "burndown", unitLabel }) {
   const burnupGuide = guide.map((g) => ({ x: g.x, y: committed - g.y }));
 
   const title = kind === "burndown" ? "Burndown chart" : "Burnup chart";
+  const summary = kind === "burndown"
+    ? `${report.remaining_estimate} remaining of ${report.committed_estimate} committed`
+    : `${report.completed_estimate} completed of ${report.scope_estimate} in scope`;
   return (
     <figure className="ag-chart">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${title}: ${kind === "burndown" ? `${report.remaining_estimate} remaining of ${report.committed_estimate} committed` : `${report.completed_estimate} completed of ${report.scope_estimate} in scope`}`}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${title}: ${summary}`}>
         {nonWorking.map((d) => (
           <rect key={d.from} x={x(d.from)} y={M.top} width={Math.max(0, x(d.to) - x(d.from))}
             height={H - M.top - M.bottom} className="ag-nonworking" />
@@ -133,7 +136,7 @@ export function VelocityChart({ report, unitLabel }) {
   if (!points.length) return <p className="muted ag-empty">No completed sprints yet.</p>;
   const maxY = Math.max(1, ...points.map((p) => Math.max(p.committed_estimate, p.completed_estimate)));
   const yTicks = niceTicks(0, maxY, 5);
-  const y = linearScale([0, yTicks[yTicks.length - 1]], [H - M.bottom, M.top]);
+  const y = linearScale([0, yTicks.at(-1)], [H - M.bottom, M.top]);
   const slot = (W - M.left - M.right) / points.length;
   const bar = Math.min(34, slot / 3);
   const x = linearScale([0, points.length], [M.left, W - M.right]);
@@ -176,17 +179,17 @@ export function FlowChart({ report }) {
   const order = [...columns].reverse();
   const totals = points.map((p) => columns.reduce((sum, c) => sum + (p.counts[String(c.id)] || 0), 0));
   const yTicks = niceTicks(0, Math.max(1, ...totals), 5);
-  const x = linearScale([xs[0], Math.max(xs[xs.length - 1], xs[0] + 1)], [M.left, W - M.right]);
-  const y = linearScale([0, yTicks[yTicks.length - 1]], [H - M.bottom, M.top]);
+  const x = linearScale([xs[0], Math.max(xs.at(-1), xs[0] + 1)], [M.left, W - M.right]);
+  const y = linearScale([0, yTicks.at(-1)], [H - M.bottom, M.top]);
   const bands = order.reduce((acc, col) => {
-    const lower = acc.length ? acc[acc.length - 1].upper : points.map(() => 0);
+    const lower = acc.length ? acc.at(-1).upper : points.map(() => 0);
     const upper = points.map((p, i) => lower[i] + (p.counts[String(col.id)] || 0));
     return [...acc, { col, upper, d: bandPath(xs, upper, lower, x, y) }];
   }, []);
   return (
     <figure className="ag-chart">
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Cumulative flow diagram">
-        <Axes x={x} y={y} xTicks={dayTicks(xs[0], xs[xs.length - 1], 10)} yTicks={yTicks} yLabel="Issues" />
+        <Axes x={x} y={y} xTicks={dayTicks(xs[0], xs.at(-1), 10)} yTicks={yTicks} yLabel="Issues" />
         {bands.map(({ col, d }) => (
           <path key={col.id} d={d} className={`ag-band ag-band-${CATEGORY_CLASS[col.category] || "todo"}`}>
             <title>{col.name}</title>
@@ -208,7 +211,7 @@ export function CycleChart({ report }) {
   const pad = Math.max(3_600_000, (hi - lo) * 0.05);
   const yTicks = niceTicks(0, Math.max(1, report.max_days), 5);
   const x = linearScale([lo - pad, hi + pad], [M.left, W - M.right]);
-  const y = linearScale([0, yTicks[yTicks.length - 1]], [H - M.bottom, M.top]);
+  const y = linearScale([0, yTicks.at(-1)], [H - M.bottom, M.top]);
   const rolling = (report.rolling_average || []).map((p) => ({ x: toMs(p.completed_at), y: p.value }));
   return (
     <figure className="ag-chart">

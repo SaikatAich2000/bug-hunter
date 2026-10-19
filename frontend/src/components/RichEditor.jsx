@@ -69,6 +69,123 @@ const ZWSP = "​";
 // Word chars for auto word-select: alphanumerics plus Latin-extended, Greek, CJK ranges.
 const WORD_RE = /[A-Za-z0-9_'\-À-ɏͰ-῿一-鿿]/;
 
+const LIST_BLOCK_RE = /^(LI|P|DIV|BLOCKQUOTE|PRE|H[1-6])$/;
+const BLOCK_RE = /^(P|DIV|BLOCKQUOTE|PRE|H[1-6])$/;
+const HEADING_BLOCKS = ["blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6"];
+
+/** The live selection and its range, when the range sits inside `editor`; else null. */
+function selectionIn(editor) {
+  const s = window.getSelection();
+  if (!s || s.rangeCount === 0) return null;
+  const r = s.getRangeAt(0);
+  return editor.contains(r.commonAncestorContainer) ? { s, r } : null;
+}
+
+function setSelection(s, range) {
+  s.removeAllRanges();
+  s.addRange(range);
+}
+
+/** A collapsed range at the start or end of `node`'s contents. */
+function caretIn(node, atEnd) {
+  const re = document.createRange();
+  re.selectNodeContents(node);
+  re.collapse(!atEnd);
+  return re;
+}
+
+/** Nearest element, from `start` up to (not including) `editor`, that `match` accepts. */
+function closestIn(editor, start, match) {
+  for (let n = start; n && n !== editor; n = n.parentNode) {
+    if (n.nodeType === Node.ELEMENT_NODE && match(n)) return n;
+  }
+  return null;
+}
+
+function moveChildren(from, to) {
+  while (from.firstChild) to.appendChild(from.firstChild);
+}
+
+/** Text node and offset under a collapsed caret; a caret between elements steps into the neighbouring text node. */
+function caretTextPosition(r) {
+  const { startContainer: node, startOffset: pos } = r;
+  if (node.nodeType === Node.TEXT_NODE) return { node, pos };
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+  const before = node.childNodes[pos - 1];
+  if (before?.nodeType === Node.TEXT_NODE) return { node: before, pos: (before.textContent || "").length };
+  const at = node.childNodes[pos];
+  if (at?.nodeType === Node.TEXT_NODE) return { node: at, pos: 0 };
+  return null;
+}
+
+/** Start/end offsets of the word around `pos`, or null when the caret is not touching a word. */
+function wordBounds(text, pos) {
+  if (!WORD_RE.test(text.charAt(pos - 1)) && !WORD_RE.test(text.charAt(pos))) return null;
+  let start = pos;
+  while (start > 0 && WORD_RE.test(text.charAt(start - 1))) start--;
+  let end = pos;
+  while (end < text.length && WORD_RE.test(text.charAt(end))) end++;
+  return start === end ? null : { start, end };
+}
+
+/** Auto-select the word at the caret so a Bold/Italic click with no selection formats that word. */
+function selectWordAtCaret() {
+  const s = window.getSelection();
+  if (!s || s.rangeCount === 0) return false;
+  const r = s.getRangeAt(0);
+  if (!r.collapsed) return true;
+  const target = caretTextPosition(r);
+  const bounds = target && wordBounds(target.node.textContent || "", target.pos);
+  if (!bounds) return false;
+  const wordRange = document.createRange();
+  wordRange.setStart(target.node, bounds.start);
+  wordRange.setEnd(target.node, bounds.end);
+  setSelection(s, wordRange);
+  return true;
+}
+
+/** Takes `li` out of its list into a paragraph after it; the items below it move to a new list of the same kind. */
+function liftListItem(li, list, listTag) {
+  const parent = list.parentNode;
+  const p = document.createElement("p");
+  moveChildren(li, p);
+  const after = [];
+  for (let sib = li.nextSibling; sib; sib = sib.nextSibling) after.push(sib);
+  if (parent) {
+    parent.insertBefore(p, list.nextSibling);
+    if (after.length) {
+      const rest = document.createElement(listTag);
+      for (const node of after) rest.appendChild(node);
+      parent.insertBefore(rest, p.nextSibling);
+    }
+  }
+  li.remove();
+  if (!list.firstChild) list.remove();
+  return p;
+}
+
+/** Puts the content at the caret into a new list and returns its <li>: the caret's block, else the selection, else everything. */
+function wrapInList(listTag, block, editor, r) {
+  const list = document.createElement(listTag);
+  const li = document.createElement("li");
+  if (block) {
+    moveChildren(block, li);
+    list.appendChild(li);
+    block.parentNode?.replaceChild(list, block);
+  } else if (r.collapsed) {
+    moveChildren(editor, li);
+    list.appendChild(li);
+    editor.appendChild(list);
+  } else {
+    li.appendChild(r.extractContents());
+    list.appendChild(li);
+    r.insertNode(list);
+  }
+  // An empty <li> shows no bullet in some browsers; a <br> makes it visible.
+  if (!li.firstChild) li.appendChild(document.createElement("br"));
+  return li;
+}
+
 const MAX_HISTORY = 100;
 
 const RichEditor = forwardRef(function RichEditor(
@@ -346,47 +463,6 @@ const RichEditor = forwardRef(function RichEditor(
     return true;
   };
 
-  // Auto-select the word at the caret so a Bold/Italic click with no selection formats that word.
-  const selectWordAtCaret = ()=> {
-    const s = window.getSelection();
-    if (!s || s.rangeCount === 0) return false;
-    const r = s.getRangeAt(0);
-    if (!r.collapsed) return true;
-    // Caret in an ELEMENT node: descend into the adjacent text node so the char walk can run.
-    let node = r.startContainer;
-    let pos = r.startOffset;
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const kids = node.childNodes;
-      const before = pos > 0 ? kids[pos - 1] : undefined;
-      const at = pos < kids.length ? kids[pos] : undefined;
-      if (before && before.nodeType === Node.TEXT_NODE) {
-        node = before;
-        pos = (node.textContent || "").length;
-      } else if (at && at.nodeType === Node.TEXT_NODE) {
-        node = at;
-        pos = 0;
-      } else {
-        return false;
-      }
-    }
-    if (!node || node.nodeType !== Node.TEXT_NODE) return false;
-    const text = node.textContent || "";
-    const left = pos > 0 ? text.charAt(pos - 1) : "";
-    const right = pos < text.length ? text.charAt(pos) : "";
-    if (!WORD_RE.test(left) && !WORD_RE.test(right)) return false;
-    let start = pos;
-    while (start > 0 && WORD_RE.test(text.charAt(start - 1))) start--;
-    let end = pos;
-    while (end < text.length && WORD_RE.test(text.charAt(end))) end++;
-    if (start === end) return false;
-    const wordRange = document.createRange();
-    wordRange.setStart(node, start);
-    wordRange.setEnd(node, end);
-    s.removeAllRanges();
-    s.addRange(wordRange);
-    return true;
-  };
-
   // Wrap/unwrap inline styles — pure DOM (execCommand("bold") can silently no-op in some ancestors).
   const applyInlineWrap = (tag) => {
     const editor = editorRef.current;
@@ -448,147 +524,68 @@ const RichEditor = forwardRef(function RichEditor(
   // Toggle ul/ol on the block containing the caret (unwrap if already that type, else wrap).
   const applyList = (listTag) => {
     const editor = editorRef.current;
-    if (!editor) return false;
-    const s = window.getSelection();
-    if (!s || s.rangeCount === 0) return false;
-    const r = s.getRangeAt(0);
-    if (!editor.contains(r.commonAncestorContainer)) return false;
-    // Enclosing block element.
-    const block = (()=> {
-      let n = r.startContainer;
-      while (n && n !== editor) {
-        if (
-          n.nodeType === Node.ELEMENT_NODE &&
-          /^(LI|P|DIV|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)
-        ) {
-          return n;
-        }
-        n = n.parentNode;
-      }
-      return null;
-    })();
-    // Matching LI: unwrap to <p>; preceding items keep the list, following ones move to a new sibling list.
-    if (block && block.tagName === "LI") {
-      const list = block.parentElement;
-      if (list && list.tagName === listTag.toUpperCase()) {
-        const parent = list.parentNode;
-        const p = document.createElement("p");
-        while (block.firstChild) p.appendChild(block.firstChild);
-
-        // LIs following `block` in this list.
-        const after = [];
-        let sib = block.nextSibling;
-        while (sib) {
-          after.push(sib);
-          sib = sib.nextSibling;
-        }
-
-        if (parent) {
-          parent.insertBefore(p, list.nextSibling);
-          if (after.length) {
-            const rest = document.createElement(listTag);
-            for (const node of after) rest.appendChild(node);
-            parent.insertBefore(rest, p.nextSibling);
-          }
-        }
-        block.remove();
-        if (!list.firstChild) list.remove(); // drop the list if now empty
-
-        const re = document.createRange();
-        re.setStart(p, 0);
-        re.collapse(true);
-        s.removeAllRanges();
-        s.addRange(re);
-        return true;
-      }
+    const cur = editor && selectionIn(editor);
+    if (!cur) return false;
+    const { s, r } = cur;
+    const block = closestIn(editor, r.startContainer, (n) => LIST_BLOCK_RE.test(n.tagName));
+    const list = block?.tagName === "LI" ? block.parentElement : null;
+    if (list && list.tagName === listTag.toUpperCase()) {
+      const p = liftListItem(block, list, listTag);
+      const re = document.createRange();
+      re.setStart(p, 0);
+      re.collapse(true);
+      setSelection(s, re);
+      return true;
     }
-    // Wrap: (a) caret in a block → replace with <ul/ol><li>; (b) selection at root → extract into <li>; (c) collapsed caret at root → wrap all children.
-    const list = document.createElement(listTag);
-    const li = document.createElement("li");
-    if (block && block !== editor) {
-      while (block.firstChild) li.appendChild(block.firstChild);
-      list.appendChild(li);
-      block.parentNode?.replaceChild(list, block);
-    } else if (!r.collapsed) {
-      // (b)
-      const frag = r.extractContents();
-      li.appendChild(frag);
-      list.appendChild(li);
-      r.insertNode(list);
-    } else {
-      // (c)
-      while (editor.firstChild) li.appendChild(editor.firstChild);
-      list.appendChild(li);
-      editor.appendChild(list);
-    }
-    // Empty <li> has no bullet in some browsers; a <br> makes it visible.
-    if (!li.firstChild) li.appendChild(document.createElement("br"));
-    const re = document.createRange();
-    re.selectNodeContents(li);
-    re.collapse(false);
-    s.removeAllRanges();
-    s.addRange(re);
+    setSelection(s, caretIn(wrapInList(listTag, block, editor, r), true));
     return true;
   };
 
   // Toggle a blockquote/pre around the current block.
   const applyBlockWrap = (tag) => {
     const editor = editorRef.current;
-    if (!editor) return false;
-    const s = window.getSelection();
-    if (!s || s.rangeCount === 0) return false;
-    const r = s.getRangeAt(0);
-    if (!editor.contains(r.commonAncestorContainer)) return false;
-    const existing = (()=> {
-      let n = r.startContainer;
-      while (n && n !== editor) {
-        if (n.nodeType === Node.ELEMENT_NODE && n.tagName.toLowerCase() === tag) {
-          return n;
-        }
-        n = n.parentNode;
-      }
-      return null;
-    })();
+    const cur = editor && selectionIn(editor);
+    if (!cur) return false;
+    const { s, r } = cur;
+    const existing = closestIn(editor, r.startContainer, (n) => n.tagName.toLowerCase() === tag);
+    const wrapEl = document.createElement(existing ? "p" : tag);
     if (existing) {
       // Unwrap: hoist children into a <p> and remove the wrapper.
-      const p = document.createElement("p");
-      while (existing.firstChild) p.appendChild(existing.firstChild);
-      existing.parentNode?.replaceChild(p, existing);
-      const re = document.createRange();
-      re.selectNodeContents(p);
-      re.collapse(false);
-      s.removeAllRanges();
-      s.addRange(re);
-      return true;
-    }
-    const block = (()=> {
-      let n = r.startContainer;
-      while (n && n !== editor) {
-        if (
-          n.nodeType === Node.ELEMENT_NODE &&
-          /^(P|DIV|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)
-        ) {
-          return n;
-        }
-        n = n.parentNode;
-      }
-      return null;
-    })();
-    const wrapEl = document.createElement(tag);
-    if (block && block !== editor) {
-      while (block.firstChild) wrapEl.appendChild(block.firstChild);
-      block.parentNode?.replaceChild(wrapEl, block);
+      moveChildren(existing, wrapEl);
+      existing.parentNode?.replaceChild(wrapEl, existing);
     } else {
-      // No block — wrap all editor content.
-      while (editor.firstChild) wrapEl.appendChild(editor.firstChild);
-      editor.appendChild(wrapEl);
+      const block = closestIn(editor, r.startContainer, (n) => BLOCK_RE.test(n.tagName));
+      moveChildren(block ?? editor, wrapEl);
+      if (block) block.parentNode?.replaceChild(wrapEl, block);
+      else editor.appendChild(wrapEl); // no block: the whole editor content is wrapped
     }
-    const re = document.createRange();
-    re.selectNodeContents(wrapEl);
-    re.collapse(false);
-    s.removeAllRanges();
-    s.addRange(re);
+    setSelection(s, caretIn(wrapEl, true));
     return true;
+  };
+
+  // Bold/italic/...: format the word at a bare caret, arm typing state when there is none, wrap a selection.
+  const runInlineCmd = (tag) => {
+    const s = window.getSelection();
+    const bareCaret = s && s.rangeCount > 0 && s.getRangeAt(0).collapsed;
+    if (bareCaret && !selectWordAtCaret() && toggleInlineAtCaret(tag)) return true;
+    return applyInlineWrap(tag);
+  };
+
+  // arg is e.g. "<blockquote>", "<pre>", or "<p>" ("p" = plain: unwrap whichever block wrapper is present).
+  const runFormatBlock = (arg) => {
+    const tag = (arg || "").replace(/[<>]/g, "").toLowerCase();
+    if (tag === "p") return HEADING_BLOCKS.some((t) => applyBlockWrap(t));
+    return Boolean(tag) && applyBlockWrap(tag);
+  };
+
+  // The hand-written implementation of `cmd`; true when it handled the command.
+  const runManualCmd = (cmd, arg) => {
+    const inlineTag = INLINE_TOGGLE[cmd];
+    if (inlineTag !== undefined) return runInlineCmd(inlineTag);
+    if (cmd === "insertUnorderedList") return applyList("ul");
+    if (cmd === "insertOrderedList") return applyList("ol");
+    if (cmd === "formatBlock") return runFormatBlock(arg);
+    return false;
   };
 
   // Restore the last in-editor range, run the command, re-capture so chained clicks build on the right anchor.
@@ -597,59 +594,14 @@ const RichEditor = forwardRef(function RichEditor(
     if (!editor) return;
     editor.focus();
     ensureCaret();
-    const inlineTag = INLINE_TOGGLE[cmd];
-    if (inlineTag !== undefined) {
-      const s = window.getSelection();
-      if (s && s.rangeCount > 0 && s.getRangeAt(0).collapsed) {
-        if (!selectWordAtCaret()) {
-          // No word at caret — arm typing state with a ZWSP wrapper.
-          if (toggleInlineAtCaret(inlineTag)) {
-            captureSelection();
-            sync();
-            return;
-          }
-        }
+    if (!runManualCmd(cmd, arg)) {
+      try {
+        // document.execCommand is the only way to run the remaining commands on a contentEditable and
+        // has no standard replacement yet.
+        document.execCommand(cmd, false, arg ?? undefined); // NOSONAR S1874: no replacement API
+      } catch {
+        /* ignore */
       }
-      if (applyInlineWrap(inlineTag)) {
-        captureSelection();
-        sync();
-        return;
-      }
-    }
-    if (cmd === "insertUnorderedList" && applyList("ul")) {
-      captureSelection();
-      sync();
-      return;
-    }
-    if (cmd === "insertOrderedList" && applyList("ol")) {
-      captureSelection();
-      sync();
-      return;
-    }
-    if (cmd === "formatBlock") {
-      // arg is e.g. "<blockquote>", "<pre>", or "<p>"
-      const tag = (arg || "").replace(/[<>]/g, "").toLowerCase();
-      if (tag && tag !== "p" && applyBlockWrap(tag)) {
-        captureSelection();
-        sync();
-        return;
-      }
-      if (tag === "p") {
-        // "p" = plain — unwrap any existing block wrapper.
-        for (const t of ["blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6"]) {
-          if (applyBlockWrap(t)) {
-            captureSelection();
-            sync();
-            return;
-          }
-        }
-      }
-    }
-    // execCommand fallback for commands without a manual implementation.
-    try {
-      document.execCommand(cmd, false, arg ?? undefined);
-    } catch {
-      /* ignore */
     }
     captureSelection();
     sync();
@@ -726,7 +678,7 @@ const RichEditor = forwardRef(function RichEditor(
         active = inAncestor([inlineTag]);
         if (!active) {
           try {
-            active = !!document.queryCommandState(c);
+            active = !!document.queryCommandState(c); // NOSONAR S1874: no replacement API
           } catch {
             /* unsupported command */
           }
@@ -1028,10 +980,10 @@ const RichEditor = forwardRef(function RichEditor(
           {"🖼"}
         </button>
       </div>
-      <div
+      <div // NOSONAR S6819: rich-text editor on contentEditable; <input>/<textarea> cannot hold formatted HTML
         ref={editorRef}
         className="bh-rt-editor"
-        role="textbox"
+        role="textbox" /* NOSONAR S6819: rich-text editor on contentEditable; <input>/<textarea> cannot hold formatted HTML */
         contentEditable={!disabled}
         suppressContentEditableWarning
         tabIndex={disabled ? -1 : 0}

@@ -23,7 +23,7 @@ export default function PlanningPanel({ projectId, canManage }) {
   const [loading, setLoading] = useState(false);
   // The capacity being edited, with the sprint it was loaded for: Save writes
   // to that sprint only, never to one picked while an answer was in flight.
-  const [capacityDraft, setCapacityDraftState] = useState({ sprintId: null, entries: {} });
+  const [capacityDraftState, setCapacityDraftState] = useState({ sprintId: null, entries: {} });
   const baseRequest = useRef(0);
   const planningRequest = useRef(0);
 
@@ -78,9 +78,9 @@ export default function PlanningPanel({ projectId, canManage }) {
   useEffect(() => { void refreshPlanning(); }, [refreshPlanning]);
 
   const saveCapacity = async () => {
-    const sprintId = capacityDraft.sprintId;
+    const sprintId = capacityDraftState.sprintId;
     if (!sprintId) return;
-    const entries = Object.entries(capacityDraft.entries)
+    const entries = Object.entries(capacityDraftState.entries)
       .filter(([, v]) => v.value !== "" && v.value != null)
       .map(([userId, v]) => ({
         user_id: Number(userId),
@@ -167,7 +167,7 @@ export default function PlanningPanel({ projectId, canManage }) {
                 <tr><th>Person</th><th>Capacity ({unit})</th><th>Notes</th></tr>
               </thead>
               <tbody>
-                {users.filter((u) => u.id in capacityDraft.entries || (u.is_active && canSeeProject(u, projectId))).map((u) => (
+                {users.filter((u) => u.id in capacityDraftState.entries || (u.is_active && canSeeProject(u, projectId))).map((u) => (
                   <tr key={u.id}>
                     <td>{u.name}</td>
                     <td>
@@ -175,7 +175,7 @@ export default function PlanningPanel({ projectId, canManage }) {
                         type="number"
                         min="0"
                         disabled={!canManage}
-                        value={capacityDraft.entries[u.id]?.value ?? ""}
+                        value={capacityDraftState.entries[u.id]?.value ?? ""}
                         onChange={(e) => setDraft(u.id, "value", e.target.value)}
                         className="planning-capacity-input"
                         aria-label={`Capacity of ${u.name} (${unit})`}
@@ -184,7 +184,7 @@ export default function PlanningPanel({ projectId, canManage }) {
                     <td>
                       <input
                         disabled={!canManage}
-                        value={capacityDraft.entries[u.id]?.notes ?? ""}
+                        value={capacityDraftState.entries[u.id]?.notes ?? ""}
                         onChange={(e) => setDraft(u.id, "notes", e.target.value)}
                         placeholder="Optional"
                         aria-label={`Notes for ${u.name}`}
@@ -196,7 +196,7 @@ export default function PlanningPanel({ projectId, canManage }) {
             </table>
             {canManage && (
               <button className="btn primary" style={{ marginTop: 10 }} onClick={saveCapacity}
-                disabled={capacityDraft.sprintId !== selectedSprintId}>Save capacity</button>
+                disabled={capacityDraftState.sprintId !== selectedSprintId}>Save capacity</button>
             )}
           </div>
           )}

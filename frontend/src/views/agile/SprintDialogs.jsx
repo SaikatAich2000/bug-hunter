@@ -204,9 +204,10 @@ export function StartSprintDialog({ open, sprint, issues, mode, onClose }) {
 /** Confirmation text for deleting a sprint; a running one is called out because it ends mid-flight. */
 export function deleteSprintPrompt(sprint, issueCount) {
   const running = sprint.state === "active";
+  const plural = issueCount === 1 ? "" : "s";
   return `Delete ${running ? "the running sprint " : ""}${sprint.name}?`
     + (running ? " It has already started, so this ends it without completing it." : "")
-    + (issueCount ? ` Its ${issueCount} issue${issueCount === 1 ? "" : "s"} move to the top of the backlog.` : "");
+    + (issueCount ? ` Its ${issueCount} issue${plural} move to the top of the backlog.` : "");
 }
 
 /** Maps a destination picker value to the API's destination fields. */

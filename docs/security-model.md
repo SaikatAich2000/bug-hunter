@@ -33,9 +33,10 @@ the path shown.
 
 | Control | Limit | File |
 |---|---|---|
-| Per-IP window, `POST /api/auth/login` | 8 / 60 s | `app/main.py` `_RATE_RULES` |
+| Per-IP window, `POST /api/auth/login` | 8 / 60 s (`RATE_LOGIN_MAX`, `RATE_FORGOT_PASSWORD_MAX`, `RATE_RESET_PASSWORD_MAX`, `RATE_CHANGE_PASSWORD_MAX`, `RATE_AUTH_WINDOW_SECONDS`) | `app/main.py` `_RATE_RULES` |
 | `forgot-password` | 3 / 60 s | same |
 | `reset-password`, `change-password` | 5 / 60 s each | same |
+| Per-user upload / comment / chat limits | `RATE_UPLOAD_MAX` (20), `RATE_COMMENT_MAX` (30), `RATE_CHAT_MAX` (30) per `RATE_USER_WINDOW_SECONDS` (60 s) | `app/routes/bugs.py`, `app/chatbot/router.py` |
 | Lockout per email+IP | `LOGIN_FAIL_LIMIT` (10) failures in `LOGIN_FAIL_WINDOW_SECONDS` (900 s), locked `LOGIN_LOCKOUT_SECONDS` (900 s) | `app/account_lockout.py` |
 | Lockout per email, any IP | `LOGIN_FAIL_EMAIL_LIMIT` (50), never below `LOGIN_FAIL_LIMIT` | same |
 | Comments / uploads / chat | 30 / 20 / 30 per minute per user | `app/routes/bugs.py`, `app/chatbot/router.py` |
@@ -104,21 +105,3 @@ survive deletion of the item they describe. Not recorded: reads and most setting
 - Container image and dependency scanning run in CI (Trivy, pip-audit, npm audit, bandit,
   gitleaks); they find known issues only.
 - No webhook, SSO or MFA support exists. Do not assume them.
-
-## Hardening history
-
-Commits on `main` that tightened this model, newest first:
-
-| Commit | Change |
-|---|---|
-| `c497d85` | one shape for every 422; every status code routes raise is documented |
-| `25ef54d` | lockout scoped to email+IP, higher per-email ceiling |
-| `60a7a84` | upload extension denylist replaced by an allowlist checked against magic bytes |
-| `ab2e909` | `__Host-` session cookie under HTTPS, encrypted payload |
-| `ab9c14c` | database CHECK constraints, backup/restore scripts, safe deploy |
-| `6c5cb21` | session cookies without a session id are refused |
-| `8af878f` | input hardening, retention job, request IDs, read-only GETs |
-| `f5cc7c6` | lossless image metadata stripping, off the event loop |
-| `a275063` | Git credentials sent only to their own server, never to internal hosts |
-| `daecf20` | password-policy exemption for legacy passwords removed |
-| `03e9536` | people who cannot see a project cannot be attached to it |

@@ -47,68 +47,61 @@ function _hasSafeUrlPrefix(url) {
 // mdLite: minimal markdown-to-HTML; input must already be html-escaped. Code spans
 // are skipped so content isn't re-processed; lists become proper <ul> blocks.
 
+// Each reader looks at line[i] and returns { html, next } for the span it recognises, or null.
+// code span — emitted verbatim, no inner transforms
+function readCodeSpan(line, i) {
+  const close = line.indexOf("`", i + 1);
+  return close > i ? { html: `<code>${line.slice(i + 1, close)}</code>`, next: close + 1 } : null;
+}
+
+// link [text](url) with a safe url
+function readLink(line, i) {
+  const rb = line.indexOf("]", i + 1);
+  if (!(rb > i && line.charAt(rb + 1) === "(")) return null;
+  const rp = line.indexOf(")", rb + 2);
+  if (rp <= rb) return null;
+  const txt = line.slice(i + 1, rb);
+  const url = line.slice(rb + 2, rp);
+  if (!txt || !url || !_hasSafeUrlPrefix(url)) return null;
+  return { html: `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>`, next: rp + 1 };
+}
+
+// bold **...** (matched before italic so ** is not half-consumed)
+function readBold(line, i) {
+  if (line.charAt(i + 1) !== "*") return null;
+  const close = line.indexOf("**", i + 2);
+  return close > i + 1 ? { html: `<strong>${formatInline(line.slice(i + 2, close))}</strong>`, next: close + 2 } : null;
+}
+
+// italic *...* (no embedded asterisks)
+function readItalic(line, i) {
+  const close = line.indexOf("*", i + 1);
+  if (close <= i || line.slice(i + 1, close).includes("*")) return null;
+  return { html: `<em>${formatInline(line.slice(i + 1, close))}</em>`, next: close + 1 };
+}
+
+const INLINE_READERS = {
+  "`": [readCodeSpan],
+  "[": [readLink],
+  "*": [readBold, readItalic],
+};
+
 /**
  * Render inline spans for one line: `code`, **bold**, *italic*, [text](url).
- * Bold is matched before italic so ** doesn't get half-consumed.
+ * Anything that does not form a complete span is emitted literally.
  */
 function formatInline(line) {
   let out = "";
   let i = 0;
-  const n = line.length;
-  while (i < n) {
+  while (i < line.length) {
     const ch = line.charAt(i);
-    // code span — emit verbatim, skip inner transforms
-    if (ch === "`") {
-      const close = line.indexOf("`", i + 1);
-      if (close > i) {
-        out += `<code>${line.slice(i + 1, close)}</code>`;
-        i = close + 1;
-        continue;
-      }
-      // unbalanced backtick — emit literally
-      out += ch;
-      i += 1;
-      continue;
+    let hit = null;
+    for (const read of INLINE_READERS[ch] ?? []) {
+      hit = read(line, i);
+      if (hit) break;
     }
-    // link [text](url)
-    if (ch === "[") {
-      const rb = line.indexOf("]", i + 1);
-      if (rb > i && line.charAt(rb + 1) === "(") {
-        const rp = line.indexOf(")", rb + 2);
-        if (rp > rb) {
-          const txt = line.slice(i + 1, rb);
-          const url = line.slice(rb + 2, rp);
-          if (txt && url && _hasSafeUrlPrefix(url)) {
-            out += `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>`;
-            i = rp + 1;
-            continue;
-          }
-        }
-      }
-      out += ch;
-      i += 1;
-      continue;
-    }
-    // bold **...**
-    if (ch === "*" && line.charAt(i + 1) === "*") {
-      const close = line.indexOf("**", i + 2);
-      if (close > i + 1) {
-        out += `<strong>${formatInline(line.slice(i + 2, close))}</strong>`;
-        i = close + 2;
-        continue;
-      }
-    }
-    // italic *...* (no embedded asterisks)
-    if (ch === "*") {
-      const close = line.indexOf("*", i + 1);
-      if (close > i && !line.slice(i + 1, close).includes("*")) {
-        out += `<em>${formatInline(line.slice(i + 1, close))}</em>`;
-        i = close + 1;
-        continue;
-      }
-    }
-    out += ch;
-    i += 1;
+    out += hit ? hit.html : ch;
+    i = hit ? hit.next : i + 1;
   }
   return out;
 }
@@ -127,7 +120,8 @@ function mdLite(escaped) {
   };
   const flushList = () => {
     if (listItems.length) {
-      blocks.push(`<ul>${listItems.map((li) => `<li>${li}</li>`).join("")}</ul>`);
+      const items = listItems.map((li) => "<li>" + li + "</li>").join("");
+      blocks.push("<ul>" + items + "</ul>");
       listItems = [];
     }
   };
@@ -701,14 +695,10 @@ export default function SleuthPanel() {
         />
       </button>
 
-      <div
+      <aside
         className="sleuth-panel"
         id="sleuthPanel"
         hidden={!open}
-        // An explicit role="dialog" trips Sonar js:S6819; the assistant is an
-        // injected chat panel, so role="complementary" keeps AT semantics
-        // accurate while id/aria-label keep the labelled-region behaviour.
-        role="complementary"
         aria-label={`${appName} AI Assistant`}
         style={isNarrow ? undefined : { width: `${size.w}px`, height: `${size.h}px` }}
         ref={panelRef}
@@ -803,11 +793,11 @@ export default function SleuthPanel() {
             }
           })}
           {typing && (
-            <div className="sleuth-typing" role="status" aria-label="Sleuth is thinking">
+            <output className="sleuth-typing" aria-label="Sleuth is thinking">
               <span aria-hidden="true"></span>
               <span aria-hidden="true"></span>
               <span aria-hidden="true"></span>
-            </div>
+            </output>
           )}
         </div>
 
@@ -860,7 +850,7 @@ export default function SleuthPanel() {
             Send
           </button>
         </div>
-      </div>
+      </aside>
     </>
   );
 }

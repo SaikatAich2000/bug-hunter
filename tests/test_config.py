@@ -381,3 +381,79 @@ def test_database_url_construction_prod_vs_dev(monkeypatch):
     s = config.Settings()
     assert isinstance(s.DATABASE_URL, str)
     assert "postgres" in s.DATABASE_URL or "sqlite" in s.DATABASE_URL
+
+
+# --- externalized tunables: env overrides reach Settings ---
+def _fresh_settings(monkeypatch):
+    """Settings re-read from the environment, with a developer's .env neutralized."""
+    import importlib
+
+    import dotenv
+
+    import app.config as fresh_config
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: None)
+    return importlib.reload(fresh_config).Settings()
+
+
+def _restore_config():
+    import importlib
+
+    import app.config as fresh_config
+    importlib.reload(fresh_config)
+
+
+def test_tunables_default_to_previous_behaviour(monkeypatch):
+    for name in ("RATE_LOGIN_MAX", "RATE_AUTH_WINDOW_SECONDS", "PAGE_SIZE_DEFAULT",
+                 "PAGE_SIZE_MAX", "MAX_ATTACHMENT_BYTES", "HIBP_API_URL",
+                 "HIBP_TIMEOUT_SECONDS", "GROQ_API_URL"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        s = _fresh_settings(monkeypatch)
+        assert (s.RATE_LOGIN_MAX, s.RATE_AUTH_WINDOW_SECONDS) == (8, 60)
+        assert (s.PAGE_SIZE_DEFAULT, s.PAGE_SIZE_MAX) == (50, 200)
+        assert s.MAX_ATTACHMENT_BYTES == 50 * 1024 * 1024
+        assert s.HIBP_API_URL == "https://api.pwnedpasswords.com/range/"
+        assert s.HIBP_TIMEOUT_SECONDS == 3.0
+        assert s.GROQ_API_URL.startswith("https://api.groq.com/")
+    finally:
+        _restore_config()
+
+
+def test_tunables_env_override_and_validation(monkeypatch):
+    monkeypatch.setenv("RATE_LOGIN_MAX", "2")
+    monkeypatch.setenv("PAGE_SIZE_DEFAULT", "25")
+    monkeypatch.setenv("PAGE_SIZE_MAX", "10")  # below default: clamped up, never inconsistent
+    monkeypatch.setenv("HIBP_TIMEOUT_SECONDS", "0.01")  # below minimum: clamped
+    monkeypatch.setenv("HIBP_API_URL", "https://hibp.internal.example/range/")
+    monkeypatch.setenv("APP_BASE_URL", "https://bugs.example.test")
+    monkeypatch.setenv("UVICORN_PORT", "9123")
+    try:
+        s = _fresh_settings(monkeypatch)
+        assert s.RATE_LOGIN_MAX == 2
+        assert (s.PAGE_SIZE_DEFAULT, s.PAGE_SIZE_MAX) == (25, 25)
+        assert s.HIBP_TIMEOUT_SECONDS == 0.5
+        assert s.HIBP_API_URL == "https://hibp.internal.example/range/"
+        assert s.APP_BASE_URL == "https://bugs.example.test"
+        assert s.UVICORN_PORT == 9123
+    finally:
+        monkeypatch.undo()
+        _restore_config()
+
+
+def test_limit_ttl_caps_default_then_override(monkeypatch):
+    names = ("IMPORT_MAX_ROWS", "SLEUTH_MEMORY_TTL_SECONDS", "RETENTION_BATCH_SIZE",
+             "DEFAULT_SPRINT_DAYS", "SLEUTH_CLOUD_COOLDOWN_S", "DB_POOL_RECYCLE_SECONDS")
+    for n in names:
+        monkeypatch.delenv(n, raising=False)
+    try:
+        s = _fresh_settings(monkeypatch)
+        assert (s.IMPORT_MAX_ROWS, s.SLEUTH_MEMORY_TTL_SECONDS, s.RETENTION_BATCH_SIZE) == (1000, 1800, 1000)
+        assert (s.DEFAULT_SPRINT_DAYS, s.SLEUTH_CLOUD_COOLDOWN_S, s.DB_POOL_RECYCLE_SECONDS) == (14, 45.0, 1800)
+        monkeypatch.setenv("IMPORT_MAX_ROWS", "7")
+        monkeypatch.setenv("SLEUTH_MEMORY_TTL_SECONDS", "0")  # clamped to minimum
+        monkeypatch.setenv("SLEUTH_CLOUD_COOLDOWN_S", "3.5")
+        s = _fresh_settings(monkeypatch)
+        assert (s.IMPORT_MAX_ROWS, s.SLEUTH_MEMORY_TTL_SECONDS, s.SLEUTH_CLOUD_COOLDOWN_S) == (7, 1, 3.5)
+    finally:
+        monkeypatch.undo()
+        _restore_config()

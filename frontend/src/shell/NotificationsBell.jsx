@@ -3,6 +3,7 @@ import EmptyGuide from "../onboarding/EmptyGuide";
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { timeAgo } from "../lib/format";
+import { notificationPollMs } from "../lib/pollConfig";
 const KIND_ICON = {
   assigned: "🎯",
   reported: "📌",
@@ -28,10 +29,10 @@ export default function NotificationsBell() {
     if (open) void loadNotifications();
   }, [open, loadNotifications]);
 
-  // Poll every 15 s while the panel is open; skip when the tab is hidden.
+  // Poll (NOTIFICATION_POLL_SECONDS) while the panel is open; skip when the tab is hidden.
   useEffect(() => {
     if (!open) return;
-    const id = setInterval(() => { if (!document.hidden) void loadNotifications(); }, 15_000);
+    const id = setInterval(() => { if (!document.hidden) void loadNotifications(); }, notificationPollMs());
     return () => clearInterval(id);
   }, [open, loadNotifications]);
 
@@ -77,7 +78,7 @@ export default function NotificationsBell() {
       </button>
 
       {open && (
-        <div className="notif-panel" role="dialog" aria-label="Notifications">
+        <div className="notif-panel" role="dialog" /* NOSONAR S6819: portal dialog with its own focus trap and enter/exit animation; native <dialog> needs showModal() top-layer semantics */ aria-label="Notifications">
           <header className="notif-panel-head">
             <span className="notif-panel-title">Notifications</span>
             <button
@@ -99,10 +100,10 @@ export default function NotificationsBell() {
               </div>
             ) : (
               notifications.map((n) => (
-                <div
+                <div // NOSONAR S6819: notification row is a div wrapping nested buttons; a <button> cannot contain them
                   key={n.id}
                   className={`notif-item${n.read_at ? "" : " is-unread"}`}
-                  role="button"
+                  role="button" /* NOSONAR S6819: styled inline label inside a clickable row; a <button> would need a reset of the row styling */
                   tabIndex={0}
                   onClick={() => onRowClick(n)}
                   onKeyDown={(e) => {

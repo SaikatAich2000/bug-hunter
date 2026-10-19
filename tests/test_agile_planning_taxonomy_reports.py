@@ -371,7 +371,8 @@ def test_sprint_report_and_burndown(admin_client):
     first = burndown["points"][0]
     assert (first["remaining"], first["scope"], first["completed"]) == (8, 8, 0)
     guide = burndown["guideline"]
-    assert guide[0]["value"] == 8 and guide[-1]["value"] == 0
+    assert guide[0]["value"] == 8
+    assert guide[-1]["value"] == 0
     assert all(a["value"] >= b["value"] for a, b in zip(guide, guide[1:]))
 
     burnup_res = admin_client.get(f"/api/agile/reports/burnup?sprint_id={sprint['id']}")
@@ -415,3 +416,84 @@ def test_report_export_streams_csv(admin_client):
 
     missing_param_res = admin_client.post("/api/agile/reports/export?report_key=burndown")
     assert missing_param_res.status_code == 400
+
+
+# --- sprint workbook, epic/release reports and export parameters ------------------------------
+
+def test_sprint_report_workbook_lists_every_sheet_and_work_item(admin_client):
+    import io
+
+    from openpyxl import load_workbook
+
+    project, board_id = _setup_project_with_board(admin_client, "Workbook Suite")
+    me = admin_client.get("/api/auth/me").json()
+    epic = admin_client.post("/api/agile/work-items", json={
+        "project_id": project["id"], "title": "Workbook epic", "item_type": "epic"}).json()
+    parent = _create_story(admin_client, project["id"], "Parent story", story_points=5, epic_id=epic["id"],
+                           assignee_ids=[me["id"]])
+    admin_client.post("/api/agile/work-items", json={
+        "project_id": project["id"], "title": "Child task", "item_type": "sub-task", "parent_id": parent["id"]})
+    sprint = admin_client.post(f"/api/agile/sprints?board_id={board_id}", json={"name": "Workbook Sprint"}).json()
+    admin_client.post(f"/api/agile/sprints/{sprint['id']}/items", json={"item_ids": [parent["id"]]})
+    admin_client.post(f"/api/agile/sprints/{sprint['id']}/start", json={"version": sprint["version"]})
+
+    res = admin_client.get(f"/api/agile/reports/sprint/{sprint['id']}/export.xlsx")
+    assert res.status_code == 200, res.text
+    assert "sprint-report-Workbook Sprint.xlsx" in res.headers["content-disposition"]
+    workbook = load_workbook(io.BytesIO(res.content))
+    assert workbook.sheetnames == ["Sprint Summary", "Status Breakdown", "Work Items", "Team Workload",
+                                   "Scope Changes", "Activity History"]
+    titles = [row[2] for row in workbook["Work Items"].iter_rows(min_row=1, values_only=True) if row[2]]
+    assert "Parent story" in titles
+    assert "Child task" in titles
+
+
+def test_sprint_workbook_build_failures_are_a_clean_500(admin_client, monkeypatch):
+    from app.reports import xlsx
+
+    project, board_id = _setup_project_with_board(admin_client, "Workbook Failure")
+    sprint = admin_client.post(f"/api/agile/sprints?board_id={board_id}", json={"name": "Broken"}).json()
+
+    def _unavailable():
+        raise xlsx.XlsxBuildError("openpyxl is not installed")
+
+    monkeypatch.setattr(xlsx, "_ensure_openpyxl", _unavailable)
+    res = admin_client.get(f"/api/agile/reports/sprint/{sprint['id']}/export.xlsx")
+    assert res.status_code == 500
+    assert "openpyxl" in res.json()["detail"]
+    assert project["id"]
+
+
+def test_epic_and_release_reports_check_access_and_export(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Epic Release Reports")
+    epic = admin_client.post("/api/agile/work-items", json={
+        "project_id": project["id"], "title": "Reported epic", "item_type": "epic"}).json()
+    story = _create_story(admin_client, project["id"], "Epic child", epic_id=epic["id"])
+    version = admin_client.post("/api/agile/releases", json={"project_id": project["id"], "name": "v9"}).json()
+
+    assert admin_client.get(f"/api/agile/reports/epic/{epic['id']}").status_code == 200
+    assert admin_client.get(f"/api/agile/reports/epic/{story['id']}").status_code == 404  # not an Epic
+    assert admin_client.get("/api/agile/reports/epic/999999").status_code == 404
+    assert admin_client.get(f"/api/agile/reports/release/{version['id']}").status_code == 200
+    assert admin_client.get("/api/agile/reports/release/999999").status_code == 404
+
+    epic_csv = admin_client.post(f"/api/agile/reports/export?report_key=epic&epic_id={epic['id']}")
+    assert epic_csv.status_code == 200
+    assert epic_csv.text.splitlines()[0].startswith("progress")
+    release_csv = admin_client.post(f"/api/agile/reports/export?report_key=release&version_id={version['id']}")
+    assert release_csv.status_code == 200
+    for key in ("epic", "release", "velocity", "control-chart", "cumulative-flow", "sprint"):
+        assert admin_client.post(f"/api/agile/reports/export?report_key={key}").status_code == 400, key
+    no_dates = admin_client.post(f"/api/agile/reports/export?report_key=control-chart&board_id={board_id}")
+    assert no_dates.status_code == 400
+    assert admin_client.post("/api/agile/reports/export?report_key=velocity&board_id=999999").status_code == 404
+
+
+def test_the_daily_report_rejects_impossible_dates(admin_client):
+    _project, board_id = _setup_project_with_board(admin_client, "Daily Dates")
+    sprint = admin_client.post(f"/api/agile/sprints?board_id={board_id}", json={"name": "Daily"}).json()
+    res = admin_client.get(f"/api/agile/reports/daily?sprint_id={sprint['id']}&report_date=2026-13-45")
+    assert res.status_code == 422
+    assert "real date" in str(res.json()["detail"])
+    ok = admin_client.get(f"/api/agile/reports/daily?sprint_id={sprint['id']}&report_date=2026-03-04")
+    assert ok.status_code == 200

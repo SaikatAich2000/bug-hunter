@@ -191,8 +191,7 @@ _NOT_SET = "(not set)"
 # Canonical status vocabulary — the same set is valid for every work-item type
 # so that any configured board status can be applied to any item. The board column
 # categories (todo/in_progress/testing/done) are what drive workflow, not the
-# item type. Legacy per-type lists are preserved as comments for audit context but
-# are no longer the source of truth.
+# item type.
 CANONICAL_STATUSES = [
     "New", _IN_PROGRESS, "Testing", "In Review", "Approved",
     "Done", "Blocked", "Cancelled", "Resolved", "Closed",
@@ -323,9 +322,9 @@ def validate_timezone(value: str) -> str:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     name = value.strip()
-    try:
+    try:  # OSError: a directory ("Europe") or a name the filesystem rejects
         ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
         raise ValueError(f"'{name}' is not a known timezone; use an IANA name such as Europe/Berlin") from None
     return name
 

@@ -106,12 +106,14 @@ def assert_aligned(conn, w):
     assert rows[w["sub"]].display_id == f"SUB-{w['sub']}"
     # Sub-tasks without a valid (standard) parent become Tasks.
     for key in ("orphan", "under_epic"):
-        assert rows[w[key]].item_type == "Task" and rows[w[key]].parent_id is None
+        assert rows[w[key]].item_type == "Task"
+        assert rows[w[key]].parent_id is None
     # Only Sub-tasks have parents.
     assert rows[w["standard_with_parent"]].parent_id is None
     # Every standard issue is ranked in the list it sits in.
     assert rows[w["story"]].rank_scope == f"sprint:{w['sprint']}"
-    assert rows[w["stray"]].rank_scope == f"backlog:{w['project']}" and rows[w["stray"]].rank
+    assert rows[w["stray"]].rank_scope == f"backlog:{w['project']}"
+    assert rows[w["stray"]].rank
     # Collections and Features became labels on what they grouped.
     labels = {r.display_name: r for r in conn.execute(select(Label.__table__)).all()}
     assert set(labels) == {"Q4 Goals", "Checkout"}
@@ -119,7 +121,8 @@ def assert_aligned(conn, w):
     assert (w["epic"], labels["Q4 Goals"].id) in links
     assert (w["stray"], labels["Q4 Goals"].id) in links
     assert (w["story"], labels["Checkout"].id) in links
-    assert labels["Q4 Goals"].usage_count == 2 and labels["Checkout"].usage_count == 1
+    assert labels["Q4 Goals"].usage_count == 2
+    assert labels["Checkout"].usage_count == 1
     assert conn.execute(select(COLLECTION_ITEMS)).all() == []
     assert _retired_link(conn, "collection_id", w["epic"]) is None
 
@@ -271,7 +274,8 @@ def test_appending_after_a_damaged_list_respaces_it_instead_of_failing(db_sessio
         db.commit()
         first_rank = db.get(Bug, first_id).rank
         assert first_rank < second.rank
-        assert len(first_rank) <= 32 and len(second.rank) <= 32
+        assert len(first_rank) <= 32
+        assert len(second.rank) <= 32
 
 
 def test_upgrade_runs_on_a_database_without_the_retired_tables(db_session):

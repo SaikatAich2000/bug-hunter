@@ -39,18 +39,26 @@ export default function UserModal() {
   const [projectIds, setProjectIds] = useState([]);
   const nameRef = useRef(null);
 
-  // Reset form state on every open and focus the first field.
+  // Reset form state on every open and focus the first field. Keyed on which
+  // user is edited, not the object: a background refresh of the user list must
+  // not wipe what is being typed.
+  const userRef = useRef(user);
   useEffect(() => {
-    if (!open) return;
-    setName(user ? user.name : "");
-    setEmail(user ? user.email : "");
-    setRole(user ? user.role || "user" : "user");
-    setIsActive(user ? user.is_active : true);
+    userRef.current = user;
+  });
+  const seedKey = open ? (user?.id ?? "new") : null;
+  useEffect(() => {
+    if (seedKey === null) return;
+    const current = userRef.current;
+    setName(current ? current.name : "");
+    setEmail(current ? current.email : "");
+    setRole(current ? current.role || "user" : "user");
+    setIsActive(current ? current.is_active : true);
     setPassword("");
-    setProjectIds(user?.project_ids ?? []);
+    setProjectIds(current?.project_ids ?? []);
     const t = setTimeout(() => nameRef.current?.focus(), 50);
     return () => clearTimeout(t);
-  }, [open, user]);
+  }, [seedKey]);
 
   function toggleProject(pid) {
     setProjectIds((cur) =>
@@ -157,8 +165,8 @@ export default function UserModal() {
             value={role}
             onChange={(e) => setRole(e.target.value)}
           >
-            <option value="user">User — only edit own bugs</option>
-            <option value="manager">Manager — edit any bug, manage projects</option>
+            <option value="user">User — edit bugs, view their projects</option>
+            <option value="manager">Manager — also edit tasks, manage projects and sprints</option>
             {/* Managers cannot grant admin; only admins can. */}
             {(isAdmin || role === "admin") && (
               <option value="admin">Admin — full access including users</option>

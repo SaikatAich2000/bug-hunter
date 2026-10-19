@@ -58,13 +58,17 @@ def test_retention_removes_only_what_has_expired(admin_client, monkeypatch):
         db.commit()
 
         stats = retention.run_retention(db, now=NOW)
-        assert stats["notifications"] == 5 and stats["chat_conversations"] == 1
-        assert stats["sessions"] >= 1 and stats["reset_tokens"] == 2 and stats["idempotency_keys"] == 1
+        assert stats["notifications"] == 5
+        assert stats["chat_conversations"] == 1
+        assert stats["sessions"] >= 1
+        assert stats["reset_tokens"] == 2
+        assert stats["idempotency_keys"] == 1
         assert _count(db, Notification) == 2
         assert _count(db, SessionRow, SessionRow.jti == "live") == 1
         assert _count(db, SessionRow, SessionRow.jti == "gone") == 0
         assert [t.token_hash[0] for t in db.scalars(select(PasswordResetToken))] == ["c"]
-        assert _count(db, ChatMessage) == 1 and _count(db, ChatConversation) == 1
+        assert _count(db, ChatMessage) == 1
+        assert _count(db, ChatConversation) == 1
         assert [k.idempotency_key for k in db.scalars(select(IdempotencyKey))] == ["k2"]
 
 

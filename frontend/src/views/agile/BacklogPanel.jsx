@@ -49,10 +49,10 @@ function IssueRow({ issue, epicsById, mode, draggable, selected, onToggle, onOpe
   // Keyboard users rank with its drag handle (Space to lift, arrows, Space to
   // drop) or its actions menu; its buttons keep their own meaning.
   return (
-    <div
+    <div // NOSONAR S6819: drag-and-drop wrapper; <fieldset>/<details> carry form/disclosure semantics that do not apply
       ref={setNodeRef}
       style={style}
-      role="group"
+      role="group" /* NOSONAR S6819: drag-and-drop wrapper; <fieldset>/<details> carry form/disclosure semantics that do not apply */
       className={`ag-row${selected ? " selected" : ""}${isDragging || dragging ? " dragging" : ""}${issue.flagged ? " flagged" : ""}${draggable ? " ag-draggable" : ""}`}
       data-issue-id={issue.id}
       {...(draggable ? listeners : {})}
@@ -193,7 +193,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
     setContainers((prev) => moveLocally(prev, itemIds, targetKey, where === "top" ? 0 : list.length));
     const neighbours = where === "top"
       ? { before_id: null, after_id: list[0]?.id ?? null }
-      : { before_id: list[list.length - 1]?.id ?? null, after_id: null };
+      : { before_id: list.at(-1)?.id ?? null, after_id: null };
     void send(itemIds, targetKey, neighbours);
   };
 
@@ -276,8 +276,10 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
       }
     }
     if (here !== BACKLOG_KEY) items.push({ label: "Move to backlog", onSelect: () => moveTo(ids, BACKLOG_KEY, "top") });
-    items.push({ label: "Top of this list", onSelect: () => moveTo(ids, here, "top") });
-    items.push({ label: "Bottom of this list", onSelect: () => moveTo(ids, here, "bottom") });
+    items.push(
+      { label: "Top of this list", onSelect: () => moveTo(ids, here, "top") },
+      { label: "Bottom of this list", onSelect: () => moveTo(ids, here, "bottom") },
+    );
     return items;
   };
 
@@ -357,6 +359,9 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
           const totals = categoryTotals(issues, mode);
           const isCollapsed = collapsed[key];
           const remaining = sprint.state === "active" ? daysRemaining(sprint.end_date, today) : null;
+          let startTitle = "Start this sprint";
+          if (!canStartAnother) startTitle = "Complete the active sprint first";
+          else if (issues.length === 0) startTitle = "Add issues first";
           return (
             <section key={key} className={`ag-sprint ag-sprint-${sprint.state}`} aria-label={sprint.name}>
               <header className="ag-sprint-head">
@@ -373,7 +378,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
                 {canManage && sprint.state === "future" && (
                   <button type="button" className="btn primary btn-sm"
                     disabled={!canStartAnother || issues.length === 0}
-                    title={!canStartAnother ? "Complete the active sprint first" : issues.length === 0 ? "Add issues first" : "Start this sprint"}
+                    title={startTitle}
                     onClick={() => setDialog({ kind: "start", sprint })}>Start sprint</button>
                 )}
                 {canManage && sprint.state === "active" && (

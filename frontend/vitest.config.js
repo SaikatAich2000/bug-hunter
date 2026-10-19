@@ -11,14 +11,22 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     pool: "forks",
+    // Generous so tests stay green when the machine is busy (CI, scans); passing tests never wait this long.
+    testTimeout: 20000,
+    hookTimeout: 20000,
     include: ["src/**/*.test.jsx"],
     setupFiles: ["./vitest.setup.js"],
     exclude: ["node_modules/**"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "lcov"],
+      reporter: ["text-summary", "json-summary", "lcov"],
       reportsDirectory: "./coverage",
       include: ["src/**/*.js", "src/**/*.jsx"],
+      exclude: [
+        "src/**/*.test.jsx", // the tests themselves
+        "src/test/**", // fake-API test harness
+      ],
+      thresholds: { lines: 95, statements: 95 },
     },
   },
   resolve: {

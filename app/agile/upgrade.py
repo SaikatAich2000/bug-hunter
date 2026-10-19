@@ -82,6 +82,31 @@ def _statement(sql: str):
     return statement
 
 
+def _rank_scope_of(row) -> str:
+    if row.item_type == "Epic":
+        return f"epics:{row.project_id}"
+    if row.sprint_id is not None:
+        return f"sprint:{row.sprint_id}"
+    return f"backlog:{row.project_id}"
+
+
+def _rank_updates(placed: dict[str, list], misplaced: dict[str, list]) -> list[dict]:
+    """Row updates that re-space every list with anything off in it (see _normalize_rank_scopes)."""
+    from app.agile.ranking import is_valid, spaced_ranks
+
+    updates = []
+    for scope in set(placed) | set(misplaced):
+        ok = sorted(placed.get(scope, []), key=lambda r: (r.rank, r.id))
+        bad = sorted(misplaced.get(scope, []), key=lambda r: (r.rank is None, r.rank or "", r.id))
+        ranks = [r.rank for r in ok]
+        if not bad and len(set(ranks)) == len(ranks) and all(is_valid(r) for r in ranks):
+            continue
+        for row, token in zip(ok + bad, spaced_ranks(len(ok) + len(bad))):
+            if (row.rank_scope, row.rank) != (scope, token):
+                updates.append({"bid": row.id, "scope": scope, "token": token})
+    return updates
+
+
 def _normalize_rank_scopes(conn) -> int:
     """Rank every standard issue in the list it sits in (its sprint or its
     project's backlog) and every Epic in its project's Epic list.
@@ -93,7 +118,6 @@ def _normalize_rank_scopes(conn) -> int:
     (the earlier algorithm left tokens of up to 62 characters that leave no
     room after them). Healthy lists are not touched, so a second boot changes
     nothing."""
-    from app.agile.ranking import is_valid, spaced_ranks
     from app.models import Bug
 
     bugs = Bug.__table__
@@ -104,24 +128,10 @@ def _normalize_rank_scopes(conn) -> int:
     placed: dict[str, list] = {}
     misplaced: dict[str, list] = {}
     for row in rows:
-        if row.item_type == "Epic":
-            scope = f"epics:{row.project_id}"
-        elif row.sprint_id is not None:
-            scope = f"sprint:{row.sprint_id}"
-        else:
-            scope = f"backlog:{row.project_id}"
+        scope = _rank_scope_of(row)
         bucket = placed if row.rank_scope == scope and row.rank is not None else misplaced
         bucket.setdefault(scope, []).append(row)
-    updates = []
-    for scope in set(placed) | set(misplaced):
-        ok = sorted(placed.get(scope, []), key=lambda r: (r.rank, r.id))
-        bad = sorted(misplaced.get(scope, []), key=lambda r: (r.rank is None, r.rank or "", r.id))
-        ranks = [r.rank for r in ok]
-        if not bad and len(set(ranks)) == len(ranks) and all(is_valid(r) for r in ranks):
-            continue
-        for row, token in zip(ok + bad, spaced_ranks(len(ok) + len(bad))):
-            if (row.rank_scope, row.rank) != (scope, token):
-                updates.append({"bid": row.id, "scope": scope, "token": token})
+    updates = _rank_updates(placed, misplaced)
     if updates:
         conn.execute(
             bugs.update().where(bugs.c.id == bindparam("bid")).values(
@@ -167,47 +177,60 @@ def _attach(conn, label_id: int, item_ids: set[int]) -> int:
     return added
 
 
-def _retire_levels_to_labels(conn, tables: set[str], bug_columns: set[str]) -> int:
-    from app.models import Bug, Label, WorkItemLabel
+def _label_items(conn, name: str, item_ids: set[int], touched_labels: set[int]) -> int:
+    """Give each item the label ``name`` in its own project (a collection could hold items of several)."""
+    from app.models import Bug
 
     bugs = Bug.__table__
+    by_project: dict[int, set[int]] = {}
+    for row in conn.execute(select(bugs.c.id, bugs.c.project_id).where(bugs.c.id.in_(item_ids))).all():
+        by_project.setdefault(row.project_id, set()).add(row.id)
+    attached = 0
+    for project_id, ids in by_project.items():
+        label_id = _label_id(conn, project_id, name)
+        attached += _attach(conn, label_id, ids)
+        touched_labels.add(label_id)
+    return attached
+
+
+def _ids_of(conn, sql: str, group_id: int) -> set[int]:
+    return set(conn.execute(text(sql), {"gid": group_id}).scalars())
+
+
+def _collections_to_labels(conn, tables: set[str], bug_columns: set[str], touched: set[int]) -> int:
     converted = 0
+    for gid, name in conn.execute(text("SELECT id, name FROM collections")).all():
+        item_ids: set[int] = set()
+        if "collection_id" in bug_columns:
+            item_ids |= _ids_of(conn, "SELECT id FROM bugs WHERE collection_id = :gid", gid)
+        if "collection_items" in tables:
+            item_ids |= _ids_of(conn, "SELECT work_item_id FROM collection_items WHERE collection_id = :gid", gid)
+        if item_ids:
+            converted += _label_items(conn, name, item_ids, touched)
+    return converted
+
+
+def _features_to_labels(conn, touched: set[int]) -> int:
+    converted = 0
+    for gid, title in conn.execute(text("SELECT id, title FROM features")).all():
+        item_ids = _ids_of(conn, "SELECT id FROM bugs WHERE feature_id = :gid", gid)
+        if item_ids:
+            converted += _label_items(conn, title, item_ids, touched)
+    return converted
+
+
+def _retire_levels_to_labels(conn, tables: set[str], bug_columns: set[str]) -> int:
+    from app.models import Label, WorkItemLabel
+
     touched_labels: set[int] = set()
-
-    def label_items(name: str, item_ids: set[int]) -> int:
-        # Labels are per project: each grouped item gets the label in its own
-        # project (a collection could hold items from several projects).
-        attached = 0
-        by_project: dict[int, set[int]] = {}
-        for row in conn.execute(select(bugs.c.id, bugs.c.project_id).where(bugs.c.id.in_(item_ids))).all():
-            by_project.setdefault(row.project_id, set()).add(row.id)
-        for project_id, ids in by_project.items():
-            label_id = _label_id(conn, project_id, name)
-            attached += _attach(conn, label_id, ids)
-            touched_labels.add(label_id)
-        return attached
-
-    def ids_of(sql: str, group_id: int) -> set[int]:
-        return set(conn.execute(text(sql), {"gid": group_id}).scalars())
-
+    converted = 0
     if "collections" in tables:
-        for gid, name in conn.execute(text("SELECT id, name FROM collections")).all():
-            item_ids: set[int] = set()
-            if "collection_id" in bug_columns:
-                item_ids |= ids_of("SELECT id FROM bugs WHERE collection_id = :gid", gid)
-            if "collection_items" in tables:
-                item_ids |= ids_of("SELECT work_item_id FROM collection_items WHERE collection_id = :gid", gid)
-            if item_ids:
-                converted += label_items(name, item_ids)
+        converted += _collections_to_labels(conn, tables, bug_columns, touched_labels)
     if "features" in tables and "feature_id" in bug_columns:
-        for gid, title in conn.execute(text("SELECT id, title FROM features")).all():
-            item_ids = ids_of("SELECT id FROM bugs WHERE feature_id = :gid", gid)
-            if item_ids:
-                converted += label_items(title, item_ids)
-    if "collection_id" in bug_columns:
-        conn.execute(text("UPDATE bugs SET collection_id = NULL WHERE collection_id IS NOT NULL"))
-    if "feature_id" in bug_columns:
-        conn.execute(text("UPDATE bugs SET feature_id = NULL WHERE feature_id IS NOT NULL"))
+        converted += _features_to_labels(conn, touched_labels)
+    for column in ("collection_id", "feature_id"):
+        if column in bug_columns:
+            conn.execute(text(f"UPDATE bugs SET {column} = NULL WHERE {column} IS NOT NULL"))
     if "collection_items" in tables:
         conn.execute(text("DELETE FROM collection_items"))
     labels, links = Label.__table__, WorkItemLabel.__table__

@@ -114,7 +114,8 @@ def test_epic_never_sits_in_a_sprint_or_under_a_parent(world):
     epic.epic_id = world["epic_2"].id
     db.commit()
     db.refresh(epic)
-    assert epic.sprint_id is None and epic.epic_id is None
+    assert epic.sprint_id is None
+    assert epic.epic_id is None
 
 
 def test_standard_issue_never_has_a_parent(world):
@@ -148,7 +149,8 @@ def test_every_tracked_change_is_logged_once_with_old_and_new_values(world):
     points = _changes(db, story.id, "story_points")
     assert [(c.old_value, c.new_value) for c in points] == [("3", "5")]
     created = _changes(db, story.id, "created")
-    assert len(created) == 1 and created[0].new_value == "Story"
+    assert len(created) == 1
+    assert created[0].new_value == "Story"
 
 
 def test_unchanged_assignment_is_not_logged(world):
@@ -178,7 +180,8 @@ def test_change_reason_tags_side_effects(world):
         story.sprint_id = None
     db.commit()
     rows = _changes(db, story.id, "sprint")
-    assert rows and rows[0].reason == "sprint_completed"
+    assert rows
+    assert rows[0].reason == "sprint_completed"
     assert db.info.get("change_reason") is None
     story.sprint_id = world["sprint_b"].id
     db.commit()

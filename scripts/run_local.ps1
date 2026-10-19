@@ -15,6 +15,7 @@
 #>
 param(
     [int]$Port = 8000,
+    [string]$BindHost = "127.0.0.1",
     [switch]$Reload
 )
 $ErrorActionPreference = "Stop"
@@ -44,7 +45,7 @@ if (-not (Test-Path (Join-Path $root ".env"))) {
 
 # Windows consoles default to a legacy code page; keep log output UTF-8.
 $env:PYTHONUTF8 = "1"
-$uvicornArgs = @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$Port", "--no-server-header")
+$uvicornArgs = @("-m", "uvicorn", "app.main:app", "--host", $BindHost, "--port", "$Port", "--no-server-header")
 if ($Reload) { $uvicornArgs += @("--reload", "--reload-dir", "app") }
-Write-Host "Bug Hunter: http://127.0.0.1:$Port  (Ctrl+C to stop)"
+Write-Host "Bug Hunter: http://${BindHost}:$Port  (Ctrl+C to stop)"
 & $py @uvicornArgs

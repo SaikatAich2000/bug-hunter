@@ -26,9 +26,11 @@ export function dragDropAnimation() {
  */
 export async function exitRows(rows) {
   const els = [...rows].filter(Boolean);
-  const undo = () => els.forEach((el) => el.removeAttribute("data-leaving"));
-  if (!els.length || prefersReducedMotion()) return undo;
-  els.forEach((el) => el.setAttribute("data-leaving", ""));
-  await new Promise((r) => setTimeout(r, MOTION_MS));
-  return undo;
+  if (els.length && !prefersReducedMotion()) {
+    for (const el of els) el.dataset.leaving = "";
+    await new Promise((r) => setTimeout(r, MOTION_MS));
+  }
+  return () => {
+    for (const el of els) delete el.dataset.leaving;
+  };
 }

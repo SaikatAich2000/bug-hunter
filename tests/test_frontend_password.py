@@ -77,4 +77,5 @@ def test_password_toggle_css_present(cls):
 # No client-side exemption: the UI applies the same policy to every password.
 def test_client_validator_has_no_exempt_passwords():
     src = _read(CONSTANTS)
-    assert "legacy-default" not in src and "changeme" not in src.lower()
+    assert "legacy-default" not in src
+    assert "changeme" not in src.lower()

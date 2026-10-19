@@ -16,6 +16,8 @@ fail_under = 80
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
+    # Protocol method bodies are signatures only.
+    '^\s*\.\.\.$',
     "if __name__ == .__main__.:",
     # TYPE_CHECKING blocks hold import-only type aliases that never run.
     "if TYPE_CHECKING:",

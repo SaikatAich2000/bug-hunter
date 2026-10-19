@@ -242,7 +242,8 @@ def test_project_move_detaches_project_scoped_links(admin_client):
     res = admin_client.put(f"/api/bugs/{story['id']}", json={"project_id": other["id"]})
     assert res.status_code == 200, res.text
     row = _bug_row(story["id"])
-    assert row.sprint_id is None and row.epic_id is None
+    assert row.sprint_id is None
+    assert row.epic_id is None
     assert row.rank_scope == f"backlog:{other['id']}"
 
 
@@ -255,7 +256,8 @@ def test_project_move_takes_subtasks_along_but_not_epic_children(admin_client):
     child = _agile_item(admin_client, project["id"], "Child sub-task", "Sub-task", parent_id=parent["id"])
 
     res = admin_client.put(f"/api/bugs/{child['id']}", json={"project_id": other["id"]})
-    assert res.status_code == 409 and "parent" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "parent" in res.json()["detail"]
 
     res = admin_client.put(f"/api/bugs/{parent['id']}", json={"project_id": other["id"]})
     assert res.status_code == 200, res.text
@@ -292,7 +294,8 @@ def test_agile_create_validates_assignees_and_places_sprint_properly(admin_clien
     res = admin_client.post("/api/agile/work-items", json={
         "project_id": project["id"], "title": "Sprint epic", "item_type": "Epic", "sprint_id": sprint["id"],
     })
-    assert res.status_code == 422 and "not planned" in res.json()["detail"][0]["msg"]
+    assert res.status_code == 422
+    assert "not planned" in res.json()["detail"][0]["msg"]
 
 
 # --- Taxonomy ----------------------------------------------------------------
@@ -306,7 +309,8 @@ def test_subtask_sprint_follows_its_parent_on_every_route(admin_client):
     sub = _agile_item(admin_client, project["id"], "Child", "Sub-task", parent_id=story["id"])
     assert _bug_row(sub["id"]).sprint_id == sprint["id"]
     res = admin_client.put(f"/api/bugs/{sub['id']}", json={"sprint_id": None})
-    assert res.status_code == 422 and "parent" in res.json()["detail"][0]["msg"]
+    assert res.status_code == 422
+    assert "parent" in res.json()["detail"][0]["msg"]
     res = admin_client.put(f"/api/bugs/{story['id']}", json={"sprint_id": None})
     assert res.status_code == 200, res.text
     assert _bug_row(sub["id"]).sprint_id is None
@@ -320,7 +324,8 @@ def test_archived_epic_refuses_new_issues(admin_client):
     res = admin_client.post("/api/agile/work-items", json={
         "project_id": project["id"], "title": "Too late", "item_type": "Story", "epic_id": epic["id"],
     })
-    assert res.status_code == 422 and "Archived" in res.json()["detail"][0]["msg"]
+    assert res.status_code == 422
+    assert "Archived" in res.json()["detail"][0]["msg"]
     story = _agile_item(admin_client, project["id"], "Existing", "Story")
     res = admin_client.put(f"/api/agile/work-items/{story['id']}/hierarchy",
                            json={"epic_id": epic["id"], "version": story["version"]})
@@ -350,7 +355,8 @@ def test_report_csv_neutralises_formulas(admin_client):
     res = admin_client.post(f"/api/agile/reports/export?report_key=scope-change&sprint_id={sprint['id']}")
     assert res.status_code == 200, res.text
     rows = list(csv.DictReader(io.StringIO(res.text)))
-    assert rows and all(not str(v).startswith(("=", "@", "+", "-")) for r in rows for v in r.values())
+    assert rows
+    assert all(not str(v).startswith(("=", "@", "+", "-")) for r in rows for v in r.values())
 
 
 def test_flow_reports_validate_the_date_range(admin_client):
@@ -397,7 +403,8 @@ def test_bulk_import_reports_an_overlong_title_instead_of_failing(admin_client):
     res = admin_client.post("/api/bugs/import", files={"file": ("items.csv", body.encode(), "text/csv")})
     assert res.status_code == 200, res.text
     out = res.json()
-    assert out["created"] == 1 and out["failed"] == 1
+    assert out["created"] == 1
+    assert out["failed"] == 1
     assert "at most 200" in out["errors"][0]["error"]
 
 
@@ -464,8 +471,129 @@ def test_https_deploy_without_app_env_keeps_the_lighter_gate():
     )
     assert _production_config_errors(types.SimpleNamespace(**base, is_production_env=False)) == []
     strict = _production_config_errors(types.SimpleNamespace(**base, is_production_env=True))
-    assert any("https" in e for e in strict) and any("console" in e for e in strict)
+    assert any("https" in e for e in strict)
+    assert any("console" in e for e in strict)
     weak = _production_config_errors(types.SimpleNamespace(
         **{**base, "SESSION_SECRET": "short", "AUTO_LOGIN_ENABLED": True}, is_production_env=False,
     ))
-    assert any("SESSION_SECRET" in e for e in weak) and any("AUTO_LOGIN" in e for e in weak)
+    assert any("SESSION_SECRET" in e for e in weak)
+    assert any("AUTO_LOGIN" in e for e in weak)
+
+
+def _prod_settings(**overrides):
+    import types
+
+    fields = dict(
+        SESSION_SECRET="x" * 40, BOOTSTRAP_ADMIN_PASSWORD="Strong-Pass-1", AUTO_LOGIN_ENABLED=False,
+        COOKIE_SECURE=True, APP_BASE_URL="https://bugs.example.com", EMAIL_BACKEND="smtp",
+        GIT_CREDENTIAL_ENCRYPTION_KEY="", is_production=True, is_production_env=True,
+    )
+    return types.SimpleNamespace(**{**fields, **overrides})
+
+
+def test_production_config_names_every_unsafe_setting():
+    from app.main import _meets_password_policy, _production_config_errors
+
+    assert _meets_password_policy("Strong-Pass-1") is True
+    assert _meets_password_policy("abc") is False
+    assert _production_config_errors(_prod_settings()) == []
+
+    errors = _production_config_errors(_prod_settings(
+        BOOTSTRAP_ADMIN_PASSWORD="ChangeMe123!", GIT_CREDENTIAL_ENCRYPTION_KEY="not-a-key",
+        COOKIE_SECURE=False, APP_BASE_URL="", EMAIL_BACKEND="console"))
+    assert any("default bootstrap admin password" in e for e in errors)
+    assert any("GIT_CREDENTIAL_ENCRYPTION_KEY is malformed" in e for e in errors)
+    assert any("COOKIE_SECURE" in e for e in errors)
+    assert any("APP_BASE_URL must be set" in e for e in errors)
+    assert any("console" in e for e in errors)
+
+    weak = _production_config_errors(_prod_settings(BOOTSTRAP_ADMIN_PASSWORD="weakpass"))
+    assert any("password policy" in e for e in weak)
+    placeholder = _production_config_errors(_prod_settings(BOOTSTRAP_ADMIN_PASSWORD="replace_with_a_password"))
+    assert any("default bootstrap admin password" in e for e in placeholder)
+
+
+def test_production_gate_skips_the_bootstrap_check_once_users_exist(client, monkeypatch, caplog):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+    from app.main import _enforce_production_config
+
+    _enforce_production_config(_prod_settings(is_production=False, SESSION_SECRET="short"))  # not production: no-op
+    weak_secret = _prod_settings(SESSION_SECRET="short")
+    with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+        _enforce_production_config(weak_secret)
+    # The test database already holds the bootstrap admin, so a weak bootstrap password alone is tolerated.
+    weak_bootstrap = _prod_settings(BOOTSTRAP_ADMIN_PASSWORD="ChangeMe123!")
+    _enforce_production_config(weak_bootstrap)
+
+    def _no_database():
+        raise SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(database, "SessionLocal", _no_database)
+    with caplog.at_level("WARNING", logger="bug_hunter"):
+        with pytest.raises(RuntimeError, match="bootstrap"):
+            _enforce_production_config(weak_bootstrap)
+    assert "Production bootstrap-password check skipped" in caplog.text
+
+
+def test_startup_repairs_boards_and_transitions_from_older_releases(admin_client, caplog):
+    from app import main
+    from app.database import SessionLocal
+    from app.models import Board, BoardColumn, BoardColumnStatus, WorkflowTransition
+
+    project = admin_client.post("/api/projects", json={"name": "Older Board", "color": "#c9764f"}).json()
+    board_id = admin_client.post(f"/api/agile/projects/{project['id']}/enable",
+                                 json={"feature_flags": {}}).json()["board_id"]
+    with SessionLocal() as db:
+        testing = db.query(BoardColumn).filter_by(board_id=board_id, category="testing").one()
+        db.query(BoardColumnStatus).filter_by(board_column_id=testing.id).delete()
+        db.query(BoardColumn).filter_by(id=testing.id).delete()
+        db.query(WorkflowTransition).filter_by(work_item_type="Bug").delete()
+        db.commit()
+
+    with caplog.at_level("INFO", logger="bug_hunter"):
+        main._reconcile_existing_boards()
+    assert "Reconciled Testing column onto" in caplog.text
+    with SessionLocal() as db:
+        assert db.query(BoardColumn).filter_by(board_id=board_id, category="testing").count() == 1
+        assert db.query(WorkflowTransition).filter_by(work_item_type="Bug").count() > 0
+        assert db.get(Board, board_id) is not None
+
+
+def test_startup_reconciliation_never_blocks_boot(monkeypatch, caplog):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app import main
+
+    def _db_error(_db):
+        raise SQLAlchemyError("schema unreadable")
+
+    monkeypatch.setattr(main, "_board_schema_ready", _db_error)
+    with caplog.at_level("ERROR", logger="bug_hunter"):
+        main._reconcile_existing_boards()
+    assert "Board Testing-column reconciliation failed" in caplog.text
+
+    def _unexpected(_db):
+        raise RuntimeError("surprise")
+
+    monkeypatch.setattr(main, "_board_schema_ready", _unexpected)
+    with caplog.at_level("ERROR", logger="bug_hunter"):
+        main._reconcile_existing_boards()
+    assert "Board reconciliation failed unexpectedly" in caplog.text
+
+
+def test_api_docs_pages_and_the_push_csp(client, monkeypatch):
+    from app import main
+    from app.config import Settings, get_settings
+
+    assert "swagger-ui-bundle.js" in main.swagger_docs().body.decode()
+    assert "redoc.standalone.js" in main.redoc_docs().body.decode()
+    assert main.swagger_ui_init_js().media_type == "application/javascript"
+
+    monkeypatch.setattr(Settings, "WEB_PUSH_ENABLED", True)
+    get_settings.cache_clear()
+    assert "fcm.googleapis.com" in main._build_csp()
+    monkeypatch.setattr(Settings, "WEB_PUSH_ENABLED", False)
+    get_settings.cache_clear()
+    assert "fcm.googleapis.com" not in main._build_csp()

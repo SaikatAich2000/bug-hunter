@@ -254,6 +254,16 @@ class TestProjects:
         r = admin_client.post("/api/projects", json={"name": "Unique"})
         assert r.status_code == 409
 
+    def test_project_name_uniqueness_ignores_case(self, admin_client):
+        _create_project(admin_client, name="CaseDup")
+        assert admin_client.post("/api/projects", json={"name": "casedup"}).status_code == 409
+        other = _create_project(admin_client, name="CaseOther")
+        r = admin_client.put(f"/api/projects/{other['id']}", json={"name": "CASEDUP"})
+        assert r.status_code == 409
+        # renaming a project to a different casing of its own name is fine
+        r = admin_client.put(f"/api/projects/{other['id']}", json={"name": "caseother"})
+        assert r.status_code == 200
+
     def test_delete_project_with_bugs_is_409(self, admin_client):
         p = _create_project(admin_client, name="HasBugs")
         _create_bug(admin_client, p["id"])
@@ -1109,3 +1119,11 @@ class TestV321Chatbot:
         _create_bug(admin_client, p["id"], title="Yearly")
         r = self._ask(admin_client, "bugs created this year")
         assert r["intent"] in ("list_bugs", "count_bugs"), r
+
+
+def test_attachment_too_large_message_is_never_zero_mb():
+    from app.routes.bugs import _too_large_detail
+
+    assert _too_large_detail(50 * 1024 * 1024).endswith("is 50 MB.")
+    assert _too_large_detail(1000).endswith("is 1 KB.")
+    assert "0 MB" not in _too_large_detail(512 * 1024)

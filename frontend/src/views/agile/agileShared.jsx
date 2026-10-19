@@ -82,7 +82,7 @@ export function localToday() {
 /** Name for the next sprint, as the server picks it: "Mobile Board" -> "Mobile Sprint 3", the
  * default "Sprint Board" -> "Sprint 3" (never "Sprint Sprint 3"), skipping names in use. */
 export function defaultSprintName(boardName, sprints) {
-  const base = (boardName || "").replace(/ Board$/, "").trim().replace(/\s*\bsprints?$/i, "").trim();
+  const base = (boardName || "").replace(/ Board$/, "").trim().replace(/\bsprints?$/i, "").trim();
   const prefix = base ? `${base} Sprint` : "Sprint";
   const taken = new Set(sprints.map((s) => (s.name || "").trim().toLowerCase()));
   let n = sprints.length + 1;

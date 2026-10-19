@@ -485,12 +485,11 @@ def _finish_analysis(db: Session, analysis: SprintAnalysis, replay: _Replay, end
     analysis.series.append((end, end_remaining, end_completed + end_remaining, end_completed))
 
 
-def _analyze_legacy(db: Session, analysis: SprintAnalysis) -> SprintAnalysis:
-    """Sprints from before full history: use the sprint's own event rows."""
-    analysis.history_complete = False
-    mode, sprint = analysis.mode, analysis.sprint
+def _replay_legacy_events(db: Session, analysis: SprintAnalysis) -> None:
+    """Fold the sprint's committed/added/removed event rows into ``analysis``."""
+    mode = analysis.mode
     rows = db.scalars(
-        select(SprintItemHistory).where(SprintItemHistory.sprint_id == sprint.id)
+        select(SprintItemHistory).where(SprintItemHistory.sprint_id == analysis.sprint.id)
         .order_by(SprintItemHistory.occurred_at, SprintItemHistory.id)
     ).all()
 
@@ -509,6 +508,13 @@ def _analyze_legacy(db: Session, analysis: SprintAnalysis) -> SprintAnalysis:
             analysis.added.add(row.work_item_id)
         elif row.event_type == "removed":
             analysis.removed[row.work_item_id] = est(row.work_item_id, row.old_estimate)
+
+
+def _analyze_legacy(db: Session, analysis: SprintAnalysis) -> SprintAnalysis:
+    """Sprints from before full history: use the sprint's own event rows."""
+    analysis.history_complete = False
+    mode, sprint = analysis.mode, analysis.sprint
+    _replay_legacy_events(db, analysis)
     recorded = _completion_from_records(db, sprint)
     if recorded is not None:
         analysis.completed, analysis.incomplete = recorded
@@ -729,14 +735,8 @@ def _status_timelines(db: Session, project_id: int, types: tuple[str, ...]) -> d
     return out
 
 
-def cumulative_flow_report(db: Session, board: Board, date_from: str, date_to: str,
-                           include_subtasks: bool = True) -> dict:
-    zone = board_zone(board)
-    columns = ordered_columns(board)
-    placement = {status: col.id for status, col in status_to_column(board).items()}
-    types = (*STANDARD_TYPES, SUBTASK) if include_subtasks else STANDARD_TYPES
-    timelines = _status_timelines(db, board.project_id, types)
-    first, last = date.fromisoformat(date_from), date.fromisoformat(date_to)
+def _column_events(timelines: dict, placement: dict) -> list[tuple[datetime, int | None, int | None]]:
+    """(when, column left, column entered) for every move of an issue between board columns."""
     events: list[tuple[datetime, int | None, int | None]] = []
     for timeline in timelines.values():
         previous_column = None
@@ -746,6 +746,11 @@ def cumulative_flow_report(db: Session, board: Board, date_from: str, date_to: s
                 events.append((at, previous_column, column))
             previous_column = column
     events.sort(key=lambda e: e[0])
+    return events
+
+
+def _flow_points(first: date, last: date, zone, events: list, columns: list) -> list[dict]:
+    """Issues per column at the end of each day from ``first`` to ``last``."""
     counts = {col.id: 0 for col in columns}
     points = []
     cursor = 0
@@ -761,6 +766,17 @@ def cumulative_flow_report(db: Session, board: Board, date_from: str, date_to: s
             cursor += 1
         points.append({"date": day.isoformat(), "counts": {str(k): v for k, v in counts.items()}})
         day += timedelta(days=1)
+    return points
+
+
+def cumulative_flow_report(db: Session, board: Board, date_from: str, date_to: str,
+                           include_subtasks: bool = True) -> dict:
+    zone = board_zone(board)
+    columns = ordered_columns(board)
+    placement = {status: col.id for status, col in status_to_column(board).items()}
+    types = (*STANDARD_TYPES, SUBTASK) if include_subtasks else STANDARD_TYPES
+    events = _column_events(_status_timelines(db, board.project_id, types), placement)
+    points = _flow_points(date.fromisoformat(date_from), date.fromisoformat(date_to), zone, events, columns)
     return {
         "board_id": board.id, "project_id": board.project_id,
         "columns": [{"id": c.id, "name": c.name, "category": c.category} for c in columns],
@@ -776,35 +792,27 @@ def _work_column_statuses(board: Board) -> tuple[set[str], list[str]]:
     return statuses, [c.name for c in work]
 
 
-def control_chart_report(db: Session, board: Board, date_from: str, date_to: str) -> dict:
-    zone = board_zone(board)
-    done = done_status_values(db, board)
-    work_statuses, work_columns = _work_column_statuses(board)
-    range_start = _midnight(date.fromisoformat(date_from), zone)
-    range_end = _midnight(date.fromisoformat(date_to) + timedelta(days=1), zone)
-    timelines = _status_timelines(db, board.project_id, STANDARD_TYPES)
-    completions: list[tuple[int, datetime | None, datetime, float, datetime]] = []
-    # One dot per issue, at its last move into the done column.
-    # Its cycle time is the time spent in the work columns up to then,
-    # summed over every pass (an issue reopened and finished again counts all
-    # the time worked on it).
-    for item_id, timeline in timelines.items():
-        created_at = timeline[0][0]
-        cycle_seconds = 0.0
-        started: datetime | None = None
-        last: tuple | None = None
-        for (at, status), nxt in zip(timeline, timeline[1:] + [(None, None)]):
-            next_at, next_status = nxt
-            if status in work_statuses and next_at is not None:
-                cycle_seconds += (next_at - at).total_seconds()
-                started = started or at
-            if next_at is not None and next_status in done and status not in done:
-                last = (item_id, started, next_at, cycle_seconds, created_at)
-        if last is not None and range_start <= last[2] < range_end and timeline[-1][1] in done:
-            completions.append(last)
-    ids = [c[0] for c in completions]
-    items = {}
-    for chunk in _chunks(sorted(set(ids))):
+def _last_completion(item_id: int, timeline: list, work_statuses: set[str], done: set[str]):
+    """(id, started, finished, cycle seconds, created) for the issue's last move into done, or None.
+
+    Cycle time is the time spent in the work columns up to then, summed over every pass (an issue
+    reopened and finished again counts all the time worked on it)."""
+    created_at = timeline[0][0]
+    cycle_seconds = 0.0
+    started: datetime | None = None
+    last: tuple | None = None
+    for (at, status), (next_at, next_status) in zip(timeline, timeline[1:] + [(None, None)]):
+        if status in work_statuses and next_at is not None:
+            cycle_seconds += (next_at - at).total_seconds()
+            started = started or at
+        if next_at is not None and next_status in done and status not in done:
+            last = (item_id, started, next_at, cycle_seconds, created_at)
+    return last
+
+
+def _control_entries(db: Session, completions: list) -> list[dict]:
+    items: dict[int, Bug] = {}
+    for chunk in _chunks(sorted({c[0] for c in completions})):
         items.update({b.id: b for b in db.scalars(select(Bug).where(Bug.id.in_(chunk))).all()})
     entries = []
     for item_id, started, finished, seconds, created_at in sorted(completions, key=lambda c: c[2]):
@@ -817,13 +825,34 @@ def control_chart_report(db: Session, board: Board, date_from: str, date_to: str
             "cycle_time_days": round(seconds / 86400, 2),
             "lead_time_days": round((finished - created_at).total_seconds() / 86400, 2),
         })
-    values = [e["cycle_time_days"] for e in entries]
+    return entries
+
+
+def _rolling_average(entries: list[dict], values: list[float]) -> list[dict]:
     window = max(1, round(len(values) * 0.2))
     rolling = []
     for n, entry in enumerate(entries):
         lo, hi = max(0, n - window // 2), min(len(values), n + window // 2 + 1)
         rolling.append({"completed_at": entry["completed_at"],
                         "value": round(sum(values[lo:hi]) / (hi - lo), 2)})
+    return rolling
+
+
+def control_chart_report(db: Session, board: Board, date_from: str, date_to: str) -> dict:
+    zone = board_zone(board)
+    done = done_status_values(db, board)
+    work_statuses, work_columns = _work_column_statuses(board)
+    range_start = _midnight(date.fromisoformat(date_from), zone)
+    range_end = _midnight(date.fromisoformat(date_to) + timedelta(days=1), zone)
+    timelines = _status_timelines(db, board.project_id, STANDARD_TYPES)
+    completions = []
+    # One dot per issue, at its last move into the done column.
+    for item_id, timeline in timelines.items():
+        last = _last_completion(item_id, timeline, work_statuses, done)
+        if last is not None and range_start <= last[2] < range_end and timeline[-1][1] in done:
+            completions.append(last)
+    entries = _control_entries(db, completions)
+    values = [e["cycle_time_days"] for e in entries]
     return {
         "board_id": board.id, "work_columns": work_columns, "count": len(values),
         "average_days": round(statistics.fmean(values), 2) if values else 0.0,
@@ -831,8 +860,58 @@ def control_chart_report(db: Session, board: Board, date_from: str, date_to: str
         "min_days": min(values) if values else 0.0,
         "max_days": max(values) if values else 0.0,
         "std_dev_days": round(statistics.pstdev(values), 2) if len(values) > 1 else 0.0,
-        "entries": entries, "rolling_average": rolling,
+        "entries": entries, "rolling_average": _rolling_average(entries, values),
     }
+
+
+def _epic_bucket(category: str) -> str:
+    if category == "done":
+        return "done"
+    return "in_progress" if category in ("in_progress", "testing") else "todo"
+
+
+def _epic_sprint_row(db: Session, sprint: Sprint, board: Board, history: History, epic_text: str,
+                     mode: str) -> dict | None:
+    a = analyze_sprint(db, sprint, board)
+    if a.end is None:
+        return None
+
+    def estimate(i: int) -> float:
+        return statistic_value(mode, history.value(i, "story_points", a.end),
+                               history.value(i, "original_estimate", a.end))
+
+    in_epic = [i for i in history.items if history.exists(i, a.end)
+               and history.value(i, "epic", a.end) == epic_text]
+    done = done_status_values(db, board)
+    scope = sum(estimate(i) for i in in_epic)
+    finished_value = sum(estimate(i) for i in in_epic if history.value(i, "status", a.end) in done)
+    completed_here = [i for i in a.completed_inside if i in history.items
+                      and history.value(i, "epic", a.end) == epic_text]
+    return {
+        "sprint_id": sprint.id, "sprint_name": sprint.name, "state": sprint.state,
+        "completed_count": len(completed_here),
+        "completed_estimate": round(sum(a.estimate_at_end.get(i, 0.0) for i in completed_here), 2),
+        "scope_estimate": round(scope, 2),
+        "remaining_estimate": round(scope - finished_value, 2),
+    }
+
+
+def _epic_sprint_rows(db: Session, epic: Bug, issues: list, board: Board, mode: str) -> list[dict]:
+    epic_text = str(epic.id)
+    candidate_ids = {i.id for i in issues} | set(db.scalars(select(WorkItemChange.work_item_id).where(
+        WorkItemChange.field == "epic",
+        or_(WorkItemChange.old_value == epic_text, WorkItemChange.new_value == epic_text),
+    )).all())
+    candidates = []
+    for chunk in _chunks(sorted(candidate_ids)):
+        candidates.extend(db.scalars(select(Bug).where(Bug.id.in_(chunk), Bug.item_type.in_(STANDARD_TYPES))).all())
+    history = History(db, candidates)
+    sprints = db.scalars(
+        select(Sprint).where(Sprint.board_id == board.id, Sprint.state.in_(("active", "closed")))
+        .order_by(Sprint.sequence_number, Sprint.id)
+    ).all()
+    rows = (_epic_sprint_row(db, sprint, board, history, epic_text, mode) for sprint in sprints)
+    return [row for row in rows if row is not None]
 
 
 def epic_report(db: Session, epic: Bug, board: Board | None) -> dict:
@@ -845,48 +924,12 @@ def epic_report(db: Session, epic: Bug, board: Board | None) -> dict:
     buckets: dict[str, list[dict]] = {"done": [], "in_progress": [], "todo": []}
     for issue in issues:
         category = category_of(categories, issue)
-        bucket = "done" if category == "done" else ("in_progress" if category in ("in_progress", "testing") else "todo")
-        buckets[bucket].append({
+        buckets[_epic_bucket(category)].append({
             "id": issue.id, "display_id": _display(issue), "title": issue.title,
             "item_type": issue.item_type or "Bug", "status": issue.status, "status_category": category,
             "estimate": item_statistic(mode, issue), "assignees": [a.name for a in issue.assignees],
         })
-    sprint_rows = []
-    if board is not None:
-        epic_text = str(epic.id)
-        candidate_ids = {i.id for i in issues} | set(db.scalars(select(WorkItemChange.work_item_id).where(
-            WorkItemChange.field == "epic",
-            or_(WorkItemChange.old_value == epic_text, WorkItemChange.new_value == epic_text),
-        )).all())
-        candidates = []
-        for chunk in _chunks(sorted(candidate_ids)):
-            candidates.extend(db.scalars(select(Bug).where(Bug.id.in_(chunk), Bug.item_type.in_(STANDARD_TYPES))).all())
-        history = History(db, candidates)
-        done = done_status_values(db, board)
-        sprints = db.scalars(
-            select(Sprint).where(Sprint.board_id == board.id, Sprint.state.in_(("active", "closed")))
-            .order_by(Sprint.sequence_number, Sprint.id)
-        ).all()
-        for sprint in sprints:
-            a = analyze_sprint(db, sprint, board)
-            if a.end is None:
-                continue
-            in_epic = [i for i in history.items if history.exists(i, a.end)
-                       and history.value(i, "epic", a.end) == epic_text]
-            scope = sum(statistic_value(mode, history.value(i, "story_points", a.end),
-                                        history.value(i, "original_estimate", a.end)) for i in in_epic)
-            finished = [i for i in in_epic if history.value(i, "status", a.end) in done]
-            finished_value = sum(statistic_value(mode, history.value(i, "story_points", a.end),
-                                                 history.value(i, "original_estimate", a.end)) for i in finished)
-            completed_here = [i for i in a.completed_inside if i in history.items
-                              and history.value(i, "epic", a.end) == epic_text]
-            sprint_rows.append({
-                "sprint_id": sprint.id, "sprint_name": sprint.name, "state": sprint.state,
-                "completed_count": len(completed_here),
-                "completed_estimate": round(sum(a.estimate_at_end.get(i, 0.0) for i in completed_here), 2),
-                "scope_estimate": round(scope, 2),
-                "remaining_estimate": round(scope - finished_value, 2),
-            })
+    sprint_rows = _epic_sprint_rows(db, epic, issues, board, mode) if board is not None else []
     return {
         "epic_id": epic.id, "display_id": _display(epic), "title": epic.title, "status": epic.status,
         "estimation_mode": mode, "statistic_label": statistic_label(mode),
@@ -895,21 +938,20 @@ def epic_report(db: Session, epic: Bug, board: Board | None) -> dict:
     }
 
 
-def workload_report(db: Session, sprint: Sprint, board: Board) -> dict:
-    mode = board.estimation_mode
+def _workload_items(db: Session, sprint: Sprint, board: Board) -> tuple[list, dict[int, float]]:
+    """The sprint's issues with their estimates; a closed sprint shows what it held when it closed."""
     if sprint.state == "closed":
-        # What the sprint held when it closed, carried-over issues included,
-        # at their estimates then.
+        # Carried-over issues included, at their estimates then.
         a = analyze_sprint(db, sprint, board)
-        items = [a.items[i] for i in sorted(a.completed | a.incomplete)]
-        estimates = {i: a.estimate_at_end.get(i, 0.0) for i in a.items}
-    else:
-        items = list(db.scalars(
-            select(Bug).options(selectinload(Bug.assignees))
-            .where(Bug.sprint_id == sprint.id, Bug.item_type.in_(STANDARD_TYPES))
-        ).all())
-        estimates = {item.id: item_statistic(mode, item) for item in items}
-    capacity = {c.user_id: c for c in db.scalars(select(SprintCapacity).where(SprintCapacity.sprint_id == sprint.id)).all()}
+        return [a.items[i] for i in sorted(a.completed | a.incomplete)], {i: a.estimate_at_end.get(i, 0.0) for i in a.items}
+    items = list(db.scalars(
+        select(Bug).options(selectinload(Bug.assignees))
+        .where(Bug.sprint_id == sprint.id, Bug.item_type.in_(STANDARD_TYPES))
+    ).all())
+    return items, {item.id: item_statistic(board.estimation_mode, item) for item in items}
+
+
+def _per_user_totals(items: list, estimates: dict[int, float]) -> tuple[dict[int, dict], int, float]:
     per_user: dict[int, dict] = {}
     unassigned_count, unassigned_estimate = 0, 0.0
     for item in items:
@@ -921,54 +963,79 @@ def workload_report(db: Session, sprint: Sprint, board: Board) -> dict:
             entry = per_user.setdefault(assignee.id, {"count": 0, "estimate": 0.0, "name": assignee.name})
             entry["count"] += 1
             entry["estimate"] += value
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(set(per_user) | set(capacity)))).all()} \
-        if (per_user or capacity) else {}
-    entries = []
-    for user_id in sorted(set(per_user) | set(capacity), key=lambda u: (users[u].name if u in users else "")):
-        data = per_user.get(user_id, {"count": 0, "estimate": 0.0, "name": users[user_id].name if user_id in users else "?"})
-        cap = capacity.get(user_id)
-        cap_value = float(cap.capacity_value) if cap else None
-        entries.append({
-            "user_id": user_id, "user_name": data["name"],
-            "assigned_estimate": round(data["estimate"], 2), "assigned_count": data["count"],
-            "capacity_value": cap_value, "capacity_unit": cap.capacity_unit if cap else None,
-            "utilization_pct": round(data["estimate"] / cap_value * 100, 1) if cap_value else None,
-        })
+    return per_user, unassigned_count, unassigned_estimate
+
+
+def _workload_entry(user_id: int, data: dict, cap) -> dict:
+    cap_value = float(cap.capacity_value) if cap else None
+    return {
+        "user_id": user_id, "user_name": data["name"],
+        "assigned_estimate": round(data["estimate"], 2), "assigned_count": data["count"],
+        "capacity_value": cap_value, "capacity_unit": cap.capacity_unit if cap else None,
+        "utilization_pct": round(data["estimate"] / cap_value * 100, 1) if cap_value else None,
+    }
+
+
+def workload_report(db: Session, sprint: Sprint, board: Board) -> dict:
+    items, estimates = _workload_items(db, sprint, board)
+    capacity = {c.user_id: c for c in db.scalars(select(SprintCapacity).where(SprintCapacity.sprint_id == sprint.id)).all()}
+    per_user, unassigned_count, unassigned_estimate = _per_user_totals(items, estimates)
+    user_ids = set(per_user) | set(capacity)
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids))).all()} if user_ids else {}
+
+    def name_of(user_id: int) -> str:
+        return users[user_id].name if user_id in users else ""
+
+    entries = [
+        _workload_entry(
+            user_id,
+            per_user.get(user_id, {"count": 0, "estimate": 0.0, "name": name_of(user_id) or "?"}),
+            capacity.get(user_id),
+        )
+        for user_id in sorted(user_ids, key=name_of)
+    ]
     return {"sprint_id": sprint.id, "unassigned_count": unassigned_count,
             "unassigned_estimate": round(unassigned_estimate, 2), "entries": entries}
+
+
+_SCOPE_EVENT_TYPES = {EVENT_ADDED: "added", EVENT_CREATED: "added",
+                      EVENT_REMOVED: "removed", EVENT_ESTIMATE: "estimate_changed"}
+
+
+def _legacy_scope_entries(db: Session, a: SprintAnalysis) -> list[dict]:
+    """Scope changes of a sprint without full history come from its own event rows."""
+    rows = db.scalars(select(SprintItemHistory).where(
+        SprintItemHistory.sprint_id == a.sprint.id,
+        SprintItemHistory.event_type.in_(("added", "removed")),
+    ).order_by(SprintItemHistory.occurred_at)).all()
+    entries = []
+    for row in rows:
+        item = a.items.get(row.work_item_id)
+        label = _display(item) if item else f"#{row.work_item_id}"
+        entries.append({
+            "work_item_id": row.work_item_id, "display_id": label,
+            "title": item.title if item else f"#{row.work_item_id}", "event_type": row.event_type,
+            "occurred_at": _aware(row.occurred_at), "change": 0.0, "actor_name": "",
+        })
+    return entries
 
 
 def scope_change_report(db: Session, sprint: Sprint, board: Board) -> dict:
     a = analyze_sprint(db, sprint, board)
     actor_ids = {e["actor_id"] for e in a.events if e.get("actor_id")}
-    names = {u.id: u.name for u in db.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
-    entries = []
-    kinds = {EVENT_ADDED: "added", EVENT_CREATED: "added",
-             EVENT_REMOVED: "removed", EVENT_ESTIMATE: "estimate_changed"}
-    for event in a.events:
-        if event["event"] in kinds:
-            entries.append({
-                "work_item_id": event["work_item_id"], "display_id": event["display_id"],
-                "title": event["title"], "event_type": kinds[event["event"]],
-                "occurred_at": event["at"], "change": event["change"],
-                "actor_name": names.get(event.get("actor_id"), ""),
-            })
+    names = {u.id: u.name for u in db.scalars(select(User).where(User.id.in_(actor_ids))).all()}
+    entries = [
+        {
+            "work_item_id": event["work_item_id"], "display_id": event["display_id"],
+            "title": event["title"], "event_type": _SCOPE_EVENT_TYPES[event["event"]],
+            "occurred_at": event["at"], "change": event["change"],
+            "actor_name": names.get(event.get("actor_id"), ""),
+        }
+        for event in a.events if event["event"] in _SCOPE_EVENT_TYPES
+    ]
     if not a.history_complete:
-        for row in db.scalars(select(SprintItemHistory).where(
-            SprintItemHistory.sprint_id == sprint.id,
-            SprintItemHistory.event_type.in_(("added", "removed")),
-        ).order_by(SprintItemHistory.occurred_at)).all():
-            item = a.items.get(row.work_item_id)
-            entries.append({
-                "work_item_id": row.work_item_id, "display_id": _display(item) if item else f"#{row.work_item_id}",
-                "title": item.title if item else f"#{row.work_item_id}", "event_type": row.event_type,
-                "occurred_at": _aware(row.occurred_at), "change": 0.0, "actor_name": "",
-            })
+        entries.extend(_legacy_scope_entries(db, a))
     return {"sprint_id": sprint.id, "entries": entries}
-
-
-_SCOPE_EVENT_TYPES = {EVENT_ADDED: "added", EVENT_CREATED: "added",
-                      EVENT_REMOVED: "removed", EVENT_ESTIMATE: "estimate_changed"}
 
 
 def _daily_item_state(a: SprintAnalysis, history: History, item_id: int, at: datetime,
@@ -977,8 +1044,8 @@ def _daily_item_state(a: SprintAnalysis, history: History, item_id: int, at: dat
     item = a.items[item_id]
     status = history.value(item_id, "status", at)
     column = placement.get(status)
-    category = "done" if status in a.done else (column.category if column else "todo")
-    if column is not None and column is last_column:
+    category = column.category if column else "todo"
+    if status in a.done or (column is not None and column is last_column):
         category = "done"
     value = statistic_value(a.mode, history.value(item_id, "story_points", at),
                             history.value(item_id, "original_estimate", at))

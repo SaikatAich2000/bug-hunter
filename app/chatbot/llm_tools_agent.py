@@ -105,9 +105,9 @@ def _headers_and_url(settings) -> Optional[tuple[str, str, str]]:
     """Return (url, api_key, model) for whichever provider is configured;
     Groq first, OpenRouter as fallback. None if neither is usable."""
     if settings.GROQ_API_KEY:
-        return "https://api.groq.com/openai/v1/chat/completions", settings.GROQ_API_KEY, settings.GROQ_MODEL
+        return settings.GROQ_API_URL, settings.GROQ_API_KEY, settings.GROQ_MODEL
     if settings.OPENROUTER_API_KEY:
-        return "https://openrouter.ai/api/v1/chat/completions", settings.OPENROUTER_API_KEY, settings.OPENROUTER_MODEL
+        return settings.OPENROUTER_API_URL, settings.OPENROUTER_API_KEY, settings.OPENROUTER_MODEL
     return None
 
 

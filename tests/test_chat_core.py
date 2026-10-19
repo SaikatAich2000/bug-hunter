@@ -2267,21 +2267,18 @@ def test_cov_assign_bug_not_found_and_perm_denied(client):
         assert r_missing.intent == "action_error"
         assert "not found" in r_missing.blocks[0].payload["text"].lower()
 
-        # 231 — bob (regular user) is denied edit permission on a Task.
+        # bob (regular user) is denied edit permission on a Task.
         bug = db.get(models.Bug, ids["bug_id"])
-        if hasattr(bug, "item_type"):
-            bug.item_type = "Task"
-            db.commit()
-            plan_perm = actions.ActionPlan(
-                kind="assign", actor_user_id=bob.id, bug_id=ids["bug_id"],
-                target_user_ids=[bob.id], target_user_names=["Bob"],
-                summary_human="Assign",
-            )
-            r_perm = actions._apply_assign(db, plan_perm, bob)
-            assert r_perm.intent == "action_error"
-            assert "permission" in r_perm.blocks[0].payload["text"].lower()
-        else:  # pragma: no cover - models always have item_type in this build
-            pytest.skip("Bug has no item_type column; cannot exercise 231")
+        bug.item_type = "Task"
+        db.commit()
+        plan_perm = actions.ActionPlan(
+            kind="assign", actor_user_id=bob.id, bug_id=ids["bug_id"],
+            target_user_ids=[bob.id], target_user_names=["Bob"],
+            summary_human="Assign",
+        )
+        r_perm = actions._apply_assign(db, plan_perm, bob)
+        assert r_perm.intent == "action_error"
+        assert "permission" in r_perm.blocks[0].payload["text"].lower()
     finally:
         db.close()
 
@@ -2359,8 +2356,6 @@ def test_cov_set_field_permission_denied(client):
     db = SessionLocal()
     try:
         bug = db.get(models.Bug, ids["bug_id"])
-        if not hasattr(bug, "item_type"):  # pragma: no cover
-            pytest.skip("No item_type column; cannot exercise 285")
         bug.item_type = "Requirement"
         db.commit()
         bob = db.get(models.User, ids["bob_id"])

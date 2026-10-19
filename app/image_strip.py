@@ -75,41 +75,61 @@ def _keep_jpeg_segment(marker: int, payload: bytes) -> bool:
     return not (0xE0 <= marker <= 0xEF or marker == _COM)
 
 
+def _read_marker(data: bytes, pos: int) -> tuple[int, int] | None:
+    """(marker, position after it), or None when the data ends or a segment does not start with 0xFF."""
+    if data[pos] != 0xFF:
+        return None
+    while pos < len(data) and data[pos] == 0xFF:  # fill bytes
+        pos += 1
+    if pos >= len(data):
+        return None
+    return data[pos], pos + 1
+
+
+def _read_segment_length(data: bytes, pos: int) -> int | None:
+    if pos + 2 > len(data):
+        return None
+    (length,) = struct.unpack_from(">H", data, pos)
+    return length if length >= 2 and pos + length <= len(data) else None
+
+
+def _insert_orientation(out: bytearray, orientation: int) -> None:
+    """Put an Exif orientation segment right after the JFIF header, or first when there is none."""
+    insert_at = 2
+    if len(out) > 4 and out[2:4] == b"\xff\xe0":
+        insert_at = 4 + struct.unpack_from(">H", out, 4)[0]
+    out[insert_at:insert_at] = _orientation_segment(orientation)
+
+
+def _with_orientation(out: bytearray, orientation: int) -> bytes:
+    if orientation != 1:
+        _insert_orientation(out, orientation)
+    return bytes(out)
+
+
 def _strip_jpeg(data: bytes) -> bytes | None:
     out = bytearray(data[:2])
     orientation = 1
     pos = 2
     while pos < len(data):
-        if data[pos] != 0xFF:
+        found = _read_marker(data, pos)
+        if found is None:
             return None
-        while pos < len(data) and data[pos] == 0xFF:  # fill bytes
-            pos += 1
-        if pos >= len(data):
-            return None
-        marker = data[pos]
-        pos += 1
+        marker, pos = found
         if marker == _EOI or 0xD0 <= marker <= 0xD7 or marker == 0x01:
             out += bytes([0xFF, marker])
             continue
-        if pos + 2 > len(data):
+        length = _read_segment_length(data, pos)
+        if length is None:
             return None
-        (length,) = struct.unpack_from(">H", data, pos)
-        if length < 2 or pos + length > len(data):
-            return None
-        segment = data[pos - 2:pos + length]
         payload = data[pos + 2:pos + length]
         if marker == _SOS:
             # Scan data follows; everything from here on is copied as is.
-            if orientation != 1:
-                insert_at = 2
-                if len(out) > 4 and out[2:4] == b"\xff\xe0":
-                    insert_at = 4 + struct.unpack_from(">H", out, 4)[0]
-                out[insert_at:insert_at] = _orientation_segment(orientation)
-            return bytes(out) + data[pos - 2:]
-        if marker == _APP1:
-            orientation = _jpeg_orientation(payload) if orientation == 1 else orientation
+            return _with_orientation(out, orientation) + data[pos - 2:]
+        if marker == _APP1 and orientation == 1:
+            orientation = _jpeg_orientation(payload)
         if _keep_jpeg_segment(marker, payload):
-            out += segment
+            out += data[pos - 2:pos + length]
         pos += length
     return None
 

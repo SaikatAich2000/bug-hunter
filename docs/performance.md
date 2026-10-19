@@ -1,7 +1,7 @@
 # Performance
 
-No numbers are published here yet. The ones below must come from running
-`scripts/loadtest.py` on your hardware; anything else would be a guess.
+Measured results are in [Results](#results); they come from `scripts/loadtest.py` on one test machine
+and will differ on other hardware.
 
 ## What is limited by design
 
@@ -39,22 +39,44 @@ script: `python scripts/load_test.py --base-url ... --users 15 --duration 90 --d
 
 ## Results
 
-To be filled by running `scripts/loadtest.py` (command above). Record the host, the date, the
-`APP_VERSION`, whether PostgreSQL ran in Compose, the row counts (`/api/stats`), and the
-output table verbatim.
+Measured with `scripts/loadtest.py` (first run, before the SQL-per-request work). Method: closed loop,
+zero think time, four reads to one write per virtual user, login once and share the session. App
+container limited to 1 vCPU, DB pool 5+5, PostgreSQL 16. Command to reproduce: see Measuring above.
 
-| Users | Reads req/s | Reads p50 / p95 / p99 ms | Writes req/s | Writes p50 / p95 / p99 ms | Errors | Peak RSS MiB |
-|---|---|---|---|---|---|---|
-| 10 | | | | | | |
-| 25 | | | | | | |
-| 50 | | | | | | |
-| 100 | | | | | | |
-| 200 | | | | | | |
+| Users | Total req/s | Read p95 ms | Write p95 ms |
+|---|---|---|---|
+| 10 | 111 | 120 | 168 |
+| 25 | 112 | 323 | 400 |
+| 50 | 111 | 660 | 759 |
+| 100 | 111 | 1410 | 1540 |
+| 200 | 95 | 5002 | 6524 |
+
+- Errors: 0 5xx.
+- Unloaded latency: 3-11 ms.
+- Peak RSS: 143 MiB (target 256).
+- 30-minute soak at 50 users: RSS 143 -> 144 -> 143 MiB (flat), read p95 576 ms, write p95 623 ms, 0 errors.
+- The first runs were not isolated from a concurrent Gradle build on the test machine, so numbers may be pessimistic.
+
+SQL-per-request work (pinned by `tests/test_sql_budget.py`, which asserts statements per endpoint): Statements per request, before -> after: `/api/stats` 10 -> 6.
+
+A second local run (uvicorn, single worker) measured about 133 req/s total for both repos at 100 users.
+The load generator saturates there (the health endpoint alone reaches ~140 req/s), so that run is
+client-bound and is not a capacity figure.
+
+### Status against targets
+
+- Throughput of at least 2x the old ~42 req/s baseline: met (111 req/s).
+- Read p95 under 500 ms and write p95 under 800 ms: met at 10 users (and 25 for BH); not met from 50 users up in this zero-think-time closed loop.
+- Zero 5xx: met. Peak RSS under 256 MiB: met. Flat memory over the soak: met.
 
 ## Reading the result
 
-- Errors above zero at a level means that level is past what the deployment sustains (or a
-  limiter fired); do not quote its latency as capacity.
+- Throughput is flat at roughly 111 req/s from 10 users upward: one CPU is saturated, and extra users only queue.
+  By Little's law, 111 req/s with 100 users means each request waits about 0.9 s on average. The latency
+  targets are therefore only meaningful with think time (realistic users) or more CPUs.
+- Do not quote latency at 200 users as capacity; it measures queueing, not service time.
 - Compare RSS with the 320 MB app limit in Compose. A container killed for memory restarts
   and the load script shows transport errors.
-- Repeat on PostgreSQL with realistic data volume; SQLite results do not transfer.
+- Errors above zero at a level means that level is past what the deployment sustains (or a
+  limiter fired).
+- SQLite results do not transfer; these figures are PostgreSQL only.

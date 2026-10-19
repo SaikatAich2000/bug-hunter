@@ -117,6 +117,29 @@ def _derive_kpis(
     )
 
 
+def _fold_cube(cube, item_type: Optional[str], status_filter: list[str]):
+    """Slice the (item_type, status, priority, environment) cube into the per-dimension counts."""
+    by_type: dict[str, int] = {}
+    by_status_global: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    by_environment: dict[str, int] = {}
+    by_status_f: dict[str, int] = {}
+    for it, st, pr, env, cnt in cube:
+        cnt = int(cnt)
+        by_type[str(it)] = by_type.get(str(it), 0) + cnt
+        if item_type is not None and it != item_type:
+            continue
+        # no status filter for the headline KPIs: they stay global so tiles remain toggleable
+        by_status_global[st] = by_status_global.get(st, 0) + cnt
+        if status_filter and st not in status_filter:
+            continue
+        by_status_f[st] = by_status_f.get(st, 0) + cnt
+        # str() guards against NULL keys the response model would reject
+        by_priority[str(pr)] = by_priority.get(str(pr), 0) + cnt
+        by_environment[str(env)] = by_environment.get(str(env), 0) + cnt
+    return by_type, by_status_global, by_priority, by_environment, by_status_f
+
+
 @router.get("", responses=BAD_REQUEST_400)
 def stats(
     db: Session = Depends(get_db),
@@ -166,12 +189,16 @@ def stats(
             stmt = stmt.where(Bug.status.in_(status_filter))
         return stmt
 
-    # no status filter here — headline KPIs stay global so tiles remain toggleable
-    by_status_global: dict[str, int] = {}
-    for status_name, cnt in db.execute(
-        _scoped(select(Bug.status, func.count(Bug.id)).group_by(Bug.status))
-    ).all():
-        by_status_global[status_name] = int(cnt)
+    # One grouped query feeds the KPIs and the status/priority/environment/type breakdowns;
+    # each is a different slice of this (item_type, status, priority, environment) cube.
+    cube = db.execute(scope_bug_query(
+        select(Bug.item_type, Bug.status, Bug.priority, Bug.environment, func.count(Bug.id))
+        .group_by(Bug.item_type, Bug.status, Bug.priority, Bug.environment),
+        accessible,
+    )).all()
+    by_type, by_status_global, by_priority, by_environment, by_status_f = _fold_cube(
+        cube, item_type, status_filter,
+    )
 
     # total excludes non-bug statuses like "Not a Bug"
     bug_count = sum(
@@ -180,41 +207,8 @@ def stats(
     open_count, resolved_count, closed_count, resolve_later_count = _derive_kpis(
         by_status_global, item_type,
     )
+    by_status = by_status_f if status_filter else by_status_global
 
-    # re-query only when a status filter is active; otherwise reuse the KPI result
-    if status_filter:
-        by_status = {
-            s: int(c)
-            for s, c in db.execute(
-                _scoped_f(select(Bug.status, func.count(Bug.id)).group_by(Bug.status))
-            ).all()
-        }
-    else:
-        by_status = by_status_global
-
-    # str()/int() casts guard against NULL keys the response model would reject
-    by_priority = {
-        str(p): int(c)
-        for p, c in db.execute(
-            _scoped_f(select(Bug.priority, func.count(Bug.id)).group_by(Bug.priority))
-        ).all()
-    }
-    by_environment = {
-        str(e): int(c)
-        for e, c in db.execute(
-            _scoped_f(select(Bug.environment, func.count(Bug.id)).group_by(Bug.environment))
-        ).all()
-    }
-    # by_type drives the tab badges; project-scoped for restricted actors
-    by_type = {
-        str(t): int(c)
-        for t, c in db.execute(
-            scope_bug_query(
-                select(Bug.item_type, func.count(Bug.id)).group_by(Bug.item_type),
-                accessible,
-            )
-        ).all()
-    }
     # event badge scoped to match the Events view
     events_count = db.scalar(
         scope_event_query(select(func.count(Event.id)), accessible)

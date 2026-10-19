@@ -1222,3 +1222,147 @@ def test_duplicate_removal_deletes_once_and_leaves_other_branches_alone(
     _other_id, other = _branch_record_id(admin_client, second["id"])
     assert other["status"] == "Active"
     assert ("acme", "web-app", other["branch_name"]) in provider.remote_branches
+
+
+# ===========================================================================
+# Branch service guards (direct, with the in-memory provider)
+# ===========================================================================
+
+def _target(**overrides):
+    from app.git.branches import BranchTarget
+
+    fields = {"item_type": "Story", "item_id": 7, "project_id": 1, "title": "Login page",
+              "display_id": "USRSTR-7", "assignee_ids": frozenset()}
+    return BranchTarget(**{**fields, **overrides})
+
+
+def _repository(db, project_id, **overrides):
+    from app.models import ProjectRepository
+
+    fields = {"provider": "github", "provider_repo_id": "42", "name": "web-app", "owner": "acme",
+              "default_base_branch": "dev", **overrides}
+    repo = ProjectRepository(project_id=project_id, **fields)
+    db.add(repo)
+    db.flush()
+    return repo
+
+
+def _project_and_actor(db):
+    from app.auth import hash_password
+    from app.models import ROLE_ADMIN, Project, User
+
+    project = Project(name="Branch Unit", color="#123456")
+    actor = User(email="unit@branch.test", name="Unit", role=ROLE_ADMIN, password_hash=hash_password("p"))
+    db.add_all([project, actor])
+    db.flush()
+    return project, actor
+
+
+def test_preview_needs_a_base_branch_and_a_supported_type():
+    from app.git import branches
+
+    name, base, display = branches.preview_branch_name(_target(), None, default_base_branch="dev")
+    assert (name, base, display) == ("feature_7_login-page", "dev", "USRSTR-7")
+    assert branches.preview_branch_name(_target(), " release ", default_base_branch="dev")[1] == "release"
+
+    story, epic = _target(), _target(item_type="Epic")
+    with pytest.raises(branches.BranchCreationError) as excinfo:
+        branches.preview_branch_name(story, None, default_base_branch="  ")
+    assert excinfo.value.code == branches.BASE_BRANCH_UNCONFIGURED
+    with pytest.raises(branches.BranchCreationError) as excinfo:
+        branches.preview_branch_name(epic, None, default_base_branch="dev")
+    assert excinfo.value.code == branches.UNSUPPORTED_ITEM_TYPE
+
+
+def test_a_repository_must_belong_to_the_project_and_allow_branches(db_session):
+    from app.git import branches
+
+    project, _actor = _project_and_actor(db_session)
+    target = _target(project_id=project.id)
+
+    from app.models import Project
+
+    other = Project(name="Elsewhere", color="#654321")
+    db_session.add(other)
+    db_session.flush()
+    elsewhere = _repository(db_session, other.id)
+    dormant = _repository(db_session, project.id, active=False, name="dormant", provider_repo_id="43")
+    locked = _repository(db_session, project.id, branch_creation_enabled=False, name="locked", provider_repo_id="44")
+    for repo, code in ((elsewhere, branches.REPOSITORY_MISMATCH), (dormant, branches.REPOSITORY_INACTIVE),
+                       (locked, branches.REPOSITORY_INACTIVE)):
+        with pytest.raises(branches.BranchCreationError) as excinfo:
+            branches._require_repository_usable(target, repo)
+        assert excinfo.value.code == code
+    assert "disabled" in excinfo.value.message
+
+
+def test_a_generated_name_must_embed_the_work_items_number():
+    from app.git import branches
+
+    target = _target()
+    branches._require_ownership(target, "feature_7_login-page")
+    with pytest.raises(branches.BranchCreationError) as excinfo:
+        branches._require_ownership(target, "feature_8_login-page")
+    assert excinfo.value.code == branches.UNVERIFIED_BRANCH_NAME
+
+
+def test_branch_records_are_found_by_repository_or_provider_id(db_session):
+    from app.git import branches
+
+    project, actor = _project_and_actor(db_session)
+    repo = _repository(db_session, project.id)
+    target = _target(project_id=project.id)
+    assert branches.find_existing_branch_by_provider(db_session, target=target, provider_repo_id="") is None
+    assert branches.find_existing_branch_by_provider(db_session, target=target, provider_repo_id="42") is None
+
+    row, created = branches.create_branch(db_session, FakeProvider(), target=target, repository=repo, actor=actor)
+    assert created is True
+    assert branches.find_existing_branch(db_session, target=target, repository=repo).id == row.id
+    assert branches.find_existing_branch_by_provider(db_session, target=target, provider_repo_id="42").id == row.id
+
+
+def test_a_failure_is_recorded_only_on_an_existing_branch(db_session):
+    from app.git import branches
+
+    project, actor = _project_and_actor(db_session)
+    repo = _repository(db_session, project.id)
+    target = _target(project_id=project.id)
+
+    branches.record_failure(db_session, target=target, repository=repo, error=RuntimeError("nothing to attach"))
+    row, _created = branches.create_branch(db_session, FakeProvider(), target=target, repository=repo, actor=actor)
+    assert row.last_error == ""
+    branches.record_failure(db_session, target=target, repository=repo,
+                            error=_provider_error(TIMEOUT, "GitHub did not respond in time"))
+    assert row.last_error == "GitHub did not respond in time"
+    branches.record_failure(db_session, target=target, repository=repo, error=RuntimeError("plain failure"))
+    assert row.last_error == "plain failure"
+
+
+def test_a_retryable_failure_is_raised_when_the_branch_never_appeared(db_session):
+    from app.git import branches
+    from app.git.provider import GitProviderError
+
+    project, actor = _project_and_actor(db_session)
+    repo = _repository(db_session, project.id)
+    provider = FakeProvider()
+    provider.fail_on["create_branch"] = _provider_error(TIMEOUT, "timed out before the ref was created")
+
+    target = _target(project_id=project.id)
+    with pytest.raises(GitProviderError) as excinfo:
+        branches.create_branch(db_session, provider, target=target, repository=repo, actor=actor)
+    assert excinfo.value.retryable
+    assert not provider.remote_branches
+
+
+def test_branch_name_helpers_reject_what_git_would_refuse():
+    from app.git import naming
+
+    assert naming.is_valid_branch_name("feature_7_login-page") is True
+    for bad in ("", "..", "-lead", "a..b", "x.lock", "a@{b", "has space"):
+        assert naming.is_valid_branch_name(bad) is False
+        with pytest.raises(ValueError, match="invalid git branch name"):
+            naming.ensure_valid_branch_name(bad)
+    assert naming.display_id_for_branch("Story", 7, "  USRSTR-7 ") == "USRSTR-7"
+    assert naming.display_id_for_branch("Story", 7) == "USRSTR-7"
+    assert naming.stable_reference("Story", None, "USRSTR-9") == "USRSTR-9"
+    assert naming.stable_reference("Story", None) == "ID"

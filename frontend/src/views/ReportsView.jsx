@@ -57,6 +57,22 @@ function isBreakdown(value) {
 }
 
 /** Toggle a value in an array. */
+/** One summary card's value: a plain cell, or a key/value list for a breakdown. */
+function SummaryValue({ value, breakdown }) {
+  if (!breakdown) return <div className="reports-summary-value">{reportCellText(value)}</div>;
+  if (breakdown.length === 0) return <div className="reports-summary-value">—</div>;
+  return (
+    <ul className="reports-summary-breakdown">
+      {breakdown.map(([sk, sv]) => (
+        <li key={sk}>
+          <span className="reports-summary-bd-key">{sk}</span>
+          <span className="reports-summary-bd-val">{reportCellText(sv)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function toggleVal(list, v) {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 }
@@ -461,20 +477,7 @@ export default function ReportsView() {
               return (
                 <div className="reports-summary-card" key={k}>
                   <div className="reports-summary-label">{k.replaceAll("_", " ")}</div>
-                  {breakdown?.length === 0 ? (
-                    <div className="reports-summary-value">—</div>
-                  ) : breakdown ? (
-                    <ul className="reports-summary-breakdown">
-                      {breakdown.map(([sk, sv]) => (
-                        <li key={sk}>
-                          <span className="reports-summary-bd-key">{sk}</span>
-                          <span className="reports-summary-bd-val">{reportCellText(sv)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="reports-summary-value">{reportCellText(v)}</div>
-                  )}
+                  <SummaryValue value={v} breakdown={breakdown} />
                 </div>
               );
             })}

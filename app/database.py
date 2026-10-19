@@ -76,7 +76,7 @@ def _build_engine(url: str) -> Engine:
         pool_size=_settings.DB_POOL_SIZE,
         max_overflow=_settings.DB_MAX_OVERFLOW,
         # Recycle before proxy/idle timeouts reap; fail fast on pool exhaustion.
-        pool_recycle=1800,
+        pool_recycle=get_settings().DB_POOL_RECYCLE_SECONDS,
         pool_timeout=30,
         # TCP connect to a firewalled/slow Postgres must fail fast.
         connect_args={
@@ -239,7 +239,7 @@ def _add_missing_columns(conn) -> None:
     from sqlalchemy import inspect
     # Inspect through the migration's own connection: a separate connection
     # can't see this transaction's changes and, on PostgreSQL, waits on the
-    # locks its ALTERs hold until lock_timeout, which used to make the
+    # locks its ALTERs hold until lock_timeout, which would make the
     # generic pass skip the table silently.
     inspector = inspect(conn)
 
@@ -297,42 +297,41 @@ def _add_missing_columns_from_metadata(conn) -> None:
     inspector = inspect(conn)
     existing_tables = set(inspector.get_table_names())
     for table in Base.metadata.sorted_tables:
-        if table.name not in existing_tables:
-            continue
-        present = _column_names(inspector, table.name)
+        present = _column_names(inspector, table.name) if table.name in existing_tables else set()
         if not present:
             continue
         for column in table.columns:
-            if column.name in present:
-                continue
-            # Compute a safe server default; refuse anything that would need a
-            # backfill or a non-scalar default (those need a bespoke migration).
-            default_sql = None
-            if column.nullable:
-                default_sql = None
-            else:
-                py_default = getattr(column.default, "arg", None)
-                if isinstance(py_default, bool):
-                    default_sql = "FALSE" if not py_default else "TRUE"
-                elif isinstance(py_default, int):
-                    default_sql = str(py_default)
-                elif isinstance(py_default, float):
-                    default_sql = str(py_default)
-                elif isinstance(py_default, str):
-                    default_sql = f"'{py_default.replace(chr(39), chr(39) * 2)}'"
-                if default_sql is None:
-                    logger.warning(
-                        "Column %s.%s is missing and has no safe default; "
-                        "skipping (needs a bespoke migration)",
-                        table.name, column.name,
-                    )
-                    continue
-            ddl_type = _ddl_type_for(conn, column.type)
-            clause = f" {ddl_type}" if default_sql is None else \
-                f" {ddl_type} NOT NULL DEFAULT {default_sql}"
-            _add_column_safely(
-                conn, f"ALTER TABLE {table.name} ADD COLUMN {column.name}{clause}"
+            if column.name not in present:
+                _add_missing_column(conn, table, column)
+
+
+def _safe_scalar_default_sql(column) -> str | None:
+    """SQL literal for the model's scalar default, or None when there is no safe one."""
+    py_default = getattr(column.default, "arg", None)
+    if isinstance(py_default, bool):
+        return "TRUE" if py_default else "FALSE"
+    if isinstance(py_default, (int, float)):
+        return str(py_default)
+    if isinstance(py_default, str):
+        return "'" + py_default.replace("'", "''") + "'"
+    return None
+
+
+def _add_missing_column(conn, table, column) -> None:
+    """Add one ORM column the DB lacks, refusing anything that would need a backfill."""
+    default_sql = None
+    if not column.nullable:
+        default_sql = _safe_scalar_default_sql(column)
+        if default_sql is None:
+            logger.warning(
+                "Column %s.%s is missing and has no safe default; "
+                "skipping (needs a bespoke migration)",
+                table.name, column.name,
             )
+            return
+    ddl_type = _ddl_type_for(conn, column.type)
+    clause = f" {ddl_type}" if default_sql is None else f" {ddl_type} NOT NULL DEFAULT {default_sql}"
+    _add_column_safely(conn, f"ALTER TABLE {table.name} ADD COLUMN {column.name}{clause}")
 
 
 def _add_missing_git_columns(conn, inspector) -> None:
@@ -568,7 +567,7 @@ def _add_missing_epic_detail_columns(conn, inspector) -> None:
 
 def _add_missing_indexes(conn) -> None:
     """CREATE indexes the model declares that the DB lacks (idempotent)."""
-    from sqlalchemy import Index, inspect
+    from sqlalchemy import inspect
     inspector = inspect(conn)  # same connection as the migration (see _add_missing_columns)
     # display_id is a nullable human-facing label, backfilled on old
     # databases: NULL/duplicate values are legitimate legacy data, so these
@@ -586,13 +585,11 @@ def _add_missing_indexes(conn) -> None:
             # Table absent → nothing to compare against.
             continue
         for idx in table.indexes:
-            if idx.name and idx.name not in existing:
-                if idx.name in display_id_non_unique and idx.unique:
-                    idx = Index(
-                        idx.name,
-                        *[c.name for c in idx.columns.values()],
-                    )
-                _create_index_safely(conn, idx, table.name)
+            if not idx.name or idx.name in existing:
+                continue
+            if idx.name in display_id_non_unique and idx.unique:
+                idx.unique = False
+            _create_index_safely(conn, idx, table.name)
 
 
 def _add_missing_check_constraints(conn) -> None:
@@ -613,35 +610,48 @@ def _add_missing_check_constraints(conn) -> None:
     ))}
     for table in Base.metadata.sorted_tables:
         wanted = [c for c in table.constraints if isinstance(c, CheckConstraint) and c.name]
-        if not wanted:
+        if wanted:
+            _reconcile_table_checks(conn, inspector, table, wanted, pending)
+
+
+def _reconcile_table_checks(conn, inspector, table, wanted, pending: set[str]) -> None:
+    try:
+        existing = {c["name"] for c in inspector.get_check_constraints(table.name)}
+    except SQLAlchemyError:
+        return
+    for constraint in wanted:
+        is_new = constraint.name not in existing
+        if is_new and not _add_check_not_valid(conn, table, constraint):
             continue
-        try:
-            existing = {c["name"] for c in inspector.get_check_constraints(table.name)}
-        except SQLAlchemyError:
-            continue
-        for constraint in wanted:
-            if constraint.name in existing and constraint.name not in pending:
-                continue
-            if constraint.name not in existing:
-                try:
-                    with conn.begin_nested():
-                        conn.execute(text(
-                            f'ALTER TABLE "{table.name}" ADD CONSTRAINT "{constraint.name}" '
-                            f"CHECK ({constraint.sqltext}) NOT VALID"
-                        ))
-                except SQLAlchemyError:
-                    logger.exception("could not add constraint %s", constraint.name)
-                    continue
-            try:
-                with conn.begin_nested():
-                    conn.execute(text(
-                        f'ALTER TABLE "{table.name}" VALIDATE CONSTRAINT "{constraint.name}"'
-                    ))
-            except SQLAlchemyError:
-                logger.warning(
-                    "Existing rows in %s violate %s; it guards new writes but stays NOT VALID "
-                    "until those rows are fixed.", table.name, constraint.name,
-                )
+        if is_new or constraint.name in pending:
+            _validate_check(conn, table, constraint)
+
+
+def _add_check_not_valid(conn, table, constraint) -> bool:
+    """Add the CHECK without scanning the table; False when the database refuses it."""
+    try:
+        with conn.begin_nested():
+            conn.execute(text(
+                f'ALTER TABLE "{table.name}" ADD CONSTRAINT "{constraint.name}" '
+                f"CHECK ({constraint.sqltext}) NOT VALID"
+            ))
+    except SQLAlchemyError:
+        logger.exception("could not add constraint %s", constraint.name)
+        return False
+    return True
+
+
+def _validate_check(conn, table, constraint) -> None:
+    try:
+        with conn.begin_nested():
+            conn.execute(text(
+                f'ALTER TABLE "{table.name}" VALIDATE CONSTRAINT "{constraint.name}"'
+            ))
+    except SQLAlchemyError:
+        logger.warning(
+            "Existing rows in %s violate %s; it guards new writes but stays NOT VALID "
+            "until those rows are fixed.", table.name, constraint.name,
+        )
 
 
 def _create_index_safely(conn, idx, table_name: str) -> None:

@@ -44,7 +44,7 @@ export default function HelpHint({ label, children, guide }) {
         ?
       </button>
       {open && (
-        <span id={popId} className="help-hint-pop" role="region" aria-label={label}>
+        <span id={popId} className="help-hint-pop" role="region" /* NOSONAR S6819: popover tied to its button by aria-controls; <section> would add a landmark per hint */ aria-label={label}>
           <span className="help-hint-text">{children}</span>
           {guide && (
             <button

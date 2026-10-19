@@ -94,8 +94,6 @@ def _load_verified_bundle_context(bundle_path: str) -> ssl.SSLContext:
             raise OSError(f"CA bundle is not a file: {path.name}")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.load_verify_locations(cafile=str(path))
-    except GitProviderError:
-        raise
     except Exception as exc:
         logger.exception(
             "git.tls.ca_bundle_failed exception=%s",

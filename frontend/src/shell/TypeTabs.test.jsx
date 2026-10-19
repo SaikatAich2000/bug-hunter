@@ -61,6 +61,14 @@ describe("TypeTabs", () => {
     expect(count("all")).toBe("9");
   });
 
+  it("All also counts types without their own tab (Epic, Story, Sub-task)", () => {
+    state.stats = { by_type: { Bug: 3, Task: 1, Epic: 2, Story: 1 } };
+    mount();
+    expect(count("all")).toBe("7");
+    expect(count("Bug")).toBe("3");
+    state.stats = { by_type: { Bug: 3, Requirement: 2, Task: 4 } };
+  });
+
   it("treats missing stats as zeros", () => {
     state.stats = null;
     mount();

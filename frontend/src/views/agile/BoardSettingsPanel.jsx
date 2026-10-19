@@ -43,7 +43,7 @@ function columnProblems(columns) {
       problems.push(`"${col.name}": the minimum is above the maximum.`);
     }
   }
-  const last = columns[columns.length - 1];
+  const last = columns.at(-1);
   if (last && last.category !== "done") problems.push("The right-most column must have the Done category: issues there count as finished.");
   if (last && !last.statuses.length) problems.push("The right-most column needs at least one status.");
   return problems;
@@ -352,7 +352,7 @@ function QuickFilterSettings({ board }) {
           <li key={qf.id}>
             <strong>{qf.name}</strong> <span className="muted small">{describeQuickFilter(qf.filter_json || {}, lookups)}</span>
             <span className="ag-spacer" />
-            <button type="button" className="btn ghost btn-sm" onClick={() => setDraft({ ...EMPTY_FILTER, ...(qf.filter_json || {}), id: qf.id, version: qf.version, name: qf.name })}>Edit</button>
+            <button type="button" className="btn ghost btn-sm" onClick={() => setDraft({ ...EMPTY_FILTER, ...qf.filter_json, id: qf.id, version: qf.version, name: qf.name })}>Edit</button>
             <button type="button" className="btn ghost btn-sm" onClick={() => remove(qf)}>Delete</button>
           </li>
         ))}

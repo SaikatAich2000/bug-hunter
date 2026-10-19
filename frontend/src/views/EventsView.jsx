@@ -18,7 +18,8 @@ import { api } from "../lib/api";
 import { withLoader } from "../lib/loader";
 import { toast, toastError } from "../lib/toast";
 import { debounce, formatDate, initials } from "../lib/format";
-import { DATA_POLL_MS, useApp } from "../state/AppContext";
+import { dataPollMs } from "../lib/pollConfig";
+import { useApp } from "../state/AppContext";
 import { itemTypeIcon as itemTypeEmoji } from "../lib/itemTypes";
 
 /** Button label for "add existing tasks", with count and plural handling. */
@@ -281,6 +282,50 @@ function EventItemsTable({ items, onOpen }) {
   );
 }
 
+/** The event cards, or the message for an empty / filtered-out grid (null while nothing is loaded). */
+function EventsGrid({ loading, events, rows, total, onOpen }) {
+  if (loading) return <div className="events-loading muted">Loading events…</div>;
+  if (events === null) return null;
+  if (rows.length > 0) return rows.map((ev) => <EventCard key={ev.id} ev={ev} onOpen={onOpen} />);
+  if (total === 0) return null;
+  return (
+    <div className="events-empty muted">
+      <p>No events match the current filter. Try clearing the search or date</p>
+    </div>
+  );
+}
+
+/** [value, label] pairs for the event's distinct assignees, in first-seen order. */
+function assigneeOptionsOf(items) {
+  const seen = new Map();
+  for (const it of items) {
+    for (const a of it.assignees) if (!seen.has(a.id)) seen.set(a.id, [String(a.id), a.name]);
+  }
+  return [...seen.values()];
+}
+
+function DetailItems({ loading, allItems, filteredItems, onOpen }) {
+  if (loading) return <div className="muted">Loading…</div>;
+  if (allItems.length === 0) {
+    return (
+      <div className="event-detail-empty muted">
+        <p>
+          No items yet. Click <strong>+ Add Task</strong> to create one inside this event, or
+          open any existing work item and assign it to this event from its Event field
+        </p>
+      </div>
+    );
+  }
+  if (filteredItems.length === 0) {
+    return (
+      <div className="event-detail-empty muted">
+        <p>No tasks in this event match the current filter. Try clearing the search or filters</p>
+      </div>
+    );
+  }
+  return <EventItemsTable items={filteredItems} onOpen={onOpen} />;
+}
+
 export default function EventsView() {
   const {
     view, meta, canManage, isAdmin, openBugForm, openBugDetail, bugModal, refreshAll,
@@ -414,7 +459,7 @@ export default function EventsView() {
   useEffect(() => {
     if (view !== "events") return;
     const tick = () => pollRef.current();
-    const id = setInterval(tick, DATA_POLL_MS);
+    const id = setInterval(tick, dataPollMs());
     document.addEventListener("visibilitychange", tick);
     return () => {
       clearInterval(id);
@@ -488,37 +533,13 @@ export default function EventsView() {
     [openBugDetail],
   );
 
-  let gridContent = null;
-  if (loading) {
-    gridContent = <div className="events-loading muted">Loading events…</div>;
-  } else if (events !== null && rows.length === 0) {
-    gridContent =
-      all.length > 0 ? (
-        <div className="events-empty muted">
-          <p>No events match the current filter. Try clearing the search or date</p>
-        </div>
-      ) : null;
-  } else if (events !== null) {
-    gridContent = rows.map((ev) => <EventCard key={ev.id} ev={ev} onOpen={openDetail} />);
-  }
+  const gridContent = <EventsGrid loading={loading} events={events} rows={rows} total={all.length} onOpen={openDetail} />;
 
   // derived detail-mode data
   const allItems = detail?.items ?? [];
   const filteredItems = filterEventItems(allItems, detailFilters);
 
-  // Build the assignee dropdown from the event's items so only relevant people appear.
-  const assigneeOptions = [];
-  {
-    const seen = new Set();
-    for (const it of allItems) {
-      for (const a of it.assignees) {
-        if (!seen.has(a.id)) {
-          seen.add(a.id);
-          assigneeOptions.push([String(a.id), a.name]);
-        }
-      }
-    }
-  }
+  const assigneeOptions = assigneeOptionsOf(allItems);
   const statusOptions = meta.statuses.map((s) => [s, s]);
   const priorityOptions = meta.priorities.map((p) => [p, p]);
 
@@ -545,27 +566,9 @@ export default function EventsView() {
     });
   };
 
-  let itemsContent;
-  if (detailLoading || !detail) {
-    itemsContent = <div className="muted">Loading…</div>;
-  } else if (allItems.length === 0) {
-    itemsContent = (
-      <div className="event-detail-empty muted">
-        <p>
-          No items yet. Click <strong>+ Add Task</strong> to create one inside this event, or
-          open any existing work item and assign it to this event from its Event field
-        </p>
-      </div>
-    );
-  } else if (filteredItems.length === 0) {
-    itemsContent = (
-      <div className="event-detail-empty muted">
-        <p>No tasks in this event match the current filter. Try clearing the search or filters</p>
-      </div>
-    );
-  } else {
-    itemsContent = <EventItemsTable items={filteredItems} onOpen={openItem} />;
-  }
+  const itemsContent = (
+    <DetailItems loading={detailLoading || !detail} allItems={allItems} filteredItems={filteredItems} onOpen={openItem} />
+  );
 
   return (
     <>

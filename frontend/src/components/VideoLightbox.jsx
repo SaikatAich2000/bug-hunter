@@ -41,7 +41,7 @@ export default function VideoLightbox({ src, type, label, onClose }) {
           return;
         }
         const first = focusable[0];
-        const last = focusable[focusable.length - 1];
+        const last = focusable.at(-1);
         const active = document.activeElement;
         if (e.shiftKey) {
           if (active === first || !root.contains(active)) {
@@ -89,9 +89,9 @@ export default function VideoLightbox({ src, type, label, onClose }) {
 
   return createPortal(
     
-    <div
+    <div // NOSONAR S6819: portal dialog with its own focus trap; native <dialog> needs showModal() top-layer semantics
       className="video-lightbox"
-      role="dialog"
+      role="dialog" /* NOSONAR S6819: portal dialog with its own focus trap and enter/exit animation; native <dialog> needs showModal() top-layer semantics */
       aria-modal="true"
       aria-label={label ? `Video: ${label}` : "Video"}
       ref={dialogRef}

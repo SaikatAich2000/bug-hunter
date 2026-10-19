@@ -34,7 +34,7 @@ def _embed(texts: list[str]) -> Optional[list[list[float]]]:
         from app.chatbot.redaction import redact
         model = f"models/{s.GEMINI_EMBED_MODEL}"
         r = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
+            f"{s.GEMINI_API_BASE_URL}/{model}:batchEmbedContents",
             # Key in a header, not the URL, so it stays out of logged URLs.
             headers={"x-goog-api-key": s.GEMINI_API_KEY},
             # Outbound egress passes the same PII gate: redact first, then truncate.

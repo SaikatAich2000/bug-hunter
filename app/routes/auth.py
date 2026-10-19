@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy import select
@@ -13,6 +14,7 @@ from app.api_docs import (
     AUTH_401,
     FORGOT_PASSWORD_404,
     PASSWORD_CHANGE_400,
+    RATE_LIMITED_429,
     RESET_TOKEN_400,
 )
 from app.auth import (
@@ -108,8 +110,23 @@ def _record_failed_login(db: Session, user: User | None, email: str, ip: str, re
     db.commit()
 
 
-@router.post("/login", response_model=MeOut, responses=AUTH_401)
-def login(payload: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)) -> User:
+def _login_failure_reason(user, password_ok: bool) -> str | None:
+    """Why a sign-in is refused (for the log only: the client always gets the same 401), or None."""
+    if user is None:
+        return "unknown account"
+    if not password_ok:
+        return "wrong password"
+    return None if user.is_active else "inactive account"
+
+
+_LOGIN_RESPONSES = {**AUTH_401, **RATE_LIMITED_429}
+_CHANGE_PASSWORD_RESPONSES = {**PASSWORD_CHANGE_400, **RATE_LIMITED_429}
+_FORGOT_PASSWORD_RESPONSES = {**FORGOT_PASSWORD_404, **RATE_LIMITED_429}
+_RESET_PASSWORD_RESPONSES = {**RESET_TOKEN_400, **RATE_LIMITED_429}
+
+
+@router.post("/login", response_model=MeOut, responses=_LOGIN_RESPONSES)
+def login(payload: LoginIn, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]) -> User:
     """Verify credentials, create a session row, and set the signed cookie.
     The cookie's `jti` maps back to the row, enabling per-session admin revocation."""
     # Check lockout before bcrypt so a login flood doesn't become a CPU flood.
@@ -129,8 +146,8 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     else:
         password_ok = verify_password(payload.password, user.password_hash)
     # Same 401 for all failures so existence/disabled status doesn't leak.
-    if user is None or not password_ok or not user.is_active:
-        reason = "unknown account" if user is None else ("wrong password" if not password_ok else "inactive account")
+    reason = _login_failure_reason(user, password_ok)
+    if reason is not None:
         _record_failed_login(db, user, payload.email, client_ip, reason)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -156,7 +173,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
 
 
 @router.post("/logout", status_code=204)
-def logout(request: Request, db: Session = Depends(get_db)) -> Response:
+def logout(request: Request, db: Annotated[Session, Depends(get_db)]) -> Response:
     """Clear the session cookie and its server-side row; always 204 (idempotent)."""
     from app.auth import parse_session_token, session_cookie_value
     parsed = parse_session_token(session_cookie_value(request))
@@ -174,17 +191,17 @@ def logout(request: Request, db: Session = Depends(get_db)) -> Response:
 
 
 @router.get("/me", response_model=MeOut)
-def me(user: User = Depends(get_current_user)) -> User:
+def me(user: Annotated[User, Depends(get_current_user)]) -> User:
     """Return the currently logged-in user."""
     return user
 
 
-@router.post("/change-password", status_code=204, responses=PASSWORD_CHANGE_400)
+@router.post("/change-password", status_code=204, responses=_CHANGE_PASSWORD_RESPONSES)
 def change_password(
     payload: ChangePasswordIn,
     request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> Response:
     """Change own password: bumps session_version (killing other sessions), invalidates
     outstanding reset tokens, and re-issues a fresh session so the caller stays logged in."""
@@ -229,11 +246,11 @@ def change_password(
     return out
 
 
-@router.post("/forgot-password", status_code=204, responses=FORGOT_PASSWORD_404)
+@router.post("/forgot-password", status_code=204, responses=_FORGOT_PASSWORD_RESPONSES)
 def forgot_password(
     payload: ForgotPasswordIn,
     background: BackgroundTasks,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     """Issue a password-reset email. With FORGOT_PASSWORD_ENUMERATION_SAFE (default)
     always 204 so account existence never leaks; otherwise 404s on unknown addresses."""
@@ -273,8 +290,8 @@ def forgot_password(
     return Response(status_code=204)
 
 
-@router.post("/reset-password", status_code=204, responses=RESET_TOKEN_400)
-def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)) -> Response:
+@router.post("/reset-password", status_code=204, responses=_RESET_PASSWORD_RESPONSES)
+def reset_password(payload: ResetPasswordIn, db: Annotated[Session, Depends(get_db)]) -> Response:
     """Set a new password via reset token; bumps session_version and
     invalidates the user's other outstanding reset tokens."""
     h = hash_reset_token(payload.token)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run pytest with coverage, then push the report to the local SonarQube via the
 # sonar-scanner-cli Docker image. Env overrides: SONAR_HOST_URL (default
-# http://localhost:9090) and SONAR_TOKEN (required if anonymous analysis is disabled).
+# http://localhost:9000) and SONAR_TOKEN (required if anonymous analysis is disabled).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,9 +16,11 @@ command -v docker >/dev/null 2>&1 || abort "docker is not installed"
 docker info >/dev/null 2>&1 || abort "Docker daemon is not running"
 command -v python >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 \
   || abort "python is not on PATH"
-PY=$(command -v python || command -v python3)
+if [[ -x "$ROOT/.venv/bin/python" ]]; then PY="$ROOT/.venv/bin/python"
+elif [[ -x "$ROOT/.venv/Scripts/python.exe" ]]; then PY="$ROOT/.venv/Scripts/python.exe"
+else PY=$(command -v python || command -v python3); fi
 
-SONAR_HOST_URL="${SONAR_HOST_URL:-http://localhost:9090}"
+SONAR_HOST_URL="${SONAR_HOST_URL:-http://localhost:9000}"
 SONAR_TOKEN="${SONAR_TOKEN:-}"
 
 # sonar.projectVersion is not hardcoded in sonar-project.properties; it comes
@@ -52,13 +54,22 @@ PREV_PY_WARNINGS="${PYTHONWARNINGS:-}"
 export PYTHONWARNINGS=ignore
 
 "$PY" -m pytest \
+  -m "not ui" -n 2 -p no:cacheprovider \
   --cov=app \
   --cov-report=xml:coverage.xml \
-  --cov-report=term-missing:skip-covered \
+  --cov-report=term:skip-covered \
   --junitxml=junit.xml \
   -q || warn "pytest exited non-zero — running scanner anyway so partial results land in SonarQube."
 
 export PYTHONWARNINGS="${PREV_PY_WARNINGS}"
+
+info "Running frontend tests with coverage (vitest)..."
+(cd "$ROOT/frontend" && npm run test:coverage --silent) \
+  || warn "vitest exited non-zero — scanning anyway."
+# Vitest writes SF: paths relative to frontend/; Sonar resolves them from the repo root.
+if [[ -f frontend/coverage/lcov.info ]]; then
+  sed -i 's#^SF:src/#SF:frontend/src/#' frontend/coverage/lcov.info
+fi
 
 # Repo root is mounted as /usr/src so the scanner sees sonar-project.properties + reports.
 info "Running sonar-scanner-cli via Docker..."
@@ -100,6 +111,8 @@ docker run --rm \
   -v "${MOUNT_SRC}:/usr/src" \
   -w /usr/src \
   sonarsource/sonar-scanner-cli:latest \
-  -Dsonar.projectVersion="${APP_VERSION}"
+  -Dsonar.projectVersion="${APP_VERSION}" \
+  -Dsonar.qualitygate.wait=true \
+  -Dsonar.scm.disabled="${SONAR_SCM_DISABLED:-false}"
 
 info "Done. Browse results at ${SONAR_HOST_URL}/dashboard?id=Bug-Hunter"

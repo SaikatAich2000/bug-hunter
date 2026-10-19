@@ -17,12 +17,9 @@ from app.agile import boards as boards_svc
 from app.agile import reports as reports_svc
 from app.agile.permissions import EXPORT_AGILE_REPORTS, VIEW_AGILE_REPORTS, require_permission
 from app.api_docs import (
-    BAD_REQUEST_NOT_FOUND_404,
-    FORBIDDEN_403,
     FORBIDDEN_NOT_FOUND_VALIDATION_422,
-    NOT_FOUND_500,
-    XLSX_FILE_200,
-    XLSX_OR_CSV_FILE_200,
+    XLSX_FILE_200_NOT_FOUND_FORBIDDEN_500,
+    XLSX_OR_CSV_FILE_200_BAD_REQUEST_FORBIDDEN_NOT_FOUND_404,
 )
 from app.auth import get_current_user
 from app.database import get_db
@@ -65,11 +62,14 @@ def _validate_date_range(date_from: str, date_to: str) -> None:
         start = datetime.strptime(date_from, "%Y-%m-%d").date()
         end = datetime.strptime(date_to, "%Y-%m-%d").date()
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Dates must be YYYY-MM-DD") from exc
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=422, detail="Dates must be YYYY-MM-DD") from exc  # NOSONAR(S8415)
     if end < start:
-        raise HTTPException(status_code=422, detail="date_to cannot precede date_from")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=422, detail="date_to cannot precede date_from")  # NOSONAR(S8415)
     if (end - start).days > _MAX_REPORT_RANGE_DAYS:
-        raise HTTPException(
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(  # NOSONAR(S8415)
             status_code=422,
             detail=f"The date range can span at most {_MAX_REPORT_RANGE_DAYS} days",
         )
@@ -83,24 +83,29 @@ def _csv_safe(value):
 def _get_sprint_and_board(db: Session, sprint_id: int, user: User):
     sprint = db.get(Sprint, sprint_id)
     if sprint is None or not can_access_project(accessible_project_ids(db, user), sprint.project_id):
-        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)  # NOSONAR(S8415)
     project = db.get(Project, sprint.project_id)
     if project is None or not project.agile_enabled:
-        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)  # NOSONAR(S8415)
     require_permission(user, VIEW_AGILE_REPORTS)
     board = boards_svc.get_board_or_none(db, sprint.board_id)
     if board is None:
-        raise HTTPException(status_code=404, detail="Sprint Board not found")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail="Sprint Board not found")  # NOSONAR(S8415)
     return sprint, board
 
 
 def _get_report_board(db: Session, board_id: int, user: User):
     board = boards_svc.get_board_or_none(db, board_id)
     if board is None or not can_access_project(accessible_project_ids(db, user), board.project_id):
-        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)  # NOSONAR(S8415)
     project = db.get(Project, board.project_id)
     if project is None or not project.agile_enabled:
-        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)  # NOSONAR(S8415)
     require_permission(user, VIEW_AGILE_REPORTS)
     return board
 
@@ -156,48 +161,59 @@ def _status_breakdown_rows(items) -> list[dict]:
     return rows
 
 
-def _work_item_rows(db: Session, items, users_by_id: dict, report: dict) -> list[dict]:
-    epic_ids = {it.epic_id for it in items if it.epic_id}
-    epics = {e.id: e for e in db.scalars(select(Bug).where(Bug.id.in_(epic_ids))).all()} if epic_ids else {}
-    parents_ids = {it.parent_id for it in items if it.parent_id}
-    parents = {p.id: p for p in db.scalars(select(Bug).where(Bug.id.in_(parents_ids))).all()} if parents_ids else {}
-    outcome = {}
-    for key, label in (("completed", "Completed"), ("not_completed", "Not completed"),
-                       ("removed", "Removed"), ("completed_outside", "Completed outside the sprint")):
-        for row in report.get(key, []):
-            outcome[row["id"]] = label
-    added = {row["id"] for key in ("completed", "not_completed", "removed", "completed_outside")
-             for row in report.get(key, []) if row.get("added_during_sprint")}
+_OUTCOME_GROUPS = (("completed", "Completed"), ("not_completed", "Not completed"),
+                   ("removed", "Removed"), ("completed_outside", "Completed outside the sprint"))
 
-    rows = []
-    for it in items:
-        epic = epics.get(it.epic_id)
-        parent = parents.get(it.parent_id)
-        rows.append({
-            "id": it.id,
-            "key": (it.display_id or "").strip() or display_id_for(it.item_type or "Bug", it.id),
-            "item_type": it.item_type,
-            "title": it.title,
-            "status": it.status,
-            "outcome": outcome.get(it.id, "Sub-task" if it.item_type == "Sub-task" else ""),
-            "added": "Yes" if it.id in added else "No",
-            "priority": it.priority,
-            "environment": it.environment,
-            "epic": epic.title if epic else "",
-            "parent": parent.title if parent else "",
-            "owner": users_by_id[it.owner_id].name if it.owner_id in users_by_id else "",
-            "assignees": ", ".join(a.name for a in it.assignees),
-            "reporter": users_by_id[it.reporter_id].name if it.reporter_id in users_by_id else "",
-            "story_points": float(it.story_points) if it.story_points is not None else "",
-            "start_date": it.start_date or "",
-            "due_date": it.due_date or "",
-            "blocked": "Yes" if it.blocked else "No",
-            "blocked_reason": it.blocked_reason or "",
-            "mandatory": "Yes" if it.mandatory else "No",
-            "created_at": it.created_at,
-            "updated_at": it.updated_at,
-        })
-    return rows
+
+def _bugs_by_id(db: Session, ids: set[int]) -> dict:
+    if not ids:
+        return {}
+    return {b.id: b for b in db.scalars(select(Bug).where(Bug.id.in_(ids))).all()}
+
+
+def _yes_no(flag) -> str:
+    return "Yes" if flag else "No"
+
+
+def _user_name(users_by_id: dict, user_id) -> str:
+    return users_by_id[user_id].name if user_id in users_by_id else ""
+
+
+def _work_item_row(it, outcome: dict, added: set, epics: dict, parents: dict, users_by_id: dict) -> dict:
+    epic = epics.get(it.epic_id)
+    parent = parents.get(it.parent_id)
+    return {
+        "id": it.id,
+        "key": (it.display_id or "").strip() or display_id_for(it.item_type or "Bug", it.id),
+        "item_type": it.item_type,
+        "title": it.title,
+        "status": it.status,
+        "outcome": outcome.get(it.id, "Sub-task" if it.item_type == "Sub-task" else ""),
+        "added": _yes_no(it.id in added),
+        "priority": it.priority,
+        "environment": it.environment,
+        "epic": epic.title if epic else "",
+        "parent": parent.title if parent else "",
+        "owner": _user_name(users_by_id, it.owner_id),
+        "assignees": ", ".join(a.name for a in it.assignees),
+        "reporter": _user_name(users_by_id, it.reporter_id),
+        "story_points": float(it.story_points) if it.story_points is not None else "",
+        "start_date": it.start_date or "",
+        "due_date": it.due_date or "",
+        "blocked": _yes_no(it.blocked),
+        "blocked_reason": it.blocked_reason or "",
+        "mandatory": _yes_no(it.mandatory),
+        "created_at": it.created_at,
+        "updated_at": it.updated_at,
+    }
+
+
+def _work_item_rows(db: Session, items, users_by_id: dict, report: dict) -> list[dict]:
+    epics = _bugs_by_id(db, {it.epic_id for it in items if it.epic_id})
+    parents = _bugs_by_id(db, {it.parent_id for it in items if it.parent_id})
+    outcome = {row["id"]: label for key, label in _OUTCOME_GROUPS for row in report.get(key, [])}
+    added = {row["id"] for key, _ in _OUTCOME_GROUPS for row in report.get(key, []) if row.get("added_during_sprint")}
+    return [_work_item_row(it, outcome, added, epics, parents, users_by_id) for it in items]
 
 
 _WORK_ITEM_COLS = [
@@ -214,8 +230,34 @@ _WORK_ITEM_COLS = [
 ]
 
 
+def _estimate_cell(value) -> float | str:
+    return "" if value is None else float(value)
+
+
+def _history_row(h, titles: dict, status_names: dict, users_by_id: dict) -> dict:
+    actor = users_by_id.get(h.actor_id)
+    return {
+        "work_item_id": h.work_item_id,
+        "title": titles.get(h.work_item_id, f"#{h.work_item_id}"),
+        "event_type": h.event_type,
+        "from_status": status_names.get(h.old_status_id, ""),
+        "to_status": status_names.get(h.new_status_id, ""),
+        "old_estimate": _estimate_cell(h.old_estimate),
+        "new_estimate": _estimate_cell(h.new_estimate),
+        "actor": actor.name if actor else "",
+        "occurred_at": h.occurred_at,
+    }
+
+
+def _ascii_name(sprint) -> str:
+    """Sprint name safe for a Content-Disposition header (Latin-1 encoded, so ASCII only)."""
+    return "".join(
+        c if (c.isascii() and c.isalnum()) or c in (" ", "-", "_") else "_" for c in sprint.name
+    ).strip() or f"sprint-{sprint.id}"
+
+
 @router.get("/sprint/{sprint_id}/export.xlsx", response_class=Response,
-            responses={**XLSX_FILE_200, **NOT_FOUND_500, **FORBIDDEN_403})
+            responses=XLSX_FILE_200_NOT_FOUND_FORBIDDEN_500)
 def export_sprint_report_xlsx(
     sprint_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -319,17 +361,7 @@ def export_sprint_report_xlsx(
              ReportColumn(key="new_estimate", label="New Est.", width=10, align="right"),
              ReportColumn(key="actor", label="Actor", width=22),
              ReportColumn(key="occurred_at", label="When", width=24)],
-            [{
-                "work_item_id": h.work_item_id,
-                "title": titles.get(h.work_item_id, f"#{h.work_item_id}"),
-                "event_type": h.event_type,
-                "from_status": status_names.get(h.old_status_id, ""),
-                "to_status": status_names.get(h.new_status_id, ""),
-                "old_estimate": float(h.old_estimate) if h.old_estimate is not None else "",
-                "new_estimate": float(h.new_estimate) if h.new_estimate is not None else "",
-                "actor": users_by_id[h.actor_id].name if h.actor_id in users_by_id else "",
-                "occurred_at": h.occurred_at,
-            } for h in history],
+            [_history_row(h, titles, status_names, users_by_id) for h in history],
             banner=f"Activity History ({len(history)} event(s))",
         )
 
@@ -339,11 +371,7 @@ def export_sprint_report_xlsx(
     except XlsxBuildError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    # ASCII only: the name goes into an HTTP header, which is Latin-1 encoded.
-    safe_name = "".join(
-        c if (c.isascii() and c.isalnum()) or c in (" ", "-", "_") else "_" for c in sprint.name
-    ).strip() or f"sprint-{sprint.id}"
-    filename = f"sprint-report-{safe_name}.xlsx"
+    filename = f"sprint-report-{_ascii_name(sprint)}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -476,20 +504,23 @@ _SPRINT_SCOPED_REPORTS = {
 
 def _export_sprint_scoped(db: Session, user: User, report_key: str, sprint_id: int | None) -> dict:
     if sprint_id is None:
-        raise HTTPException(status_code=400, detail="sprint_id is required for this report")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=400, detail="sprint_id is required for this report")  # NOSONAR(S8415)
     sprint, board = _get_sprint_and_board(db, sprint_id, user)
     return _SPRINT_SCOPED_REPORTS[report_key](db, sprint, board)
 
 
 def _export_epic(db: Session, user: User, epic_id: int | None) -> dict:
     if epic_id is None:
-        raise HTTPException(status_code=400, detail="epic_id is required for this report")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=400, detail="epic_id is required for this report")  # NOSONAR(S8415)
     return get_epic_progress_report(epic_id, db, user)
 
 
 def _export_release(db: Session, user: User, version_id: int | None) -> dict:
     if version_id is None:
-        raise HTTPException(status_code=400, detail="version_id is required for this report")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=400, detail="version_id is required for this report")  # NOSONAR(S8415)
     return get_release_report(version_id, db, user)
 
 
@@ -498,12 +529,14 @@ def _export_board_scoped(
     date_from: str | None, date_to: str | None, sprint_count: int, include_subtasks: bool = True,
 ) -> dict:
     if board_id is None:
-        raise HTTPException(status_code=400, detail="board_id is required for this report")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=400, detail="board_id is required for this report")  # NOSONAR(S8415)
     board = _get_report_board(db, board_id, user)
     if report_key == "velocity":
         return reports_svc.velocity_report(db, board, sprint_count)
     if date_from is None or date_to is None:
-        raise HTTPException(status_code=400, detail="date_from and date_to are required for this report")
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=400, detail="date_from and date_to are required for this report")  # NOSONAR(S8415)
     _validate_date_range(date_from, date_to)
     if report_key == "cumulative-flow":
         return _flatten_cfd(reports_svc.cumulative_flow_report(
@@ -578,30 +611,37 @@ def _csv_cell(value):
 def _report_to_csv_bytes(data: dict, report_key: str | None = None) -> bytes:
     """The report's table as CSV (see _CSV_ROWS); a report without one (or
     with an empty table) exports its summary figures as a single row."""
-    builder = _CSV_ROWS.get(report_key or "")
-    if builder is not None:
-        rows = builder(data)
-    else:
-        rows = next(
-            (v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)),
-            [],
-        )
+    rows = _csv_table(data, report_key)
     buf = io.StringIO()
     if rows:
-        fieldnames = list(dict.fromkeys(k for row in rows for k in row))
+        fieldnames = _csv_fieldnames(rows)
         writer = csv.DictWriter(buf, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows({k: _csv_cell(row.get(k)) for k in fieldnames} for row in rows)
     else:
         scalar = {k: v for k, v in data.items() if not isinstance(v, (list, dict))}
-        writer = csv.DictWriter(buf, fieldnames=list(scalar.keys()))
+        writer = csv.DictWriter(buf, fieldnames=list(scalar))
         writer.writeheader()
         writer.writerow({k: _csv_safe(v) for k, v in scalar.items()})
     return buf.getvalue().encode("utf-8")
 
 
+def _csv_fieldnames(rows: list[dict]) -> list[str]:
+    return list(dict.fromkeys(k for row in rows for k in row))
+
+
+def _csv_table(data: dict, report_key: str | None) -> list[dict]:
+    builder = _CSV_ROWS.get(report_key or "")
+    if builder is not None:
+        return builder(data)
+    return next(
+        (v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)),
+        [],
+    )
+
+
 @router.post("/export", response_class=Response,
-             responses={**XLSX_OR_CSV_FILE_200, **BAD_REQUEST_NOT_FOUND_404, **FORBIDDEN_403})
+             responses=XLSX_OR_CSV_FILE_200_BAD_REQUEST_FORBIDDEN_NOT_FOUND_404)
 def export_report(
     report_key: str = Query(..., description="|".join(_EXPORTABLE_REPORTS)),
     sprint_id: int | None = Query(default=None),

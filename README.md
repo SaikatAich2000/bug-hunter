@@ -352,7 +352,6 @@ Browser env vars: `PW_BROWSERS` (comma list, default `chromium`), `PW_EXECUTABLE
 See [docs/testing.md](docs/testing.md).
 
 ```bash
-
 python -m compileall -q app tests scripts
 ruff check app tests scripts
 bandit -c pyproject.toml -r app -q
@@ -380,6 +379,10 @@ SonarQube: `scripts/sonar-server-up.ps1` starts a local server,
 `scripts/sonar-scan.ps1` / `sonar-scan.sh` scan, and
 `python scripts/sonar_gate.py apply` installs the `bug-hunter-gate` quality gate
 (80% coverage overall and on new code, security rating A, zero vulnerabilities).
+The token comes only from the `SONAR_TOKEN` environment variable. Shell scripts keep LF
+endings (`.gitattributes`). Details and the last verified results (0 bugs, 0 vulnerabilities,
+0 code smells, 0 hotspots, 95.5% combined coverage, 0.5% duplication, gate passed;
+Schemathesis: zero 5xx) are in [docs/testing.md](docs/testing.md).
 
 GitHub Actions runs on pushes and pull requests to `main`. `build-and-push.yml`
 (CI): lint (compile, ruff, ESLint), backend tests with coverage on SQLite and on
@@ -403,7 +406,7 @@ Details per job: [docs/testing.md](docs/testing.md).
 - `./down.sh` (no flags) stops containers and keeps the volume.
 - Data is lost only through explicit commands: `./down.sh --wipe-db` (asks for confirmation) or `docker compose down -v`.
 - `init_db()` only creates missing tables, columns and indexes. Existing rows are never deleted, and the only in-place writes are one-time backfills of new columns (for example display IDs and default workflow statuses).
-- Because the schema is additive, an older release still runs against a newer database. Rolling back is still a manual step, so take a backup before upgrading.
+- Because the schema is additive, an older release still runs against a newer database. Rolling back is a manual step (below), so take a backup before upgrading. A drill of backup, delete, restore and rollback to the previous `APP_VERSION` kept the data.
 
 **Backup & restore:** `./deploy.sh` takes a dump first (`SKIP_BACKUP=1` skips it).
 Manually:
@@ -433,7 +436,7 @@ against a newer schema).
 | --- | --- |
 | Services | The app container and a PostgreSQL container |
 | Ports | App `8765 → 8000`; PostgreSQL only on `127.0.0.1:55432` |
-| Resource limits | Compose caps the stack at 0.5 vCPU / 512 MB (app 0.30 / 320 MB, database 0.20 / 192 MB). Measure your own headroom with `scripts/loadtest.py`; see [docs/performance.md](docs/performance.md). |
+| Resource limits | Compose caps the stack at 0.5 vCPU / 512 MB (app 0.30 / 320 MB, database 0.20 / 192 MB). Measured results and how to reproduce them: [docs/performance.md](docs/performance.md). |
 | Workers | One Uvicorn worker and a small SQLAlchemy pool (`DB_POOL_SIZE` + `DB_MAX_OVERFLOW`, 2 + 2 in Compose). The digest scheduler and rate limiters are per process, so scale out only after moving them out of the app. |
 | Secrets | Injected from `.env` / `secrets/` by Compose, or by the platform; never baked into the image |
 | Health | `curl -fsS http://localhost:8765/api/health` |
@@ -543,7 +546,7 @@ behind a TLS-intercepting proxy.
 - [docs/operations.md](docs/operations.md): deploy, backup/restore, retention, health, logs, telemetry, upgrades.
 - [docs/security-model.md](docs/security-model.md): what is enforced where, and the known limits.
 - [docs/testing.md](docs/testing.md): test layers, commands, CI jobs.
-- [docs/performance.md](docs/performance.md): how to measure; where to record results.
+- [docs/performance.md](docs/performance.md): measured load-test results and how to reproduce them.
 
 ## Security
 

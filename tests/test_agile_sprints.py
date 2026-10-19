@@ -286,7 +286,8 @@ def test_task_and_sub_task_each_use_their_own_workflow(admin_client):
     with SessionLocal() as db:
         task_row = get_status_by_value(db, "Task", "In Progress")
         sub_row = get_status_by_value(db, "Sub-task", "In Progress")
-        assert task_row is not None and sub_row is not None
+        assert task_row is not None
+        assert sub_row is not None
         assert (task_row.work_item_type, sub_row.work_item_type) == ("Task", "Sub-task")
     project, board_id = _setup_project_with_board(admin_client, "Task Workflow Suite")
     task = _create_item(admin_client, project["id"], "A task", "Task")
@@ -423,3 +424,200 @@ def test_settings_self_heals_agile_enabled_without_board(admin_client):
     assert enable.json()["agile_enabled"] is True
     assert enable.json()["board_id"] is not None
 
+
+
+# --- lifecycle guards: stale versions, bad edits, idempotent replays ---------
+
+def _sprint(admin_client, board_id, name, **extra):
+    res = admin_client.post(f"/api/agile/sprints?board_id={board_id}", json={"name": name, **extra})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _put_in(admin_client, sprint_id, *item_ids):
+    res = admin_client.post(f"/api/agile/sprints/{sprint_id}/items", json={"item_ids": list(item_ids)})
+    assert res.status_code == 200, res.text
+
+
+def test_every_lifecycle_route_rejects_a_stale_version(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Stale Versions")
+    item = _create_story(admin_client, project["id"], "Versioned")
+    sprint = _sprint(admin_client, board_id, "Stale 1")
+    _put_in(admin_client, sprint["id"], item["id"])
+    stale = sprint["version"] + 7
+
+    base = f"/api/agile/sprints/{sprint['id']}"
+    assert admin_client.put(base, json={"goal": "x", "version": stale}).status_code == 409
+    assert admin_client.post(f"{base}/start", json={"version": stale}).status_code == 409
+    started = admin_client.post(f"{base}/start", json={"version": sprint["version"]}).json()
+    assert admin_client.post(f"{base}/complete", json={"version": stale}).status_code == 409
+    cancel = admin_client.post(f"{base}/cancel", json={"cancellation_note": "n", "version": stale})
+    assert cancel.status_code == 409
+    assert admin_client.get(base).json()["version"] == started["version"]
+
+
+def test_sprint_edit_rules(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Edit Rules")
+    item = _create_story(admin_client, project["id"], "Editable")
+    sprint = _sprint(admin_client, board_id, "Edit 1", start_date="2026-03-01", end_date="2026-03-14")
+    other = _sprint(admin_client, board_id, "Edit 2")
+    base = f"/api/agile/sprints/{sprint['id']}"
+
+    swapped = admin_client.put(base, json={"start_date": "2026-04-01", "version": sprint["version"]})
+    assert swapped.status_code == 409
+    assert "end date" in swapped.json()["detail"]
+    edited = admin_client.put(base, json={"goal": "Ship", "cadence": "weekly", "version": sprint["version"]})
+    assert edited.status_code == 200, edited.text
+    assert (edited.json()["goal"], edited.json()["cadence"]) == ("Ship", "weekly")
+    cleared = admin_client.put(base, json={"start_date": None, "end_date": None,
+                                           "version": edited.json()["version"]})
+    assert (cleared.json()["start_date"], cleared.json()["end_date"]) == (None, None)
+    assert cleared.json()["cadence"] == "weekly"
+    clash = admin_client.put(base, json={"name": other["name"].lower(), "version": cleared.json()["version"]})
+    assert clash.status_code == 409
+
+    _put_in(admin_client, sprint["id"], item["id"])
+    started = admin_client.post(f"{base}/start", json={
+        "version": cleared.json()["version"], "start_date": "2026-05-01", "end_date": "2026-05-14",
+    }).json()
+    keep_dates = admin_client.put(base, json={"end_date": None, "version": started["version"]})
+    assert keep_dates.status_code == 409
+    assert "keeps its start and end dates" in keep_dates.json()["detail"]
+
+    closed = admin_client.post(f"{base}/complete", json={"version": started["version"]}).json()
+    assert admin_client.put(base, json={"goal": "late", "version": closed["version"]}).status_code == 409
+
+
+def test_starting_with_a_taken_name_conflicts(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Start Names")
+    item = _create_story(admin_client, project["id"], "Named")
+    taken = _sprint(admin_client, board_id, "Taken name")
+    sprint = _sprint(admin_client, board_id, "Fresh name")
+    _put_in(admin_client, sprint["id"], item["id"])
+    res = admin_client.post(f"/api/agile/sprints/{sprint['id']}/start",
+                            json={"name": taken["name"], "version": sprint["version"]})
+    assert res.status_code == 409
+
+
+def test_state_rules_for_start_complete_cancel_and_remove(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "State Rules")
+    item = _create_story(admin_client, project["id"], "Stateful")
+    sprint = _sprint(admin_client, board_id, "State 1")
+    base = f"/api/agile/sprints/{sprint['id']}"
+    _put_in(admin_client, sprint["id"], item["id"])
+
+    assert admin_client.post(f"{base}/complete", json={"version": sprint["version"]}).status_code == 409
+    assert admin_client.delete(f"{base}/items/999999").status_code == 404
+    started = admin_client.post(f"{base}/start", json={"version": sprint["version"]}).json()
+    assert admin_client.post(f"{base}/start", json={"version": started["version"]}).status_code == 409
+
+    # A finished issue stays in the closed sprint.
+    current = admin_client.get(f"/api/bugs/{item['id']}").json()
+    done = admin_client.post(f"/api/agile/work-items/{item['id']}/transition",
+                             json={"to_status": "Done", "version": current["version"]})
+    assert done.status_code == 200, done.text
+    closed = admin_client.post(f"{base}/complete", json={"version": started["version"]}).json()
+    assert admin_client.delete(f"{base}/items/{item['id']}").status_code == 409
+    again = admin_client.post(f"{base}/cancel", json={"cancellation_note": "n", "version": closed["version"]})
+    assert again.status_code == 409
+    assert admin_client.post(f"{base}/items", json={"item_ids": [item["id"]]}).status_code == 409
+
+
+def test_completion_and_cancellation_validate_destinations(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Destinations")
+    item = _create_story(admin_client, project["id"], "Unfinished")
+    sprint = _sprint(admin_client, board_id, "Dest 1")
+    base = f"/api/agile/sprints/{sprint['id']}"
+    _put_in(admin_client, sprint["id"], item["id"])
+    started = admin_client.post(f"{base}/start", json={"version": sprint["version"]}).json()
+
+    stray = {"item_id": 999999, "destination": "backlog"}
+    res = admin_client.post(f"{base}/complete", json={"version": started["version"], "dispositions": [stray]})
+    assert res.status_code == 409
+    to_missing = admin_client.post(f"{base}/complete", json={
+        "version": started["version"], "default_destination": "sprint", "default_target_sprint_id": 999999,
+    })
+    assert to_missing.status_code == 409
+    res = admin_client.post(f"{base}/cancel", json={
+        "cancellation_note": "n", "version": started["version"], "dispositions": [stray],
+    })
+    assert res.status_code == 409
+    # Nothing above changed the sprint.
+    assert admin_client.get(base).json()["state"] == "active"
+
+
+def test_unfinished_issues_can_open_a_new_sprint_with_a_default_name(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "New Sprint Names")
+    item = _create_story(admin_client, project["id"], "Carried")
+    sprint = _sprint(admin_client, board_id, "Names 1")
+    base = f"/api/agile/sprints/{sprint['id']}"
+    _put_in(admin_client, sprint["id"], item["id"])
+    started = admin_client.post(f"{base}/start", json={"version": sprint["version"]}).json()
+
+    body = {
+        "version": started["version"], "default_destination": "new_sprint",
+        "dispositions": [{"item_id": item["id"], "destination": "new_sprint"}],
+    }
+    res = admin_client.post(f"{base}/complete", json=body, headers={"Idempotency-Key": "complete-1"})
+    assert res.status_code == 200, res.text
+    sprints = admin_client.get(f"/api/agile/sprints?board_id={board_id}").json()
+    assert [s["name"] for s in sprints if s["state"] == "future"] == ["Sprint 2"]
+    replay = admin_client.post(f"{base}/complete", json=body, headers={"Idempotency-Key": "complete-1"})
+    assert replay.json() == res.json()
+
+
+def test_cancelling_an_active_sprint_logs_removals_and_replays(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Cancel Active")
+    item = _create_story(admin_client, project["id"], "Pulled")
+    sprint = _sprint(admin_client, board_id, "Cancel 1")
+    target = _sprint(admin_client, board_id, "Cancel target")
+    base = f"/api/agile/sprints/{sprint['id']}"
+    _put_in(admin_client, sprint["id"], item["id"])
+    started = admin_client.post(f"{base}/start", json={"version": sprint["version"]}).json()
+
+    body = {"cancellation_note": "descoped", "version": started["version"],
+            "dispositions": [{"item_id": item["id"], "destination": "sprint", "target_sprint_id": target["id"]}]}
+    res = admin_client.post(f"{base}/cancel", json=body, headers={"Idempotency-Key": "cancel-1"})
+    assert res.status_code == 200, res.text
+    assert admin_client.post(f"{base}/cancel", json=body, headers={"Idempotency-Key": "cancel-1"}).json() == res.json()
+    events = [h["event_type"] for h in admin_client.get(f"{base}/history").json()]
+    assert "removed" in events
+    moved = admin_client.get(f"/api/agile/sprints/{target['id']}").json()
+    assert moved["item_count"] == 1
+
+
+def test_adding_issues_to_a_sprint_enforces_planning_rules(admin_client):
+    project, board_id = _setup_project_with_board(admin_client, "Planning Rules")
+    other_project, other_board = _setup_project_with_board(admin_client, "Other Planning")
+    story = _create_story(admin_client, project["id"], "Plannable")
+    epic = admin_client.post("/api/agile/work-items", json={
+        "project_id": project["id"], "title": "Epic", "item_type": "epic"}).json()
+    foreign = _create_story(admin_client, other_project["id"], "Foreign")
+    sprint = _sprint(admin_client, board_id, "Plan 1")
+    foreign_sprint = _sprint(admin_client, other_board, "Foreign plan")
+    url = f"/api/agile/sprints/{sprint['id']}/items"
+
+    assert admin_client.post(url, json={"item_ids": [epic["id"]]}).status_code == 409
+    assert admin_client.post(url, json={"item_ids": [foreign["id"]]}).status_code == 409
+    assert admin_client.post(url, json={"item_ids": [story["id"]], "before_id": story["id"]}).status_code == 409
+    moved = admin_client.post("/api/agile/work-items", json={
+        "project_id": project["id"], "title": "Straight in", "item_type": "story", "sprint_id": sprint["id"]})
+    assert moved.status_code == 201, moved.text
+    for bad in (999999, foreign_sprint["id"]):
+        res = admin_client.post("/api/agile/work-items", json={
+            "project_id": project["id"], "title": "Nowhere", "item_type": "story", "sprint_id": bad})
+        assert res.status_code == 422
+    for blocked in ("epic", "sub-task"):
+        res = admin_client.post("/api/agile/work-items", json={
+            "project_id": project["id"], "title": "Blocked", "item_type": blocked, "sprint_id": sprint["id"]})
+        assert res.status_code == 422
+
+
+def test_hierarchy_route_reports_missing_and_stale_items(admin_client):
+    project, _board_id = _setup_project_with_board(admin_client, "Hierarchy Errors")
+    story = _create_story(admin_client, project["id"], "Child")
+    assert admin_client.put("/api/agile/work-items/999999/hierarchy",
+                            json={"epic_id": None, "version": 1}).status_code == 404
+    stale = admin_client.put(f"/api/agile/work-items/{story['id']}/hierarchy",
+                             json={"epic_id": None, "version": story["version"] + 4})
+    assert stale.status_code == 409

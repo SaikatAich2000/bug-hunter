@@ -80,13 +80,19 @@ async function send(path, init, timeoutMs) {
   }
 }
 
+/** fetch() init for opts, minus timeoutMs (which is ours, not fetch's). */
+function initWithoutTimeout(opts) {
+  const rest = { ...opts };
+  delete rest.timeoutMs;
+  return requestInit(rest);
+}
+
 function timeoutFor(opts) {
   return opts.timeoutMs ?? (opts.body instanceof FormData ? UPLOAD_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
 }
 
 export async function api(path, opts = {}) {
-  const { timeoutMs: _timeout, ...rest } = opts;
-  const res = await send(path, requestInit(rest), timeoutFor(opts));
+  const res = await send(path, initWithoutTimeout(opts), timeoutFor(opts));
 
   if (res.status === 401) {
     bounceToLogin();
@@ -115,9 +121,8 @@ export async function api(path, opts = {}) {
 
 /** Fetch a binary endpoint; returns blob + filename. */
 export async function apiBlob(path, opts = {}) {
-  const { timeoutMs: _timeout, ...rest } = opts;
   // Exports can take a while to build; allow as long as an upload.
-  const res = await send(path, requestInit(rest), opts.timeoutMs ?? UPLOAD_TIMEOUT_MS);
+  const res = await send(path, initWithoutTimeout(opts), opts.timeoutMs ?? UPLOAD_TIMEOUT_MS);
   if (res.status === 401) {
     bounceToLogin();
     throw new ApiError("Session expired", 401, true);

@@ -60,7 +60,8 @@ def test_two_simultaneous_first_writes_both_succeed(admin_client):
         t.start()
     for t in threads:
         t.join(timeout=30)
-    assert len(outcomes) == 2 and not [o for o in outcomes if isinstance(o, Exception)], outcomes
+    assert len(outcomes) == 2, outcomes
+    assert not [o for o in outcomes if isinstance(o, Exception)], outcomes
     with SessionLocal() as db:
         assert len(db.scalars(select(UserPreference)).all()) == 1
 

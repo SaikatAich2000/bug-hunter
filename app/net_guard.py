@@ -22,13 +22,16 @@ import httpx
 # Never reachable, whatever the deployment allows: cloud metadata services and addresses with
 # no legitimate use as a remote API.
 _METADATA = (
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("100.100.100.200/32"),
+    # Why: a blocklist/range entry the app refuses to connect to, not an address it contacts.
+    ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR(S1313)
+    # Why: a blocklist/range entry the app refuses to connect to, not an address it contacts.
+    ipaddress.ip_network("100.100.100.200/32"),  # NOSONAR(S1313)
     ipaddress.ip_network("fd00:ec2::254/128"),
     ipaddress.ip_network("fe80::/10"),
 )
 # Internal ranges: allowed only when the deployment opts in (an on-prem server).
-_SHARED = ipaddress.ip_network("100.64.0.0/10")
+# Why: a blocklist/range entry the app refuses to connect to, not an address it contacts.
+_SHARED = ipaddress.ip_network("100.64.0.0/10")  # NOSONAR(S1313)
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 

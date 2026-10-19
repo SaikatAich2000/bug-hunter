@@ -99,7 +99,8 @@ _READY_REQUIRED_FIELDS_ERROR = (
 def _get_project_or_404(db: Session, project_id: int, user: User) -> Project:
     project = db.get(Project, project_id)
     if project is None or not can_access_project(accessible_project_ids(db, user), project_id):
-        raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)  # NOSONAR(S8415)
     return project
 
 
@@ -108,17 +109,20 @@ def _get_agile_project_or_404(db: Session, project_id: int, user: User) -> Proje
     use for real Agile data endpoints, never for the settings/enable/disable routes."""
     project = _get_project_or_404(db, project_id, user)
     if not project.agile_enabled:
-        raise HTTPException(status_code=404, detail=_DETAIL_AGILE_NOT_ENABLED)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_AGILE_NOT_ENABLED)  # NOSONAR(S8415)
     return project
 
 
 def _get_board_or_404(db: Session, board_id: int, user: User) -> Board:
     board = boards_svc.get_board_or_none(db, board_id)
     if board is None or not can_access_project(accessible_project_ids(db, user), board.project_id):
-        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)  # NOSONAR(S8415)
     project = db.get(Project, board.project_id)
     if project is None or not project.agile_enabled:
-        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_BOARD_NOT_FOUND)  # NOSONAR(S8415)
     return board
 
 
@@ -135,10 +139,12 @@ def _get_sprint_or_404(db: Session, sprint_id: int, user: User, *, lock: bool = 
     else:
         sprint = db.get(Sprint, sprint_id)
     if sprint is None or not can_access_project(accessible_project_ids(db, user), sprint.project_id):
-        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)  # NOSONAR(S8415)
     project = db.get(Project, sprint.project_id)
     if project is None or not project.agile_enabled:
-        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=404, detail=_DETAIL_SPRINT_NOT_FOUND)  # NOSONAR(S8415)
     return sprint
 
 
@@ -252,6 +258,86 @@ def update_board(
     return boards_svc.serialize_board(board)
 
 
+def _validate_column(col_in, seen_names: set[str], seen_statuses: dict[str, str], known_values: set[str]) -> None:
+    key = col_in.name.strip().lower()
+    if key in seen_names:
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=422, detail=f"Two columns are named '{col_in.name}'")  # NOSONAR(S8415)
+    seen_names.add(key)
+    if col_in.wip_limit is not None and col_in.min_cards is not None and col_in.min_cards > col_in.wip_limit:
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(  # NOSONAR(S8415)
+            status_code=422,
+            detail=f"Column '{col_in.name}': the minimum cannot exceed the maximum",
+        )
+    for value in col_in.statuses:
+        if value not in known_values:
+            # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+            raise HTTPException(status_code=422, detail=f"Unknown status '{value}'")  # NOSONAR(S8415)
+        if value in seen_statuses and seen_statuses[value] != col_in.name:
+            # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+            raise HTTPException(  # NOSONAR(S8415)
+                status_code=422,
+                detail=f"Status '{value}' is in both '{seen_statuses[value]}' and '{col_in.name}'; "
+                       "a status can be shown in one column only",
+            )
+        seen_statuses[value] = col_in.name
+
+
+def _validate_columns(columns, known_values: set[str]) -> None:
+    """The column rules of Board configuration: unique names, sane WIP, one column per status, a real done column."""
+    seen_statuses: dict[str, str] = {}
+    seen_names: set[str] = set()
+    for col_in in columns:
+        _validate_column(col_in, seen_names, seen_statuses, known_values)
+    if columns[-1].category != "done":
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(  # NOSONAR(S8415)
+            status_code=422,
+            detail="The right-most column is where issues are done: give it the 'done' category",
+        )
+    if not columns[-1].statuses:
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(  # NOSONAR(S8415)
+            status_code=422,
+            detail="The right-most column needs at least one status, or nothing could ever be done",
+        )
+
+
+def _apply_column(db: Session, board, existing: dict, position: int, col_in):
+    """Update the column whose id was sent (else create one) and sync its statuses."""
+    from app.models import BoardColumn, BoardColumnStatus, WorkflowStatus
+
+    column = existing.get(col_in.id) if col_in.id is not None else None
+    if col_in.id is not None and column is None:
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=422, detail=f"Column #{col_in.id} is not on this board")  # NOSONAR(S8415)
+    if column is None:
+        column = BoardColumn(board_id=board.id)
+        db.add(column)
+    column.name = col_in.name
+    column.position = position
+    column.category = col_in.category
+    column.wip_limit = col_in.wip_limit
+    column.min_cards = col_in.min_cards
+    column.wip_enforcement = col_in.wip_enforcement
+    column.color = col_in.color
+    db.flush()
+    wanted = set(db.scalars(
+        select(WorkflowStatus.id).where(
+            WorkflowStatus.scope_key == "global",
+            WorkflowStatus.persisted_status_value.in_(col_in.statuses or [""]),
+        )
+    ).all())
+    current = {m.workflow_status_id: m for m in column.statuses}
+    for status_id, mapping in current.items():
+        if status_id not in wanted:
+            db.delete(mapping)
+    for status_id in wanted - set(current):
+        db.add(BoardColumnStatus(board_column_id=column.id, workflow_status_id=status_id))
+    return column
+
+
 @router.put("/boards/{board_id}/columns", response_model=BoardOut, responses=FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422)
 def replace_board_columns(
     board_id: int, payload: BoardColumnsReplaceIn,
@@ -262,7 +348,7 @@ def replace_board_columns(
     id is sent; the rest are created, and columns left out are removed. A
     status may sit in one column only; the right-most column is the one that
     means "done" for sprint completion and every report."""
-    from app.models import BoardColumn, BoardColumnStatus, WorkflowStatus
+    from app.models import WorkflowStatus
 
     board = _get_board_or_404(db, board_id, actor)
     require_permission(actor, MANAGE_BOARD)
@@ -273,69 +359,13 @@ def replace_board_columns(
             WorkflowStatus.scope_key == "global", WorkflowStatus.is_active.is_(True),
         )
     ).all())
-    seen_statuses: dict[str, str] = {}
-    seen_names: set[str] = set()
-    for col_in in payload.columns:
-        key = col_in.name.strip().lower()
-        if key in seen_names:
-            raise HTTPException(status_code=422, detail=f"Two columns are named '{col_in.name}'")
-        seen_names.add(key)
-        if col_in.wip_limit is not None and col_in.min_cards is not None and col_in.min_cards > col_in.wip_limit:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Column '{col_in.name}': the minimum cannot exceed the maximum",
-            )
-        for value in col_in.statuses:
-            if value not in known_values:
-                raise HTTPException(status_code=422, detail=f"Unknown status '{value}'")
-            if value in seen_statuses and seen_statuses[value] != col_in.name:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Status '{value}' is in both '{seen_statuses[value]}' and '{col_in.name}'; "
-                           "a status can be shown in one column only",
-                )
-            seen_statuses[value] = col_in.name
-    if payload.columns[-1].category != "done":
-        raise HTTPException(
-            status_code=422,
-            detail="The right-most column is where issues are done: give it the 'done' category",
-        )
-    if not payload.columns[-1].statuses:
-        raise HTTPException(
-            status_code=422,
-            detail="The right-most column needs at least one status, or nothing could ever be done",
-        )
+    _validate_columns(payload.columns, known_values)
 
     existing = {c.id: c for c in board.columns}
-    kept_ids = set()
-    for position, col_in in enumerate(payload.columns):
-        column = existing.get(col_in.id) if col_in.id is not None else None
-        if col_in.id is not None and column is None:
-            raise HTTPException(status_code=422, detail=f"Column #{col_in.id} is not on this board")
-        if column is None:
-            column = BoardColumn(board_id=board.id)
-            db.add(column)
-        column.name = col_in.name
-        column.position = position
-        column.category = col_in.category
-        column.wip_limit = col_in.wip_limit
-        column.min_cards = col_in.min_cards
-        column.wip_enforcement = col_in.wip_enforcement
-        column.color = col_in.color
-        db.flush()
-        kept_ids.add(column.id)
-        wanted = set(db.scalars(
-            select(WorkflowStatus.id).where(
-                WorkflowStatus.scope_key == "global",
-                WorkflowStatus.persisted_status_value.in_(col_in.statuses or [""]),
-            )
-        ).all())
-        current = {m.workflow_status_id: m for m in column.statuses}
-        for status_id, mapping in current.items():
-            if status_id not in wanted:
-                db.delete(mapping)
-        for status_id in wanted - set(current):
-            db.add(BoardColumnStatus(board_column_id=column.id, workflow_status_id=status_id))
+    kept_ids = {
+        _apply_column(db, board, existing, position, col_in).id
+        for position, col_in in enumerate(payload.columns)
+    }
     for column_id, column in existing.items():
         if column_id not in kept_ids:
             db.delete(column)
@@ -657,6 +687,28 @@ def get_sprint_history(
 # Work-item hierarchy + Agile-type creation
 # =====================================================================
 
+_PLANNING_BLOCKED = {
+    "Epic": "Epics are not planned into sprints",
+    "Sub-task": "A Sub-task is always in its parent's sprint",
+}
+
+
+def _planning_sprint(db: Session, payload: AgileWorkItemCreateIn, project, actor: User) -> Sprint | None:
+    """The open sprint a new issue is planned into, or None when none was requested."""
+    if payload.sprint_id is None:
+        return None
+    # Planning into a sprint needs the backlog permission (as /move does).
+    require_permission(actor, MANAGE_BACKLOG)
+    if payload.item_type in _PLANNING_BLOCKED:
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=422, detail=_PLANNING_BLOCKED[payload.item_type])  # NOSONAR(S8415)
+    sprint = db.get(Sprint, payload.sprint_id)
+    if sprint is None or sprint.project_id != project.id or sprint.state in ("closed", "cancelled"):
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
+        raise HTTPException(status_code=422, detail="sprint_id must reference an open Sprint in this project")  # NOSONAR(S8415)
+    return sprint
+
+
 @router.post("/work-items", response_model=BacklogItemOut, status_code=status.HTTP_201_CREATED, responses=BAD_REQUEST_FORBIDDEN_NOT_FOUND_422)
 def create_agile_work_item(
     payload: AgileWorkItemCreateIn,
@@ -670,17 +722,7 @@ def create_agile_work_item(
     project = _get_agile_project_or_404(db, payload.project_id, actor)
     require_permission(actor, CREATE_ITEM)
 
-    sprint = None
-    if payload.sprint_id is not None:
-        # Planning into a sprint needs the backlog permission (as /move does).
-        require_permission(actor, MANAGE_BACKLOG)
-        if payload.item_type == "Epic":
-            raise HTTPException(status_code=422, detail="Epics are not planned into sprints")
-        if payload.item_type == "Sub-task":
-            raise HTTPException(status_code=422, detail="A Sub-task is always in its parent's sprint")
-        sprint = db.get(Sprint, payload.sprint_id)
-        if sprint is None or sprint.project_id != project.id or sprint.state in ("closed", "cancelled"):
-            raise HTTPException(status_code=422, detail="sprint_id must reference an open Sprint in this project")
+    sprint = _planning_sprint(db, payload, project, actor)
     # Same assignee rules as /api/bugs: unknown ids are an error (never silently dropped),
     # and deactivated accounts and people outside the project cannot be assigned.
     assignees = resolve_users(db, payload.assignee_ids)

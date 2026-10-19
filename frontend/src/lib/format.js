@@ -33,9 +33,9 @@ export function initials(name) {
 }
 
 /** Emoji icon per MIME / filename. */
-export function fileIcon(contentType) {
+export function fileIcon(contentType, filename) {
   const ct = (contentType || "").toLowerCase();
-  const fn = (name || "").toLowerCase();
+  const fn = (filename || "").toLowerCase();
   if (ct.startsWith("image/")) return "🖼️";
   if (ct.startsWith("video/")) return "🎬";
   if (ct.startsWith("audio/")) return "🎵";

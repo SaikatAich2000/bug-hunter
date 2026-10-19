@@ -10,6 +10,7 @@ venv/
 # Tests, coverage, linters
 .pytest_cache/
 .ruff_cache/
+.complexipy_cache/
 .hypothesis/
 .schemathesis/
 .coverage
@@ -48,7 +49,6 @@ sonar-hotspots.*
 !.env.example
 secrets/
 *firebase-admin*.json
-*firebase-adminsdk*.json
 *service-account*.json
 *serviceaccount*.json
 *.pem
@@ -90,7 +90,6 @@ Thumbs.db
 
 # Docker (local overrides)
 docker-compose.override.yml
-.env.docker
 
 # Screenshots and media (the shipped icons are re-included)
 *.png

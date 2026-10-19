@@ -86,7 +86,7 @@ export default function ActionMenu({ label = "More actions", items, className = 
         <div ref={menuRef} id={menuId} role="menu" className="ag-menu" style={{ top: pos.top, left: pos.left }}
           tabIndex={-1} onKeyDown={stop} onPointerDown={stop} onMouseDown={stop} onTouchStart={stop}>
           {visible.map((item, n) => (item.separator ? (
-            <div key={`sep-${n}`} role="separator" className="ag-menu-sep" />
+            <div key={`sep-before-${visible[n + 1]?.label}`} role="separator" /* NOSONAR S6819: menu divider; <hr> would need the browser border reset in a role=menu */ className="ag-menu-sep" />
           ) : (
             <button
               key={item.label}

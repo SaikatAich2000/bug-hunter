@@ -129,7 +129,8 @@ def test_topchrome_carries_the_brandmark():
     chrome = _read(TOPCHROME)
     assert "brandmark" in chrome, "brand mark must live in the chrome (not the sidebar)"
     # Two-tone wordmark: first word plain, the rest in the accent span (BUG + HUNTER).
-    assert "{wordmark.first}" in chrome and "<span>{wordmark.rest}</span>" in chrome
+    assert "{wordmark.first}" in chrome
+    assert "<span>{wordmark.rest}</span>" in chrome
     assert "getWordmarkParts" in chrome, "wordmark parts function must be imported for dynamic branding"
 
 

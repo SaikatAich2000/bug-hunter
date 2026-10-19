@@ -99,7 +99,7 @@ _DNS_MARKERS = (
 # 5xx codes that are safe to replay on an idempotent GET. A failing POST is never
 # replayed here: the caller re-checks the remote branch and reconciles instead.
 _RETRYABLE_STATUS = frozenset({502, 503, 504})
-_BACKOFF_SECONDS = 0.5
+_BACKOFF_SECONDS = get_settings().GITHUB_RETRY_BACKOFF_SECONDS
 
 
 class GitBaseUrlError(ValueError):
@@ -119,6 +119,17 @@ def _is_dns_failure(exc: BaseException) -> bool:
         current = current.__cause__ or current.__context__
         depth += 1
     return False
+
+
+def _check_url_parts(parsed, scheme: str) -> None:
+    if scheme not in _ALLOWED_SCHEMES:
+        raise GitBaseUrlError("unsupported scheme")
+    if parsed.username or parsed.password:
+        raise GitBaseUrlError("credentials in a base URL are not allowed")
+    if parsed.query or parsed.fragment or parsed.params:
+        raise GitBaseUrlError("query strings and fragments are not allowed")
+    if not (parsed.hostname or "").strip():
+        raise GitBaseUrlError("missing host")
 
 
 def parse_base_url(base_url: str) -> tuple[str, str, str]:
@@ -141,18 +152,10 @@ def parse_base_url(base_url: str) -> tuple[str, str, str]:
         return "", "", ""
     if "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
         raise GitBaseUrlError("credentials in a base URL are not allowed")
-    candidate = raw if "://" in raw else f"https://{raw}"
-    parsed = urlparse(candidate)
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
     scheme = (parsed.scheme or "").lower()
-    if scheme not in _ALLOWED_SCHEMES:
-        raise GitBaseUrlError("unsupported scheme")
-    if parsed.username or parsed.password:
-        raise GitBaseUrlError("credentials in a base URL are not allowed")
-    if parsed.query or parsed.fragment or parsed.params:
-        raise GitBaseUrlError("query strings and fragments are not allowed")
+    _check_url_parts(parsed, scheme)
     host = (parsed.hostname or "").strip().lower()
-    if not host:
-        raise GitBaseUrlError("missing host")
     # ``urlparse`` keeps a redundant ``:port`` in ``netloc`` for IPv6 loopback
     # (``[::1]:8080``); the validated ``hostname``/``port`` pair below is the
     # authority, so encoded userinfo cannot smuggle credentials past this point.
@@ -429,55 +432,64 @@ class GitHubEnterpriseProvider:
         except net_guard.HostNotAllowed:
             raise self._host_not_allowed() from None
 
+        def send():
+            with httpx.Client(
+                timeout=self._timeouts(), verify=ssl_context,
+                transport=net_guard.guarded_transport(
+                    verify=ssl_context, allow_private=allow_private
+                ),
+            ) as client:
+                return client.request(method, url, headers=headers, params=params, json=json_body)
+
         attempts = max(settings.GITHUB_MAX_RETRIES, 0) + 1
         last_error: GitProviderError | None = None
         for attempt in range(attempts):
-            try:
-                with httpx.Client(
-                    timeout=self._timeouts(), verify=ssl_context,
-                    transport=net_guard.guarded_transport(
-                        verify=ssl_context, allow_private=allow_private
-                    ),
-                ) as client:
-                    response = client.request(
-                        method, url, headers=headers, params=params, json=json_body
-                    )
-            except net_guard.HostNotAllowed:
-                raise self._host_not_allowed() from None
-            except httpx.TimeoutException:
-                last_error = GitProviderError(
-                    TIMEOUT, "GitHub did not respond in time"
-                )
-            except (httpx.HTTPError, OSError) as exc:
-                # Raw exception text can embed the URL or the Authorization
-                # header, so it is classified and never handed back verbatim: a
-                # TLS failure, a proxy, a DNS problem and a plain outage each get
-                # their own stable, secret-free message.
-                last_error = self._transport_error(exc, auth)
-                if not last_error.retryable:
-                    raise last_error from None
-            else:
-                if response.status_code == 404 and not_found_ok:
-                    return None
-                if response.status_code < 400:
-                    if response.status_code == 204 or not response.content:
-                        return None
-                    try:
-                        return response.json()
-                    except ValueError as exc:
-                        raise GitProviderError(
-                            INVALID_RESPONSE,
-                            "GitHub returned a non-JSON response",
-                        ) from exc
-                error = self._error_for(response)
-                if not error.retryable:
-                    raise error
-                last_error = error
+            done, value = self._attempt(send, auth, not_found_ok)
+            if done:
+                return value
+            last_error = value
             if attempt + 1 < attempts:
                 time.sleep(_BACKOFF_SECONDS * (attempt + 1))
         raise last_error or GitProviderError(
             UNAVAILABLE, "GitHub request failed"
         )
+
+    def _attempt(self, send, auth: str | None, not_found_ok: bool):
+        """One try: (True, result) when finished, (False, retryable error) otherwise; final errors raise."""
+        try:
+            response = send()
+        except net_guard.HostNotAllowed:
+            raise self._host_not_allowed() from None
+        except httpx.TimeoutException:
+            return False, GitProviderError(TIMEOUT, "GitHub did not respond in time")
+        except (httpx.HTTPError, OSError) as exc:
+            # Raw exception text can embed the URL or the Authorization
+            # header, so it is classified and never handed back verbatim: a
+            # TLS failure, a proxy, a DNS problem and a plain outage each get
+            # their own stable, secret-free message.
+            error = self._transport_error(exc, auth)
+            if not error.retryable:
+                raise error from None
+            return False, error
+        if response.status_code == 404 and not_found_ok:
+            return True, None
+        if response.status_code < 400:
+            return True, self._json_body(response)
+        error = self._error_for(response)
+        if not error.retryable:
+            raise error
+        return False, error
+
+    @staticmethod
+    def _json_body(response):
+        if response.status_code == 204 or not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise GitProviderError(
+                INVALID_RESPONSE, "GitHub returned a non-JSON response"
+            ) from exc
 
     # --- GitProvider ------------------------------------------------------
 

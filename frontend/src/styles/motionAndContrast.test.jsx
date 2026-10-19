@@ -33,7 +33,11 @@ describe("motion.css", () => {
       let depth = 1;
       let i = m.index + m[0].length;
       const start = i;
-      while (depth > 0 && i < motion.length) depth += motion[i] === "{" ? 1 : motion[i] === "}" ? -1 : 0, i++;
+      while (depth > 0 && i < motion.length) {
+        if (motion[i] === "{") depth += 1;
+        else if (motion[i] === "}") depth -= 1;
+        i += 1;
+      }
       const body = motion.slice(start, i - 1);
       for (const decl of body.matchAll(/[{;]\s*([a-z-]+)\s*:/g)) {
         expect(["opacity", "transform"], `${m[1]} animates ${decl[1]}`).toContain(decl[1]);
@@ -105,5 +109,13 @@ describe.each([["dark", dark], ["light", light]])("%s theme contrast (WCAG AA)",
     expect(f, fg).toBeTruthy();
     expect(b, bg).toBeTruthy();
     expect(ratio(f, b)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("styles.css touch targets", () => {
+  it("phone layout keeps buttons, selects and icon buttons at the 44px minimum", () => {
+    const phone = base.slice(base.indexOf("Phone landscape & smaller"));
+    expect(phone).toMatch(/\.icon-btn \{ width: 44px; height: 44px; min-height: 44px; \}/);
+    expect(phone).toMatch(/\.btn, \.ms-btn, \.chip \{ min-height: 44px; \}/);
   });
 });

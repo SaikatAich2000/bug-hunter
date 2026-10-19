@@ -215,6 +215,177 @@ function DailyReport({ report }) {
   );
 }
 
+const EXPORT_KEYS = {
+  burndown: "burndown", burnup: "burnup", sprint: "sprint", velocity: "velocity",
+  cfd: "cumulative-flow", control: "control-chart", epic: "epic", workload: "workload",
+};
+
+/** Keeps `current` pointing at an item of `list`: the first one when it is missing or no longer listed. */
+function useAutoSelect(list, current, setCurrent) {
+  useEffect(() => {
+    if (!list.length) setCurrent(null);
+    else if (!list.some((x) => x.id === current)) setCurrent(list[0].id);
+  }, [list, current, setCurrent]);
+}
+
+/** Fetches the chosen report, or null while its inputs are incomplete. */
+function loadReport({ meta, reportKey, sprintId, epicId, range, rangeValid, day, boardId }) {
+  const missing = { sprint: !sprintId, epic: !epicId, range: !rangeValid }[meta.scope];
+  if (missing) return null;
+  switch (reportKey) {
+    case "burndown":
+    case "burnup": return agileApi.burndown(sprintId);
+    case "sprint": return agileApi.sprintReport(sprintId);
+    case "velocity": return agileApi.velocity(boardId, 7);
+    case "cfd": return agileApi.cumulativeFlow(boardId, range.from, range.to);
+    case "control": return agileApi.controlChart(boardId, range.from, range.to);
+    case "epic": return agileApi.epicReport(epicId);
+    case "daily": return agileApi.daily(sprintId, day);
+    case "workload": return agileApi.workload(sprintId);
+    default: return null;
+  }
+}
+
+function exportQuery({ meta, exportKey, sprintId, epicId, range, boardId }) {
+  const q = new URLSearchParams({ report_key: exportKey });
+  if (meta.scope === "sprint") q.set("sprint_id", sprintId);
+  if (meta.scope === "board" || meta.scope === "range") q.set("board_id", boardId);
+  if (meta.scope === "range") { q.set("date_from", range.from); q.set("date_to", range.to); }
+  if (meta.scope === "epic") q.set("epic_id", epicId);
+  return `/agile/reports/export?${q}`;
+}
+
+/** Why there is nothing to chart yet, or null when the report can run. */
+function reportNotice({ meta, hasSprints, hasEpics, rangeValid }) {
+  if (meta.scope === "sprint" && !hasSprints) return <p className="muted ag-empty">Start a sprint to see this report.</p>;
+  if (meta.scope === "epic" && !hasEpics) return <p className="muted ag-empty">Create an epic to see this report.</p>;
+  if (meta.scope === "range" && !rangeValid) return <p className="ag-error">Pick a start date on or before the end date.</p>;
+  return null;
+}
+
+function KpiStrip({ items }) {
+  return (
+    <div className="report-kpis">
+      {items.map(([value, label]) => (
+        <div className="report-kpi" key={label}><span className="report-kpi-num">{value}</span><span>{label}</span></div>
+      ))}
+    </div>
+  );
+}
+
+function BurnReport({ data, kind, unitLabel }) {
+  return (
+    <>
+      <KpiStrip items={[
+        [formatNumber(data.committed_estimate), "Committed"],
+        [formatNumber(data.remaining_estimate), "Remaining"],
+        [formatNumber(data.completed_estimate), "Completed"],
+        [formatNumber(data.scope_estimate), "Total scope"],
+      ]} />
+      <SprintChart report={data} kind={kind} unitLabel={unitLabel} />
+      <BurnTable report={data} />
+    </>
+  );
+}
+
+function VelocityReport({ data, unitLabel }) {
+  return (
+    <>
+      <VelocityChart report={data} unitLabel={unitLabel} />
+      {data.points.length > 0 && (
+        <table className="reports-table ag-table">
+          <thead><tr><th>Sprint</th><th>Dates</th><th className="num">Commitment</th><th className="num">Completed</th></tr></thead>
+          <tbody>{data.points.map((p) => (
+            <tr key={p.sprint_id}><td>{p.sprint_name}</td><td>{formatDateRange(p.start_date, p.end_date)}</td>
+              <td className="num">{formatNumber(p.committed_estimate)}</td><td className="num">{formatNumber(p.completed_estimate)}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function ControlReport({ data }) {
+  return (
+    <>
+      <KpiStrip items={[
+        [data.count, "Issues"],
+        [data.average_days, "Average (days)"],
+        [data.median_days, "Median (days)"],
+        [`${data.min_days}–${data.max_days}`, "Min–max (days)"],
+      ]} />
+      <p className="muted small">Cycle time = time spent in {data.work_columns.join(", ") || "the working columns"}.</p>
+      <CycleChart report={data} />
+    </>
+  );
+}
+
+function WorkloadReport({ data }) {
+  if (data.entries.length === 0 && !data.unassigned_count) return <p className="muted ag-empty">Nobody has work in this sprint yet.</p>;
+  return (
+    <table className="reports-table ag-table">
+      <thead><tr><th>Person</th><th className="num">Issues</th><th className="num">Assigned</th><th className="num">Capacity</th><th className="num">Load</th></tr></thead>
+      <tbody>
+        {data.entries.map((e) => (
+          <tr key={e.user_id} className={e.utilization_pct > 100 ? "ag-over" : ""}>
+            <td>{e.user_name}</td><td className="num">{e.assigned_count}</td><td className="num">{formatNumber(e.assigned_estimate)}</td>
+            <td className="num">{e.capacity_value != null ? formatNumber(e.capacity_value) : "–"}</td>
+            <td className="num">{e.utilization_pct != null ? `${e.utilization_pct}%` : "–"}</td>
+          </tr>
+        ))}
+        {data.unassigned_count > 0 && (
+          <tr><td><em>Unassigned</em></td><td className="num">{data.unassigned_count}</td><td className="num">{formatNumber(data.unassigned_estimate)}</td><td /><td /></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function ReportBody({ reportKey, data, unitLabel, onOpen }) {
+  switch (reportKey) {
+    case "burndown":
+    case "burnup": return <BurnReport data={data} kind={reportKey} unitLabel={unitLabel} />;
+    case "sprint": return <SprintReport report={data} onOpen={onOpen} />;
+    case "velocity": return <VelocityReport data={data} unitLabel={unitLabel} />;
+    case "cfd": return <FlowChart report={data} />;
+    case "control": return <ControlReport data={data} />;
+    case "epic": return <EpicReport report={data} onOpen={onOpen} />;
+    case "daily": return <DailyReport report={data} />;
+    case "workload": return <WorkloadReport data={data} />;
+    default: return null;
+  }
+}
+
+/** The scope-specific pickers in the report header: sprint, epic, date range, day. */
+function ReportPickers({ meta, reportKey, reportable, sprintId, setSprintId, epicList, epicId, setEpicId, range, setRange, day, setDay }) {
+  return (
+    <>
+      {meta.scope === "sprint" && reportable.length > 0 && (
+        <BhSelect ariaLabel="Sprint" value={sprintId ? String(sprintId) : ""} onChange={(v) => setSprintId(Number(v))}
+          options={reportable.map((s) => ({ value: String(s.id), label: `${s.name}${s.state === "active" ? " (active)" : ""}` }))} />
+      )}
+      {meta.scope === "epic" && epicList.length > 0 && (
+        <BhSelect ariaLabel="Epic" value={epicId ? String(epicId) : ""} onChange={(v) => setEpicId(Number(v))}
+          options={epicList.map((e) => ({ value: String(e.id), label: `${e.display_id} ${e.title}` }))} />
+      )}
+      {meta.scope === "range" && (
+        <>
+          <label className="muted small" htmlFor="ag-range-from">From</label>
+          <BhDateInput id="ag-range-from" value={range.from} onChange={(v) => setRange((r) => ({ ...r, from: v }))} />
+          <label className="muted small" htmlFor="ag-range-to">To</label>
+          <BhDateInput id="ag-range-to" value={range.to} onChange={(v) => setRange((r) => ({ ...r, to: v }))} />
+        </>
+      )}
+      {reportKey === "daily" && (
+        <>
+          <label className="muted small" htmlFor="ag-daily-date">Day</label>
+          <BhDateInput id="ag-daily-date" value={day} onChange={setDay} />
+        </>
+      )}
+    </>
+  );
+}
+
 export default function ReportsPanel({ projectId, board }) {
   const { openBugDetail } = useApp();
   const mode = board.estimation_mode;
@@ -226,122 +397,26 @@ export default function ReportsPanel({ projectId, board }) {
 
   const sprints = useLatestLoad(() => agileApi.sprints(board.id), [board.id]);
   const epics = useLatestLoad(() => agileApi.epics(projectId), [projectId]);
+  const epicList = epics.data || [];
   const reportable = useMemo(() => (sprints.data || [])
     .filter((s) => s.state === "active" || s.state === "closed")
     .sort((a, b) => b.sequence_number - a.sequence_number), [sprints.data]);
-
-  useEffect(() => {
-    if (!reportable.length) setSprintId(null);
-    else if (!reportable.some((s) => s.id === sprintId)) setSprintId(reportable[0].id);
-  }, [reportable, sprintId]);
-  useEffect(() => {
-    const list = epics.data || [];
-    if (!list.length) setEpicId(null);
-    else if (!list.some((e) => e.id === epicId)) setEpicId(list[0].id);
-  }, [epics.data, epicId]);
+  useAutoSelect(reportable, sprintId, setSprintId);
+  useAutoSelect(epicList, epicId, setEpicId);
 
   const meta = REPORTS.find((r) => r.key === reportKey);
-  const rangeValid = range.from && range.to && range.from <= range.to;
-  const result = useLatestLoad(async () => {
-    if (meta.scope === "sprint" && !sprintId) return null;
-    if (meta.scope === "epic" && !epicId) return null;
-    if (meta.scope === "range" && !rangeValid) return null;
-    switch (reportKey) {
-      case "burndown":
-      case "burnup": return agileApi.burndown(sprintId);
-      case "sprint": return agileApi.sprintReport(sprintId);
-      case "velocity": return agileApi.velocity(board.id, 7);
-      case "cfd": return agileApi.cumulativeFlow(board.id, range.from, range.to);
-      case "control": return agileApi.controlChart(board.id, range.from, range.to);
-      case "epic": return agileApi.epicReport(epicId);
-      case "daily": return agileApi.daily(sprintId, day);
-      case "workload": return agileApi.workload(sprintId);
-      default: return null;
-    }
-  }, [reportKey, sprintId, epicId, range.from, range.to, day, board.id]);
+  const rangeValid = Boolean(range.from && range.to && range.from <= range.to);
+  const inputs = { meta, reportKey, sprintId, epicId, range, rangeValid, day, boardId: board.id };
+  const result = useLatestLoad(async () => loadReport(inputs),
+    [reportKey, sprintId, epicId, range.from, range.to, day, board.id]);
 
   const sprint = reportable.find((s) => s.id === sprintId);
   const unitLabel = statisticLabel(mode);
-  const exportKey = { burndown: "burndown", burnup: "burnup", sprint: "sprint", velocity: "velocity", cfd: "cumulative-flow", control: "control-chart", epic: "epic", workload: "workload" }[reportKey];
-  const exportPath = () => {
-    const q = new URLSearchParams({ report_key: exportKey });
-    if (meta.scope === "sprint") q.set("sprint_id", sprintId);
-    if (meta.scope === "board" || meta.scope === "range") q.set("board_id", board.id);
-    if (meta.scope === "range") { q.set("date_from", range.from); q.set("date_to", range.to); }
-    if (meta.scope === "epic") q.set("epic_id", epicId);
-    return `/agile/reports/export?${q}`;
-  };
-
+  const exportKey = EXPORT_KEYS[reportKey];
   const data = result.data;
-  let body = null;
-  if (meta.scope === "sprint" && !reportable.length) body = <p className="muted ag-empty">Start a sprint to see this report.</p>;
-  else if (meta.scope === "epic" && !(epics.data || []).length) body = <p className="muted ag-empty">Create an epic to see this report.</p>;
-  else if (meta.scope === "range" && !rangeValid) body = <p className="ag-error">Pick a start date on or before the end date.</p>;
-  else if (!data) body = result.loading ? <Skeleton lines={4} className="sprints-loading" /> : null;
-  else if (reportKey === "burndown" || reportKey === "burnup") {
-    body = (
-      <>
-        <div className="report-kpis">
-          <div className="report-kpi"><span className="report-kpi-num">{formatNumber(data.committed_estimate)}</span><span>Committed</span></div>
-          <div className="report-kpi"><span className="report-kpi-num">{formatNumber(data.remaining_estimate)}</span><span>Remaining</span></div>
-          <div className="report-kpi"><span className="report-kpi-num">{formatNumber(data.completed_estimate)}</span><span>Completed</span></div>
-          <div className="report-kpi"><span className="report-kpi-num">{formatNumber(data.scope_estimate)}</span><span>Total scope</span></div>
-        </div>
-        <SprintChart report={data} kind={reportKey} unitLabel={unitLabel} />
-        <BurnTable report={data} />
-      </>
-    );
-  } else if (reportKey === "sprint") body = <SprintReport report={data} onOpen={openBugDetail} />;
-  else if (reportKey === "velocity") {
-    body = (
-      <>
-        <VelocityChart report={data} unitLabel={unitLabel} />
-        {data.points.length > 0 && (
-          <table className="reports-table ag-table">
-            <thead><tr><th>Sprint</th><th>Dates</th><th className="num">Commitment</th><th className="num">Completed</th></tr></thead>
-            <tbody>{data.points.map((p) => (
-              <tr key={p.sprint_id}><td>{p.sprint_name}</td><td>{formatDateRange(p.start_date, p.end_date)}</td>
-                <td className="num">{formatNumber(p.committed_estimate)}</td><td className="num">{formatNumber(p.completed_estimate)}</td></tr>
-            ))}</tbody>
-          </table>
-        )}
-      </>
-    );
-  } else if (reportKey === "cfd") body = <FlowChart report={data} />;
-  else if (reportKey === "control") {
-    body = (
-      <>
-        <div className="report-kpis">
-          <div className="report-kpi"><span className="report-kpi-num">{data.count}</span><span>Issues</span></div>
-          <div className="report-kpi"><span className="report-kpi-num">{data.average_days}</span><span>Average (days)</span></div>
-          <div className="report-kpi"><span className="report-kpi-num">{data.median_days}</span><span>Median (days)</span></div>
-          <div className="report-kpi"><span className="report-kpi-num">{data.min_days}–{data.max_days}</span><span>Min–max (days)</span></div>
-        </div>
-        <p className="muted small">Cycle time = time spent in {data.work_columns.join(", ") || "the working columns"}.</p>
-        <CycleChart report={data} />
-      </>
-    );
-  } else if (reportKey === "epic") body = <EpicReport report={data} onOpen={openBugDetail} />;
-  else if (reportKey === "daily") body = <DailyReport report={data} />;
-  else if (reportKey === "workload") {
-    body = data.entries.length === 0 && !data.unassigned_count ? <p className="muted ag-empty">Nobody has work in this sprint yet.</p> : (
-      <table className="reports-table ag-table">
-        <thead><tr><th>Person</th><th className="num">Issues</th><th className="num">Assigned</th><th className="num">Capacity</th><th className="num">Load</th></tr></thead>
-        <tbody>
-          {data.entries.map((e) => (
-            <tr key={e.user_id} className={e.utilization_pct > 100 ? "ag-over" : ""}>
-              <td>{e.user_name}</td><td className="num">{e.assigned_count}</td><td className="num">{formatNumber(e.assigned_estimate)}</td>
-              <td className="num">{e.capacity_value != null ? formatNumber(e.capacity_value) : "–"}</td>
-              <td className="num">{e.utilization_pct != null ? `${e.utilization_pct}%` : "–"}</td>
-            </tr>
-          ))}
-          {data.unassigned_count > 0 && (
-            <tr><td><em>Unassigned</em></td><td className="num">{data.unassigned_count}</td><td className="num">{formatNumber(data.unassigned_estimate)}</td><td /><td /></tr>
-          )}
-        </tbody>
-      </table>
-    );
-  }
+  let body = reportNotice({ meta, hasSprints: reportable.length > 0, hasEpics: epicList.length > 0, rangeValid });
+  if (!body && data) body = <ReportBody reportKey={reportKey} data={data} unitLabel={unitLabel} onOpen={openBugDetail} />;
+  else if (!body && result.loading) body = <Skeleton lines={4} className="sprints-loading" />;
 
   return (
     <div className="ag-reports">
@@ -357,31 +432,10 @@ export default function ReportsPanel({ projectId, board }) {
       <section className="ag-report-body" aria-labelledby="ag-report-title">
         <header className="ag-report-head">
           <h3 id="ag-report-title">{meta.label}</h3>
-          {meta.scope === "sprint" && reportable.length > 0 && (
-            <BhSelect ariaLabel="Sprint" value={sprintId ? String(sprintId) : ""} onChange={(v) => setSprintId(Number(v))}
-              options={reportable.map((s) => ({ value: String(s.id), label: `${s.name}${s.state === "active" ? " (active)" : ""}` }))} />
-          )}
-          {meta.scope === "epic" && (epics.data || []).length > 0 && (
-            <BhSelect ariaLabel="Epic" value={epicId ? String(epicId) : ""} onChange={(v) => setEpicId(Number(v))}
-              options={(epics.data || []).map((e) => ({ value: String(e.id), label: `${e.display_id} ${e.title}` }))} />
-          )}
-          {meta.scope === "range" && (
-            <>
-              <label className="muted small" htmlFor="ag-range-from">From</label>
-              <BhDateInput id="ag-range-from" value={range.from} onChange={(v) => setRange((r) => ({ ...r, from: v }))} />
-              <label className="muted small" htmlFor="ag-range-to">To</label>
-              <BhDateInput id="ag-range-to" value={range.to} onChange={(v) => setRange((r) => ({ ...r, to: v }))} />
-            </>
-          )}
-          {reportKey === "daily" && (
-            <>
-              <label className="muted small" htmlFor="ag-daily-date">Day</label>
-              <BhDateInput id="ag-daily-date" value={day} onChange={setDay} />
-            </>
-          )}
+          <ReportPickers {...{ meta, reportKey, reportable, sprintId, setSprintId, epicList, epicId, setEpicId, range, setRange, day, setDay }} />
           <span className="ag-spacer" />
           {exportKey && data && (
-            <button type="button" className="btn ghost btn-sm" onClick={() => download(exportPath(), `${exportKey}.csv`, "POST")}>⬇ CSV</button>
+            <button type="button" className="btn ghost btn-sm" onClick={() => download(exportQuery({ ...inputs, exportKey }), `${exportKey}.csv`, "POST")}>⬇ CSV</button>
           )}
           {reportKey === "sprint" && sprintId && (
             <button type="button" className="btn ghost btn-sm"

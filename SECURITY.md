@@ -134,9 +134,8 @@ read-only discovery endpoint.
 - **Static-analysis policy.** SonarQube is a gate, not a cosmetic one: Bugs,
   Vulnerabilities and Security Hotspots are fixed in code, every hotspot is
   reviewed individually with its own justification, and no script or API call
-  bulk-marks findings or hotspots as false positive / SAFE. The only
-  configuration-level narrowing is for documented FastAPI idiom rules
-  (style and documentation), never for a bug or security rule.
+  bulk-marks findings or hotspots as false positive / SAFE. No issue
+  suppression is configured in `sonar-project.properties`.
 - **Coverage floor.** Releases are expected to remain at or above 80% coverage overall and on new code (see `README.md` and `sonar-project.properties`). Coverage never waives Bugs, Vulnerabilities, or Security Hotspots; those are still fixed or reviewed individually.
 
 ## Secret-history remediation

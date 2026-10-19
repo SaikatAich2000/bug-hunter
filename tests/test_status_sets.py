@@ -194,7 +194,7 @@ def test_attachment_delete_is_admin_only(admin_client):
     r = admin_client.post(f"/api/bugs/{bug['id']}/attachments", files=files)
     assert r.status_code == 201
     att_id = r.json()["id"]
-    # Managers were previously allowed to delete; that permission was removed.
+    # Managers cannot delete attachments.
     _make_user(admin_client, "Mgr2", role="manager", email="mgr2@x.test")
     _login(admin_client, "mgr2@x.test", "User12345Aa")
     r = admin_client.delete(f"/api/bugs/{bug['id']}/attachments/{att_id}")

@@ -26,7 +26,7 @@ export default function OnboardingHost() {
 
   const save = useCallback((patch) => {
     setPrefs((p) => {
-      const next = { ...(p ?? {}), ...patch };
+      const next = { ...p, ...patch };
       prefsRef.current = next;
       return next;
     });

@@ -102,6 +102,16 @@ def _between(lo: str | None, hi: str | None, count: int) -> list[str]:
     raise RankExhausted("no room between the neighbours")
 
 
+def _tokens_between(lo: str | None, hi: str | None, count: int) -> list[str]:
+    if lo is None and hi is None:
+        return spaced_ranks(count)
+    if hi is None:
+        return _after(lo, count)
+    if lo is None:
+        return _before(hi, count)
+    return _between(lo, hi, count)
+
+
 def ranks_between(lo: str | None, hi: str | None, count: int) -> list[str]:
     """``count`` ascending tokens strictly after ``lo`` and before ``hi``.
 
@@ -117,17 +127,10 @@ def ranks_between(lo: str | None, hi: str | None, count: int) -> list[str]:
         _check(hi)
     if lo is not None and hi is not None and lo >= hi:
         raise RankExhausted("the neighbours are not in order")
-    if lo is None and hi is None:
-        tokens = spaced_ranks(count)
-    elif hi is None:
-        tokens = _after(lo, count)
-    elif lo is None:
-        tokens = _before(hi, count)
-    else:
-        tokens = _between(lo, hi, count)
+    tokens = _tokens_between(lo, hi, count)
     ordered = [lo, *tokens, hi]
     for left, right in zip(ordered, ordered[1:]):
-        if left is not None and right is not None and not left < right:
+        if left is not None and right is not None and left >= right:
             raise RankExhausted("no room between the neighbours")
     if any(len(t) > MAX_LENGTH for t in tokens):
         raise RankExhausted("rank tokens are getting too long")

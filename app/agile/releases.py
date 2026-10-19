@@ -149,38 +149,67 @@ def release_360(db: Session, version: Version) -> dict:
     }
 
 
+def _empty_progress() -> dict:
+    return {"item_count": 0, "completed_count": 0, "total_estimate": 0.0,
+            "completed_estimate": 0.0, "unestimated_count": 0}
+
+
+def _count_item(entry: dict, item: Bug, done: bool) -> None:
+    """Fold one fix-version item into its release's progress totals."""
+    entry["item_count"] += 1
+    pts = None if item.story_points is None else float(item.story_points)
+    if pts is None:
+        entry["unestimated_count"] += 1
+    else:
+        entry["total_estimate"] += pts
+    if done:
+        entry["completed_count"] += 1
+        entry["completed_estimate"] += pts or 0.0
+
+
 def _release_progress_many(db: Session, versions: list[Version]) -> dict[int, dict]:
     """release_progress for many versions in three queries instead of three per version."""
     from app.agile.taxonomy import category_of, status_categories
 
     ids = [v.id for v in versions]
-    out = {vid: {"item_count": 0, "completed_count": 0, "total_estimate": 0.0,
-                 "completed_estimate": 0.0, "unestimated_count": 0} for vid in ids}
+    out = {vid: _empty_progress() for vid in ids}
     if not ids:
         return out
     links = db.execute(select(WorkItemVersion.version_id, WorkItemVersion.work_item_id).where(
         WorkItemVersion.version_id.in_(ids), WorkItemVersion.relation_type == "fix",
     )).all()
+    if not links:
+        return out
     items = {b.id: b for b in db.scalars(
         select(Bug).where(Bug.id.in_({item_id for _, item_id in links}))
-    ).all()} if links else {}
+    ).all()}
     categories = status_categories(db)
     for version_id, item_id in links:
         item = items.get(item_id)
-        if item is None:
-            continue
-        entry = out[version_id]
-        entry["item_count"] += 1
-        pts = float(item.story_points) if item.story_points is not None else None
-        if pts is None:
-            entry["unestimated_count"] += 1
-        else:
-            entry["total_estimate"] += pts
-        if category_of(categories, item) == "done":
-            entry["completed_count"] += 1
-            if pts is not None:
-                entry["completed_estimate"] += pts
+        if item is not None:
+            _count_item(out[version_id], item, category_of(categories, item) == "done")
     return out
+
+
+def _epic_row(epic: Bug, detail, progress: dict) -> dict:
+    start = detail.start_date if detail else None
+    target = detail.target_date if detail else None
+    return {
+        "kind": "epic", "id": epic.id, "title": epic.title,
+        "start_date": start, "target_date": target,
+        "health": detail.health if detail else "unknown",
+        "scheduled": bool(start or target),
+        "progress": progress,
+    }
+
+
+def _release_row(v: Version, progress: dict) -> dict:
+    return {
+        "kind": "release", "id": v.id, "title": v.name,
+        "start_date": v.start_date, "target_date": v.release_date,
+        "status": v.status, "scheduled": bool(v.start_date or v.release_date),
+        "progress": progress,
+    }
 
 
 def roadmap_data(db: Session, project_id: int) -> dict:
@@ -195,35 +224,18 @@ def roadmap_data(db: Session, project_id: int) -> dict:
     epic_ids = [e.id for e in epics]
     details = {d.epic_id: d for d in db.scalars(
         select(EpicDetail).where(EpicDetail.epic_id.in_(epic_ids))
-    ).all()} if epic_ids else {}
+    ).all()}
     progress = epic_progress_many(db, epic_ids)
-    epic_rows = []
-    for epic in epics:
-        detail = details.get(epic.id)
-        start, target = (detail.start_date, detail.target_date) if detail else (None, None)
-        epic_rows.append({
-            "kind": "epic", "id": epic.id, "title": epic.title,
-            "start_date": start, "target_date": target,
-            "health": detail.health if detail else "unknown",
-            "scheduled": bool(start or target),
-            "progress": progress[epic.id],
-        })
+    epic_rows = [_epic_row(e, details.get(e.id), progress[e.id]) for e in epics]
 
     versions = list(db.scalars(select(Version).where(Version.project_id == project_id)).all())
     release_progress_by_id = _release_progress_many(db, versions)
-    version_rows = []
-    for v in versions:
-        version_rows.append({
-            "kind": "release", "id": v.id, "title": v.name,
-            "start_date": v.start_date, "target_date": v.release_date,
-            "status": v.status, "scheduled": bool(v.start_date or v.release_date),
-            "progress": release_progress_by_id[v.id],
-        })
+    version_rows = [_release_row(v, release_progress_by_id[v.id]) for v in versions]
 
-    warnings = []
-    for row in epic_rows + version_rows:
-        if not row["scheduled"]:
-            warnings.append(f"{row['kind'].title()} '{row['title']}' has no dates set")
+    warnings = [
+        f"{row['kind'].title()} '{row['title']}' has no dates set"
+        for row in epic_rows + version_rows if not row["scheduled"]
+    ]
 
     return {
         "project_id": project_id,

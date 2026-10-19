@@ -35,7 +35,7 @@ from app.services.work_items import (
     work_item_type,
 )
 
-# Item-type conversion errors (Phase 7 contract): stable codes carried in the
+# Item-type conversion errors : stable codes carried in the
 # X-Error-Code header and message fragments kept human-readable.
 CONVERSION_NOT_SUPPORTED_CODE = "item_conversion_not_supported"
 

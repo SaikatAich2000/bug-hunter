@@ -48,7 +48,7 @@ button.ag-key:hover, button.ag-key:focus-visible { color: var(--accent); text-de
   color: var(--text); background: color-mix(in srgb, var(--epic-color, var(--accent)) 26%, transparent);
   border: 1px solid color-mix(in srgb, var(--epic-color, var(--accent)) 60%, transparent);
 }
-.ag-priority { font-size: 12px; flex-shrink: 0; }
+.ag-priority { display: inline-flex; align-items: center; color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
 .ag-estimate {
   min-width: 24px; padding: 1px 7px; border-radius: 999px; text-align: center; font-size: 12px; font-weight: 700;
   background: var(--bg-elev-3); color: var(--text); flex-shrink: 0;
@@ -237,7 +237,7 @@ button.ag-key:hover, button.ag-key:focus-visible { color: var(--accent); text-de
 .ag-settings-card h3 { margin: 0; }
 .ag-settings-card .field { display: flex; flex-direction: column; gap: 4px; max-width: 520px; }
 .ag-days { display: flex; gap: 12px; flex-wrap: wrap; border: 0; padding: 0; margin: 0; }
-.ag-col-editor { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.ag-col-editor { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; align-items: start; }
 .ag-col-edit {
   border: 1px solid var(--border-strong); border-top: 3px solid var(--text-muted); border-radius: var(--r-sm);
   padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--bg-elev-2);
@@ -247,7 +247,11 @@ button.ag-key:hover, button.ag-key:focus-visible { color: var(--accent); text-de
 .ag-col-edit[data-category="done"] { border-top-color: var(--ok); }
 .ag-col-unmapped { border-style: dashed; }
 .ag-col-edit-head { display: flex; align-items: center; gap: 6px; }
-.ag-col-edit-head input { flex: 1; min-width: 0; font-weight: 600; }
+.ag-col-edit-head input {
+  flex: 1; min-width: 0;
+  background: var(--bg-elev); color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: var(--r-field); padding: 5px 8px; font: inherit; font-weight: 600;
+}
 .ag-col-edit-moves { display: inline-flex; gap: 2px; }
 .ag-col-edit .ag-form-row input { width: 100%; }
 .ag-status-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -340,17 +344,11 @@ button.ag-key:hover, button.ag-key:focus-visible { color: var(--accent); text-de
 .ag-status-chip .bh-sel-btn { padding: 3px 8px; font-size: 12px; }
 .ag-report-head .bh-date-wrap { width: auto; flex: 0 0 auto; min-width: 170px; }
 .ag-card .ag-epic { align-self: flex-start; }
-.ag-col-editor { align-items: start; }
 .ag-col-edit > * { flex: 0 0 auto; }
 .ag-col-edit .field { flex: 0 0 auto; }
-.ag-col-edit-head input {
-  background: var(--bg-elev); color: var(--text); border: 1px solid var(--border-strong);
-  border-radius: var(--r-field); padding: 5px 8px; font: inherit; font-weight: 600;
-}
 .ag-col-edit-head input:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--shadow-focus); }
 .ag-settings-card .ag-days { flex-direction: row; flex-wrap: wrap; gap: 14px; max-width: none; }
 .ag-settings-card .ag-days legend { width: 100%; margin-bottom: 6px; }
-.ag-priority { display: inline-flex; align-items: center; color: var(--text-muted); }
 .ag-priority-critical { color: #e5484d; }
 .ag-priority-high { color: #f76b15; }
 .ag-priority-medium { color: #e2a336; }

@@ -16,13 +16,14 @@ from threading import Lock
 
 from fastapi import HTTPException
 
-from app.config import env_int
+from app.config import get_settings
 
-# All limits overridable via env vars.
-_LOGIN_FAIL_LIMIT = env_int("LOGIN_FAIL_LIMIT", 10)
-_LOGIN_FAIL_EMAIL_LIMIT = env_int("LOGIN_FAIL_EMAIL_LIMIT", 50)
-_LOGIN_FAIL_WINDOW_SECONDS = env_int("LOGIN_FAIL_WINDOW_SECONDS", 900)  # 15 min
-_LOGIN_LOCKOUT_SECONDS = env_int("LOGIN_LOCKOUT_SECONDS", 900)          # 15 min
+# All limits come from Settings (env-overridable).
+_s = get_settings()
+_LOGIN_FAIL_LIMIT = _s.LOGIN_FAIL_LIMIT
+_LOGIN_FAIL_EMAIL_LIMIT = _s.LOGIN_FAIL_EMAIL_LIMIT
+_LOGIN_FAIL_WINDOW_SECONDS = _s.LOGIN_FAIL_WINDOW_SECONDS
+_LOGIN_LOCKOUT_SECONDS = _s.LOGIN_LOCKOUT_SECONDS
 _LOCKOUT_BUCKETS_MAX = 10_000
 
 
@@ -83,11 +84,8 @@ def check_locked(email: str, ip: str = "") -> None:
         return
     now = time.monotonic()
     with _lock:
-        remaining = max(
-            (b.locked_until - now for k in (_pair_key(email, ip), _key(email))
-             if (b := _buckets.get(k)) is not None),
-            default=0.0,
-        )
+        buckets = (_buckets.get(k) for k in (_pair_key(email, ip), _key(email)))
+        remaining = max((b.locked_until - now for b in buckets if b is not None), default=0.0)
     if remaining > 0:
         raise HTTPException(
             status_code=429,

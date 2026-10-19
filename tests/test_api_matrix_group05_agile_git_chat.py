@@ -38,7 +38,8 @@ class TestAgileCore:
         board = _enable_agile(admin_client, p["id"])
         r = admin_client.get(f"/api/agile/boards/{board['board_id']}/planning")
         assert r.status_code == 200, r.text
-        assert r.json()["sprints"] == [] and r.json()["backlog"] == []
+        assert r.json()["sprints"] == []
+        assert r.json()["backlog"] == []
 
     def test_components_epics_labels_list(self, admin_client):
         p = _mk_project(admin_client, "MX5-T")

@@ -212,9 +212,9 @@ export default function BhDateInput({ name, value, onChange, required, disabled,
       ) : null}
       {open &&
         createPortal(
-          <div
+          <div // NOSONAR S6819: portal date-picker dialog with its own focus handling; native <dialog> needs showModal() top-layer semantics
             className="bh-date-pop"
-            role="dialog"
+            role="dialog" /* NOSONAR S6819: portal dialog with its own focus trap and enter/exit animation; native <dialog> needs showModal() top-layer semantics */
             aria-label="Pick a date"
             ref={popRef}
           >

@@ -54,6 +54,14 @@ BACKUP_KEEP=30 BACKUP_DIR=/mnt/backups ./scripts/backup.sh
   now and then to prove the dumps work.
 - Sessions stay valid across a restore only if `SESSION_SECRET` is unchanged.
 
+### Drill
+
+The following sequence was run against a Compose stack and each step verified: take a backup
+(`./scripts/backup.sh`), delete data, restore it with `./scripts/restore.sh` and confirm the rows
+came back, then set the previous `APP_VERSION`, run `./deploy.sh` and confirm the data was still
+there (the schema is additive, so an older release runs against it). Repeat it on your own host
+before relying on the dumps.
+
 ## Data retention
 
 The app runs `app/jobs/retention.py` daily (first run a few minutes after start) unless
@@ -122,6 +130,30 @@ disabled, that the sampler is not `always_off`, and that the collector filter in
 When `SLEUTH_RAG_ENABLED=1`, the index includes every `.md` and `.txt` file under
 `SLEUTH_DOCS_DIR` (default `docs/`), so these pages become assistant knowledge. Point it
 elsewhere if that is not wanted.
+
+## Configuration reference
+
+Every deployment- or environment-specific value is a `Settings` attribute in `app/config.py`, read from the
+environment or `.env`; `.env.example` lists each with its default (the default equals the former built-in value).
+Tunable groups: rate limits (`RATE_*`), login lockout (`LOGIN_*`), paging and size (`PAGE_SIZE_*`,
+`MAX_ATTACHMENT_BYTES`, `MAX_*_BODY_BYTES`), timeouts and retries (`DB_*`, `SMTP_TIMEOUT`, `GITHUB_*`,
+`HIBP_TIMEOUT_SECONDS`, `SLEUTH_CLOUD_TIMEOUT_S`), third-party endpoints (`HIBP_API_URL`, `GROQ_API_URL`,
+`OPENROUTER_API_URL`, `GEMINI_API_BASE_URL`, `GITHUB_API_URL`, `FCM_CONNECT_SRC`), URLs and CORS (`APP_BASE_URL`,
+`CORS_ORIGINS`), identity (`APP_NAME`, `EMAIL_FROM`, `BOOTSTRAP_ADMIN_*`), retention, and listener (`UVICORN_*`).
+Also configurable: bulk-import limits (`IMPORT_MAX_*`), Sleuth memory, confirmation, export-cache, bulk-cap, upload and breaker values (`SLEUTH_*`), retention schedule (`RETENTION_*`), `IDEMPOTENCY_EXPIRY_HOURS`, `DEFAULT_SPRINT_DAYS`, `BACKLOG_DEFAULT_LIMIT`, `DB_POOL_RECYCLE_SECONDS`. Browser poll intervals (`DATA_POLL_SECONDS`, `SESSION_POLL_SECONDS`, `NOTIFICATION_POLL_SECONDS`, minimum 5) are served in `/api/meta`; the frontend falls back to 30/30/15 s until it answers.
+Numeric values below their minimum are clamped; unparsable values fall back to the default.
+
+## Local run
+
+`scripts/run_local.ps1` starts the app on port 8000 with the SQLite file `bug_hunter.db` in the repo (gitignored).
+`.env` comes from `scripts/gen_local_env_secrets.py` (secrets generated, never printed). Mail goes to a local Mailpit:
+
+    docker run -d --name bh-mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit
+
+Set `EMAIL_BACKEND=smtp`, `SMTP_HOST=127.0.0.1`, `SMTP_PORT=1025`, `SMTP_USE_TLS=false`; read mail at
+http://127.0.0.1:8025. With the server running, `python scripts/seed_local.py` creates two demo projects,
+manager and user accounts and sample items through the API (idempotent; values come from `.env`).
+The bootstrap admin is only created in an empty database, so delete `bug_hunter.db` to change it.
 
 ## Troubleshooting
 

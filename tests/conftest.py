@@ -114,6 +114,15 @@ _TEST_ENV = {
 }
 os.environ.update(_TEST_ENV)
 
+# Hermetic: config.py calls dotenv.load_dotenv at import; a developer's local .env
+# (UVICORN_HOST, HIBP off, SMTP, ...) must never leak into the suite.
+try:
+    import dotenv
+
+    dotenv.load_dotenv = lambda *args, **kwargs: False
+except ImportError:  # pragma: no cover - dotenv is optional
+    pass
+
 # Settings are read once at import, but a few modules re-read these per call, and
 # unit tests without a fixture expect the developer's own values. So they are set
 # for the import and re-applied by `_fresh_db`, not left in the environment.
@@ -348,7 +357,11 @@ def _isolate(_app_runtime):
 # ---------------------------------------------------------------------------
 def _truncate_all_tables(engine) -> None:
     from sqlalchemy import inspect, text
+    from sqlalchemy.orm import close_all_sessions
 
+    # A test that leaves a Session open keeps its transaction (and table locks) alive;
+    # on PostgreSQL that blocks the TRUNCATE below until lock_timeout.
+    close_all_sessions()
     tables = inspect(engine).get_table_names()
     if not tables:
         return
@@ -398,7 +411,6 @@ def _fresh_db(_isolate, monkeypatch):
     _drop_foreign_tables(engine, Base)  # e.g. legacy tables a migration test created
     Base.metadata.create_all(bind=engine)  # recreate anything a test dropped
     _truncate_all_tables(engine)
-    yield
 
 
 @pytest.fixture

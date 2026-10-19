@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import account_lockout, image_strip, scheduler
-from app.auth import trusted_forwarded_ip
+from app.auth import COOKIE_NAME, trusted_forwarded_ip
 from tests.conftest import BOOTSTRAP_EMAIL
 
 
@@ -238,7 +238,7 @@ def test_cov_main_has_valid_session_legacy_token(client, monkeypatch):
     import app.main as main
 
     class _Req:
-        cookies = {main.COOKIE_NAME: "legacy-cookie"}
+        cookies = {COOKIE_NAME: "legacy-cookie"}
 
     monkeypatch.setattr(main, "parse_session_token", lambda tok: (42, 0, None))
     assert main._has_valid_session(_Req()) is True
@@ -265,7 +265,7 @@ def test_cov_main_has_valid_session_expired_row(admin_client, monkeypatch):
     monkeypatch.setattr(main, "SessionLocal", lambda: _Scalar())
 
     class _Req:
-        cookies = {main.COOKIE_NAME: "cookie"}
+        cookies = {COOKIE_NAME: "cookie"}
 
     assert main._has_valid_session(_Req()) is False
 
@@ -291,7 +291,7 @@ def test_cov_main_has_valid_session_naive_expiry_is_valid(admin_client, monkeypa
     monkeypatch.setattr(main, "SessionLocal", lambda: _DB())
 
     class _Req:
-        cookies = {main.COOKIE_NAME: "cookie"}
+        cookies = {COOKIE_NAME: "cookie"}
 
     assert main._has_valid_session(_Req()) is True
 
@@ -313,7 +313,7 @@ def test_cov_main_has_valid_session_db_error_returns_false(client, monkeypatch):
     monkeypatch.setattr(main, "SessionLocal", lambda: _DB())
 
     class _Req:
-        cookies = {main.COOKIE_NAME: "cookie"}
+        cookies = {COOKIE_NAME: "cookie"}
 
     assert main._has_valid_session(_Req()) is False
 
@@ -1696,7 +1696,7 @@ def test_main_has_valid_session_missing_row_returns_false(client):
     from sqlalchemy import select
 
     import app.main as main
-    from app.auth import COOKIE_NAME, make_session_token, new_jti
+    from app.auth import make_session_token, new_jti
     from app.database import SessionLocal
     from app.models import User
 
@@ -1710,3 +1710,419 @@ def test_main_has_valid_session_missing_row_returns_false(client):
     req = _FakeReq(method="GET", headers={})
     req.cookies = {COOKIE_NAME: token}
     assert main._has_valid_session(req) is False
+
+
+# --- database reconciliation helpers ------------------------------------------------------
+
+def test_column_names_survive_an_introspection_error(caplog):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    class _Broken:
+        def get_columns(self, _table):
+            raise SQLAlchemyError("cannot introspect")
+
+    with caplog.at_level("WARNING", logger="bug_hunter"):
+        assert database._column_names(_Broken(), "bugs") == set()
+    assert "Could not read columns of bugs" in caplog.text
+
+
+def test_ddl_type_falls_back_when_the_dialect_cannot_render_the_type():
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    class _Type:
+        def compile(self, dialect):
+            raise SQLAlchemyError("no dialect rendering")
+
+        def __str__(self):
+            return "datetime"
+
+    conn = SimpleNamespace(dialect=None)
+    assert database._ddl_type_for(conn, _Type()) == "TIMESTAMP"
+
+
+def test_safe_scalar_default_sql_renders_only_literal_defaults():
+    import app.database as database
+
+    def col(arg):
+        return SimpleNamespace(default=SimpleNamespace(arg=arg))
+
+    assert database._safe_scalar_default_sql(col(True)) == "TRUE"
+    assert database._safe_scalar_default_sql(col(False)) == "FALSE"
+    assert database._safe_scalar_default_sql(col(7)) == "7"
+    assert database._safe_scalar_default_sql(col(1.5)) == "1.5"
+    assert database._safe_scalar_default_sql(col("it's")) == "'it''s'"
+    assert database._safe_scalar_default_sql(col(lambda: 1)) is None
+    assert database._safe_scalar_default_sql(SimpleNamespace(default=None)) is None
+
+
+def test_legacy_sprint_epic_and_git_tables_gain_their_new_columns(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine, inspect, text
+
+    import app.database as database
+
+    legacy = create_engine(f"sqlite:///{tmp_path / 'older.db'}", future=True)
+    with legacy.begin() as conn:
+        for table in ("sprints", "epic_details", "project_git_configs"):
+            conn.execute(text(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)"))
+    monkeypatch.setattr(database, "engine", legacy)
+    with legacy.begin() as conn:
+        database._add_missing_columns(conn)
+
+    insp = inspect(legacy)
+    assert "cadence" in {c["name"] for c in insp.get_columns("sprints")}
+    assert "sprint_id" in {c["name"] for c in insp.get_columns("epic_details")}
+    assert "credential_encrypted" in {c["name"] for c in insp.get_columns("project_git_configs")}
+    legacy.dispose()
+
+
+def test_display_id_backfill_tolerates_a_missing_table(caplog):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    class _Conn:
+        def execute(self, *_a, **_k):
+            raise SQLAlchemyError("no such table: bugs")
+
+    with caplog.at_level("WARNING", logger="bug_hunter"):
+        database._backfill_bug_display_id(_Conn())
+    assert "display_id backfill skipped" in caplog.text
+
+
+def test_legacy_description_copy_logs_instead_of_aborting(caplog):
+    from contextlib import nullcontext
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    class _Conn:
+        def begin_nested(self):
+            return nullcontext()
+
+        def execute(self, *_a, **_k):
+            raise SQLAlchemyError("boom")
+
+    with caplog.at_level("ERROR", logger="bug_hunter"):
+        database._preserve_legacy_html_descriptions(_Conn())
+    assert "legacy description preservation failed" in caplog.text
+
+
+def test_run_once_records_success_skips_repeats_and_retries_failures(db_session, caplog):
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    conn = db_session.connection()
+    calls = []
+    database._run_once(conn, "unit_test_once", lambda c: calls.append("ran"))
+    database._run_once(conn, "unit_test_once", lambda c: calls.append("again"))
+    assert calls == ["ran"]
+
+    def _fail(_conn):
+        raise SQLAlchemyError("migration blew up")
+
+    with caplog.at_level("ERROR", logger="bug_hunter"):
+        database._run_once(conn, "unit_test_failing", _fail)
+    assert "data migration unit_test_failing failed" in caplog.text
+    recorded = {r[0] for r in conn.execute(text("SELECT name FROM app_migrations"))}
+    assert "unit_test_once" in recorded
+    assert "unit_test_failing" not in recorded
+
+
+def test_plain_text_migration_only_rewrites_entities_that_change(db_session):
+    from sqlalchemy import text
+
+    import app.database as database
+    from app.models import Board, Project, Sprint
+
+    project = Project(name="Entities", color="#123456", agile_enabled=True)
+    db_session.add(project)
+    db_session.flush()
+    board = Board(project_id=project.id, name="B", name_normalized="b")
+    db_session.add(board)
+    db_session.flush()
+    escaped = Sprint(board_id=board.id, project_id=project.id, name="S1", goal="a &gt; b", state="future",
+                     sequence_number=1, name_normalized="s1")
+    literal = Sprint(board_id=board.id, project_id=project.id, name="S2", goal="fish &chips", state="future",
+                     sequence_number=2, name_normalized="s2")
+    db_session.add_all([escaped, literal])
+    db_session.flush()
+
+    database._unescape_plain_text_fields(db_session.connection())
+    goals = dict(db_session.connection().execute(text("SELECT name, goal FROM sprints")).all())
+    assert goals == {"S1": "a > b", "S2": "fish &chips"}
+
+
+class _FakeNested:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class _FakePgConn:
+    """Records the SQL a PostgreSQL-only reconciler sends; ``fail`` makes matching statements raise."""
+
+    dialect = SimpleNamespace(name="postgresql")
+
+    def __init__(self, pending=(), fail=()):
+        self.sql = []
+        self.pending = pending
+        self.fail = fail
+        self.committed = 0
+        self.rolled_back = 0
+
+    def begin_nested(self):
+        return _FakeNested(self)
+
+    def execute(self, stmt, params=None):
+        from sqlalchemy.exc import SQLAlchemyError
+
+        text_ = str(stmt)
+        if any(marker in text_ for marker in self.fail):
+            raise SQLAlchemyError("refused")
+        self.sql.append(text_)
+        if "pg_constraint" in text_:
+            return [(name,) for name in self.pending]
+        return SimpleNamespace(scalar=lambda: True)
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+def _fake_inspector(existing_checks, broken=False):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    def get_check_constraints(_table):
+        if broken:
+            raise SQLAlchemyError("cannot read constraints")
+        return [{"name": n} for n in existing_checks]
+
+    return SimpleNamespace(get_check_constraints=get_check_constraints)
+
+
+def test_check_constraints_are_added_not_valid_then_validated(monkeypatch):
+    import sqlalchemy
+
+    import app.database as database
+
+    monkeypatch.setattr(sqlalchemy, "inspect", lambda _conn: _fake_inspector([]))
+    conn = _FakePgConn()
+    database._add_missing_check_constraints(conn)
+    added = [s for s in conn.sql if "NOT VALID" in s]
+    validated = [s for s in conn.sql if "VALIDATE CONSTRAINT" in s]
+    assert added
+    assert len(validated) == len(added)
+
+
+def test_check_constraints_revalidate_pending_ones_and_tolerate_failures(monkeypatch, caplog):
+    import sqlalchemy
+
+    import app.database as database
+
+    names = [c.name for t in database.Base.metadata.sorted_tables for c in t.constraints
+             if c.__class__.__name__ == "CheckConstraint" and c.name]
+    assert names
+    monkeypatch.setattr(sqlalchemy, "inspect", lambda _conn: _fake_inspector(names))
+
+    conn = _FakePgConn(pending=[names[0]])
+    database._add_missing_check_constraints(conn)
+    assert [s for s in conn.sql if "VALIDATE CONSTRAINT" in s] == [
+        s for s in conn.sql if f'VALIDATE CONSTRAINT "{names[0]}"' in s
+    ]
+    assert not [s for s in conn.sql if "NOT VALID" in s]
+
+    refusing = _FakePgConn(pending=[names[0]], fail=("VALIDATE CONSTRAINT",))
+    with caplog.at_level("WARNING", logger="bug_hunter"):
+        database._add_missing_check_constraints(refusing)
+    assert "stays NOT VALID" in caplog.text
+
+    monkeypatch.setattr(sqlalchemy, "inspect", lambda _conn: _fake_inspector([]))
+    rejecting = _FakePgConn(fail=("NOT VALID",))
+    with caplog.at_level("ERROR", logger="bug_hunter"):
+        database._add_missing_check_constraints(rejecting)
+    assert "could not add constraint" in caplog.text
+    assert not [s for s in rejecting.sql if "VALIDATE CONSTRAINT" in s]
+
+    monkeypatch.setattr(sqlalchemy, "inspect", lambda _conn: _fake_inspector([], broken=True))
+    unreadable = _FakePgConn()
+    database._add_missing_check_constraints(unreadable)
+    assert not [s for s in unreadable.sql if "NOT VALID" in s]
+
+
+def test_check_constraints_are_left_alone_off_postgresql():
+    import app.database as database
+
+    conn = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    assert database._add_missing_check_constraints(conn) is None
+
+
+class _PgEngine:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connect(self):
+        from contextlib import nullcontext
+
+        return nullcontext(self._conn)
+
+
+def _stub_migration_steps(monkeypatch, database, order):
+    monkeypatch.setattr(database._settings, "DATABASE_URL", "postgresql+psycopg://u:p@db/bh")
+    monkeypatch.setattr(database.Base.metadata, "create_all", lambda bind: order.append("create_all"))
+    for step in ("_add_missing_columns", "_retire_legacy_branch_index", "_add_missing_indexes",
+                 "_seed_global_workflow_statuses", "_backfill_bug_display_id", "_align_agile_hierarchy",
+                 "_add_missing_check_constraints"):
+        monkeypatch.setattr(database, step, lambda conn, _n=step: order.append(_n))
+    monkeypatch.setattr(database, "_run_once", lambda conn, name, fn: order.append(name))
+
+
+def test_postgres_init_runs_every_step_under_the_advisory_lock(monkeypatch):
+    import app.database as database
+
+    order = []
+    conn = _FakePgConn()
+    _stub_migration_steps(monkeypatch, database, order)
+    monkeypatch.setattr(database, "engine", _PgEngine(conn))
+    seeded = []
+
+    assert database.init_db(on_migrated=lambda: seeded.append(True)) is True
+    assert order[0] == "create_all"
+    assert order[-1] == "_add_missing_check_constraints"
+    assert "plain_text_storage_v1" in order
+    assert seeded == [True]
+    assert any("pg_advisory_unlock" in s for s in conn.sql)
+
+
+def test_postgres_init_skips_migration_when_another_replica_holds_the_lock(monkeypatch, caplog):
+    import app.database as database
+
+    class _Busy(_FakePgConn):
+        def execute(self, stmt, params=None):
+            self.sql.append(str(stmt))
+            return SimpleNamespace(scalar=lambda: False)
+
+    order = []
+    _stub_migration_steps(monkeypatch, database, order)
+    monkeypatch.setattr(database, "engine", _PgEngine(_Busy()))
+    with caplog.at_level("INFO", logger="bug_hunter"):
+        assert database.init_db() is False
+    assert order == []
+    assert "another replica holds the migration lock" in caplog.text
+
+
+def test_postgres_init_rolls_back_a_failed_step_and_still_unlocks(monkeypatch):
+    import pytest
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    order = []
+    conn = _FakePgConn()
+    _stub_migration_steps(monkeypatch, database, order)
+
+    def _boom(_conn):
+        raise RuntimeError("step failed")
+
+    monkeypatch.setattr(database, "_add_missing_indexes", _boom)
+    monkeypatch.setattr(database, "engine", _PgEngine(conn))
+    with pytest.raises(RuntimeError, match="step failed"):
+        database.init_db()
+    assert conn.rolled_back == 1
+    assert any("pg_advisory_unlock" in s for s in conn.sql)
+
+    class _LockError(_FakePgConn):
+        def execute(self, stmt, params=None):
+            raise SQLAlchemyError("lock query failed")
+
+    monkeypatch.setattr(database, "_add_missing_indexes", lambda _c: order.append("indexes"))
+    flaky = _LockError()
+    monkeypatch.setattr(database, "engine", _PgEngine(flaky))
+    assert database.init_db() is True
+    assert flaky.rolled_back >= 2
+
+
+def test_workflow_seed_is_idempotent_and_reports_drift(db_session, caplog):
+    from sqlalchemy import func, select
+
+    import app.database as database
+    from app.models import WorkflowStatus
+    from app.schemas import STATUSES_BY_TYPE
+
+    conn = db_session.connection()
+    before = conn.execute(select(func.count(WorkflowStatus.id))).scalar()
+    database._seed_global_workflow_statuses(conn)  # already seeded at startup: nothing new
+    assert conn.execute(select(func.count(WorkflowStatus.id))).scalar() == before
+
+    original = STATUSES_BY_TYPE["Task"]
+    STATUSES_BY_TYPE["Task"] = [*original, "Invented"]
+    try:
+        with caplog.at_level("ERROR", logger="bug_hunter"):
+            database._seed_global_workflow_statuses(conn)
+    finally:
+        STATUSES_BY_TYPE["Task"] = original
+    assert "Workflow-status seed drift for item_type=Task" in caplog.text
+
+
+def test_workflow_seed_tolerates_a_missing_table_and_a_refused_insert(caplog):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    import app.database as database
+
+    class _NoTable:
+        def execute(self, *_a, **_k):
+            raise SQLAlchemyError("no such table: workflow_statuses")
+
+    database._seed_global_workflow_statuses(_NoTable())
+
+    class _Refusing:
+        def execute(self, stmt, *_a, **_k):
+            return SimpleNamespace(all=lambda: [])
+
+        def begin_nested(self):
+            raise SQLAlchemyError("duplicate key")
+
+    with caplog.at_level("WARNING", logger="bug_hunter"):
+        database._seed_global_workflow_statuses(_Refusing())
+    assert "Could not seed global workflow status" in caplog.text
+
+
+def test_display_id_indexes_are_rebuilt_non_unique(monkeypatch):
+    from sqlalchemy import Column, Index, Integer, MetaData, String, Table, create_engine, inspect
+
+    import app.database as database
+
+    meta = MetaData()
+    table = Table("boards", meta, Column("id", Integer, primary_key=True), Column("display_id", String(32)))
+    Index("ix_boards_display_id", table.c.display_id, unique=True)
+    monkeypatch.setattr(database.Base, "metadata", SimpleNamespace(sorted_tables=[table]))
+
+    probe = create_engine("sqlite://")
+    with probe.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE boards (id INTEGER PRIMARY KEY, display_id VARCHAR(32))")
+        database._add_missing_indexes(conn)
+        indexes = inspect(conn).get_indexes("boards")
+    assert [(i["name"], bool(i["unique"])) for i in indexes] == [("ix_boards_display_id", False)]
+    probe.dispose()
+
+
+def test_meta_serves_poll_intervals_from_settings(client, monkeypatch):
+    from app.main import settings
+    j = client.get("/api/meta").json()
+    assert (j["data_poll_seconds"], j["session_poll_seconds"], j["notification_poll_seconds"]) == (
+        settings.DATA_POLL_SECONDS, settings.SESSION_POLL_SECONDS, settings.NOTIFICATION_POLL_SECONDS)
+    monkeypatch.setattr(settings, "DATA_POLL_SECONDS", 99)
+    assert client.get("/api/meta").json()["data_poll_seconds"] == 99

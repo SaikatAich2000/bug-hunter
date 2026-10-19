@@ -135,7 +135,7 @@ def _call_groq(system: str, user: str, *, temperature: float = 0.0,
     try:
         # Key in the Authorization header (never the URL) so it can't leak into logs.
         r = httpx.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            s.GROQ_API_URL,
             headers={"Authorization": f"Bearer {s.GROQ_API_KEY}"},
             json={
                 "model": s.GROQ_MODEL,
@@ -170,7 +170,7 @@ def _call_openrouter(system: str, user: str, *, temperature: float = 0.0,
     import httpx
     try:
         r = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            s.OPENROUTER_API_URL,
             headers={"Authorization": f"Bearer {s.OPENROUTER_API_KEY}"},
             json={
                 "model": s.OPENROUTER_MODEL,
@@ -211,7 +211,7 @@ def metrics_snapshot() -> dict[str, int]:
 # Circuit breaker: after both providers fail, skip cloud calls for a short
 # window rather than paying a round-trip on every message. The rule-based
 # layers keep answering during the cooldown.
-_COOLDOWN_S = 45.0
+_COOLDOWN_S = get_settings().SLEUTH_CLOUD_COOLDOWN_S
 _cooldown_until = 0.0
 # The timestamp is shared across worker threads (sync endpoints run in a
 # threadpool), so guard it against concurrent read/write races.

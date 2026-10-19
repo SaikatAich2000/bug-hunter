@@ -693,7 +693,7 @@ def test_download_range_slice(admin_client):
     assert full.content == body
 
 
-# main — login is no longer CSRF-exempt; error responses carry no-store
+# Login is not CSRF-exempt; error responses carry no-store
 def test_login_not_csrf_exempt(client):
     r = client.post("/api/auth/login",
                     headers={"Origin": "https://evil.example"},
@@ -881,8 +881,9 @@ def test_image_over_the_decode_budget_is_refused_before_decode(monkeypatch):
     img.save(buf, format="BMP")
     monkeypatch.setattr(image_strip, "_MAX_DECODE_BYTES", 10)
     monkeypatch.setattr(Image.Image, "load", lambda self: pytest.fail("decoded over budget"))
+    data = buf.getvalue()
     with pytest.raises(image_strip.ImageTooLarge):
-        image_strip.strip_image_metadata(buf.getvalue(), "image/bmp")
+        image_strip.strip_image_metadata(data, "image/bmp")
 
 
 # Unhandled errors return a sanitized 500 with security headers; covers get_db rollback.
@@ -905,7 +906,8 @@ def test_unhandled_exception_clean_500_with_headers(client):
     assert r.status_code == 500
     body = r.json()
     assert body["detail"] == "Internal server error."
-    assert body["request_id"] and r.headers["X-Request-ID"] == body["request_id"]
+    assert body["request_id"]
+    assert r.headers["X-Request-ID"] == body["request_id"]
     assert "kaboom-internal-detail" not in r.text   # no internal detail leaked
     assert "Content-Security-Policy" in r.headers    # security headers on 500
 

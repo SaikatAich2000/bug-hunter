@@ -131,22 +131,19 @@ def test_llm_unavailable_path():
         db.close()
 
 
-def test_llm_memory_budget_calculation():
+def test_llm_memory_budget_calculation(monkeypatch):
     section("LLM memory budget: detects undersized hardware")
     import tempfile
     fake = tempfile.NamedTemporaryFile(suffix=".gguf", delete=False)
     fake.seek(400 * 1024 * 1024 - 1)
     fake.write(b"\x00")
     fake.close()
-    old_path = llm._MODEL_PATH
     from pathlib import Path as _P
-    llm._MODEL_PATH = _P(fake.name)
+    monkeypatch.setattr(llm, "_MODEL_PATH", _P(fake.name))
 
     # Simulate an undersized box.
-    orig_avail = llm._detect_available_mb
-    orig_cg = llm._detect_container_limit_mb
-    llm._detect_available_mb = lambda: 350
-    llm._detect_container_limit_mb = lambda: 512
+    monkeypatch.setattr(llm, "_detect_available_mb", lambda: 350)
+    monkeypatch.setattr(llm, "_detect_container_limit_mb", lambda: 512)
     try:
         budget = llm.memory_budget()
         check("budget: model size detected at 400 MB",
@@ -174,24 +171,19 @@ def test_llm_memory_budget_calculation():
         check("is_available: False when RAM too low",
               llm.is_available() is False)
     finally:
-        llm._detect_available_mb = orig_avail
-        llm._detect_container_limit_mb = orig_cg
-        llm._MODEL_PATH = old_path
         os.unlink(fake.name)
 
 
-def test_llm_memory_budget_sufficient():
+def test_llm_memory_budget_sufficient(monkeypatch):
     section("LLM memory budget: 'enough RAM' path")
     import tempfile
     fake = tempfile.NamedTemporaryFile(suffix=".gguf", delete=False)
     fake.seek(100 * 1024 * 1024 - 1)
     fake.write(b"\x00")
     fake.close()
-    old_path = llm._MODEL_PATH
     from pathlib import Path as _P
-    llm._MODEL_PATH = _P(fake.name)
-    orig_avail = llm._detect_available_mb
-    llm._detect_available_mb = lambda: 1500
+    monkeypatch.setattr(llm, "_MODEL_PATH", _P(fake.name))
+    monkeypatch.setattr(llm, "_detect_available_mb", lambda: 1500)
     try:
         budget = llm.memory_budget()
         check("budget-ok: sufficient flag True",
@@ -200,12 +192,10 @@ def test_llm_memory_budget_sufficient():
         check("budget-ok: no shortfall msg",
               llm.memory_shortfall_message() is None)
     finally:
-        llm._detect_available_mb = orig_avail
-        llm._MODEL_PATH = old_path
         os.unlink(fake.name)
 
 
-def test_executor_falls_through_simply():
+def test_executor_falls_through_simply(monkeypatch):
     section("Executor: shortfall stays in logs, user gets simple reply")
     import tempfile
     # Oversized model: Layer 3 detects the shortfall, logs it, returns None;
@@ -214,15 +204,12 @@ def test_executor_falls_through_simply():
     fake.seek(400 * 1024 * 1024 - 1)
     fake.write(b"\x00")
     fake.close()
-    old_path = llm._MODEL_PATH
     from pathlib import Path as _P
-    llm._MODEL_PATH = _P(fake.name)
-    orig_avail = llm._detect_available_mb
-    orig_cg = llm._detect_container_limit_mb
-    llm._detect_available_mb = lambda: 350
-    llm._detect_container_limit_mb = lambda: 512
+    monkeypatch.setattr(llm, "_MODEL_PATH", _P(fake.name))
+    monkeypatch.setattr(llm, "_detect_available_mb", lambda: 350)
+    monkeypatch.setattr(llm, "_detect_container_limit_mb", lambda: 512)
     # Reset the warned-once flag before this test runs.
-    llm._shortfall_warned = False
+    monkeypatch.setattr(llm, "_shortfall_warned", False)
     try:
         seed()
         db = SessionLocal()
@@ -248,9 +235,6 @@ def test_executor_falls_through_simply():
         finally:
             db.close()
     finally:
-        llm._detect_available_mb = orig_avail
-        llm._detect_container_limit_mb = orig_cg
-        llm._MODEL_PATH = old_path
         os.unlink(fake.name)
 
 

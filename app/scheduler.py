@@ -186,8 +186,8 @@ async def _loop(schedule: CronSchedule, tz: tzinfo) -> None:
 _task: asyncio.Task | None = None
 _retention_task: asyncio.Task | None = None
 # First retention run a few minutes after boot (not during a rolling deploy's warm-up), then daily.
-_RETENTION_FIRST_DELAY_SECONDS = 300
-_RETENTION_INTERVAL_SECONDS = 24 * 3600
+_RETENTION_FIRST_DELAY_SECONDS = get_settings().RETENTION_FIRST_DELAY_SECONDS
+_RETENTION_INTERVAL_SECONDS = get_settings().RETENTION_INTERVAL_SECONDS
 
 
 async def _retention_loop() -> None:

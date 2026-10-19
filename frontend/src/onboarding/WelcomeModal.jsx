@@ -8,11 +8,12 @@ export default function WelcomeModal({ open, name, onTour, onHelp, onLater }) {
   const [dontShow, setDontShow] = useState(false);
   const appName = getAppName();
   const first = (name || "").trim().split(/\s+/)[0];
+  const greeting = first ? `, ${first}` : "";
   return (
     <Modal
       id="welcomeModal"
       open={open}
-      title={`Welcome to ${appName}${first ? `, ${first}` : ""}`}
+      title={`Welcome to ${appName}${greeting}`}
       subtitle="Here is the quickest way to get going."
       cardClass="welcome-card"
       onClose={() => onLater(dontShow)}

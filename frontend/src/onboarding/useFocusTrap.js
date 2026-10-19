@@ -29,17 +29,15 @@ export function useFocusTrap(ref, active, focusKey) {
         return;
       }
       const first = items[0];
-      const last = items[items.length - 1];
+      const last = items.at(-1);
       const here = document.activeElement;
-      if (!root.contains(here)) {
+      let target = null;
+      if (!root.contains(here)) target = first;
+      else if (e.shiftKey && (here === first || here === root)) target = last;
+      else if (!e.shiftKey && here === last) target = first;
+      if (target) {
         e.preventDefault();
-        first.focus();
-      } else if (e.shiftKey && (here === first || here === root)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && here === last) {
-        e.preventDefault();
-        first.focus();
+        target.focus();
       }
     };
     document.addEventListener("keydown", onKey);

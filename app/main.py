@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import (
     Depends,
@@ -38,7 +38,6 @@ from sqlalchemy.orm import Session as OrmSession
 from starlette.datastructures import MutableHeaders
 
 from app.auth import (
-    COOKIE_NAME,  # noqa: F401  (legacy cookie name, addressed through this module by tests)
     hash_password,
     new_jti,
     parse_session_token,
@@ -47,7 +46,7 @@ from app.auth import (
     trusted_forwarded_ip,
 )
 from app.chatbot.router import router as chatbot_router
-from app.config import env_int, env_str, get_settings
+from app.config import get_settings
 from app.database import (
     DEFAULT_PROJECT_COLOR,
     DEFAULT_PROJECT_DESCRIPTION,
@@ -105,7 +104,7 @@ APP_VERSION_PLACEHOLDER = "__APP_VERSION__"
 
 
 # Files over this cap hash by path+size, not content, to keep startup fast.
-_MAX_ASSET_FILE_BYTES = 8 * 1024 * 1024
+_MAX_ASSET_FILE_BYTES = get_settings().MAX_ASSET_FILE_BYTES
 
 
 def _compute_asset_version(static_dir: Path) -> str:
@@ -226,6 +225,13 @@ def _production_config_errors(s) -> list[str]:
     backend) apply only when APP_ENV explicitly declares production/staging, so
     an HTTPS deploy that never set APP_ENV keeps working across upgrades.
     """
+    errors = _secret_errors(s)
+    if getattr(s, "is_production_env", False):
+        errors += _deployment_shape_errors(s)
+    return errors
+
+
+def _secret_errors(s) -> list[str]:
     errors: list[str] = []
     if len(s.SESSION_SECRET or "") < 32 or _is_placeholder(s.SESSION_SECRET):
         errors.append("SESSION_SECRET must be set to a strong value (>= 32 chars)")
@@ -245,13 +251,17 @@ def _production_config_errors(s) -> list[str]:
             Fernet(key.encode("utf-8"))
         except Exception:
             errors.append("GIT_CREDENTIAL_ENCRYPTION_KEY is malformed")
-    if not getattr(s, "is_production_env", False):
-        return errors
+    return errors
+
+
+def _deployment_shape_errors(s) -> list[str]:
+    errors: list[str] = []
     if not s.COOKIE_SECURE:
         errors.append("COOKIE_SECURE must be true in production")
-    if not (s.APP_BASE_URL or "").strip():
+    base_url = (s.APP_BASE_URL or "").strip()
+    if not base_url:
         errors.append("APP_BASE_URL must be set in production")
-    elif not (s.APP_BASE_URL or "").strip().lower().startswith("https://"):
+    elif not base_url.lower().startswith("https://"):
         errors.append("APP_BASE_URL must use https in production")
     if s.EMAIL_BACKEND == "console":
         errors.append("EMAIL_BACKEND=console is not allowed in production")
@@ -478,6 +488,23 @@ app = FastAPI(
 instrument_app(app)
 
 
+
+_openapi_without_400 = app.openapi
+
+
+def _openapi_with_malformed_body_400() -> dict:
+    """FastAPI answers 400 to an undecodable body but never documents it (bytes that are not valid UTF-8)."""
+    schema = _openapi_without_400()
+    for item in schema.get("paths", {}).values():
+        for op in item.values():
+            if isinstance(op, dict) and "application/json" in op.get("requestBody", {}).get("content", {}):
+                op.setdefault("responses", {}).setdefault("400", {"description": "Request body is not decodable"})
+    return schema
+
+
+app.openapi = _openapi_with_malformed_body_400  # type: ignore[method-assign]
+
+
 def swagger_docs() -> responses.HTMLResponse:
     return HTMLResponse(
         f"""<!DOCTYPE html>
@@ -568,6 +595,45 @@ _UPLOAD_TOO_LARGE = "This upload is too large. Please attach a smaller file."
 _BODY_TOO_LARGE = "This request is too large."
 
 
+def _declared_length_problem(declared: bytes | None, max_bytes: int, message: str, scope) -> tuple[int, str] | None:
+    """(status, detail) when the declared Content-Length is unusable or over the cap, else None."""
+    if declared is None:
+        return None
+    try:
+        length = int(declared)
+    except ValueError:
+        return 400, "We couldn't process this request. Please try again."
+    if length <= max_bytes:
+        return None
+    logger.warning("Body too large: %d bytes declared (limit %d) on %s",
+                   length, max_bytes, scope.get("path", ""))
+    return 413, message
+
+
+class _BodyCap:
+    """Wraps one request's receive/send: counts the body bytes read and notes when a response starts."""
+
+    def __init__(self, receive, send, max_bytes: int):
+        self._receive = receive
+        self._send = send
+        self._max_bytes = max_bytes
+        self._total = 0
+        self.started = False
+
+    async def receive(self):
+        msg = await self._receive()
+        if msg.get("type") == "http.request":
+            self._total += len(msg.get("body", b"") or b"")
+            if self._total > self._max_bytes:
+                raise _RequestBodyTooLarge()
+        return msg
+
+    async def send(self, msg):
+        if msg.get("type") == "http.response.start":
+            self.started = True
+        await self._send(msg)
+
+
 class BodyLimitMiddleware:
     """Request-body ceilings, enforced before the body reaches memory: a declared
     Content-Length over the cap is refused at once, and the bytes actually received are
@@ -587,43 +653,16 @@ class BodyLimitMiddleware:
         max_bytes = settings.MAX_REQUEST_BODY_BYTES if is_upload else settings.MAX_JSON_BODY_BYTES
         message = _UPLOAD_TOO_LARGE if is_upload else _BODY_TOO_LARGE
 
-        declared = headers.get(b"content-length")
-        if declared is not None:
-            try:
-                length = int(declared)
-            except ValueError:
-                await self._reply(scope, receive, send, 400,
-                                  "We couldn't process this request. Please try again.")
-                return
-            if length > max_bytes:
-                logger.warning("Body too large: %d bytes declared (limit %d) on %s",
-                               length, max_bytes, scope.get("path", ""))
-                await self._reply(scope, receive, send, 413, message)
-                return
+        problem = _declared_length_problem(headers.get(b"content-length"), max_bytes, message, scope)
+        if problem is not None:
+            await self._reply(scope, receive, send, *problem)
+            return
 
-        total = 0
-
-        async def counting_receive():
-            nonlocal total
-            msg = await receive()
-            if msg.get("type") == "http.request":
-                total += len(msg.get("body", b"") or b"")
-                if total > max_bytes:
-                    raise _RequestBodyTooLarge()
-            return msg
-
-        started = False
-
-        async def tracking_send(msg):
-            nonlocal started
-            if msg.get("type") == "http.response.start":
-                started = True
-            await send(msg)
-
+        cap = _BodyCap(receive, send, max_bytes)
         try:
-            await self.app(scope, counting_receive, tracking_send)
+            await self.app(scope, cap.receive, cap.send)
         except _RequestBodyTooLarge:
-            if started:
+            if cap.started:
                 raise  # The response already started; it can't be replaced cleanly.
             logger.warning("Streaming body exceeded %d bytes on %s", max_bytes, scope.get("path", ""))
             await self._reply(scope, receive, send, 413, message)
@@ -666,16 +705,11 @@ def _apply_cache_headers(h, path: str) -> None:
 # Endpoints the Firebase SDK needs for token mint/refresh; added to
 # connect-src only when web push is enabled. Firebase scripts are vendored,
 # so script-src stays 'self'.
-_FCM_CONNECT_SRC = (
-    " https://fcm.googleapis.com https://fcmregistrations.googleapis.com"
-    " https://firebaseinstallations.googleapis.com https://www.googleapis.com"
-)
-
 
 def _build_csp() -> str:
     connect = "connect-src 'self'"
     if get_settings().WEB_PUSH_ENABLED:
-        connect += _FCM_CONNECT_SRC
+        connect += " " + get_settings().FCM_CONNECT_SRC
     return (
         "default-src 'self'; "
         "img-src 'self' data: blob:; "
@@ -770,11 +804,11 @@ def _blocked(status_code: int, detail: str, headers: Optional[dict] = None) -> J
 # for a strict global limit). Tuned to absorb typos, slow credential stuffing.
 _RATE_RULES: dict[str, tuple[int, int]] = {
     # (max_requests, window_seconds)
-    "/api/auth/login": (8, 60),
-    "/api/auth/forgot-password": (3, 60),
+    "/api/auth/login": (settings.RATE_LOGIN_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
+    "/api/auth/forgot-password": (settings.RATE_FORGOT_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
     # change-password bcrypt-verifies on every call — throttle the amplification.
-    "/api/auth/reset-password": (5, 60),
-    "/api/auth/change-password": (5, 60),
+    "/api/auth/reset-password": (settings.RATE_RESET_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
+    "/api/auth/change-password": (settings.RATE_CHANGE_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
 }
 _rate_buckets: dict[tuple[str, str], deque] = {}
 _rate_lock = Lock()
@@ -899,7 +933,12 @@ class CsrfOriginMiddleware(_GateMiddleware):
 
 app.add_middleware(CsrfOriginMiddleware)
 
-# CORS registered last (outermost — see note near _origins).
+# Request ids are set inside CORS. CORS must be outermost (added last) so its headers reach the
+# responses that rate limiting, CSRF or the body cap short-circuit; a preflight that CORS answers
+# itself therefore carries no request id.
+app.add_middleware(RequestIdMiddleware)
+
+# CORS registered last (outermost -- see note near _origins).
 if _origins:
     # Restrict methods/headers to what the SPA uses; smaller blast radius.
     app.add_middleware(
@@ -910,10 +949,6 @@ if _origins:
         allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
         expose_headers=["X-Request-ID"],
     )
-
-# Outermost, so the request id is set before anything else runs: the error handler and every
-# log line see it.
-app.add_middleware(RequestIdMiddleware)
 
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
@@ -1005,7 +1040,7 @@ def _auto_login(request: Request, db: OrmSession) -> Optional[tuple[User, str]]:
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def home(request: Request, db: OrmSession = Depends(get_db)):
+def home(request: Request, db: Annotated[OrmSession, Depends(get_db)]):
     # Server-side redirect avoids a flash of the empty app shell.
     if not _has_valid_session(request):
         auto = _auto_login(request, db)
@@ -1020,7 +1055,7 @@ def home(request: Request, db: OrmSession = Depends(get_db)):
 
 @app.get("/login.html", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
-def login_page(request: Request, db: OrmSession = Depends(get_db)):
+def login_page(request: Request, db: Annotated[OrmSession, Depends(get_db)]):
     # Skip the login form for users who are already logged in.
     if _has_valid_session(request):
         return RedirectResponse(url="/", status_code=302)
@@ -1126,6 +1161,9 @@ def meta() -> dict[str, object]:
         "priorities": ALLOWED_PRIORITIES,
         "environments": ALLOWED_ENVIRONMENTS,
         "item_types": ALLOWED_ITEM_TYPES,
+        "data_poll_seconds": settings.DATA_POLL_SECONDS,
+        "session_poll_seconds": settings.SESSION_POLL_SECONDS,
+        "notification_poll_seconds": settings.NOTIFICATION_POLL_SECONDS,
     }
 
 
@@ -1246,6 +1284,4 @@ if __name__ == "__main__":
     import uvicorn
     # Default to loopback. Set UVICORN_HOST=0.0.0.0 in containers where the
     # container boundary and reverse proxy make it safe to bind all interfaces.
-    _host = env_str("UVICORN_HOST", "127.0.0.1")
-    _port = env_int("UVICORN_PORT", 8000)
-    uvicorn.run("app.main:app", host=_host, port=_port, reload=False)
+    uvicorn.run("app.main:app", host=settings.UVICORN_HOST, port=settings.UVICORN_PORT, reload=False)

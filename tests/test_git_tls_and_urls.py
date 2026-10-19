@@ -128,8 +128,9 @@ def test_certificate_failure_is_classified_with_a_safe_message(monkeypatch, capl
     _install_transport(monkeypatch, github, raiser=error)
 
     with caplog.at_level("DEBUG"):
+        provider = _provider(github)
         with pytest.raises(github.GitProviderError) as excinfo:
-            _provider(github).validate_connection()
+            provider.validate_connection()
 
     assert excinfo.value.code == github.TLS_TRUST_ERROR
     assert excinfo.value.message == (
@@ -151,8 +152,9 @@ def test_certificate_failure_is_not_retried(monkeypatch):
         error = httpx.ConnectError("boom")
         error.__cause__ = ssl.SSLCertVerificationError(1, "certificate verify failed")
         calls = _install_transport(monkeypatch, github, raiser=error)
+        provider = _provider(github)
         with pytest.raises(github.GitProviderError) as excinfo:
-            _provider(github).validate_connection()
+            provider.validate_connection()
         assert excinfo.value.code == github.TLS_TRUST_ERROR
         assert calls["count"] == 1
     finally:
@@ -174,8 +176,9 @@ def test_proxy_dns_and_generic_failures_are_classified_separately(monkeypatch):
         ]
         for exc, expected in cases:
             _install_transport(monkeypatch, github, raiser=exc)
+            provider = _provider(github)
             with pytest.raises(github.GitProviderError) as excinfo:
-                _provider(github).validate_connection()
+                provider.validate_connection()
             assert excinfo.value.code == expected, type(exc).__name__
             assert excinfo.value.code != github.TLS_TRUST_ERROR
     finally:
@@ -185,8 +188,9 @@ def test_proxy_dns_and_generic_failures_are_classified_separately(monkeypatch):
 def test_timeout_is_still_its_own_class(monkeypatch):
     github = _github()
     _install_transport(monkeypatch, github, raiser=httpx.ReadTimeout("took too long"))
+    provider = _provider(github)
     with pytest.raises(github.GitProviderError) as excinfo:
-        _provider(github).validate_connection()
+        provider.validate_connection()
     assert excinfo.value.code == github.TIMEOUT
 
 
@@ -199,8 +203,9 @@ def test_trust_store_init_failure_fails_closed_before_any_request(monkeypatch):
 
     monkeypatch.setattr(github, "system_trust_context", _boom)
     calls = _install_transport(monkeypatch, github)
+    provider = _provider(github)
     with pytest.raises(github.GitProviderError) as excinfo:
-        _provider(github).validate_connection()
+        provider.validate_connection()
     assert excinfo.value.code == github.TLS_TRUST_ERROR
     assert calls["count"] == 0, "no connection may be attempted without a trust store"
 
@@ -276,8 +281,9 @@ def test_delete_branch_refuses_a_non_exact_ref_without_calling_the_api(monkeypat
     github = _github()
     calls = _install_transport(monkeypatch, github)
 
+    provider = _provider(github)
     with pytest.raises(github.GitProviderError) as excinfo:
-        _provider(github).delete_branch("acme", "widgets", ref)
+        provider.delete_branch("acme", "widgets", ref)
 
     assert excinfo.value.code == github.INVALID_BASE_BRANCH
     assert calls["count"] == 0, "an invalid ref must be rejected before any request"
@@ -356,8 +362,9 @@ def test_delete_branch_never_treats_http_failures_as_absent(monkeypatch, status_
             monkeypatch, github,
             response=_StubResponse(status_code=status_code, payload={"message": "boom"}),
         )
+        provider = _provider(github)
         with pytest.raises(github.GitProviderError) as excinfo:
-            _provider(github).delete_branch("acme", "widgets", "refs/heads/feature/one")
+            provider.delete_branch("acme", "widgets", "refs/heads/feature/one")
         assert excinfo.value.code == expected_code
     finally:
         get_settings.cache_clear()
@@ -377,8 +384,9 @@ def test_delete_branch_never_treats_transport_failures_as_absent(monkeypatch):
         ]
         for raiser, expected_code in failures:
             _install_transport(monkeypatch, github, raiser=raiser)
+            provider = _provider(github)
             with pytest.raises(github.GitProviderError) as excinfo:
-                _provider(github).delete_branch("acme", "widgets", "refs/heads/feature/one")
+                provider.delete_branch("acme", "widgets", "refs/heads/feature/one")
             assert excinfo.value.code == expected_code
     finally:
         get_settings.cache_clear()
@@ -670,3 +678,334 @@ def test_tls_error_message_never_contains_pat(monkeypatch):
     assert excinfo.value.code == github.TLS_TRUST_ERROR
     assert token not in excinfo.value.message
     assert calls["count"] >= 1
+
+
+# ===========================================================================
+# Provider API surface: repositories, branches, error mapping
+# ===========================================================================
+
+class _Reply:
+    """A scripted httpx response: ``payload`` is returned by json(); ``bad_json`` makes json() raise."""
+
+    def __init__(self, status_code=200, payload=None, *, bad_json=False, headers=None, content=b"{}"):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.content = content
+        self._payload = payload
+        self._bad_json = bad_json
+
+    def json(self):
+        if self._bad_json:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _script(monkeypatch, github, *replies):
+    """Serve ``replies`` in order, one per request; returns the (method, url, params) log."""
+    log: list[tuple] = []
+    queue = list(replies)
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def request(self, method, url, **kwargs):
+            log.append((method, url, kwargs.get("params")))
+            return queue.pop(0)
+
+    monkeypatch.setattr(github.httpx, "Client", _Client)
+    monkeypatch.setattr(github.time, "sleep", lambda _s: None)
+    return log
+
+
+def _repo_row(index, **extra):
+    return {"id": index, "name": f"repo-{index}", "owner": {"login": "acme"},
+            "html_url": f"https://ghe.example.com/acme/repo-{index}", "default_branch": "main", **extra}
+
+
+def test_repositories_are_paged_until_the_limit(monkeypatch):
+    github = _github()
+    first = [_repo_row(i) for i in range(100)]
+    second = [_repo_row(i) for i in range(100, 150)]
+    log = _script(monkeypatch, github, _Reply(payload=first), _Reply(payload=second))
+
+    repos = _provider(github).list_repositories(limit=150)
+    assert [r.name for r in repos][:2] == ["repo-0", "repo-1"]
+    assert len(repos) == 150
+    assert [p["page"] for _m, _u, p in log] == [1, 2]
+    assert log[0][1].endswith("/orgs/acme/repos")
+    assert log[0][2]["type"] == "all"
+
+
+def test_repositories_without_an_organization_list_the_users_own(monkeypatch):
+    github = _github()
+    log = _script(monkeypatch, github, _Reply(payload=[_repo_row(1)]))
+    provider = github.GitHubEnterpriseProvider(base_url="https://ghe.example.com", organization="", token=TOKEN)
+
+    assert [r.name for r in provider.list_repositories(limit=0)] == ["repo-1"]
+    assert log[0][1].endswith("/user/repos")
+    assert "type" not in log[0][2]
+    assert log[0][2]["per_page"] == 1
+
+
+def test_repository_rows_are_mapped_defensively(monkeypatch):
+    github = _github()
+    rows = [
+        "not a mapping",
+        {"id": 1, "name": "  "},
+        {"id": 2, "name": "from-full-name", "full_name": "octo/from-full-name"},
+        {"id": 3, "name": "no-owner", "owner": {}},
+        _repo_row(4),
+    ]
+    _script(monkeypatch, github, _Reply(payload=rows), _Reply(payload={"message": "ignored"}))
+
+    repos = _provider(github).list_repositories(limit=10)
+    assert [(r.name, r.owner) for r in repos] == [("from-full-name", "octo"), ("no-owner", ""), ("repo-4", "acme")]
+    assert repos[0].provider_repo_id == "2"
+
+    _script(monkeypatch, github, _Reply(payload={"unexpected": True}))
+    assert _provider(github).list_repositories() == []
+
+
+def test_connection_label_falls_back_to_the_organization_or_api_base(monkeypatch):
+    github = _github()
+    _script(monkeypatch, github, _Reply(payload={}))
+    assert _provider(github).validate_connection() == "acme"
+
+    anonymous = github.GitHubEnterpriseProvider(base_url="https://ghe.example.com", organization="", token=TOKEN)
+    _script(monkeypatch, github, _Reply(payload={"login": "octocat"}))
+    assert anonymous.validate_connection() == "octocat"
+    _script(monkeypatch, github, _Reply(payload=[]))
+    assert anonymous.validate_connection() == "https://ghe.example.com/api/v3"
+
+
+def test_branch_lookup_distinguishes_missing_present_and_unresolvable(monkeypatch):
+    github = _github()
+    provider = _provider(github)
+
+    _script(monkeypatch, github, _Reply(payload={"commit": {"sha": "abc123"}}))
+    assert provider.get_branch_sha("acme", "repo", "main") == "abc123"
+    _script(monkeypatch, github, _Reply(404, {"message": "Branch not found"}))
+    assert provider.get_branch_sha("acme", "repo", "gone") is None
+    _script(monkeypatch, github, _Reply(payload={"commit": {}}))
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.get_branch_sha("acme", "repo", "odd")
+    assert excinfo.value.code == github.BASE_BRANCH_MISSING
+
+    _script(monkeypatch, github, _Reply(payload={"name": "main"}))
+    assert provider.branch_exists("acme", "repo", "main") is True
+    _script(monkeypatch, github, _Reply(404, {"message": "Branch not found"}))
+    assert provider.branch_exists("acme", "repo", "gone") is False
+
+
+def test_create_branch_returns_the_new_ref_sha_or_nothing(monkeypatch):
+    github = _github()
+    provider = _provider(github)
+
+    log = _script(monkeypatch, github, _Reply(201, {"object": {"sha": "def456"}}))
+    assert provider.create_branch("acme", "repo", "feature/x", "abc123") == "def456"
+    assert log[0][0] == "POST"
+    _script(monkeypatch, github, _Reply(201, ["unexpected"]))
+    assert provider.create_branch("acme", "repo", "feature/y", "abc123") == ""
+    _script(monkeypatch, github, _Reply(201, {"object": "odd"}))
+    assert provider.create_branch("acme", "repo", "feature/z", "abc123") == ""
+
+
+def test_error_mapping_covers_unparseable_bodies_and_transient_outages(monkeypatch):
+    github = _github()
+    provider = _provider(github)
+
+    _script(monkeypatch, github, _Reply(418, bad_json=True))
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.validate_connection()
+    assert excinfo.value.code == github.INVALID_RESPONSE
+    assert "HTTP 418" in str(excinfo.value)
+
+    _script(monkeypatch, github, _Reply(418, ["not", "a", "mapping"]))
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.validate_connection()
+    assert "HTTP 418" in str(excinfo.value)
+
+    outage = [_Reply(503, {"message": "down"})] * 10
+    log = _script(monkeypatch, github, *outage)
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.validate_connection()
+    assert excinfo.value.code == github.UNAVAILABLE
+    assert excinfo.value.retryable
+    assert len(log) == github.get_settings().GITHUB_MAX_RETRIES + 1
+
+
+def test_a_success_body_that_is_not_json_is_an_invalid_response(monkeypatch):
+    github = _github()
+    _script(monkeypatch, github, _Reply(200, bad_json=True))
+    provider = _provider(github)
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.validate_connection()
+    assert excinfo.value.code == github.INVALID_RESPONSE
+
+
+def test_a_missing_token_is_reported_before_any_request(monkeypatch):
+    github = _github()
+    log = _script(monkeypatch, github)
+    tokenless = github.GitHubEnterpriseProvider(base_url="https://ghe.example.com", organization="acme", token="")
+    with pytest.raises(github.GitProviderError) as excinfo:
+        tokenless.validate_connection()
+    assert excinfo.value.code == github.NOT_CONFIGURED
+    assert log == []
+
+
+def test_private_hosts_are_refused_before_the_request(monkeypatch):
+    github = _github()
+    log = _script(monkeypatch, github)
+    # Only a proxied request is checked up front; a direct one is guarded at connect time.
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(github.get_settings(), "GIT_ALLOW_PRIVATE_HOSTS", False)
+    provider = github.GitHubEnterpriseProvider(base_url="https://10.1.2.3", organization="acme", token=TOKEN)
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.validate_connection()
+    assert excinfo.value.code == github.INVALID_BASE_URL
+    assert log == []
+
+
+def test_name_resolution_failures_are_recognised_through_the_exception_chain():
+    import socket
+
+    github = _github()
+    try:
+        try:
+            raise socket.gaierror(-2, "Name or service not known")
+        except socket.gaierror as inner:
+            raise httpx.ConnectError("connection failed") from inner
+    except httpx.ConnectError as outer:
+        assert github._is_dns_failure(outer) is True
+    assert github._is_dns_failure(httpx.ConnectError("refused")) is False
+
+
+def test_base_urls_with_userinfo_or_blank_hosts_are_handled():
+    github = _github()
+    with pytest.raises(github.GitBaseUrlError):
+        github.require_https_provider_url("https://user:secret@ghe.example.com")
+    assert github.require_https_provider_url("") == "https://api.github.com"
+
+
+def test_url_validation_helpers_and_the_cache_shim():
+    from urllib.parse import urlparse
+
+    github = _github()
+    parts = urlparse("https://user:secret@ghe.example.com")
+    with pytest.raises(github.GitBaseUrlError, match="credentials"):
+        github._check_url_parts(parts, "https")
+    assert github.reset_token_cache() is None
+
+
+def test_requests_without_a_token_carry_no_authorization_header(monkeypatch):
+    github = _github()
+    sent = {}
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def request(self, method, url, **kwargs):
+            sent.update(kwargs["headers"])
+            return _Reply(payload={"login": "anon"})
+
+    monkeypatch.setattr(github.httpx, "Client", _Client)
+    assert _provider(github)._request("GET", "/user", token="") == {"login": "anon"}
+    assert "Authorization" not in sent
+
+
+def test_a_branch_whose_commit_is_not_an_object_has_no_sha(monkeypatch):
+    github = _github()
+    _script(monkeypatch, github, _Reply(payload={"commit": "abc"}))
+    provider = _provider(github)
+    with pytest.raises(github.GitProviderError) as excinfo:
+        provider.get_branch_sha("acme", "repo", "main")
+    assert excinfo.value.code == github.BASE_BRANCH_MISSING
+
+
+# --- trust-store helpers and message sanitising --------------------------------------------
+
+def test_trust_store_availability_is_reported():
+    from app.git import tls
+
+    assert tls.trust_store_available() is True
+
+
+def test_ca_bundle_context_fails_closed_without_a_usable_bundle(monkeypatch):
+    import ssl
+
+    from app.git import tls
+    from app.git.provider import TLS_TRUST_ERROR, GitProviderError
+
+    with pytest.raises(GitProviderError) as excinfo:
+        tls._load_verified_bundle_context("  ")
+    assert excinfo.value.code == TLS_TRUST_ERROR
+
+    class _Lax(ssl.SSLContext):
+        verify_mode = property(lambda self: ssl.CERT_NONE)
+
+        def load_verify_locations(self, *args, **kwargs):
+            return None
+
+    bundle = ROOT / "pyproject.toml"  # any existing file: the lax context never parses it
+    monkeypatch.setattr(tls.ssl, "SSLContext", _Lax)
+    with pytest.raises(GitProviderError) as excinfo:
+        tls._load_verified_bundle_context(str(bundle))
+    assert excinfo.value.code == TLS_TRUST_ERROR
+
+
+def test_certificate_failures_are_recognised_by_type_name_or_message():
+    from app.git import tls
+
+    class CertificateVerifyError(Exception):
+        pass
+
+    assert tls.is_certificate_verification_error(CertificateVerifyError("boom")) is True
+    assert tls.is_certificate_verification_error(OSError("self-signed certificate in certificate chain")) is True
+    assert tls.is_certificate_verification_error(OSError("connection reset")) is False
+
+
+def test_provider_messages_are_collapsed_redacted_and_capped(monkeypatch):
+    from app.git import provider
+
+    assert provider.sanitize_provider_message("   ") == "Git provider request failed"
+    assert provider.sanitize_provider_message("", fallback="custom") == "custom"
+    assert provider.sanitize_provider_message("two\n  lines\there") == "two lines here"
+    long = provider.sanitize_provider_message("word " * 400)
+    assert long.endswith("...")
+    assert len(long) <= provider._MAX_MESSAGE_CHARS + 3
+
+    monkeypatch.setattr(provider, "_configured_secret_values", lambda extra=(): ("hunter2-hunter2",))
+    assert "hunter2" not in provider.sanitize_provider_message("the token hunter2-hunter2 leaked")
+    assert provider.sanitize_provider_message("the token hunter2-hunter2 leaked").count("[redacted]") >= 0
+    assert "hunter2" not in provider.redact_secrets("Bearer hunter2-hunter2 rejected")
+
+
+def test_only_credential_length_values_are_collected_as_secrets():
+    from app.git import provider
+
+    values = provider._configured_secret_values(("short", "  a-long-enough-secret ", ""))
+    assert "a-long-enough-secret" in values
+    assert "short" not in values
+
+
+def test_redact_secrets_erases_caller_supplied_values():
+    from app.git import provider
+
+    assert "plain-secret-value" not in provider.redact_secrets(
+        "rejected plain-secret-value", extra_secrets=("plain-secret-value",))

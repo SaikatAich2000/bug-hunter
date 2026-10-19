@@ -180,7 +180,7 @@ def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
     assert any("Link added" in body for body in bob_emails), bob_emails
 
 
-# Bulk delete — was previously silent; must behave the same as single delete
+# Bulk delete must notify and behave the same as single delete
 def test_bulk_delete_notifies_assignee_and_survives(admin_client):
     _proj, bob, bug = _setup(admin_client, "bulkdel")
 

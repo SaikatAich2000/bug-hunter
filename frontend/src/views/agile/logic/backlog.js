@@ -57,22 +57,26 @@ export function findContainer(containers, issueId) {
  */
 export function matchesIssueFilter(issue, filter = {}) {
   const text = (filter.text || "").trim().toLowerCase();
-  if (text) {
-    const hay = `${issue.display_id || ""} ${issue.title || ""}`.toLowerCase();
-    if (!hay.includes(text)) return false;
-  }
-  if (filter.epicId === "none") {
-    if (issue.epic_id != null) return false;
-  } else if (filter.epicId != null && filter.epicId !== "") {
-    if (issue.epic_id !== Number(filter.epicId)) return false;
-  }
-  if (filter.assigneeId === "unassigned") {
-    if ((issue.assignees || []).length) return false;
-  } else if (filter.assigneeId != null && filter.assigneeId !== "") {
-    if (!(issue.assignees || []).some((a) => a.id === Number(filter.assigneeId))) return false;
-  }
-  if (filter.type && issue.item_type !== filter.type) return false;
-  return true;
+  const hay = `${issue.display_id || ""} ${issue.title || ""}`.toLowerCase();
+  return (
+    (!text || hay.includes(text))
+    && matchesEpicFilter(issue, filter.epicId)
+    && matchesAssigneeFilter(issue, filter.assigneeId)
+    && (!filter.type || issue.item_type === filter.type)
+  );
+}
+
+const isUnset = (v) => v == null || v === "";
+
+function matchesEpicFilter(issue, epicId) {
+  if (epicId === "none") return issue.epic_id == null;
+  return isUnset(epicId) || issue.epic_id === Number(epicId);
+}
+
+function matchesAssigneeFilter(issue, assigneeId) {
+  const assignees = issue.assignees || [];
+  if (assigneeId === "unassigned") return assignees.length === 0;
+  return isUnset(assigneeId) || assignees.some((a) => a.id === Number(assigneeId));
 }
 
 /** Remaining days of a sprint (end date inclusive), never negative; null without an end date. */
@@ -99,26 +103,39 @@ export function daysRemaining(endDate, today) {
  * order, the list, the API's before_id/after_id, and the insert position for
  * the optimistic local move (counted without the moving issues).
  */
+/** Ids that move with the drag: the whole visible selection when the dragged issue is in it. */
+function movingIds({ startContainers, activeId, selectedIds, isVisible }) {
+  const selected = new Set(selectedIds || []);
+  if (!(selected.has(activeId) && selected.size > 1)) return [activeId];
+  return Object.values(startContainers).flat()
+    .filter((i) => selected.has(i.id) && (i.id === activeId || isVisible(i)))
+    .map((i) => i.id);
+}
+
+/** The list with the dragged issue moved onto the issue it was dropped on. */
+function reorderedList(list, activeId, overId) {
+  const from = list.findIndex((i) => i.id === activeId);
+  const to = list.findIndex((i) => i.id === overId);
+  if (to < 0 || from === to) return list;
+  const next = [...list];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/** Insert position among the issues that stay put (the moving ones are not counted). */
+function insertIndex(rest, above, below, targetKey) {
+  if (above) return rest.findIndex((i) => i.id === above.id) + 1;
+  if (below) return rest.findIndex((i) => i.id === below.id);
+  return targetKey === BACKLOG_KEY ? 0 : rest.length;
+}
+
 export function planDrop({ startContainers, containers, activeId, overId, selectedIds, isVisible = () => true }) {
   const origin = findContainer(startContainers, activeId);
   const targetKey = findContainer(containers, activeId);
   if (!origin || !targetKey) return null;
-  let list = containers[targetKey] || [];
-  const from = list.findIndex((i) => i.id === activeId);
-  const to = list.findIndex((i) => i.id === overId);
-  if (to >= 0 && from !== to) {
-    list = [...list];
-    const [moved] = list.splice(from, 1);
-    list.splice(to, 0, moved);
-  }
-  const selected = new Set(selectedIds || []);
-  let itemIds = [activeId];
-  if (selected.has(activeId) && selected.size > 1) {
-    const boardOrder = Object.values(startContainers).flat();
-    itemIds = boardOrder
-      .filter((i) => selected.has(i.id) && (i.id === activeId || isVisible(i)))
-      .map((i) => i.id);
-  }
+  const list = reorderedList(containers[targetKey] || [], activeId, overId);
+  const itemIds = movingIds({ startContainers, activeId, selectedIds, isVisible });
   const moving = new Set(itemIds);
   const shown = list.filter((i) => i.id === activeId || (!moving.has(i.id) && isVisible(i)));
   const at = shown.findIndex((i) => i.id === activeId);
@@ -129,10 +146,7 @@ export function planDrop({ startContainers, containers, activeId, overId, select
     if (before === list.map((i) => i.id).join(",")) return null;
   }
   const rest = list.filter((i) => !moving.has(i.id));
-  let index = rest.length;
-  if (above) index = rest.findIndex((i) => i.id === above.id) + 1;
-  else if (below) index = rest.findIndex((i) => i.id === below.id);
-  else if (targetKey === BACKLOG_KEY) index = 0;
+  const index = insertIndex(rest, above, below, targetKey);
   return {
     itemIds,
     targetKey,

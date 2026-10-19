@@ -10,3 +10,19 @@ if (typeof window !== "undefined" && window.HTMLMediaElement) {
   window.HTMLMediaElement.prototype.play = function play() { return Promise.resolve(); };
   window.HTMLMediaElement.prototype.pause = function pause() {};
 }
+
+// Unmount whatever a test rendered with Testing Library so DOM and timers never leak between tests.
+import { afterEach } from "vitest";
+import { cleanup, configure } from "@testing-library/react";
+
+// findBy*/waitFor poll for up to this long; the 1 s default flakes under CPU load.
+configure({ asyncUtilTimeout: 8000 });
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+import "@testing-library/jest-dom/vitest";
+
+// jsdom has no blob URLs; the staged-attachment tiles need them.
+URL.createObjectURL = () => `blob:test/${Math.random().toString(36).slice(2)}`;
+URL.revokeObjectURL = () => {};

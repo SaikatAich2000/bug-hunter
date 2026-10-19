@@ -26,9 +26,19 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 _DETAIL_PROJECT_NOT_FOUND = "Project not found"
+_DETAIL_NAME_EXISTS = "Project name already exists"
 
 def _audit(db: Session, actor: User, action: str, entity_id: int, detail: str) -> None:
     audit(db, actor, "project", entity_id, action, detail)
+
+
+def _name_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
+    """Project names are unique ignoring case ("Web" vs "web" would confuse every picker);
+    the DB constraint stays as the race-proof backstop."""
+    stmt = select(Project.id).where(func.lower(Project.name) == name.strip().lower())
+    if exclude_id is not None:
+        stmt = stmt.where(Project.id != exclude_id)
+    return db.scalar(stmt.limit(1)) is not None
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -50,13 +60,15 @@ def create_project(
     db: Session = Depends(get_db),
     actor: User = Depends(require_manager_or_admin),
 ) -> Project:
+    if _name_taken(db, payload.name):
+        raise HTTPException(status_code=409, detail=_DETAIL_NAME_EXISTS)
     p = Project(**payload.model_dump(exclude={"agile_enabled"}))
     db.add(p)
     try:
         db.flush()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Project name already exists") from exc
+        raise HTTPException(status_code=409, detail=_DETAIL_NAME_EXISTS) from exc
     # Optional Agile activation in the same transaction: a failure rolls the
     # whole creation back, so a project is never left half-configured (no board
     # while agile_enabled says otherwise).
@@ -103,6 +115,8 @@ def update_project(
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     # exclude_unset so omitted fields aren't reset to schema defaults
     fields = payload.model_dump(exclude_unset=True)
+    if fields.get("name") and _name_taken(db, fields["name"], project_id):
+        raise HTTPException(status_code=409, detail=_DETAIL_NAME_EXISTS)
     changes = []
     for key, value in fields.items():
         old = getattr(p, key)
@@ -113,7 +127,7 @@ def update_project(
         db.flush()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Project name already exists") from exc
+        raise HTTPException(status_code=409, detail=_DETAIL_NAME_EXISTS) from exc
     if changes:
         _audit(db, actor, "project_updated", p.id,
                f"Updated project '{p.name}': " + "; ".join(changes))

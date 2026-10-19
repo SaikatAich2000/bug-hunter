@@ -10,8 +10,10 @@ export const agileApi = {
   board: (boardId) => api(`/agile/boards/${boardId}`),
   updateBoard: (boardId, body) => api(`/agile/boards/${boardId}`, json("PUT", body)),
   saveColumns: (boardId, body) => api(`/agile/boards/${boardId}/columns`, json("PUT", body)),
-  boardView: (boardId, sprintId) =>
-    api(`/agile/boards/${boardId}/view${sprintId ? `?sprint_id=${sprintId}` : ""}`),
+  boardView: (boardId, sprintId) => {
+    const query = sprintId ? `?sprint_id=${sprintId}` : "";
+    return api(`/agile/boards/${boardId}/view${query}`);
+  },
   planning: (boardId) => api(`/agile/boards/${boardId}/planning`),
   move: (boardId, body) => api(`/agile/boards/${boardId}/move`, json("POST", body)),
   transition: (itemId, body) => api(`/agile/work-items/${itemId}/transition`, json("POST", body)),

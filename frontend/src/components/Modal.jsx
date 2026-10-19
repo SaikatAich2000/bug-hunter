@@ -64,7 +64,7 @@ export default function Modal({
       cancelAnimationFrame(frame);
       const back = returnTo.current;
       returnTo.current = null;
-      if (back && back.isConnected && typeof back.focus === "function") back.focus({ preventScroll: true });
+      if (back?.isConnected && typeof back.focus === "function") back.focus({ preventScroll: true });
     };
   }, [open]);
 
@@ -76,7 +76,7 @@ export default function Modal({
       return;
     }
     const first = items[0];
-    const last = items[items.length - 1];
+    const last = items.at(-1);
     const active = document.activeElement;
     if (e.shiftKey && (active === first || active === cardRef.current)) {
       e.preventDefault();
@@ -90,10 +90,10 @@ export default function Modal({
   return (
     <div className="modal" id={id} hidden={!open && !closing} data-closing={!open && closing ? "" : undefined} data-bh-modal>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Tab trap for the dialog */}
-      <div
+      <div // NOSONAR S6819: portal dialog with its own focus trap and enter/exit animation; native <dialog> needs showModal() top-layer semantics
         ref={cardRef}
         className={`modal-card ${size} ${cardClass}`.trim()}
-        role="dialog"
+        role="dialog" /* NOSONAR S6819: portal dialog with its own focus trap and enter/exit animation; native <dialog> needs showModal() top-layer semantics */
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}

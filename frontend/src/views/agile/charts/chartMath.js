@@ -22,7 +22,7 @@ export function niceTicks(min, max, count = 5) {
   for (let v = start; v <= max + step * 1e-9; v += step) {
     ticks.push(Math.round(v * 1e6) / 1e6);
   }
-  if (ticks[ticks.length - 1] < max) ticks.push(Math.round((ticks[ticks.length - 1] + step) * 1e6) / 1e6);
+  if (ticks.at(-1) < max) ticks.push(Math.round((ticks.at(-1) + step) * 1e6) / 1e6);
   return ticks;
 }
 
@@ -57,7 +57,7 @@ export function bandPath(xs, upper, lower, x, y) {
 
 /** Midnight-aligned day ticks between two instants (local time), thinned to ``max``. */
 export function dayTicks(startMs, endMs, max = 10) {
-  if (!(endMs > startMs)) return [startMs];
+  if (endMs <= startMs) return [startMs];
   const first = new Date(startMs);
   first.setHours(0, 0, 0, 0);
   if (first.getTime() < startMs) first.setDate(first.getDate() + 1);

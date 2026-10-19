@@ -27,6 +27,7 @@ import { daysRemaining } from "./logic/backlog";
 import { categoryTotals, formatNumber, statisticUnit } from "./logic/estimates";
 
 const WIP_WARNING = /acknowledge to proceed/i;
+const WIP_TITLES = { over: "Over the column's maximum", under: "Under the column's minimum" };
 
 // What screen readers hear on a card: there is no keyboard drag on the board.
 const DND_ACCESSIBILITY = {
@@ -59,9 +60,9 @@ function Card({ card, epicsById, mode, columns, onOpen, onMove, onFlag }) {
   // its own buttons (key, title, actions) are what keyboard and screen-reader
   // users work with: the actions menu moves the card.
   return (
-    <div
+    <div // NOSONAR S6819: drag-and-drop wrapper; <fieldset>/<details> carry form/disclosure semantics that do not apply
       ref={setNodeRef}
-      role="group"
+      role="group" /* NOSONAR S6819: drag-and-drop wrapper; <fieldset>/<details> carry form/disclosure semantics that do not apply */
       className={`ag-card${card.flagged ? " flagged" : ""}${isDragging ? " dragging" : ""}${card.item_type === "Sub-task" ? " ag-card-sub" : ""}${card.can_edit ? " ag-draggable" : ""}`}
       data-issue-id={card.id}
       {...listeners}
@@ -98,7 +99,8 @@ function Card({ card, epicsById, mode, columns, onOpen, onMove, onFlag }) {
 function Cell({ id, column, children, dimmed }) {
   const { setNodeRef, isOver } = useDroppable({ id, data: { column } });
   return (
-    <div ref={setNodeRef} className={`ag-cell${isOver ? " drop-over" : ""}${dimmed ? " dimmed" : ""}`}
+    <div // NOSONAR S6819: drag-and-drop wrapper; <fieldset>/<details> carry form/disclosure semantics that do not apply
+      ref={setNodeRef} className={`ag-cell${isOver ? " drop-over" : ""}${dimmed ? " dimmed" : ""}`}
       role="group" data-category={column.category} aria-label={`${column.name} column`}>
       {children}
     </div>
@@ -273,12 +275,12 @@ export default function BoardPanel({ canManage, board, onOpenTab }) {
       </div>
 
       {data.unmapped.length > 0 && (
-        <p className="ag-notice" role="status">
+        <output className="ag-notice">
           {data.unmapped.length} issue{data.unmapped.length === 1 ? " is" : "s are"} not shown because
           {data.unmapped.length === 1 ? " its" : " their"} status ({[...new Set(data.unmapped.map((c) => c.status))].join(", ")})
           {" "}is not in any column.
           {canManage && <> <button type="button" className="ag-link" onClick={() => onOpenTab("settings")}>Map it in Board settings</button>.</>}
-        </p>
+        </output>
       )}
       {hidden > 0 && <p className="muted small">{hidden} card{hidden === 1 ? "" : "s"} hidden by quick filters.</p>}
 
@@ -293,7 +295,7 @@ export default function BoardPanel({ canManage, board, onOpenTab }) {
               return (
                 <div key={col.id} className={`ag-col-head ag-wip-${state}`} data-category={col.category}>
                   <span className="ag-col-name">{col.name}</span>
-                  <span className="ag-col-count" title={state === "over" ? "Over the column's maximum" : state === "under" ? "Under the column's minimum" : ""}>
+                  <span className="ag-col-count" title={WIP_TITLES[state] ?? ""}>
                     {count}
                     {col.min_cards != null && ` · min ${col.min_cards}`}
                     {col.wip_limit != null && ` · max ${col.wip_limit}`}

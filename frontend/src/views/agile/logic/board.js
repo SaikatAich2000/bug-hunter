@@ -47,10 +47,81 @@ export function applyQuickFilters(cards, active, { userId, customFilters = [], n
     if (selected.has("mine") && !(card.assignees || []).some((a) => a.id === userId)) return false;
     if (selected.has("recent")) {
       const updated = card.updated_at ? Date.parse(card.updated_at) : Number.NaN;
-      if (!(now - updated <= DAY_MS)) return false;
+      if (Number.isNaN(updated) || now - updated > DAY_MS) return false;
     }
     return custom.every((f) => matchesCustomFilter(card, f.filter_json || {}));
   });
+}
+
+function parentLaneTitle(card) {
+  const key = card.parent_display_id || `#${card.parent_id}`;
+  return `${key} ${card.parent_title || ""}`.trim();
+}
+
+function storyLanes(cards) {
+  const parentIds = new Set(cards.filter((c) => c.parent_id != null).map((c) => c.parent_id));
+  const lanes = new Map();
+  const other = [];
+  for (const card of cards) {
+    if (card.parent_id == null) {
+      if (!parentIds.has(card.id)) other.push(card);
+      continue;
+    }
+    if (!lanes.has(card.parent_id)) {
+      lanes.set(card.parent_id, {
+        key: `parent:${card.parent_id}`,
+        title: parentLaneTitle(card),
+        parentId: card.parent_id,
+        cards: [],
+      });
+    }
+    lanes.get(card.parent_id).cards.push(card);
+  }
+  // A parent whose Sub-tasks are on the board is represented by its lane.
+  const parents = new Map(cards.filter((c) => parentIds.has(c.id)).map((c) => [c.id, c]));
+  const out = [...lanes.values()].map((lane) => ({ ...lane, parent: parents.get(lane.parentId) || null }));
+  out.push({ key: "other", title: "Other issues", cards: other });
+  return out;
+}
+
+function assigneeLanes(cards, currentUserId) {
+  const lanes = new Map();
+  const unassigned = [];
+  for (const card of cards) {
+    const first = (card.assignees || [])[0];
+    if (!first) {
+      unassigned.push(card);
+      continue;
+    }
+    if (!lanes.has(first.id)) lanes.set(first.id, { key: `user:${first.id}`, title: first.name, cards: [] });
+    lanes.get(first.id).cards.push(card);
+  }
+  const mine = `user:${currentUserId}`;
+  const out = [...lanes.values()].sort((a, b) => {
+    if (a.key === mine) return -1;
+    if (b.key === mine) return 1;
+    return a.title.localeCompare(b.title);
+  });
+  out.push({ key: "unassigned", title: "Unassigned", cards: unassigned });
+  return out;
+}
+
+function epicLanes(cards, epics) {
+  const lanes = new Map(epics.map((e) => [e.id, { key: `epic:${e.id}`, title: e.title, color: e.color, cards: [] }]));
+  const none = [];
+  for (const card of cards) {
+    if (card.epic_id != null && lanes.has(card.epic_id)) lanes.get(card.epic_id).cards.push(card);
+    else none.push(card);
+  }
+  const out = [...lanes.values()].filter((lane) => lane.cards.length);
+  out.push({ key: "no-epic", title: "Issues without epic", cards: none });
+  return out;
+}
+
+function priorityLanes(cards) {
+  return PRIORITY_ORDER.map((p) => ({
+    key: `priority:${p}`, title: p, cards: cards.filter((c) => c.priority === p),
+  })).filter((lane) => lane.cards.length);
 }
 
 /**
@@ -60,70 +131,13 @@ export function applyQuickFilters(cards, active, { userId, customFilters = [], n
  * "Other issues".
  */
 export function buildSwimlanes(cards, mode, { epics = [], currentUserId } = {}) {
-  if (!mode || mode === "none") return [{ key: "all", title: "", cards }];
-  if (mode === "story") {
-    const parentIds = new Set(cards.filter((c) => c.parent_id != null).map((c) => c.parent_id));
-    const lanes = new Map();
-    const other = [];
-    for (const card of cards) {
-      if (card.parent_id != null) {
-        if (!lanes.has(card.parent_id)) {
-          lanes.set(card.parent_id, {
-            key: `parent:${card.parent_id}`,
-            title: `${card.parent_display_id || `#${card.parent_id}`} ${card.parent_title || ""}`.trim(),
-            parentId: card.parent_id,
-            cards: [],
-          });
-        }
-        lanes.get(card.parent_id).cards.push(card);
-      } else if (!parentIds.has(card.id)) {
-        other.push(card);
-      }
-    }
-    // A parent whose Sub-tasks are on the board is represented by its lane.
-    const parents = new Map(cards.filter((c) => parentIds.has(c.id)).map((c) => [c.id, c]));
-    const out = [...lanes.values()].map((lane) => ({ ...lane, parent: parents.get(lane.parentId) || null }));
-    out.push({ key: "other", title: "Other issues", cards: other });
-    return out;
+  switch (mode) {
+    case "story": return storyLanes(cards);
+    case "assignee": return assigneeLanes(cards, currentUserId);
+    case "epic": return epicLanes(cards, epics);
+    case "priority": return priorityLanes(cards);
+    default: return [{ key: "all", title: "", cards }];
   }
-  if (mode === "assignee") {
-    const lanes = new Map();
-    const unassigned = [];
-    for (const card of cards) {
-      const people = card.assignees || [];
-      if (!people.length) {
-        unassigned.push(card);
-        continue;
-      }
-      const first = people[0];
-      if (!lanes.has(first.id)) lanes.set(first.id, { key: `user:${first.id}`, title: first.name, cards: [] });
-      lanes.get(first.id).cards.push(card);
-    }
-    const out = [...lanes.values()].sort((a, b) => {
-      if (a.key === `user:${currentUserId}`) return -1;
-      if (b.key === `user:${currentUserId}`) return 1;
-      return a.title.localeCompare(b.title);
-    });
-    out.push({ key: "unassigned", title: "Unassigned", cards: unassigned });
-    return out;
-  }
-  if (mode === "epic") {
-    const lanes = new Map(epics.map((e) => [e.id, { key: `epic:${e.id}`, title: e.title, color: e.color, cards: [] }]));
-    const none = [];
-    for (const card of cards) {
-      if (card.epic_id != null && lanes.has(card.epic_id)) lanes.get(card.epic_id).cards.push(card);
-      else none.push(card);
-    }
-    const out = [...lanes.values()].filter((lane) => lane.cards.length);
-    out.push({ key: "no-epic", title: "Issues without epic", cards: none });
-    return out;
-  }
-  if (mode === "priority") {
-    return PRIORITY_ORDER.map((p) => ({
-      key: `priority:${p}`, title: p, cards: cards.filter((c) => c.priority === p),
-    })).filter((lane) => lane.cards.length);
-  }
-  return [{ key: "all", title: "", cards }];
 }
 
 /** Column constraint colouring: over the max or under the min. */

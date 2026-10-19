@@ -55,7 +55,7 @@ export function isEpic(type) {
  * Types selectable in edit mode: the convertible set plus the item's own type
  * (an Epic or Sub-task stays visible but cannot be converted from here).
  */
-export function itemTypeSelectionForEdit(itemType) {
+export function itemTypeSelectionForEdit(itemType = "Bug") {
   const own = itemType || "Bug";
   if (!CONVERTIBLE_ITEM_TYPES.includes(own)) return [own];
   return [...CONVERTIBLE_ITEM_TYPES];

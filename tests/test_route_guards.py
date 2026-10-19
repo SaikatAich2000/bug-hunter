@@ -6,6 +6,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.auth import COOKIE_NAME
+
 
 def test_cov_is_current_false_on_unparseable_cookie(client):
     """`_is_current` returns False for a missing or malformed session cookie."""
@@ -19,7 +21,7 @@ def test_cov_is_current_false_on_unparseable_cookie(client):
     # No cookie at all.
     assert sessions._is_current(_Req({}), sess) is False
     # Cookie present but not a valid token.
-    assert sessions._is_current(_Req({sessions.COOKIE_NAME: "not-a-real-token"}), sess) is False
+    assert sessions._is_current(_Req({COOKIE_NAME: "not-a-real-token"}), sess) is False
 
 
 def test_cov_last_admin_guardrail_blocks_demoting_sole_admin(client):

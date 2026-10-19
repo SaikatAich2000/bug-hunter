@@ -14,8 +14,8 @@ function firstParagraph(md) {
 export const GUIDES = Object.entries(files)
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([path, md]) => {
-    const id = path.replace(/^.*\/\d*-?/, "").replace(/\.md$/, "");
-    const title = /^#\s+(.+)$/m.exec(md)?.[1] ?? id;
+    const id = path.slice(path.lastIndexOf("/") + 1).replace(/^\d*-?/, "").replace(/\.md$/, "");
+    const title = /^#[ \t]+(\S.*)$/m.exec(md)?.[1] ?? id;
     return { id, title, summary: firstParagraph(md), markdown: md };
   });
 

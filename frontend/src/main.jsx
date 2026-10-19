@@ -25,22 +25,21 @@ if (collapsed) {
   document.body.classList.add("sidebar-collapsed");
 }
 
-async function boot() {
-  let me;
+/** The signed-in user, or null after redirecting to the login page. */
+async function loadSession() {
   try {
     const res = await fetch("/api/auth/me", { credentials: "include" });
-    if (!res.ok) {
-      location.replace("/login.html");
-      return;
-    }
-    me = (await res.json());
+    if (res.ok) return await res.json();
   } catch {
-    location.replace("/login.html");
-    return;
+    /* treated like an expired session */
   }
+  location.replace("/login.html");
+  return null;
+}
 
-  const root = document.getElementById("root");
-  if (!root) return;
+const me = await loadSession();
+const root = me ? document.getElementById("root") : null;
+if (root) {
   createRoot(root).render(
     <StrictMode>
       <AppProvider me={me}>
@@ -49,5 +48,3 @@ async function boot() {
     </StrictMode>,
   );
 }
-
-void boot();

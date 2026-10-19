@@ -16,6 +16,8 @@ from app.schemas.common import (
 )
 from app.schemas.users import UserBrief
 
+_SPRINT_NAME_LABEL = "Sprint name"
+
 
 # --- Sprints ---
 class SprintCreateIn(BaseModel):
@@ -29,7 +31,7 @@ class SprintCreateIn(BaseModel):
     @field_validator("name")
     @classmethod
     def _strip_name(cls, v: str) -> str:
-        return _strip_and_check_min_length(v, _AGILE_NAME_MIN, "Sprint name")
+        return _strip_and_check_min_length(v, _AGILE_NAME_MIN, _SPRINT_NAME_LABEL)
 
     @field_validator("goal")
     @classmethod
@@ -77,7 +79,7 @@ class SprintUpdateIn(BaseModel):
     def _strip_name(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        return _strip_and_check_min_length(v, _AGILE_NAME_MIN, "Sprint name")
+        return _strip_and_check_min_length(v, _AGILE_NAME_MIN, _SPRINT_NAME_LABEL)
 
     @field_validator("goal")
     @classmethod
@@ -193,7 +195,7 @@ class SprintStartIn(BaseModel):
     def _strip_name(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        return _strip_and_check_min_length(v, _AGILE_NAME_MIN, "Sprint name")
+        return _strip_and_check_min_length(v, _AGILE_NAME_MIN, _SPRINT_NAME_LABEL)
 
     @field_validator("goal")
     @classmethod

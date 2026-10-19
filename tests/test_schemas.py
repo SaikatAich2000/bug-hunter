@@ -811,3 +811,134 @@ def test_bulk_action_dedup_skips_duplicate_id():
     from app.schemas import BulkActionIn
     ba = BulkActionIn(action="delete", ids=[5, 5, 7, 5])
     assert ba.ids == [5, 7]
+
+
+# --- agile and git payload validators --------------------------------------------------------
+
+def _rejects(model, **fields):
+    with pytest.raises(ValidationError) as excinfo:
+        model(**fields)
+    return str(excinfo.value)
+
+
+def test_sprint_payloads_normalise_blank_values_and_reject_bad_ones():
+    import importlib
+
+    m = importlib.import_module("app.schemas.agile_sprints")
+
+    blank = m.SprintCreateIn(name="Sprint", cadence="", start_date="", end_date="")
+    assert (blank.cadence, blank.start_date, blank.end_date) == (None, None, None)
+    assert m.SprintCreateIn(name="Sprint", cadence="weekly").cadence == "weekly"
+    assert "cadence must be one of" in _rejects(m.SprintCreateIn, name="Sprint", cadence="hourly")
+    assert "YYYY-MM-DD" in _rejects(m.SprintCreateIn, name="Sprint", start_date="03/04/2026")
+    assert "end_date cannot be before" in _rejects(m.SprintCreateIn, name="Sprint",
+                                                    start_date="2026-03-05", end_date="2026-03-01")
+
+    update = m.SprintUpdateIn(version=1)
+    assert (update.name, update.goal, update.cadence, update.start_date) == (None, None, None, None)
+    assert m.SprintUpdateIn(version=1, cadence="", start_date="").cadence is None
+    assert "cadence must be one of" in _rejects(m.SprintUpdateIn, version=1, cadence="hourly")
+    assert "YYYY-MM-DD" in _rejects(m.SprintUpdateIn, version=1, end_date="soon")
+
+    start = m.SprintStartIn(version=1)
+    assert (start.name, start.goal, start.start_date) == (None, None, None)
+    assert "YYYY-MM-DD" in _rejects(m.SprintStartIn, version=1, start_date="soon")
+    assert "target_sprint_id is required" in _rejects(m.SprintDispositionEntry, item_id=1, destination="sprint")
+    assert m.SprintItemsAddIn(item_ids=[3, 3, 4]).item_ids == [3, 4]
+
+
+def test_board_settings_validate_names_modes_and_working_days():
+    import importlib
+
+    m = importlib.import_module("app.schemas.agile_boards")
+
+    assert m.BoardUpdateIn(version=1).name is None
+    assert m.BoardUpdateIn(version=1, name="  Team board ").name == "Team board"
+    assert m.BoardUpdateIn(version=1, swimlane_mode="assignee").swimlane_mode == "assignee"
+    assert m.BoardUpdateIn(version=1, wip_enforcement="block").wip_enforcement == "block"
+    assert m.BoardUpdateIn(version=1, card_color_scheme="priority").card_color_scheme == "priority"
+    assert m.BoardUpdateIn(version=1, working_weekdays=[5, 1, 1]).working_weekdays == [1, 5]
+    assert m.BoardUpdateIn(version=1, working_weekdays=None).working_weekdays is None
+    assert "ISO weekday" in _rejects(m.BoardUpdateIn, version=1, working_weekdays=[0, 3])
+    assert "swimlane_mode" in _rejects(m.BoardUpdateIn, version=1, swimlane_mode="diagonal")
+
+
+def test_capacity_days_off_must_be_real_dates():
+    import importlib
+
+    m = importlib.import_module("app.schemas.agile_planning")
+
+    ok = m.SprintCapacityIn(user_id=1, capacity_value=5, capacity_unit="points", days_off=["2026-03-04"])
+    assert ok.days_off == ["2026-03-04"]
+    assert "days_off entries must be YYYY-MM-DD" in _rejects(
+        m.SprintCapacityIn, user_id=1, capacity_value=5, capacity_unit="points", days_off=["tomorrow"])
+
+
+def test_epic_version_and_component_payloads():
+    import importlib
+
+    m = importlib.import_module("app.schemas.agile_taxonomy")
+
+    epic = m.EpicUpdateIn(version=1)
+    assert (epic.title, epic.description, epic.start_date, epic.health) == (None, None, None, None)
+    assert m.EpicUpdateIn(version=1, start_date="", summary_note="<b>x</b>").start_date is None
+    assert "YYYY-MM-DD" in _rejects(m.EpicUpdateIn, version=1, target_date="later")
+    assert m.EpicUpdateIn(version=1, health="at_risk").health == "at_risk"
+
+    assert m.VersionCreateIn(project_id=1, name="v1", start_date="", release_date="").release_date is None
+    assert "YYYY-MM-DD" in _rejects(m.VersionCreateIn, project_id=1, name="v1", release_date="soon")
+    assert "release date" in _rejects(m.VersionCreateIn, project_id=1, name="v1",
+                                      start_date="2026-03-05", release_date="2026-03-01").lower()
+    assert m.ComponentCreateIn(project_id=1, name="API", default_assignee_policy="lead").default_assignee_policy == "lead"
+    assert m.ComponentUpdateIn(version=1, default_assignee_policy="lead").default_assignee_policy == "lead"
+    assert m.ComponentUpdateIn(version=1).default_assignee_policy is None
+    assert "default_assignee_policy" in _rejects(m.ComponentUpdateIn, version=1, default_assignee_policy="nobody")
+
+
+def test_work_item_payload_dates_and_filters():
+    import importlib
+
+    m = importlib.import_module("app.schemas.agile_items")
+
+    item = m.AgileWorkItemCreateIn(project_id=1, title="Story", item_type="story", start_date="", end_date="")
+    assert (item.start_date, item.end_date) == (None, None)
+    assert m.AgileWorkItemCreateIn(project_id=1, title="Story", item_type="story", priority="high").priority
+    assert "YYYY-MM-DD" in _rejects(m.AgileWorkItemCreateIn, project_id=1, title="Story", item_type="story",
+                                    start_date="soon")
+    assert "cannot precede" in _rejects(m.AgileWorkItemCreateIn, project_id=1, title="Story", item_type="story",
+                                        start_date="2026-03-05", end_date="2026-03-01")
+    assert m.WorkItemDatesIn(version=1, start_date="").start_date is None
+    assert "cannot precede" in _rejects(m.WorkItemDatesIn, version=1, start_date="2026-03-05",
+                                        end_date="2026-03-01")
+    assert m.QuickFilterUpdateIn(version=1, filter_json={"assignee": "me"}).filter_json == {"assignee": "me"}
+
+
+def test_git_configuration_payloads_are_validated_strictly():
+    import importlib
+
+    m = importlib.import_module("app.schemas.git")
+
+    assert m.GitIntegrationIn(base_url="").base_url == ""
+    assert m.GitIntegrationIn(base_url="http://localhost:8080").base_url == "http://localhost:8080"
+    assert "https" in _rejects(m.GitIntegrationIn, base_url="http://ghe.example.com")
+    assert "credentials" in _rejects(m.GitIntegrationIn, base_url="https://user:pw@ghe.example.com")
+    assert "base URL" in _rejects(m.GitIntegrationIn, base_url="ftp://ghe.example.com/path")
+    assert "branch name" in _rejects(m.GitIntegrationIn, default_base_branch="bad..name")
+    assert "required" in _rejects(m.GitIntegrationIn, default_base_branch="  ")
+    assert "whitespace" in _rejects(m.GitIntegrationIn, organization="two words")
+    assert "not a URL" in _rejects(m.GitIntegrationIn, organization="https://ghe.example.com/acme")
+    assert "whitespace" in _rejects(m.GitIntegrationIn, credential="has space")
+    assert m.GitIntegrationIn(credential="   ").credential is None
+    assert "not both" in _rejects(m.GitIntegrationIn, credential="abcdefgh", clear_credential=True)
+
+    draft = m.GitConnectionDraftIn()
+    assert (draft.organization, draft.default_base_branch) == (None, None)
+    assert m.GitConnectionDraftIn(organization="acme", default_base_branch="  ").default_base_branch == ""
+    assert m.GitConnectionDraftIn(default_base_branch="release/1.0").default_base_branch == "release/1.0"
+    assert "branch name" in _rejects(m.GitConnectionDraftIn, default_base_branch="a//b")
+
+    create = m.GitBranchCreateIn(provider_repo_id="42", base_branch="dev")
+    assert create.provider_repo_id == "42"
+    assert "numeric" in _rejects(m.GitBranchCreateIn, provider_repo_id="abc", base_branch="dev")
+    assert "required" in _rejects(m.GitBranchCreateIn, provider_repo_id="  ", base_branch="dev")
+    assert "required" in _rejects(m.GitBranchCreateIn, provider_repo_id="42", base_branch="  ")

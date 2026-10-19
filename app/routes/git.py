@@ -180,12 +180,20 @@ def _get_project_or_404(db: Session, project_id: int, user: User) -> Project:
     project = db.get(Project, project_id)
     # 404 not 403: project scoping must never leak what exists.
     # Documented on every route via _CONFIG_RESPONSES/_DISCOVERY_RESPONSES
-    # (Sonar S8415: this helper raises inside config/discovery/branch routes).
+    # This helper raises inside config/discovery/branch routes.
     if project is None or not can_access_project(
         accessible_project_ids(db, user), project_id
     ):
+        # Why: helper shared by routes; every route that calls it lists this status in its `responses`.
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)  # NOSONAR(S8415)
     return project
+
+
+def _resolve_text(override: str | None, saved: str | None, fallback: str | None) -> str:
+    """An explicit draft value as-is (blank included), else the saved value, else the environment default."""
+    if override is not None:
+        return override.strip()
+    return (saved or "").strip() or (fallback or "").strip()
 
 
 def build_provider(
@@ -214,22 +222,12 @@ def build_provider(
     all provider calls.
     """
     settings = get_settings()
-    # None = no override supplied; an explicit blank is tested as-is.
-    if base_url is None:
-        if config is not None and (config.base_url or "").strip():
-            resolved_base_url = (config.base_url or "").strip()
-        else:
-            resolved_base_url = (settings.GITHUB_API_URL or "").strip()
-    else:
-        resolved_base_url = (base_url or "").strip()
-
-    if organization is None:
-        if config is not None and (config.organization or "").strip():
-            resolved_organization = (config.organization or "").strip()
-        else:
-            resolved_organization = (settings.GITHUB_ORGANIZATION or "").strip()
-    else:
-        resolved_organization = (organization or "").strip()
+    resolved_base_url = _resolve_text(
+        base_url, config.base_url if config is not None else None, settings.GITHUB_API_URL
+    )
+    resolved_organization = _resolve_text(
+        organization, config.organization if config is not None else None, settings.GITHUB_ORGANIZATION
+    )
 
     return GitHubEnterpriseProvider(
         base_url=resolved_base_url,
@@ -256,6 +254,74 @@ def _verified_provider_metadata(
             return candidate
     raise HTTPException(status_code=404, detail=_DETAIL_REPOSITORY_UNREACHABLE)
 
+def _identity_query(project_id: int, provider_name: str, provider_repo_id: str):
+    return select(ProjectRepository).where(
+        ProjectRepository.project_id == project_id,
+        ProjectRepository.provider == provider_name,
+        ProjectRepository.provider_repo_id == provider_repo_id,
+    )
+
+
+def _legacy_repository(db: Session, project_id: int, metadata: ProviderRepository) -> ProjectRepository | None:
+    """The one row matched on verified owner/name that never carried a provider id."""
+    return db.scalar(
+        select(ProjectRepository).where(
+            ProjectRepository.project_id == project_id,
+            ProjectRepository.provider_repo_id == "",
+            func.lower(ProjectRepository.name) == metadata.name.lower(),
+            ProjectRepository.owner.in_([metadata.owner, ""] if metadata.owner else [""]),
+        ).order_by(ProjectRepository.id)
+    )
+
+
+def _new_repository(
+    db: Session, project_id: int, provider_name: str, metadata: ProviderRepository,
+    config: ProjectGitConfig | None,
+) -> tuple[ProjectRepository, bool]:
+    """Insert the identity; (row, created). A concurrent insert of the same identity wins."""
+    repository = ProjectRepository(
+        project_id=project_id,
+        provider=provider_name,
+        provider_repo_id=metadata.provider_repo_id,
+        name=metadata.name,
+        owner=metadata.owner,
+        url=metadata.url,
+        default_base_branch=(
+            (config.default_base_branch if config is not None else "")
+            or metadata.default_branch
+            or get_settings().GITHUB_DEFAULT_BASE_BRANCH
+        ),
+        active=True,
+        branch_creation_enabled=True,
+        last_checked_at=utcnow(),
+    )
+    db.add(repository)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        winner = db.scalar(_identity_query(project_id, provider_name, metadata.provider_repo_id))
+        if winner is None:
+            raise
+        return winner, False
+    return repository, True
+
+
+def _refresh_repository(repository: ProjectRepository, metadata: ProviderRepository) -> list[str]:
+    """Safe metadata refresh: a renamed repository keeps its row id and every branch-history reference."""
+    changed = []
+    if (repository.name or "") != metadata.name:
+        changed.append(f"name: {repository.name!r} -> {metadata.name!r}")
+        repository.name = metadata.name
+    if metadata.owner and (repository.owner or "") != metadata.owner:
+        changed.append(f"owner: {repository.owner!r} -> {metadata.owner!r}")
+        repository.owner = metadata.owner
+    if metadata.url and (repository.url or "") != metadata.url:
+        repository.url = metadata.url
+    repository.last_checked_at = utcnow()
+    return changed
+
+
 def _repository_identity_from_provider(
     db: Session,
     *,
@@ -275,81 +341,22 @@ def _repository_identity_from_provider(
     provider_name = (
         (config.provider if config is not None else "") or "github_enterprise"
     )
-    repository = db.scalar(
-        select(ProjectRepository).where(
-            ProjectRepository.project_id == project_id,
-            ProjectRepository.provider == provider_name,
-            ProjectRepository.provider_repo_id == metadata.provider_repo_id,
-        )
-    )
+    repository = db.scalar(_identity_query(project_id, provider_name, metadata.provider_repo_id))
     if repository is None:
-        # Legacy reconciliation: one row matched on verified owner/name that
-        # never carried a provider id adopts the provider identity.
-        legacy = db.scalar(
-            select(ProjectRepository).where(
-                ProjectRepository.project_id == project_id,
-                ProjectRepository.provider_repo_id == "",
-                func.lower(ProjectRepository.name) == metadata.name.lower(),
-                ProjectRepository.owner.in_(
-                    [metadata.owner, ""] if metadata.owner else [""]
-                ),
-            ).order_by(ProjectRepository.id)
-        )
-        if legacy is not None:
-            legacy.provider = provider_name
-            legacy.provider_repo_id = metadata.provider_repo_id
-            repository = legacy
+        repository = _legacy_repository(db, project_id, metadata)
+        if repository is not None:
+            repository.provider = provider_name
+            repository.provider_repo_id = metadata.provider_repo_id
     if repository is None:
-        repository = ProjectRepository(
-            project_id=project_id,
-            provider=provider_name,
-            provider_repo_id=metadata.provider_repo_id,
-            name=metadata.name,
-            owner=metadata.owner,
-            url=metadata.url,
-            default_base_branch=(
-                (config.default_base_branch if config is not None else "")
-                or metadata.default_branch
-                or get_settings().GITHUB_DEFAULT_BASE_BRANCH
-            ),
-            active=True,
-            branch_creation_enabled=True,
-            last_checked_at=utcnow(),
-        )
-        db.add(repository)
-        try:
-            db.flush()
-        except IntegrityError:
-            # A concurrent request created the same identity first; its row wins.
-            db.rollback()
-            repository = db.scalar(
-                select(ProjectRepository).where(
-                    ProjectRepository.project_id == project_id,
-                    ProjectRepository.provider == provider_name,
-                    ProjectRepository.provider_repo_id == metadata.provider_repo_id,
-                )
+        repository, created = _new_repository(db, project_id, provider_name, metadata, config)
+        if created:
+            _audit(
+                db, None, "git_repository_identity_created", repository.id,
+                f"project={project_id} repository={metadata.full_name} "
+                f"provider_repo_id={metadata.provider_repo_id}",
             )
-            if repository is None:
-                raise
-            return repository
-        _audit(
-            db, None, "git_repository_identity_created", repository.id,
-            f"project={project_id} repository={metadata.full_name} "
-            f"provider_repo_id={metadata.provider_repo_id}",
-        )
         return repository
-    # Safe metadata refresh only — a renamed repository keeps its row id and
-    # every branch-history reference.
-    changed = []
-    if (repository.name or "") != metadata.name:
-        changed.append(f"name: {repository.name!r} -> {metadata.name!r}")
-        repository.name = metadata.name
-    if metadata.owner and (repository.owner or "") != metadata.owner:
-        changed.append(f"owner: {repository.owner!r} -> {metadata.owner!r}")
-        repository.owner = metadata.owner
-    if metadata.url and (repository.url or "") != metadata.url:
-        repository.url = metadata.url
-    repository.last_checked_at = utcnow()
+    changed = _refresh_repository(repository, metadata)
     if changed:
         _audit(
             db, None, "git_repository_identity_updated", repository.id,
@@ -357,6 +364,7 @@ def _repository_identity_from_provider(
             + "; ".join(changed),
         )
     return repository
+
 
 def _resolve_creation_repository(
     db: Session,
@@ -732,24 +740,7 @@ def _preview_route(
         provider_repo_id=provider_repo_id, base_branch=base_branch,
     )
 
-def _remove_branch_record(
-    db: Session, branch_record_id: int, expected_version: int | None, actor: User
-) -> WorkItemBranch:
-    """Remove exactly one tracked feature branch (project-member action).
-
-    Every destructive field is derived from the stored record: the stored
-    ``refs/heads/<name>`` ref, the stored repository identity and the stored
-    project. The browser supplies only the record id (and its expected
-    version); it can never steer what is deleted.
-    """
-    row = db.get(WorkItemBranch, branch_record_id)
-    # Scoped 404: a record of another project is simply invisible. This is the
-    # whole authorization: removal is a project-level action available to any
-    # project member (the user role included); outsiders get the same 404.
-    if row is None or not can_access_project(
-        accessible_project_ids(db, actor), row.project_id
-    ):
-        raise HTTPException(status_code=404, detail="Branch record was not found")
+def _require_removal_allowed(row: WorkItemBranch, expected_version: int | None) -> None:
     if not get_settings().GIT_BRANCH_DELETION_ENABLED:
         raise HTTPException(
             status_code=403,
@@ -771,18 +762,24 @@ def _remove_branch_record(
         raise HTTPException(
             status_code=409, detail="This branch has already been removed"
         )
-    ref = row.provider_branch_ref or ""
-    if (
-        not ref.startswith("refs/heads/")
-        or "*" in ref
-        or ref != f"refs/heads/{row.branch_name}"
-        or not row.branch_name.startswith("feature_")
-    ):
+
+
+def _require_exact_feature_ref(row: WorkItemBranch, ref: str) -> None:
+    exact = (
+        ref.startswith("refs/heads/")
+        and "*" not in ref
+        and ref == f"refs/heads/{row.branch_name}"
+        and row.branch_name.startswith("feature_")
+    )
+    if not exact:
         raise HTTPException(
             status_code=409,
             detail="The stored branch record has no exact provider ref; "
             "it cannot be removed safely",
         )
+
+
+def _require_not_protected(db: Session, row: WorkItemBranch) -> None:
     short_name = row.branch_name
     if (
         short_name.lower() in _PROTECTED_BRANCH_NAMES
@@ -793,9 +790,10 @@ def _remove_branch_record(
             status_code=409,
             detail="A base or protected branch cannot be removed here",
         )
-    repository = None
-    if row.repository_id is not None:
-        repository = db.get(ProjectRepository, row.repository_id)
+
+
+def _require_repository_identity(db: Session, row: WorkItemBranch) -> ProjectRepository:
+    repository = db.get(ProjectRepository, row.repository_id) if row.repository_id is not None else None
     if (
         repository is None
         or not (row.provider_repo_id or repository.provider_repo_id or "").strip()
@@ -806,6 +804,32 @@ def _remove_branch_record(
             detail="The repository identity for this branch is no longer available; "
             "it cannot be removed safely",
         )
+    return repository
+
+
+def _remove_branch_record(
+    db: Session, branch_record_id: int, expected_version: int | None, actor: User
+) -> WorkItemBranch:
+    """Remove exactly one tracked feature branch (project-member action).
+
+    Every destructive field is derived from the stored record: the stored
+    ``refs/heads/<name>`` ref, the stored repository identity and the stored
+    project. The browser supplies only the record id (and its expected
+    version); it can never steer what is deleted.
+    """
+    row = db.get(WorkItemBranch, branch_record_id)
+    # Scoped 404: a record of another project is simply invisible. This is the
+    # whole authorization: removal is a project-level action available to any
+    # project member (the user role included); outsiders get the same 404.
+    if row is None or not can_access_project(
+        accessible_project_ids(db, actor), row.project_id
+    ):
+        raise HTTPException(status_code=404, detail="Branch record was not found")
+    _require_removal_allowed(row, expected_version)
+    ref = row.provider_branch_ref or ""
+    _require_exact_feature_ref(row, ref)
+    _require_not_protected(db, row)
+    repository = _require_repository_identity(db, row)
 
     config = get_config_row(db, row.project_id)
     provider = build_provider(config)

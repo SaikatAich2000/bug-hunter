@@ -341,7 +341,7 @@ def test_cached_budget_memoizes(monkeypatch):
     llm._cached_budget()
     llm._cached_budget()
     assert calls["n"] == 1   # second call served from cache
-    llm._budget_cache = None
+    monkeypatch.setattr(llm, "_budget_cache", None)
     llm._cached_budget()
     assert calls["n"] == 2   # cache cleared → recomputed
 

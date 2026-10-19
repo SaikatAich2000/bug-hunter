@@ -390,6 +390,87 @@ class Settings:
     GITHUB_BRANCH_TITLE_MAX_LENGTH: int = env_int(
         "GITHUB_BRANCH_TITLE_MAX_LENGTH", 25, minimum=1
     )
+    # --- Listener (python -m app.main) ---
+    UVICORN_HOST: str = os.getenv("UVICORN_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    UVICORN_PORT: int = env_int("UVICORN_PORT", 8000, minimum=1)
+
+    # --- Rate limits (in-memory sliding windows, per worker) ---
+    # Auth endpoints, per client IP, within RATE_AUTH_WINDOW_SECONDS.
+    RATE_AUTH_WINDOW_SECONDS: int = env_int("RATE_AUTH_WINDOW_SECONDS", 60, minimum=1)
+    RATE_LOGIN_MAX: int = env_int("RATE_LOGIN_MAX", 8, minimum=1)
+    RATE_FORGOT_PASSWORD_MAX: int = env_int("RATE_FORGOT_PASSWORD_MAX", 3, minimum=1)
+    RATE_RESET_PASSWORD_MAX: int = env_int("RATE_RESET_PASSWORD_MAX", 5, minimum=1)
+    RATE_CHANGE_PASSWORD_MAX: int = env_int("RATE_CHANGE_PASSWORD_MAX", 5, minimum=1)
+    # Per-user limits (attachment uploads, comments, Sleuth chat asks) within
+    # RATE_USER_WINDOW_SECONDS.
+    RATE_USER_WINDOW_SECONDS: int = env_int("RATE_USER_WINDOW_SECONDS", 60, minimum=1)
+    RATE_UPLOAD_MAX: int = env_int("RATE_UPLOAD_MAX", 20, minimum=1)
+    RATE_COMMENT_MAX: int = env_int("RATE_COMMENT_MAX", 30, minimum=1)
+    RATE_CHAT_MAX: int = env_int("RATE_CHAT_MAX", 30, minimum=1)
+
+    # --- Login lockout (app/account_lockout.py) ---
+    LOGIN_FAIL_LIMIT: int = env_int("LOGIN_FAIL_LIMIT", 10, minimum=1)
+    LOGIN_FAIL_EMAIL_LIMIT: int = env_int("LOGIN_FAIL_EMAIL_LIMIT", 50, minimum=1)
+    LOGIN_FAIL_WINDOW_SECONDS: int = env_int("LOGIN_FAIL_WINDOW_SECONDS", 900, minimum=1)
+    LOGIN_LOCKOUT_SECONDS: int = env_int("LOGIN_LOCKOUT_SECONDS", 900, minimum=1)
+
+    # --- Paging and size limits ---
+    PAGE_SIZE_DEFAULT: int = env_int("PAGE_SIZE_DEFAULT", 50, minimum=1)
+    PAGE_SIZE_MAX: int = max(env_int("PAGE_SIZE_MAX", 200, minimum=1), PAGE_SIZE_DEFAULT)
+    MAX_ATTACHMENT_BYTES: int = env_int("MAX_ATTACHMENT_BYTES", 50 * 1024 * 1024, minimum=1)
+
+    # --- Third-party endpoints (https only; never put credentials in a URL) ---
+    HIBP_API_URL: str = (
+        os.getenv("HIBP_API_URL", "https://api.pwnedpasswords.com/range/").strip()
+        or "https://api.pwnedpasswords.com/range/"
+    )
+    HIBP_TIMEOUT_SECONDS: float = env_float("HIBP_TIMEOUT_SECONDS", 3.0, minimum=0.5)
+    GROQ_API_URL: str = (
+        os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions").strip()
+        or "https://api.groq.com/openai/v1/chat/completions"
+    )
+    OPENROUTER_API_URL: str = (
+        os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions").strip()
+        or "https://openrouter.ai/api/v1/chat/completions"
+    )
+    GEMINI_API_BASE_URL: str = (
+        os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip().rstrip("/")
+        or "https://generativelanguage.googleapis.com/v1beta"
+    )
+    # Space-separated origins added to the CSP connect-src when web push is on.
+    FCM_CONNECT_SRC: str = os.getenv(
+        "FCM_CONNECT_SRC",
+        "https://fcm.googleapis.com https://fcmregistrations.googleapis.com "
+        "https://firebaseinstallations.googleapis.com https://www.googleapis.com",
+    ).strip()
+
+    # --- Limits, caps, TTLs (defaults = previous built-in values) ---
+    IMPORT_MAX_ROWS: int = env_int("IMPORT_MAX_ROWS", 1000, minimum=1)
+    IMPORT_MAX_FILE_BYTES: int = env_int("IMPORT_MAX_FILE_BYTES", 10 * 1024 * 1024, minimum=1024)
+    MAX_ASSET_FILE_BYTES: int = env_int("MAX_ASSET_FILE_BYTES", 8 * 1024 * 1024, minimum=1024)
+    LAST_SEEN_THROTTLE_SECONDS: int = env_int("LAST_SEEN_THROTTLE_SECONDS", 60, minimum=0)
+    DB_POOL_RECYCLE_SECONDS: int = env_int("DB_POOL_RECYCLE_SECONDS", 1800, minimum=30)
+    IDEMPOTENCY_EXPIRY_HOURS: int = env_int("IDEMPOTENCY_EXPIRY_HOURS", 24, minimum=1)
+    DEFAULT_SPRINT_DAYS: int = env_int("DEFAULT_SPRINT_DAYS", 14, minimum=1)
+    BACKLOG_DEFAULT_LIMIT: int = env_int("BACKLOG_DEFAULT_LIMIT", 300, minimum=1)
+    RETENTION_BATCH_SIZE: int = env_int("RETENTION_BATCH_SIZE", 1000, minimum=1)
+    RETENTION_FIRST_DELAY_SECONDS: int = env_int("RETENTION_FIRST_DELAY_SECONDS", 300, minimum=0)
+    RETENTION_INTERVAL_SECONDS: int = env_int("RETENTION_INTERVAL_SECONDS", 24 * 3600, minimum=60)
+    GITHUB_RETRY_BACKOFF_SECONDS: float = env_float("GITHUB_RETRY_BACKOFF_SECONDS", 0.5, minimum=0.0)
+    # Browser poll intervals (seconds), served to the SPA by GET /api/meta.
+    DATA_POLL_SECONDS: int = env_int("DATA_POLL_SECONDS", 30, minimum=5)
+    SESSION_POLL_SECONDS: int = env_int("SESSION_POLL_SECONDS", 30, minimum=5)
+    NOTIFICATION_POLL_SECONDS: int = env_int("NOTIFICATION_POLL_SECONDS", 15, minimum=5)
+    # Sleuth: chat memory, confirmation window, export cache, bulk cap, upload size, LLM breaker.
+    SLEUTH_MEMORY_MAX_SESSIONS: int = env_int("SLEUTH_MEMORY_MAX_SESSIONS", 200, minimum=1)
+    SLEUTH_MEMORY_TTL_SECONDS: int = env_int("SLEUTH_MEMORY_TTL_SECONDS", 30 * 60, minimum=1)
+    SLEUTH_CONFIRM_TTL_SECONDS: int = env_int("SLEUTH_CONFIRM_TTL_SECONDS", 5 * 60, minimum=1)
+    SLEUTH_EXPORT_TTL_SECONDS: int = env_int("SLEUTH_EXPORT_TTL_SECONDS", 30 * 60, minimum=1)
+    SLEUTH_EXPORT_MAX_ENTRIES: int = env_int("SLEUTH_EXPORT_MAX_ENTRIES", 50, minimum=1)
+    SLEUTH_BULK_ACTION_CAP: int = env_int("SLEUTH_BULK_ACTION_CAP", 500, minimum=1)
+    SLEUTH_INGEST_MAX_BYTES: int = env_int("SLEUTH_INGEST_MAX_BYTES", 5 * 1024 * 1024, minimum=1024)
+    SLEUTH_CLOUD_COOLDOWN_S: float = env_float("SLEUTH_CLOUD_COOLDOWN_S", 45.0, minimum=1)
+
     # Used by fail-closed startup checks. COOKIE_SECURE=true is treated as
     # production even when APP_ENV says development: the secure-cookie switch
     # is the deployment's own claim that it serves over HTTPS.

@@ -19,6 +19,8 @@ def _doc(*codes: int) -> dict[str, dict[str, str]]:
     return {str(c): {"description": ""} for c in codes}
 
 
+#: Per-client attempt limiter on the credential endpoints.
+RATE_LIMITED_429: Final = _doc(429)
 #: Wrong credentials / not signed in.
 AUTH_401: Final = _doc(401)
 #: Current-password mismatch or same-password change.
@@ -46,18 +48,34 @@ BAD_REQUEST_NOT_FOUND_404: Final = _doc(400, 404)
 XLSX_MIME: Final = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _file_200(description: str, *mimes: str) -> dict[str, dict]:
-    """A 200 whose body is a file, so clients don't expect JSON."""
+def _file_200(description: str, *mimes: str, errors: tuple[int, ...] = ()) -> dict[str, dict]:
+    """A 200 whose body is a file, so clients don't expect JSON, plus the error codes the route raises."""
     schema = {"type": "string", "format": "binary"}
-    return {"200": {"description": description, "content": {m: {"schema": schema} for m in mimes}}}
+    docs: dict[str, dict] = {"200": {"description": description, "content": {m: {"schema": schema} for m in mimes}}}
+    docs.update({str(c): {"description": ""} for c in errors})
+    return docs
 
+
+_EXCEL_WORKBOOK = "Excel workbook"
 
 #: Excel workbook download.
-XLSX_FILE_200: Final = _file_200("Excel workbook", XLSX_MIME)
+XLSX_FILE_200: Final = _file_200(_EXCEL_WORKBOOK, XLSX_MIME)
 #: Report export in the requested format.
-XLSX_OR_CSV_FILE_200: Final = _file_200("Excel workbook or CSV file", XLSX_MIME, "text/csv")
+XLSX_OR_CSV_FILE_200: Final = _file_200(f"{_EXCEL_WORKBOOK} or CSV file", XLSX_MIME, "text/csv")
 #: Stored attachment bytes (served with the file's own safe content type).
 ATTACHMENT_FILE_200: Final = _file_200("The attachment's content", "application/octet-stream")
+#: Excel workbook download that can fail while building the workbook.
+XLSX_FILE_200_SERVER_ERROR_500: Final = _file_200(_EXCEL_WORKBOOK, XLSX_MIME, errors=(500,))
+#: Excel workbook download: missing sprint/report (404), build failure (500), role check (403).
+XLSX_FILE_200_NOT_FOUND_FORBIDDEN_500: Final = _file_200(_EXCEL_WORKBOOK, XLSX_MIME, errors=(403, 404, 500))
+#: Excel workbook download with the export failures.
+XLSX_FILE_200_EXPORT_ERRORS: Final = _file_200(_EXCEL_WORKBOOK, XLSX_MIME, errors=(400, 413, 500))
+#: Report export in the requested format: bad request, role check, missing report.
+XLSX_OR_CSV_FILE_200_BAD_REQUEST_FORBIDDEN_NOT_FOUND_404: Final = _file_200(
+    f"{_EXCEL_WORKBOOK} or CSV file", XLSX_MIME, "text/csv", errors=(400, 403, 404))
+#: Attachment download: the attachment is missing or not visible.
+ATTACHMENT_FILE_200_NOT_FOUND_404: Final = _file_200(
+    "The attachment's content", "application/octet-stream", errors=(404,))
 #: Unexpected server-side failure (downstream/infrastructure).
 SERVER_ERROR_500: Final = _doc(500)
 #: Export failures: bad report request, oversize export, workbook build failure.
@@ -75,7 +93,7 @@ GIT_REMOVE_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422: Final = _doc(403, 404, 4
 #: Branch create/list/preview/discovery: missing scope + conflict + bad input.
 GIT_BRANCH_CONFLICT_NOT_FOUND_VALIDATION_422: Final = _doc(404, 409, 422)
 
-# --- Additional endpoint combinations (Sonar S8415) ------------------------
+# --- Further endpoint combinations ---------------------------------------
 #: Codes an endpoint family raises: 400, 403, 404, 413, 429.
 BAD_REQUEST_FORBIDDEN_NOT_FOUND_PAYLOAD_TOO_LARGE_429: Final = _doc(400, 403, 404, 413, 429)
 #: Codes an endpoint family raises: 400, 403, 404, 422.

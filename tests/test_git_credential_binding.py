@@ -87,7 +87,8 @@ def test_draft_test_against_another_server_never_carries_a_saved_token(git, admi
 
     res = admin_client.post(f"{git.url}/test", json={"base_url": "https://attacker.example"})
     body = res.json()
-    assert res.status_code == 200 and body["ok"] is False
+    assert res.status_code == 200
+    assert body["ok"] is False
     assert "saved token is only sent to the server it was saved for" in body["message"]
     assert git.seen == []
 
@@ -184,3 +185,147 @@ def test_the_provider_reports_a_refused_host_safely(monkeypatch):
         provider.validate_connection()
     assert excinfo.value.code == github.INVALID_BASE_URL
     assert "GIT_ALLOW_PRIVATE_HOSTS" in excinfo.value.message
+
+
+# --- address classification and the guarded connection --------------------------------
+
+@pytest.mark.parametrize("address,allow_private,expected", [
+    ("0.0.0.0", True, "a reserved address"),
+    ("224.0.0.1", True, "a reserved address"),
+    ("4000::1", False, "a reserved address"),
+    ("10.1.2.3", False, "a private network address"),
+    ("10.1.2.3", True, None),
+    ("100.64.0.1", False, "a private network address"),
+    ("100.100.100.200", True, "a link-local or cloud metadata address"),
+    ("::ffff:169.254.169.254", True, "a link-local or cloud metadata address"),
+    ("8.8.8.8", False, None),
+])
+def test_address_problem_classifies_destinations(address, allow_private, expected):
+    import ipaddress
+
+    from app import net_guard
+
+    assert net_guard.address_problem(ipaddress.ip_address(address), allow_private) == expected
+
+
+def test_the_guarded_backend_connects_to_an_allowed_address():
+    import socket
+
+    from app import net_guard
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    try:
+        stream = net_guard._GuardedBackend(allow_private=True).connect_tcp("127.0.0.1", server.getsockname()[1])
+        stream.close()
+    finally:
+        server.close()
+
+
+def test_the_guarded_backend_reports_unresolvable_and_unreachable_hosts(monkeypatch):
+    import socket
+
+    import httpcore
+
+    from app import net_guard
+
+    closed = socket.socket()
+    closed.bind(("127.0.0.1", 0))
+    port = closed.getsockname()[1]
+    closed.close()  # nothing listens here any more
+    open_backend = net_guard._GuardedBackend(allow_private=True)
+    with pytest.raises(httpcore.ConnectError):
+        open_backend.connect_tcp("127.0.0.1", port)
+
+    def _no_such_host(*_args, **_kwargs):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(net_guard.socket, "getaddrinfo", _no_such_host)
+    strict_backend = net_guard._GuardedBackend(allow_private=False)
+    with pytest.raises(httpcore.ConnectError):
+        strict_backend.connect_tcp("nowhere.invalid", 443)
+
+
+def test_precheck_applies_only_to_proxied_requests(monkeypatch):
+    import socket
+
+    from app import net_guard
+
+    for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    net_guard.precheck("https://10.1.2.3/", allow_private=False)  # direct: the transport guards it instead
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+    with pytest.raises(net_guard.HostNotAllowed):
+        net_guard.precheck("https://10.1.2.3/", allow_private=False)
+    net_guard.precheck("https://10.1.2.3/", allow_private=True)
+
+    monkeypatch.setenv("NO_PROXY", "10.1.2.3")
+    net_guard.precheck("https://10.1.2.3/", allow_private=False)  # bypassed: not the proxy's to resolve
+    monkeypatch.delenv("NO_PROXY")
+
+    def _unresolvable(*_args, **_kwargs):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(net_guard.socket, "getaddrinfo", _unresolvable)
+    net_guard.precheck("https://only-the-proxy-knows.example/", allow_private=False)
+
+
+# --- credential storage failures --------------------------------------------------------
+
+def test_encryption_needs_a_valid_key(monkeypatch):
+    from app.config import Settings, get_settings
+    from app.git import credentials
+
+    monkeypatch.setattr(Settings, "GIT_CREDENTIAL_ENCRYPTION_KEY", "")
+    get_settings.cache_clear()
+    assert credentials.encryption_available() is False
+    with pytest.raises(credentials.CredentialError) as excinfo:
+        credentials.encrypt_credential("fake-token-1234567")
+    assert excinfo.value.message == credentials.ENCRYPTION_KEY_MISSING_MESSAGE
+
+    monkeypatch.setattr(Settings, "GIT_CREDENTIAL_ENCRYPTION_KEY", "not-a-fernet-key")
+    get_settings.cache_clear()
+    with pytest.raises(credentials.CredentialError) as excinfo:
+        credentials.encrypt_credential("fake-token-1234567")
+    assert excinfo.value.message == credentials.ENCRYPTION_KEY_INVALID_MESSAGE
+    get_settings.cache_clear()
+
+
+def test_credentials_round_trip_and_undecryptable_values_are_refused(git):
+    from app.config import Settings, get_settings
+    from app.git import credentials
+
+    with pytest.raises(credentials.CredentialError, match="must not be empty"):
+        credentials.encrypt_credential("   ")
+    stored = credentials.encrypt_credential("  fake-token-1234567  ")
+    assert credentials.decrypt_credential(stored) == "fake-token-1234567"
+
+    for unreadable in ("", "   ", "garbage-ciphertext"):
+        with pytest.raises(credentials.CredentialError) as excinfo:
+            credentials.decrypt_credential(unreadable)
+        assert excinfo.value.message == credentials.CREDENTIAL_UNDECRYPTABLE_MESSAGE
+
+    other_key = base64.urlsafe_b64encode(b"z" * 32).decode()
+    Settings.GIT_CREDENTIAL_ENCRYPTION_KEY = other_key  # restored by the fixture's monkeypatch
+    get_settings.cache_clear()
+    with pytest.raises(credentials.CredentialError):
+        credentials.decrypt_credential(stored)
+
+
+def test_a_project_credential_that_cannot_be_decrypted_is_a_configuration_error(git):
+    from app.git import credentials
+    from app.git.provider import NOT_CONFIGURED, GitProviderError
+
+    broken = SimpleNamespace(base_url="", credential_encrypted="not-decryptable")
+    with pytest.raises(GitProviderError) as excinfo:
+        credentials.resolve_token(broken)
+    assert excinfo.value.code == NOT_CONFIGURED
+
+
+def test_unusable_base_urls_never_count_as_the_same_server():
+    from app.git import credentials
+
+    assert credentials.same_server("https://github.com", "https://api.github.com") is True
+    assert credentials.same_server("ftp://github.com", "https://api.github.com") is False

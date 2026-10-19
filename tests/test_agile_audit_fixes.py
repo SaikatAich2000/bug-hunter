@@ -75,7 +75,9 @@ def test_no_token_fits_between_a_token_and_its_zero_extension():
     with pytest.raises(RankExhausted):
         rank_between("b", "a")
     batch = ranks_between("a", "b", 500)
-    assert batch == sorted(batch) and "a" < batch[0] and batch[-1] < "b"
+    assert batch == sorted(batch)
+    assert "a" < batch[0]
+    assert batch[-1] < "b"
 
 
 # --- placement in the database -------------------------------------------------

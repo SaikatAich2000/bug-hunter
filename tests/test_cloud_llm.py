@@ -15,6 +15,8 @@ def _settings(**over):
     base = {
         "SLEUTH_CLOUD_ENABLED": True,
         "GROQ_API_KEY": "gk",
+        "GROQ_API_URL": "https://api.groq.com/openai/v1/chat/completions",
+        "OPENROUTER_API_URL": "https://openrouter.ai/api/v1/chat/completions",
         "OPENROUTER_API_KEY": "ok",
         "GROQ_MODEL": "llama-3.3-70b-versatile",
         "OPENROUTER_MODEL": "vendor/model:free",

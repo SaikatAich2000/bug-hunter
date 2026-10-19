@@ -43,7 +43,9 @@ def _setup(client):
 def _assert_not_member(res, name: str, project: str) -> None:
     assert res.status_code == 400, res.text
     detail = res.json()["detail"]
-    assert name in detail and f"project '{project}'" in detail and "Add them to the project" in detail
+    assert name in detail
+    assert f"project '{project}'" in detail
+    assert "Add them to the project" in detail
 
 
 def test_bug_create_and_update_refuse_outsiders(admin_client):
@@ -165,7 +167,8 @@ def test_owners_and_leads_must_be_members(admin_client):
     res = admin_client.post("/api/agile/components", json={
         "project_id": home["id"], "name": "API", "default_assignee_id": 999999,
     })
-    assert res.status_code == 400 and "does not exist" in res.json()["detail"]
+    assert res.status_code == 400
+    assert "does not exist" in res.json()["detail"]
     component = admin_client.post("/api/agile/components", json={
         "project_id": home["id"], "name": "API", "lead_id": member["id"],
     })
@@ -182,7 +185,8 @@ def test_owners_and_leads_must_be_members(admin_client):
     res = admin_client.put(f"/api/agile/epics/{epic['id']}", json={
         "owner_id": member["id"], "version": detail["version"],
     })
-    assert res.status_code == 200 and res.json()["owner_id"] == member["id"]
+    assert res.status_code == 200
+    assert res.json()["owner_id"] == member["id"]
 
 
 def test_event_managers_must_see_the_event(admin_client):

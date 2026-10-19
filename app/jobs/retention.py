@@ -23,7 +23,7 @@ from app.models import Session as SessionRow
 
 logger = logging.getLogger("bug_hunter.retention")
 
-BATCH_SIZE = 1000
+BATCH_SIZE = get_settings().RETENTION_BATCH_SIZE
 
 
 def _purge(db: Session, model, condition) -> int:

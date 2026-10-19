@@ -475,7 +475,15 @@ def test_backlog_keyboard_ranking_with_the_drag_handle(server, open_page, admin_
     third.locator(".ag-drag-handle").focus()
     pg.keyboard.press("Space")
     expect(announcer).to_contain_text(f"over droppable area {ids[2]}")
-    pg.keyboard.press("ArrowUp")
+    # dnd-kit attaches its keydown listener in setTimeout(0), so an arrow pressed
+    # right after the lift can be lost: press again until the announcement changes.
+    for _attempt in range(20):
+        pg.keyboard.press("ArrowUp")
+        try:
+            expect(announcer).to_contain_text(f"over droppable area {ids[1]}", timeout=300)
+            break
+        except AssertionError:
+            continue
     expect(announcer).to_contain_text(f"over droppable area {ids[1]}")
     with pg.expect_response(lambda r: f"/boards/{board}/move" in r.url) as resp:
         pg.keyboard.press("Space")

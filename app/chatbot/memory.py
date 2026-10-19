@@ -10,10 +10,12 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-_MAX_SESSIONS = 200
-_TTL_SECONDS = 30 * 60   # 30 minutes idle
+from app.config import get_settings
+
+_MAX_SESSIONS = get_settings().SLEUTH_MEMORY_MAX_SESSIONS
+_TTL_SECONDS = get_settings().SLEUTH_MEMORY_TTL_SECONDS  # idle
 # Shorter than the session TTL so a stray late "ok" can't fire a write.
-_CONFIRM_TTL_SECONDS = 5 * 60   # 5 minutes
+_CONFIRM_TTL_SECONDS = get_settings().SLEUTH_CONFIRM_TTL_SECONDS
 
 
 @dataclass

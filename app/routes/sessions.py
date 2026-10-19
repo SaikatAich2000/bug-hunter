@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.api_docs import BAD_REQUEST_NOT_FOUND_404 as NOT_FOUND_400
 from app.auth import (
-    COOKIE_NAME,  # noqa: F401  (legacy cookie name, addressed through this module by tests)
     parse_session_token,
     require_admin,
     session_cookie_value,

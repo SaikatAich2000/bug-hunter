@@ -28,7 +28,7 @@ if ($existing -eq "sonarqube") {
     docker volume create sonarqube_extensions | Out-Null
     docker volume create sonarqube_logs | Out-Null
     docker run -d --name sonarqube `
-        -p 9090:9000 `
+        -p 9000:9000 `
         -v sonarqube_data:/opt/sonarqube/data `
         -v sonarqube_extensions:/opt/sonarqube/extensions `
         -v sonarqube_logs:/opt/sonarqube/logs `
@@ -40,7 +40,7 @@ $deadline = (Get-Date).AddMinutes(3)
 $up = $false
 while ((Get-Date) -lt $deadline) {
     try {
-        $resp = Invoke-RestMethod -Uri "http://localhost:9090/api/system/status" -TimeoutSec 5
+        $resp = Invoke-RestMethod -Uri "http://localhost:9000/api/system/status" -TimeoutSec 5
         if ($resp.status -eq "UP") { $up = $true; break }
     } catch { }
     Start-Sleep -Seconds 5
@@ -50,8 +50,8 @@ if (-not $up) {
     Abort "SonarQube did not come up within 3 minutes. Check: docker logs sonarqube"
 }
 
-Info "SonarQube is UP at http://localhost:9090"
+Info "SonarQube is UP at http://localhost:9000"
 Info "First time only: log in with admin/admin at that URL, set a new password,"
-Info "then generate a token at http://localhost:9090/account/security/ and:"
+Info "then generate a token at http://localhost:9000/account/security/ and:"
 Info '  $env:SONAR_TOKEN = "<paste token>"'
 Info "Then run: .\scripts\sonar-scan.ps1"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 import types
+from datetime import UTC
 
 import pytest
 
@@ -477,8 +478,8 @@ class _DB:
 
 
 def _now():
-    from datetime import datetime, timezone
-    return datetime(2026, 6, 21, tzinfo=timezone.utc)
+    from datetime import datetime
+    return datetime(2026, 6, 21, tzinfo=UTC)
 
 
 def test_recent_history_no_conversation():
@@ -506,7 +507,7 @@ def test_recent_history_swallows_errors():
     assert cloud_llm._recent_history(_Boom(), types.SimpleNamespace(id=1)) == ""
 
 
-# is_available — httpx import failure (66-67)
+# is_available: httpx import failure (66-67)
 def test_is_available_httpx_missing(monkeypatch):
     monkeypatch.setattr(cloud_llm, "get_settings", lambda: _settings())
     monkeypatch.setitem(sys.modules, "httpx", None)  # None entry causes `import httpx` to raise ImportError

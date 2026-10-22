@@ -12,7 +12,7 @@ transaction. A row with a hard error (bad project, invalid enum, etc.) is
 skipped and reported; an unresolved, deactivated or out-of-project assignee is a soft warning
 that just drops that one assignee, not the whole row.
 
-Notifications are written in-app only (``background=None``) — a 500-row
+Notifications are written in-app only (``background=None``), a 500-row
 import must never trigger 500 immediate emails or web pushes. Assignees and
 reporters still see new items via the notification bell and the daily
 digest (app/scheduler.py).
@@ -24,7 +24,7 @@ import io
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover - broken installs only
 
 class BulkImportError(Exception):
     """Raised for a whole-file problem (bad format, too big, no header row).
-    Per-row problems are collected instead of raised — see run_import()."""
+    Per-row problems are collected instead of raised, see run_import()."""
 
 
 def _ensure_openpyxl() -> None:
@@ -97,8 +97,8 @@ TEMPLATE_HEADERS = [
 # Header label (lowercased) -> Bug field name; None = recognized but not used
 # for creation (system/computed columns). Keeping them in this map means a
 # previously exported report re-uploaded as-is doesn't trip an "unknown
-# column" complaint — those columns are just silently skipped.
-_LABEL_TO_FIELD: dict[str, Optional[str]] = {
+# column" complaint: those columns are just silently skipped.
+_LABEL_TO_FIELD: dict[str, str | None] = {
     "id": None,
     "type": "item_type",
     "title": "title",
@@ -197,7 +197,7 @@ class _Lookups:
         return user.role == ROLE_ADMIN or user.id in self.members_by_project.get(project.id, set())
 
 
-def _load_lookups(db: Session, accessible: Optional[set[int]]) -> _Lookups:
+def _load_lookups(db: Session, accessible: set[int] | None) -> _Lookups:
     """One bulk read per entity type instead of a query per row."""
     proj_stmt = select(Project)
     if accessible is not None:
@@ -230,11 +230,11 @@ class _RowPlan:
     title: str
     item_type: str
     project: Project
-    event: Optional[Event]
+    event: Event | None
     status: str
     priority: str
     environment: str
-    due_date: Optional[str]
+    due_date: str | None
     description: str
     reporter: User
     assignees: list[User] = field(default_factory=list)
@@ -244,7 +244,7 @@ class _RowPlan:
 def _resolve_row_title(cells: dict[str, str], row_num: int, errors: list[str]) -> str:
     title = cells.get("title", "").strip()
     if not title:
-        # A blank title never fails the row — it's just not identifying.
+        # A blank title never fails the row, it's just not identifying.
         return f"Untitled import — row {row_num}"
     if len(title) < MIN_TITLE_LENGTH:
         errors.append(f"Title must be at least {MIN_TITLE_LENGTH} characters")
@@ -270,8 +270,8 @@ def _resolve_row_item_type(cells: dict[str, str], errors: list[str]) -> str:
 
 
 def _resolve_row_project(
-    cells: dict[str, str], lookups: _Lookups, accessible: Optional[set[int]], errors: list[str],
-) -> Optional[Project]:
+    cells: dict[str, str], lookups: _Lookups, accessible: set[int] | None, errors: list[str],
+) -> Project | None:
     project_name = cells.get("project", "").strip()
     if project_name:
         project = lookups.projects_by_name.get(project_name.lower())
@@ -279,7 +279,7 @@ def _resolve_row_project(
             errors.append(f"Project '{project_name}' not found")
         return project
     # No project given: fine as long as there's exactly one to default to
-    # (already scoped to the importer's accessible projects) — otherwise
+    # (already scoped to the importer's accessible projects), otherwise
     # there's no safe guess, so the row is reported instead of misfiled.
     candidates = list(lookups.projects_by_name.values())
     if len(candidates) == 1:
@@ -292,8 +292,8 @@ def _resolve_row_project(
 
 
 def _resolve_row_event(
-    cells: dict[str, str], lookups: _Lookups, accessible: Optional[set[int]], errors: list[str],
-) -> Optional[Event]:
+    cells: dict[str, str], lookups: _Lookups, accessible: set[int] | None, errors: list[str],
+) -> Event | None:
     event_name = cells.get("event", "").strip()
     if not event_name:
         return None
@@ -352,7 +352,7 @@ def _resolve_row_environment(cells: dict[str, str], errors: list[str]) -> str:
     return environment
 
 
-def _resolve_row_due_date(cells: dict[str, str], errors: list[str]) -> Optional[str]:
+def _resolve_row_due_date(cells: dict[str, str], errors: list[str]) -> str | None:
     due_raw = cells.get("due_date", "").strip()
     if not due_raw:
         return None
@@ -366,7 +366,7 @@ def _resolve_row_due_date(cells: dict[str, str], errors: list[str]) -> Optional[
 
 def _find_reporter_by_email(
     reporter_email: str, lookups: _Lookups, errors: list[str],
-) -> Optional[User]:
+) -> User | None:
     """Look up a reporter by email address."""
     if not reporter_email:
         return None
@@ -378,7 +378,7 @@ def _find_reporter_by_email(
 
 def _find_reporter_by_name(
     reporter_name: str, lookups: _Lookups, errors: list[str],
-) -> Optional[User]:
+) -> User | None:
     """Look up a reporter by name (with multi-match detection)."""
     if not reporter_name:
         return None
@@ -397,7 +397,7 @@ def _find_reporter_by_name(
 
 def _resolve_row_reporter(
     cells: dict[str, str], lookups: _Lookups, actor: User, errors: list[str],
-) -> Optional[User]:
+) -> User | None:
     """Resolve a reporter by email or name, defaulting to the actor."""
     reporter_email = cells.get("reporter_email", "").strip().lower()
     reporter_name = cells.get("reporter", "").strip()
@@ -430,8 +430,8 @@ def _resolve_row_reporter(
 
 def _resolve_one_assignee_token(
     token: str, lookups: _Lookups, warn_parts: list[str],
-) -> Optional[User]:
-    user: Optional[User] = None
+) -> User | None:
+    user: User | None = None
     if "@" in token:
         user = lookups.users_by_email.get(token.lower())
     else:
@@ -476,12 +476,12 @@ def _process_row(
     row_num: int,
     cells: dict[str, str],
     lookups: _Lookups,
-    accessible: Optional[set[int]],
+    accessible: set[int] | None,
     actor: User,
-) -> tuple[Optional[_RowPlan], list[str]]:
+) -> tuple[_RowPlan | None, list[str]]:
     """Validate one row. Returns (plan, []) on success or (None, errors).
 
-    Every column is optional — a blank cell falls back to a sensible default
+    Every column is optional, a blank cell falls back to a sensible default
     (or, for Project, the importer's only accessible project if there's
     exactly one). A hard error only fires when a value was actually given
     and it's invalid/unresolvable/ambiguous, never merely for being blank."""
@@ -645,7 +645,7 @@ def _validate_all_rows(
     numbered: list[tuple[int, list[str]]],
     col_map: dict[int, str],
     lookups: _Lookups,
-    accessible: Optional[set[int]],
+    accessible: set[int] | None,
     actor: User,
 ) -> tuple[list[_RowPlan], list[dict[str, Any]], list[dict[str, Any]]]:
     plans: list[_RowPlan] = []

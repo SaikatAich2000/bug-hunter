@@ -1,12 +1,12 @@
 """Infra tests: app.main middleware/lifespan, scheduler, push/email transports, DB migrations.
-Client fixture reimports app.* per test — import app.<mod> inside test bodies; network is always mocked.
+Client fixture reimports app.* per test, import app.<mod> inside test bodies; network is always mocked.
 """
 from __future__ import annotations
 
 import asyncio
 import sys
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -61,7 +61,7 @@ def _fresh_app(monkeypatch, tmp_path, **env):
     return main
 
 
-# app/main.py — asset version hashing
+# app/main.py: asset version hashing
 def test_cov_main_asset_version_missing_dir_is_dev():
     # Non-existent static dir returns the sentinel "dev".
     from pathlib import Path
@@ -100,7 +100,7 @@ def test_cov_main_asset_version_skips_unreadable_dir_entry(tmp_path, monkeypatch
     assert len(v) == 12
 
 
-# app/main.py — health / meta endpoints
+# app/main.py: health / meta endpoints
 def test_cov_main_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
@@ -119,7 +119,7 @@ def test_cov_main_meta(client):
         assert key in j
 
 
-# app/main.py — HTML serving + __APP_VERSION__ substitution
+# app/main.py: HTML serving + __APP_VERSION__ substitution
 def test_cov_main_login_html_substitutes_app_version(client):
     r = client.get("/login.html")
     assert r.status_code == 200
@@ -161,7 +161,7 @@ def test_cov_main_login_redirects_to_home_when_authed(admin_client):
     assert r.headers["location"] == "/"
 
 
-# app/main.py — _auto_login (AUTO_LOGIN_ENABLED convenience switch)
+# app/main.py: _auto_login (AUTO_LOGIN_ENABLED convenience switch)
 def test_cov_main_home_auto_login_when_enabled(client, monkeypatch):
     import app.main as main
     monkeypatch.setattr(main.settings, "AUTO_LOGIN_ENABLED", True)
@@ -223,7 +223,7 @@ def test_cov_main_html_cache_reuse(client):
     assert a == b
 
 
-# app/main.py — _has_valid_session: legacy / jti / expired / DB error
+# app/main.py: _has_valid_session: legacy / jti / expired / DB error
 def test_cov_main_has_valid_session_no_cookie(client):
     from app.main import _has_valid_session
 
@@ -251,7 +251,7 @@ def test_cov_main_has_valid_session_expired_row(admin_client, monkeypatch):
 
     fake = SessionRow(
         jti="jti-x", user_id=7,
-        expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        expires_at=datetime.now(UTC) - timedelta(hours=1),
     )
 
     class _Scalar:
@@ -318,7 +318,7 @@ def test_cov_main_has_valid_session_db_error_returns_false(client, monkeypatch):
     assert main._has_valid_session(_Req()) is False
 
 
-# app/main.py — middleware edges (security headers, rate limit, CSRF)
+# app/main.py: middleware edges (security headers, rate limit, CSRF)
 def test_cov_main_security_headers_present(client):
     r = client.get("/api/health")
     assert r.headers.get("Content-Security-Policy")
@@ -399,7 +399,7 @@ def test_cov_main_csrf_skips_non_browser(admin_client):
     assert r.status_code in (200, 201)
 
 
-# app/main.py — CORS module-import branches
+# app/main.py: CORS module-import branches
 def test_cov_main_cors_wildcard_disables_credentials(monkeypatch, tmp_path):
     # CORS_ORIGINS="*" must disable credentials (spec) yet still pass preflights.
     main = _fresh_app(monkeypatch, tmp_path, CORS_ORIGINS="*")
@@ -425,7 +425,7 @@ def test_cov_main_cors_concrete_origin_registers(monkeypatch, tmp_path):
     assert main._origins == ["https://bugs.example.com"]
 
 
-# app/main.py — exception handler + 404 / validation
+# app/main.py: exception handler + 404 / validation
 def test_cov_main_http_exception_handler_preserves_headers(client):
     # Hitting an auth-required endpoint unauthenticated exercises the custom 401 handler.
     r = client.get("/api/users")
@@ -455,19 +455,19 @@ def test_cov_main_body_size_limit_rejects_huge_content_length(client):
     assert r.status_code in (413, 400, 422, 401)
 
 
-# app/scheduler.py — cron helpers + lifecycle + loop/tick dispatch
+# app/scheduler.py: cron helpers + lifecycle + loop/tick dispatch
 def test_cov_scheduler_parse_and_matches():
     from app.scheduler import CronSchedule, _parse_field
     assert _parse_field("*/20", 0, 59) == {0, 20, 40}
     c = CronSchedule("0 7 * * *")
-    assert c.matches(datetime(2026, 6, 15, 7, 0, tzinfo=timezone.utc))
-    assert not c.matches(datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc))
+    assert c.matches(datetime(2026, 6, 15, 7, 0, tzinfo=UTC))
+    assert not c.matches(datetime(2026, 6, 15, 8, 0, tzinfo=UTC))
 
 
 def test_cov_scheduler_resolve_tz():
     from app.scheduler import _resolve_tz
-    assert _resolve_tz("") is timezone.utc
-    assert _resolve_tz("Not/AReal/Zone") is timezone.utc
+    assert _resolve_tz("") is UTC
+    assert _resolve_tz("Not/AReal/Zone") is UTC
     assert _resolve_tz("Asia/Kolkata") is not None
 
 
@@ -501,7 +501,7 @@ def test_cov_scheduler_tick_runs_and_logs(monkeypatch):
                         lambda: {"emails_sent": 3, "operations": 9, "users": 3})
     c = scheduler.CronSchedule("* * * * *")
     stats = asyncio.run(scheduler._tick(
-        c, timezone.utc, now=datetime(2026, 6, 15, 7, 0, tzinfo=timezone.utc)))
+        c, UTC, now=datetime(2026, 6, 15, 7, 0, tzinfo=UTC)))
     assert stats["emails_sent"] == 3
 
 
@@ -527,7 +527,7 @@ def test_cov_scheduler_loop_invokes_tick_once(monkeypatch):
     monkeypatch.setattr(scheduler.asyncio, "sleep", fake_sleep)
 
     c = scheduler.CronSchedule("* * * * *")
-    coro = scheduler._loop(c, timezone.utc)
+    coro = scheduler._loop(c, UTC)
     with pytest.raises(_StopLoop):
         asyncio.run(coro)
     assert ticked["n"] == 1
@@ -1402,16 +1402,16 @@ def test_cov_main_lifespan_warns_on_empty_secret(monkeypatch, tmp_path, caplog):
 def test_cov_scheduler_matches_month_miss():
     from app.scheduler import CronSchedule
     c = CronSchedule("0 0 * 12 *")
-    assert not c.matches(datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc))
-    assert c.matches(datetime(2026, 12, 15, 0, 0, tzinfo=timezone.utc))
+    assert not c.matches(datetime(2026, 6, 15, 0, 0, tzinfo=UTC))
+    assert c.matches(datetime(2026, 12, 15, 0, 0, tzinfo=UTC))
 
 
 def test_cov_scheduler_matches_dom_only():
     # Day-of-month restricted with wildcard dow: match falls through to dom check.
     from app.scheduler import CronSchedule
     c = CronSchedule("0 0 15 * *")
-    assert c.matches(datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc))
-    assert not c.matches(datetime(2026, 6, 16, 0, 0, tzinfo=timezone.utc))
+    assert c.matches(datetime(2026, 6, 15, 0, 0, tzinfo=UTC))
+    assert not c.matches(datetime(2026, 6, 16, 0, 0, tzinfo=UTC))
 
 
 def test_cov_push_subs_for_users_empty_ids(client):
@@ -1456,7 +1456,7 @@ def test_cov_database_add_missing_columns_alters_legacy_db(monkeypatch, tmp_path
         conn.execute(text("CREATE TABLE notifications (id INTEGER PRIMARY KEY)"))
 
     # _add_missing_columns reads the module-global `engine` for introspection
-    # and executes DDL on the passed-in connection — point both at the legacy engine.
+    # and executes DDL on the passed-in connection, point both at the legacy engine.
     monkeypatch.setattr(database, "engine", legacy)
     with legacy.begin() as conn:
         database._add_missing_columns(conn)
@@ -1514,14 +1514,14 @@ def test_reclaim_evicts_soonest_expiring_when_all_locked(monkeypatch):
     account_lockout._buckets.clear()
 
 
-# auth.trusted_forwarded_ip — empty input guard (line 79)
+# auth.trusted_forwarded_ip: empty input guard (line 79)
 def test_trusted_forwarded_ip_empty_returns_none():
     assert trusted_forwarded_ip("", 1) is None
     assert trusted_forwarded_ip("   ,  ,", 1) is None
     assert trusted_forwarded_ip(None, 1) is None
 
 
-# image_strip — animated/multi-frame images are preserved untouched (85-86)
+# image_strip: animated/multi-frame images are preserved untouched (85-86)
 def test_strip_preserves_animated_image(monkeypatch):
     from PIL import Image
 
@@ -1712,7 +1712,7 @@ def test_main_has_valid_session_missing_row_returns_false(client):
     assert main._has_valid_session(req) is False
 
 
-# --- database reconciliation helpers ------------------------------------------------------
+# database reconciliation helpers
 
 def test_column_names_survive_an_introspection_error(caplog):
     from sqlalchemy.exc import SQLAlchemyError

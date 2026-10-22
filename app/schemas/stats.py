@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-# --- Stats ---
+# Stats
 class StatsOut(BaseModel):
     # Total excluding "Not a Bug".
     bugs: int

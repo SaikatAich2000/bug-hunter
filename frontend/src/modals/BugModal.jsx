@@ -109,7 +109,7 @@ async function toastAfterCreate(created, ctype, files) {
 }
 
 /** Board/Backlog/Hierarchy each keep their own fetched state (not wired to
- * the global refreshAll()) — this tells them to re-fetch after any mutation
+ * the global refreshAll()), this tells them to re-fetch after any mutation
  * here so a newly-created/moved item actually shows up without a reload. */
 function notifyAgileChanged() {
   window.dispatchEvent(new Event("agile:refresh"));
@@ -302,7 +302,7 @@ export default function BugModal() {
       cancelEvents?.();
       cancelFocus?.();
     };
-    // Keyed on open + bug id only — see seeding note above.
+    // Keyed on open + bug id only, see seeding note above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, bugId]);
 
@@ -453,7 +453,7 @@ export default function BugModal() {
   // Bail when closed so poll ticks don't recompute options / rebuild RichEditors. All hooks run above.
   if (!open) return null;
 
-  // Keep any status the item already holds even if invalid for the type — flagged "(legacy)".
+  // Keep any status the item already holds even if invalid for the type, flagged "(legacy)".
   const validStatuses = statusesForType(meta, itemType);
   const statusOpts = statusOptionsFor(SELECT_PLACEHOLDER, validStatuses, status);
 
@@ -474,7 +474,7 @@ export default function BugModal() {
     ...projects.map((p) => ({ value: String(p.id), label: p.name })),
   ];
   // Agile-only types (Epic / Story / Sub-task) have no
-  // create path while the selected project has Agile disabled — say so instead of
+  // create path while the selected project has Agile disabled, say so instead of
   // letting the request fail, and offer the switch to permitted roles.
   const agileTypesBlocked = !isEdit && projectAgile === false;
   const priorityOpts = [
@@ -490,7 +490,7 @@ export default function BugModal() {
   // Show the current event by name if the list hasn't loaded yet.
   const eventOpts = eventOptionsFor(eventOptions, eventId, bug);
 
-  // Reporter is fixed — inject the original reporter when it isn't the current user.
+  // Reporter is fixed, inject the original reporter when it isn't the current user.
   const me = currentUser;
   const { option: reporterOption, id: reporterId } = reporterFor(isEdit, bug, me);
 
@@ -543,7 +543,7 @@ export default function BugModal() {
     const itype = bug?.item_type || "Bug";
     const noun = itype.toLowerCase();
     const ok = await confirmDialog(
-      `Delete ${noun} #${bugId}? This will also delete its comments and attachments. Cannot be undone`,
+      `Delete ${noun} #${bugId}? This will also delete its comments and attachments, cannot be undone`,
     );
     if (!ok) return;
     try {
@@ -576,7 +576,7 @@ export default function BugModal() {
 
   const onDeleteComment = async (commentId) => {
     const ok = await confirmDialog(
-      "Delete this comment? Its attachments will be removed too. Cannot be undone",
+      "Delete this comment? Its attachments will be removed too, cannot be undone",
     );
     if (!ok || !bugId) return;
     try {
@@ -628,8 +628,8 @@ export default function BugModal() {
     if (!body && files.length > 0) {
       toast(
         "Add some comment text — files attached here become comment " +
-          "attachments. For a bug-level file, use the 📎 Add attachment " +
-          "button above.",
+          "attachments, for a bug-level file, use the 📎 Add attachment " +
+          "button above",
         "error",
       );
       commentRef.current?.focus();
@@ -823,7 +823,7 @@ export default function BugModal() {
               ...options.map((p) => ({ value: String(p.id), label: parentLabel(p) })),
             ]}
           />
-          <small className="hint">A Sub-task belongs to one Story, Task, Bug or Requirement and follows its sprint and epic.</small>
+          <small className="hint">A Sub-task belongs to one Story, Task, Bug or Requirement and follows its sprint and epic</small>
         </div>
       );
     }
@@ -832,7 +832,7 @@ export default function BugModal() {
     return (
       <div className="field" aria-labelledby="bugEpicLabel">
         <span id="bugEpicLabel">Epic</span>
-        <HelpHint label="Epic" guide="sprints">An Epic groups related stories and tasks into one large piece of work. Epics are never put into a sprint; their issues are.</HelpHint>
+        <HelpHint label="Epic" guide="sprints">An Epic groups related stories and tasks into one large piece of work, epics are never put into a sprint; their issues are</HelpHint>
         <BhSelect
           ariaLabel="Epic"
           value={epicPick}
@@ -864,7 +864,7 @@ export default function BugModal() {
     return (
       <div className="field bug-sprint-field">
         <span>Sprint</span>
-        <HelpHint label="Sprint" guide="sprints">A sprint is a short, fixed period of planned work. Move the issue here to commit it to the sprint, or leave it in the backlog.</HelpHint>
+        <HelpHint label="Sprint" guide="sprints">A sprint is a short, fixed period of planned work, move the issue here to commit it to the sprint, or leave it in the backlog</HelpHint>
         {renderEditSprintField()}
       </div>
     );
@@ -1203,7 +1203,7 @@ export default function BugModal() {
             </div>
           </div>
           <p className="muted small create-attach-hint">
-            Files attach to the item itself. Add more later via the Add-attachment button or via comments
+            Files attach to the item itself, add more later via the Add-attachment button or via comments
           </p>
         </div>
       </section>
@@ -1291,7 +1291,7 @@ export default function BugModal() {
           id="bugAttachEmpty"
           hidden={!bug || bug.attachments.length > 0 || !canEditThis}
         >
-          No attachments yet. Click <strong>📎 Add attachment</strong> above to upload one
+          No attachments yet, click <strong>📎 Add attachment</strong> above to upload one
         </div>
       </section>
   );
@@ -1509,7 +1509,7 @@ export default function BugModal() {
                   {enableAgileBusy ? "Enabling…" : "Enable Agile"}
                 </button>
               ) : (
-                "Ask a manager or admin to enable Agile for it."
+                "Ask a manager or admin to enable Agile for it"
               )}
             </small>
           )}
@@ -1552,7 +1552,7 @@ export default function BugModal() {
         </div>
         <div className="field" aria-labelledby="bugEnvLabel">
           <span id="bugEnvLabel">Environment</span>
-          <HelpHint label="Environment" guide="items">Where the problem was seen: DEV, UAT or PROD. It is used by bugs and filters the list.</HelpHint>
+          <HelpHint label="Environment" guide="items">Where the problem was seen: DEV, UAT or PROD. It is used by bugs and filters the list</HelpHint>
           <BhSelect
             name="environment"
             ariaLabel="Environment"
@@ -1697,7 +1697,7 @@ export default function BugModal() {
         >
           {readOnly && (
             <div className="bug-readonly-banner">
-              {`Read-only — only admins and managers can edit ${(bug?.item_type || "item").toLowerCase()}s.`}
+              {`Read-only — only admins and managers can edit ${(bug?.item_type || "item").toLowerCase()}s`}
             </div>
           )}
           <input type="hidden" name="id" value={bugId != null ? String(bugId) : ""} readOnly />

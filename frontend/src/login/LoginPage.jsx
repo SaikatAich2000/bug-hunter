@@ -1,5 +1,5 @@
 // Login page. Test contract: name="email"/"password" + submit button are Playwright selectors.
-// Strict CSP (no inline scripts/styles); __APP_VERSION__ is substituted server-side — keep verbatim.
+// Strict CSP (no inline scripts/styles); __APP_VERSION__ is substituted server-side, keep verbatim.
 import { useEffect, useRef, useState } from "react";
 import PasswordInput from "../components/PasswordInput";
 import { getAppName } from "../lib/branding";
@@ -83,7 +83,7 @@ export default function LoginPage() {
         try {
           msg = detailMessage(await res.json(), msg);
         } catch {
-          /* non-JSON error body — keep the fallback message */
+          /* non-JSON error body, keep the fallback message */
         }
         setLoginAlert({ msg, kind: "error" });
         return;
@@ -91,7 +91,7 @@ export default function LoginPage() {
       // Only a same-origin path is accepted (prevents open redirect).
       location.replace(loginTarget(location.search, location.hash, location.origin));
     } catch {
-      setLoginAlert({ msg: "Network error. Try again", kind: "error" });
+      setLoginAlert({ msg: "Network error, try again", kind: "error" });
     } finally {
       setLoginBusy(false);
     }
@@ -111,7 +111,7 @@ export default function LoginPage() {
       });
       if (res.status === 204) {
         setForgotAlert({
-          msg: "Reset link sent. Check your inbox — the link expires in 30 minutes",
+          msg: "Reset link sent, check your inbox — the link expires in 30 minutes",
           kind: "success",
         });
       } else {
@@ -119,12 +119,12 @@ export default function LoginPage() {
         try {
           msg = detailMessage(await res.json(), msg);
         } catch {
-          /* non-JSON error body — keep the fallback message */
+          /* non-JSON error body, keep the fallback message */
         }
         setForgotAlert({ msg, kind: "error" });
       }
     } catch {
-      setForgotAlert({ msg: "Network error. Try again", kind: "error" });
+      setForgotAlert({ msg: "Network error, try again", kind: "error" });
     } finally {
       setForgotBusy(false);
     }

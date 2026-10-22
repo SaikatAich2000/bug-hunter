@@ -1,4 +1,4 @@
-/** Password input with show/hide toggle. `name` passes through unchanged — Playwright selectors depend on it. */
+/** Password input with show/hide toggle. `name` passes through unchanged, Playwright selectors depend on it. */
 import { forwardRef, useState } from "react";
 
 const PasswordInput = forwardRef(function PasswordInput(

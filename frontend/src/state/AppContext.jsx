@@ -81,7 +81,7 @@ const PAGE_SIZE = 20;
 // user changes refreshes at once, and other people's changes show within these intervals.
 /** Users and projects change rarely; edits made here update the lists immediately. */
 const DIRECTORY_POLL_MS = 120_000;
-const POLL_FAILED_NOTICE = "Can't reach the server. Retrying…";
+const POLL_FAILED_NOTICE = "Can't reach the server, retrying…";
 // Background polls tell the user once per outage (a 401 has already redirected to sign-in).
 const pollNotices = {
   onError: (err, failures) => {
@@ -101,7 +101,7 @@ function readLs(key, fallback) {
   }
 }
 
-/** Shallow MeOut compare — unchanged session polls keep object identity (no re-render). */
+/** Shallow MeOut compare, unchanged session polls keep object identity (no re-render). */
 function sameMe(a, b) {
   return (
     a.id === b.id &&
@@ -245,7 +245,7 @@ export function AppProvider({
       const c = await api("/notifications/unread_count");
       setUnreadCount(c.unread);
     } catch {
-      /* transient — keep the last known count */
+      /* transient: keep the last known count */
     }
   }, []);
 
@@ -270,7 +270,7 @@ export function AppProvider({
   // Monotonic ordering for project state: every load gets a sequence number and
   // every optimistic mutation bumps the mutation counter. A load response that
   // started before (or raced with) a mutation is discarded instead of
-  // overwriting the fresher mutation result — no reload/delay workaround.
+  // overwriting the fresher mutation result, no reload/delay workaround.
   // The canonical list shape + staleness rule live in lib/projectList.js and are
   // covered directly by frontend/src/lib/projectList.test.jsx.
   const projectLoadSeq = useRef(0);

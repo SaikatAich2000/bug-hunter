@@ -34,7 +34,7 @@ describe("backlog layout", () => {
     const planning = planningData({ backlog: [], backlog_total: 0 });
     planning.sprints[1].issues = [];
     await open(user, { backend: makeAgile(createBackend(), { planning }) });
-    expect(await screen.findByText("Your backlog is empty.")).toBeInTheDocument();
+    expect(await screen.findByText("Your backlog is empty")).toBeInTheDocument();
     expect(screen.getByText(/Plan this sprint by dragging issues here/)).toBeInTheDocument();
     expect(within(sprint("Backlog")).getByText("0 issues")).toBeInTheDocument();
   });
@@ -56,7 +56,7 @@ describe("backlog layout", () => {
     expect(screen.queryByRole("button", { name: /^Move ALP/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create sprint" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start sprint" })).not.toBeInTheDocument();
-    expect(screen.getByText("Only admins and managers can re-rank or plan issues.")).toBeInTheDocument();
+    expect(screen.getByText("Only admins and managers can re-rank or plan issues")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Actions for ALP-301" }));
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
   });
@@ -89,7 +89,7 @@ describe("filters", () => {
     await screen.findByText("Backlog idea");
     await user.type(screen.getByRole("searchbox", { name: "Search issues" }), "another");
     expect(screen.queryByText("Backlog idea")).not.toBeInTheDocument();
-    expect(screen.getAllByText("No issues match the filter.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("No issues match the filter").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByText("Backlog idea")).toBeInTheDocument();
 
@@ -281,7 +281,7 @@ describe("sprint dialogs", () => {
     await user.click(document.querySelector('.bh-date-cell:not(.muted)[data-iso$="-20"]'));
     await user.click(within(dlg).getByRole("button", { name: "End date" }));
     await user.click(document.querySelector('.bh-date-cell:not(.muted)[data-iso$="-05"]'));
-    expect(within(dlg).getByRole("alert")).toHaveTextContent("The end date cannot be before the start date.");
+    expect(within(dlg).getByRole("alert")).toHaveTextContent("The end date cannot be before the start date");
     expect(within(dlg).getByRole("button", { name: "Create" })).toBeDisabled();
     expect(within(dlg).getByLabelText("Duration")).toHaveValue("custom");
     await user.click(within(dlg).getAllByRole("button", { name: "Clear date" })[1]);
@@ -319,7 +319,7 @@ describe("sprint dialogs", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Edit sprint" }));
     const active = await screen.findByRole("dialog", { name: "Edit sprint: Sprint 5" });
     await user.click(within(active).getAllByRole("button", { name: "Clear date" })[0]);
-    expect(within(active).getByRole("alert")).toHaveTextContent("An active sprint needs a start and an end date.");
+    expect(within(active).getByRole("alert")).toHaveTextContent("An active sprint needs a start and an end date");
   });
 
   it("starts a future sprint from the planning view", async () => {
@@ -331,7 +331,7 @@ describe("sprint dialogs", () => {
     await user.click(await screen.findByRole("button", { name: "Start sprint" }));
     const dlg = await screen.findByRole("dialog", { name: "Start sprint" });
     expect(within(dlg).getByText(/will be included in this sprint/)).toHaveTextContent("2 issues will be included in this sprint (2 pts)");
-    expect(within(dlg).getByText("1 not estimated.")).toBeInTheDocument();
+    expect(within(dlg).getByText("1 not estimated")).toBeInTheDocument();
     await user.click(within(dlg).getByRole("button", { name: "Start" }));
     await waitFor(() => expect(backend.called("POST", "/agile/sprints/6/start")).toHaveLength(1));
     const body = backend.called("POST", "/agile/sprints/6/start")[0].body;
@@ -365,7 +365,7 @@ describe("sprint dialogs", () => {
     await user.click(await screen.findByRole("button", { name: "Start sprint" }));
     const dlg = await screen.findByRole("dialog", { name: "Start sprint" });
     await user.click(within(dlg).getAllByRole("button", { name: "Clear date" })[1]);
-    expect(within(dlg).getByRole("alert")).toHaveTextContent("Pick the sprint's dates.");
+    expect(within(dlg).getByRole("alert")).toHaveTextContent("Pick the sprint's dates");
     expect(within(dlg).getByRole("button", { name: "Start" })).toBeDisabled();
   });
 

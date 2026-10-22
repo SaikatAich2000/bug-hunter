@@ -1,5 +1,5 @@
 /**
- * RichEditor — contentEditable rich-text editor with a custom toolbar.
+ * RichEditor: contentEditable rich-text editor with a custom toolbar.
  * The surface is uncontrolled (React renders only the shell); formatting is direct
  * DOM manipulation with execCommand as a last-resort fallback. Styling: .bh-rt-* in styles.css.
  */
@@ -287,7 +287,7 @@ const RichEditor = forwardRef(function RichEditor(
     if (target) {
       range.setStart(target, targetOffset);
     } else {
-      // Offset past end — caret at the editor's end.
+      // Offset past end, caret at the editor's end.
       range.selectNodeContents(editor);
       range.collapse(false);
     }
@@ -450,7 +450,7 @@ const RichEditor = forwardRef(function RichEditor(
       }
       n = n.parentNode;
     }
-    // No wrapper — insert `<tag>ZWSP</tag>` with the caret inside it.
+    // No wrapper: insert `<tag>ZWSP</tag>` with the caret inside it.
     const wrapEl = document.createElement(tag);
     const zw = document.createTextNode(ZWSP);
     wrapEl.appendChild(zw);
@@ -463,7 +463,7 @@ const RichEditor = forwardRef(function RichEditor(
     return true;
   };
 
-  // Wrap/unwrap inline styles — pure DOM (execCommand("bold") can silently no-op in some ancestors).
+  // Wrap/unwrap inline styles, pure DOM (execCommand("bold") can silently no-op in some ancestors).
   const applyInlineWrap = (tag) => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -472,7 +472,7 @@ const RichEditor = forwardRef(function RichEditor(
     const r = s.getRangeAt(0);
     if (r.collapsed) return false;
     if (!editor.contains(r.commonAncestorContainer)) return false;
-    // Both ends sharing the same tag ancestor means the selection is fully inside a wrapper — unwrap.
+    // Both ends sharing the same tag ancestor means the selection is fully inside a wrapper, unwrap.
     const findWrapper = (start) => {
       let n = start;
       while (n && n !== editor) {
@@ -489,7 +489,7 @@ const RichEditor = forwardRef(function RichEditor(
       const wrapEl = startAnc;
       const parent = wrapEl.parentNode;
       if (!parent) return false;
-      // Capture first/last refs before moving children out — the re-selection uses them.
+      // Capture first/last refs before moving children out, the re-selection uses them.
       const firstMoved = wrapEl.firstChild;
       const lastMoved = wrapEl.lastChild;
       while (wrapEl.firstChild) parent.insertBefore(wrapEl.firstChild, wrapEl);
@@ -611,7 +611,7 @@ const RichEditor = forwardRef(function RichEditor(
   const pickFileAsAttachment = ()=> {
     const handler = onPasteFileRef.current;
     if (!handler) {
-      toast("Attach files via the attachment area for this form.", "info");
+      toast("Attach files via the attachment area for this form", "info");
       return;
     }
     const f = document.createElement("input");
@@ -766,7 +766,7 @@ const RichEditor = forwardRef(function RichEditor(
     }
     if (!mod || e.altKey) return;
     const key = e.key.toLowerCase();
-    // Snapshot history for undo/redo — the native stack misses toolbar formatting changes.
+    // Snapshot history for undo/redo, the native stack misses toolbar formatting changes.
     if (key === "z" && !e.shiftKey) {
       e.preventDefault();
       undoEdit();
@@ -812,7 +812,7 @@ const RichEditor = forwardRef(function RichEditor(
     const handler = onPasteFileRef.current;
     for (const f of files) {
       if (isUnsafeExt(f.name) || isUnsafeMime(f.type)) {
-        toast(`"${f.name || f.type}" can't be attached — for safety, programs and scripts aren't allowed.`, "error");
+        toast(`"${f.name || f.type}" can't be attached — for safety, programs and scripts aren't allowed`, "error");
         continue;
       }
       const tooBig = fileTooLargeMessage(f);
@@ -821,7 +821,7 @@ const RichEditor = forwardRef(function RichEditor(
         continue;
       }
       if (!handler) {
-        toast(`There's nowhere to attach "${f.name || "this file"}" here.`, "info");
+        toast(`There's nowhere to attach "${f.name || "this file"}" here`, "info");
         continue;
       }
       try {
@@ -847,7 +847,7 @@ const RichEditor = forwardRef(function RichEditor(
         if (f) files.push(f);
       }
     }
-    if (!files.length) return; // no files — let the browser handle it
+    if (!files.length) return; // no files: let the browser handle it
     e.preventDefault();
     routeFiles(files);
   };
@@ -864,7 +864,7 @@ const RichEditor = forwardRef(function RichEditor(
   const handleDrop = (e) => {
     if (disabled) return;
     const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
-    if (!files.length) return; // not a file drop — let the browser handle it
+    if (!files.length) return; // not a file drop, let the browser handle it
     e.preventDefault();
     routeFiles(files);
   };
@@ -907,7 +907,7 @@ const RichEditor = forwardRef(function RichEditor(
       // editor, so it goes through the same sanitizer as every other HTML we display.
       editor.innerHTML = sanitizeHtml(html);
       sync();
-      resetHistory(); // wholesale replace — reset history so Ctrl+Z can't jump to old content
+      resetHistory(); // wholesale replace: reset history so Ctrl+Z can't jump to old content
 
     },
     getHtml() {

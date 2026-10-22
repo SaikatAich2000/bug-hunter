@@ -31,7 +31,7 @@ describe("planning summary", () => {
     backend.state.sprintPlanning = sprintPlanningData({ ready_to_start: true, readiness: [], total_estimate: null });
     await open(user, { backend });
     expect(await screen.findByText("Ready")).toBeInTheDocument();
-    expect(screen.getByText("No checks configured.")).toBeInTheDocument();
+    expect(screen.getByText("No checks configured")).toBeInTheDocument();
     expect(screen.getByText("Total points").previousSibling).toHaveTextContent("—");
   });
 
@@ -48,7 +48,7 @@ describe("planning summary", () => {
     const backend = makeAgile(createBackend());
     backend.state.planning.sprints = [];
     await open(user, { backend });
-    expect(await screen.findByText("Select a sprint to plan.")).toBeInTheDocument();
+    expect(await screen.findByText("Select a sprint to plan")).toBeInTheDocument();
     expect(screen.getByLabelText("Sprint:")).toHaveDisplayValue("No open sprints");
   });
 
@@ -128,7 +128,7 @@ describe("capacity", () => {
       return calls <= 1 ? { agile_enabled: true, board_id: 9 } : { agile_enabled: false, board_id: null };
     });
     await open(user, { backend });
-    expect(await screen.findByText("Scrum is not set up for this project yet.")).toBeInTheDocument();
+    expect(await screen.findByText("Scrum is not set up for this project yet")).toBeInTheDocument();
   });
 
   it("a failed settings check is reported", async () => {

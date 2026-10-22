@@ -33,7 +33,7 @@ def normalize_name(name: str) -> str:
     return s.lower()
 
 
-# --- Epics ---
+# Epics
 
 def get_or_create_epic_detail(db: Session, epic: Bug) -> EpicDetail:
     detail = db.get(EpicDetail, epic.id)
@@ -99,7 +99,7 @@ def epic_progress(db: Session, epic: Bug) -> dict:
     return epic_progress_many(db, [epic.id])[epic.id]
 
 
-# --- Versions / Releases ---
+# Versions / Releases
 
 def create_version(db: Session, project_id: int, **fields) -> Version:
     v = Version(project_id=project_id, name_normalized=normalize_name(fields["name"]), **fields)
@@ -108,7 +108,7 @@ def create_version(db: Session, project_id: int, **fields) -> Version:
     return v
 
 
-# --- Components ---
+# Components
 
 def create_component(db: Session, project_id: int, **fields) -> Component:
     c = Component(project_id=project_id, name_normalized=normalize_name(fields["name"]), **fields)
@@ -145,7 +145,7 @@ def set_work_item_components(db: Session, item: Bug, component_ids: list[int]) -
     db.flush()
 
 
-# --- Labels ---
+# Labels
 
 def get_or_create_label(db: Session, project_id: int, display_name: str, color: str = "") -> Label:
     norm = normalize_name(display_name)

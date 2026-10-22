@@ -1,4 +1,4 @@
-// KPI strip — tile numbers + click-to-filter toggle. List and analytics views only.
+// KPI strip: tile numbers + click-to-filter toggle. List and analytics views only.
 import { useApp, KPI_FILTER_MAP } from "../state/AppContext";
 
 function arraysEqualAsSets(a, b) {

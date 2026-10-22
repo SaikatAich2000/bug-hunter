@@ -113,7 +113,7 @@ async def _docker_stats_sampler(container: str, samples: list[dict], stop: async
             pass
         try:
             await asyncio.wait_for(stop.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
 
@@ -154,7 +154,7 @@ async def _user_session(
     report: LoadTestReport, stop: asyncio.Event,
 ) -> None:
     """One simulated user's request loop, sharing one already-authenticated
-    client (see main_async) — many real users hitting the app concurrently is
+    client (see main_async), many real users hitting the app concurrently is
     the thing under test here, not the per-IP login rate limiter, which has
     its own dedicated tests in tests/test_security.py."""
     names = [name for name, _ in _SCENARIOS]
@@ -195,7 +195,7 @@ async def _read_targets(client: httpx.AsyncClient) -> tuple[int | None, int | No
 
     Returns (project_id, story_id). Nothing is created or modified: when the
     instance has no accessible project (or no Story) the dependent scenarios
-    are simply skipped and reported as such.
+    are skipped and reported as such.
     """
     project_id: int | None = None
     story_id: int | None = None

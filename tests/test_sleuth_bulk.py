@@ -48,9 +48,7 @@ def _user(db, uid):
     return db.get(models.User, uid)
 
 
-# --------------------------------------------------------------------------
 # Bulk writes (admin)
-# --------------------------------------------------------------------------
 def test_bulk_assign_all_admin():
     ids = seed()
     db = SessionLocal()
@@ -165,7 +163,7 @@ def test_bulk_unassign_all_admin():
 
 def test_clear_all_assignees_by_status_filter():
     """'remove assignees from CLOSED bugs' clears every assignee on the closed
-    set only, behind a Yes/Cancel confirm — the reported 'make it smart' case."""
+    set only, behind a Yes/Cancel confirm, the reported 'make it smart' case."""
     ids = seed()
     db = SessionLocal()
     try:
@@ -520,9 +518,7 @@ def test_every_sleuth_op_notifies():
         db.close()
 
 
-# --------------------------------------------------------------------------
-# Role policy — managers / users are read-only via Sleuth
-# --------------------------------------------------------------------------
+# Role policy: managers / users are read-only via Sleuth
 def test_sleuth_write_denied_helper():
     ids = seed()
     db = SessionLocal()

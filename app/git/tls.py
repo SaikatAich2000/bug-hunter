@@ -3,10 +3,10 @@
 Why this module exists
 ----------------------
 Corporate TLS interception (Zscaler, Netskope, a self-signed internal root,
-...), or simply a Python build whose bundled ``certifi`` roots are older than
+...), or a Python build whose bundled ``certifi`` roots are older than
 the corporate CA, makes httpx raise ``CERTIFICATE_VERIFY_FAILED: unable to get
 local issuer certificate`` even though the operating system trusts the chain
-perfectly — ``curl`` succeeds against the same URL.
+perfectly: ``curl`` succeeds against the same URL.
 
 ``truststore`` fixes that correctly: instead of shipping another CA bundle it
 delegates verification to the platform trust store (Windows SChannel / CryptoAPI,

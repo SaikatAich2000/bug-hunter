@@ -1,7 +1,7 @@
 """Tests for the optional in-app email-digest cron scheduler (app/scheduler.py).
 
 Covers the standard-cron parser/matcher, the timezone resolver, the
-start()/stop() control surface, and one digest tick — without depending on
+start()/stop() control surface, and one digest tick, without depending on
 wall-clock timing (the only untested line is the infinite sleep loop itself).
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import types
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -18,10 +18,10 @@ from app.scheduler import CronSchedule, _parse_field, _resolve_tz
 
 
 def _dt(y, mo, d, h, mi):
-    return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+    return datetime(y, mo, d, h, mi, tzinfo=UTC)
 
 
-# --- field parser ---------------------------------------------------------
+# field parser
 def test_parse_field_forms():
     assert _parse_field("*", 0, 5) == {0, 1, 2, 3, 4, 5}
     assert _parse_field("5", 0, 59) == {5}
@@ -37,7 +37,7 @@ def test_parse_field_invalid(bad):
         _parse_field(bad, 0, 59)
 
 
-# --- CronSchedule.matches -------------------------------------------------
+# CronSchedule.matches
 def test_daily_at_seven():
     c = CronSchedule("0 7 * * *")
     assert c.matches(_dt(2026, 6, 15, 7, 0))
@@ -77,13 +77,13 @@ def test_invalid_field_count():
         CronSchedule("0 7 * *")
 
 
-# --- timezone resolver ----------------------------------------------------
+# timezone resolver
 def test_resolve_tz_default_is_utc():
-    assert _resolve_tz("") is timezone.utc
+    assert _resolve_tz("") is UTC
 
 
 def test_resolve_tz_unknown_falls_back_to_utc():
-    assert _resolve_tz("Not/AZone") is timezone.utc
+    assert _resolve_tz("Not/AZone") is UTC
 
 
 def test_resolve_tz_valid_returns_tzinfo():
@@ -92,7 +92,7 @@ def test_resolve_tz_valid_returns_tzinfo():
     assert _resolve_tz("Asia/Kolkata") is not None
 
 
-# --- start()/stop() control ----------------------------------------------
+# start()/stop() control
 def test_start_noop_when_cron_empty(monkeypatch):
     monkeypatch.setattr(scheduler, "_task", None)
     scheduler.start()  # default settings: EMAIL_DIGEST_CRON is empty
@@ -151,7 +151,7 @@ def test_stop_noop_when_never_started(monkeypatch):
     asyncio.run(scheduler.stop())  # must not raise
 
 
-# --- one digest tick ------------------------------------------------------
+# one digest tick
 def test_tick_runs_when_schedule_matches(monkeypatch):
     seen = {}
 
@@ -161,7 +161,7 @@ def test_tick_runs_when_schedule_matches(monkeypatch):
 
     monkeypatch.setattr(scheduler, "_run_digest_once", fake_run)
     c = CronSchedule("* * * * *")
-    stats = asyncio.run(scheduler._tick(c, timezone.utc, now=_dt(2026, 6, 15, 7, 0)))
+    stats = asyncio.run(scheduler._tick(c, UTC, now=_dt(2026, 6, 15, 7, 0)))
     assert seen.get("ran")
     assert stats["emails_sent"] == 2
 
@@ -170,7 +170,7 @@ def test_tick_skips_when_no_match(monkeypatch):
     monkeypatch.setattr(scheduler, "_run_digest_once",
                         lambda: pytest.fail("must not run when schedule misses"))
     c = CronSchedule("0 7 * * *")
-    assert asyncio.run(scheduler._tick(c, timezone.utc, now=_dt(2026, 6, 15, 8, 0))) is None
+    assert asyncio.run(scheduler._tick(c, UTC, now=_dt(2026, 6, 15, 8, 0))) is None
 
 
 def test_tick_swallows_run_failure(monkeypatch):
@@ -178,7 +178,7 @@ def test_tick_swallows_run_failure(monkeypatch):
         raise RuntimeError("smtp down")
     monkeypatch.setattr(scheduler, "_run_digest_once", boom)
     c = CronSchedule("* * * * *")
-    assert asyncio.run(scheduler._tick(c, timezone.utc, now=_dt(2026, 6, 15, 7, 0))) is None
+    assert asyncio.run(scheduler._tick(c, UTC, now=_dt(2026, 6, 15, 7, 0))) is None
 
 
 # scheduler.start: empty cron expression should be a no-op
@@ -194,21 +194,21 @@ def test_scheduler_start_empty_cron_is_noop(monkeypatch):
     assert scheduler._task is None  # left unscheduled when cron is blank
 
 
-# app/scheduler.py — the async _loop's per-minute guard
+# app/scheduler.py: the async _loop's per-minute guard
 def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
     # Same-minute calls must not fire twice; a non-matching new minute is skipped.
     sched = importlib.import_module("app.scheduler")
 
     # Scripted clock: iter1 fires 07:00; iter2 same minute; iter3 07:01 no match; iter4 cancels.
     times = [
-        datetime(2026, 6, 21, 7, 0, 5, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 7, 0, 5, tzinfo=timezone.utc),   # iter1 after-sleep
-        datetime(2026, 6, 21, 7, 0, 35, tzinfo=timezone.utc),  # iter2 (repeat min)
-        datetime(2026, 6, 21, 7, 0, 35, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 7, 1, 5, tzinfo=timezone.utc),   # iter3 (new minute)
-        datetime(2026, 6, 21, 7, 1, 5, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 7, 2, 5, tzinfo=timezone.utc),   # iter4 (terminate)
-        datetime(2026, 6, 21, 7, 2, 5, tzinfo=timezone.utc),
+        datetime(2026, 6, 21, 7, 0, 5, tzinfo=UTC),
+        datetime(2026, 6, 21, 7, 0, 5, tzinfo=UTC),   # iter1 after-sleep
+        datetime(2026, 6, 21, 7, 0, 35, tzinfo=UTC),  # iter2 (repeat min)
+        datetime(2026, 6, 21, 7, 0, 35, tzinfo=UTC),
+        datetime(2026, 6, 21, 7, 1, 5, tzinfo=UTC),   # iter3 (new minute)
+        datetime(2026, 6, 21, 7, 1, 5, tzinfo=UTC),
+        datetime(2026, 6, 21, 7, 2, 5, tzinfo=UTC),   # iter4 (terminate)
+        datetime(2026, 6, 21, 7, 2, 5, tzinfo=UTC),
     ]
     idx = {"i": 0}
     sleeps = {"n": 0}
@@ -240,7 +240,7 @@ def test_scheduler_loop_skips_repeat_minute_and_non_matching(monkeypatch):
             # Only minute 0 matches, so iter1 fires and iter3 (07:01) does not.
             return now.minute == 0
 
-    coro = sched._loop(_Schedule(), timezone.utc)
+    coro = sched._loop(_Schedule(), UTC)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(coro)
 

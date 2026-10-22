@@ -1,4 +1,4 @@
-"""GitHub REST provider — branch creation only.
+"""GitHub REST provider: branch creation only.
 
 No local repository, no `git` command, no shell, no clone. Every call is a
 bounded HTTPS request through the already-present httpx dependency.
@@ -60,7 +60,7 @@ logger = logging.getLogger("bug_hunter.git.github")
 _DEFAULT_API = "https://api.github.com"
 _DEFAULT_WEB = "https://github.com"
 # github.com, its www alias and the API host itself all resolve to the public
-# api.github.com REST root — never to an enterprise ``/api/v3`` prefix.
+# api.github.com REST root, never to an enterprise ``/api/v3`` prefix.
 _GITHUB_COM_HOSTS = frozenset({"github.com", "www.github.com", "api.github.com"})
 
 # Only http(s) may ever be used to reach a provider. Plain http is accepted by
@@ -135,7 +135,7 @@ def _check_url_parts(parsed, scheme: str) -> None:
 def parse_base_url(base_url: str) -> tuple[str, str, str]:
     """Validate one base URL and return ``(scheme, netloc, host)``.
 
-    ``("", "", "")`` means "blank — use the deployment default".
+    ``("", "", "")`` means "blank, use the deployment default".
 
     Rejected, always raising :class:`GitBaseUrlError`:
 
@@ -245,7 +245,7 @@ class GitHubEnterpriseProvider:
         self._token = (token or "").strip()
 
     def __repr__(self) -> str:
-        """Never render the token — this object may end up in a traceback."""
+        """Never render the token, this object may end up in a traceback."""
         return (
             f"{type(self).__name__}(base_url={self.base_url!r}, "
             f"organization={self.organization!r}, token=<set>)"
@@ -258,7 +258,7 @@ class GitHubEnterpriseProvider:
 
     __str__ = __repr__
 
-    # --- internal helpers -------------------------------------------------
+    # internal helpers
 
     @property
     def api_base(self) -> str:
@@ -274,7 +274,7 @@ class GitHubEnterpriseProvider:
             raise GitProviderError(INVALID_BASE_URL, INVALID_BASE_URL_MESSAGE) from None
 
     def _effective_organization(self) -> str:
-        """Only this provider's own organization — never an environment fallback.
+        """Only this provider's own organization, never an environment fallback.
 
         The environment default is applied once, by ``build_provider``, only for
         legacy rows whose organization field is blank.
@@ -491,7 +491,7 @@ class GitHubEnterpriseProvider:
                 INVALID_RESPONSE, "GitHub returned a non-JSON response"
             ) from exc
 
-    # --- GitProvider ------------------------------------------------------
+    # GitProvider
 
     def validate_connection(self) -> str:
         """Cheap authenticated call; returns a short non-secret label."""
@@ -605,7 +605,7 @@ class GitHubEnterpriseProvider:
             f"/{quote(name, safe='')}/tree/{quote(branch, safe='/')}"
         )
 
-    # --- mapping ----------------------------------------------------------
+    # mapping
 
     @staticmethod
     def _to_provider_repository(row) -> ProviderRepository | None:

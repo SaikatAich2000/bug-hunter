@@ -23,7 +23,7 @@ def _project(c, name):
     return r.json()
 
 
-# --- deleting a user leaves a trail on every item they are removed from ------
+# deleting a user leaves a trail on every item they are removed from
 def test_delete_user_logs_activity_on_each_item(admin_client):
     p = _project(admin_client, "Trail")
     u = _user(admin_client, "Leaver", "leaver@x.com", role="manager")
@@ -48,8 +48,8 @@ def test_delete_user_logs_activity_on_each_item(admin_client):
     assert any(r["action"] == "user_removed" and r["entity_id"] == ev.json()["id"] for r in rows)
 
 
-# --- a fresh install does not "repair" the seed data it just wrote ------------
-# --- session cookie: __Host- prefix, opaque value, old name still accepted ----
+# a fresh install does not "repair" the seed data it just wrote
+# session cookie: __Host- prefix, opaque value, old name still accepted
 ADMIN = {"email": "admin@test.local", "password": "Admin1234"}
 
 
@@ -118,7 +118,7 @@ def test_secure_logout_clears_both_cookie_names(client, monkeypatch):
     assert "bh_session=" in cleared.replace("__Host-bh_session=", "")
 
 
-# --- every status code a route can raise is documented ---------------------------
+# every status code a route can raise is documented
 def _raised_codes(fn, seen=None, depth=0):
     """Status codes of HTTPException(...) raised by ``fn`` and the app functions it calls by name."""
     import ast
@@ -171,7 +171,7 @@ def test_every_status_a_route_raises_is_documented(client):
     assert not gaps, "undocumented status codes:\n" + "\n".join(gaps)
 
 
-# --- every 422 has the same shape ----------------------------------------------
+# every 422 has the same shape
 def _assert_422_shape(response):
     assert response.status_code == 422, response.text
     detail = response.json()["detail"]
@@ -219,7 +219,7 @@ def test_non_422_errors_keep_their_detail(client):
     assert r.json()["detail"] == "Not authenticated"
 
 
-# --- lockout: per email+IP, higher global per-email threshold ------------------
+# lockout: per email+IP, higher global per-email threshold
 def _login_from(client, ip, password):
     return client.post("/api/auth/login", json={"email": ADMIN["email"], "password": password},
                        headers={"X-Forwarded-For": ip})
@@ -260,7 +260,7 @@ def test_email_limit_is_never_below_the_per_address_limit(client, monkeypatch):
     assert account_lockout._email_limit() >= account_lockout._LOGIN_FAIL_LIMIT
 
 
-# --- uploads: extension allowlist verified by magic bytes ---------------------
+# uploads: extension allowlist verified by magic bytes
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 _SAMPLES = {
     "shot.png": _PNG,

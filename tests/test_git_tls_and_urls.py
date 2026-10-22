@@ -5,7 +5,7 @@ Two failure modes this guards against, both observed in the field:
 * Corporate TLS interception: ``curl``/Windows trust the interception CA, but
   httpx's bundled ``certifi`` roots do not, so every Git call died with
   ``CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate``. The
-  provider must verify against the OS trust store (app/git/tls.py) — and must
+  provider must verify against the OS trust store (app/git/tls.py), and must
   still verify, never fall back to an unverified connection.
 * URL normalization: a stored ``https://github.com`` or an enterprise
   ``https://ghe.example.com/api/v3`` must map to the exact REST base, and a
@@ -77,12 +77,10 @@ def _provider(github, base_url="https://ghe.example.com", token=TOKEN):
     )
 
 
-# ===========================================================================
 # A. TLS trust
-# ===========================================================================
 
 def test_system_trust_context_is_handed_to_httpx(monkeypatch):
-    """The OS-trust context — not the certifi default — is what httpx verifies with."""
+    """The OS-trust context: not the certifi default, is what httpx verifies with."""
     github = _github()
     sentinel = object()
     monkeypatch.setattr(github, "system_trust_context", lambda: sentinel)
@@ -195,7 +193,7 @@ def test_timeout_is_still_its_own_class(monkeypatch):
 
 
 def test_trust_store_init_failure_fails_closed_before_any_request(monkeypatch):
-    """No trust store means no request at all — never an unverified one."""
+    """No trust store means no request at all, never an unverified one."""
     github = _github()
 
     def _boom():
@@ -438,9 +436,7 @@ def test_delete_branch_only_uses_the_exact_heads_ref_endpoint(monkeypatch):
 
 
 
-# ===========================================================================
 # B. API URL normalization
-# ===========================================================================
 
 @pytest.mark.parametrize(
     ("stored", "expected"),
@@ -552,9 +548,7 @@ class _NeverCalled:
         raise AssertionError("no request may be attempted for an unusable base URL")
 
 
-# ===========================================================================
 # F. Strict draft semantics: explicit blank is never replaced
-# ===========================================================================
 
 def test_draft_explicit_blank_base_url_is_tested_as_blank(monkeypatch):
     """An explicit "" draft must reach the provider unchanged (then fail safe)."""
@@ -680,9 +674,7 @@ def test_tls_error_message_never_contains_pat(monkeypatch):
     assert calls["count"] >= 1
 
 
-# ===========================================================================
 # Provider API surface: repositories, branches, error mapping
-# ===========================================================================
 
 class _Reply:
     """A scripted httpx response: ``payload`` is returned by json(); ``bad_json`` makes json() raise."""
@@ -938,7 +930,7 @@ def test_a_branch_whose_commit_is_not_an_object_has_no_sha(monkeypatch):
     assert excinfo.value.code == github.BASE_BRANCH_MISSING
 
 
-# --- trust-store helpers and message sanitising --------------------------------------------
+# trust-store helpers and message sanitising
 
 def test_trust_store_availability_is_reported():
     from app.git import tls

@@ -95,7 +95,7 @@ export default function NotificationsBell() {
             {notifications.length === 0 ? (
               <div className="notif-empty">
                 <span className="notif-empty-glyph" aria-hidden="true">🔕</span>
-                <span>You&apos;re all caught up.</span>
+                <span>You&apos;re all caught up</span>
                 <EmptyGuide guide="notifications" />
               </div>
             ) : (

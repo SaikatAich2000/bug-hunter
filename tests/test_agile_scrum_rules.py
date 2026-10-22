@@ -12,7 +12,7 @@ from app.schemas import WorkItemTaskFlagsIn
 from app.services.agile_items import apply_task_flag_updates as _apply_task_flag_updates
 from app.services.agile_items import validate_story_ready_requirements as _validate_story_ready_requirements
 
-# --- helpers ---------------------------------------------------------------
+# helpers
 
 def _project(client, name):
     project = client.post("/api/projects", json={"name": name, "color": "#c9764f"}).json()
@@ -88,7 +88,7 @@ def _backlog_ids(client, board_id):
     return [i["id"] for i in _planning(client, board_id)["backlog"]]
 
 
-# --- starting a sprint ----------------------------------------------------------
+# starting a sprint
 
 def test_start_sprint_sets_dates_and_the_exact_start_instant(admin_client):
     """The Start Sprint dialog: name, goal and dates may be set; without an
@@ -131,7 +131,7 @@ def test_start_rejects_an_end_before_the_start(admin_client):
     assert res.status_code == 422
 
 
-# --- completing a sprint --------------------------------------------------------
+# completing a sprint
 
 def test_completed_issues_stay_in_the_closed_sprint(admin_client):
     """Finished issues stay in the sprint they were finished in (the
@@ -230,7 +230,7 @@ def test_carry_over_is_tagged_so_reports_do_not_count_it_as_removal(admin_client
     assert [r["id"] for r in report["not_completed"]] == [a["id"]]
 
 
-# --- the backlog ----------------------------------------------------------------
+# the backlog
 
 def test_backlog_holds_open_standard_issues_only(admin_client):
     """The backlog: issues in no open sprint and not in the Done column;
@@ -314,7 +314,7 @@ def test_regular_users_cannot_replan(admin_client):
     assert res.status_code == 403
 
 
-# --- board configuration -----------------------------------------------------------
+# board configuration
 
 def _columns(client, board_id):
     board = client.get(f"/api/agile/boards/{board_id}").json()
@@ -399,7 +399,7 @@ def test_the_rightmost_column_decides_done(admin_client):
     assert [r["id"] for r in report["not_completed"]] == [a["id"]]
 
 
-# --- hierarchy -------------------------------------------------------------------
+# hierarchy
 
 def test_hierarchy_rules(admin_client):
     project, _board = _project(admin_client, "Hierarchy Suite")
@@ -789,7 +789,7 @@ class TestApplyTaskFlagUpdates:
         assert blocked_changed is False
 
 
-# --- item-field routes: ready-for-sprint, dates, task flags, acceptance criteria ---
+# item-field routes: ready-for-sprint, dates, task flags, acceptance criteria
 
 def _admin_id(client):
     return client.get("/api/auth/me").json()["id"]
@@ -887,7 +887,7 @@ def test_acceptance_criteria_lifecycle(admin_client):
                              json={"description": "x"}).status_code == 404
 
 
-# --- board routes: lookups, WIP limits, estimates, taxonomy, quick filters ---------------
+# board routes: lookups, WIP limits, estimates, taxonomy, quick filters
 
 def _move(client, item_id, status, **extra):
     version = client.get(f"/api/bugs/{item_id}").json().get("version", 1)

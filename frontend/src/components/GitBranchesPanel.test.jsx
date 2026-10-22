@@ -116,7 +116,7 @@ describe("creating a branch", () => {
     mount();
     await user.click(await screen.findByRole("button", { name: "Create Feature Branch" }));
     await user.click(await screen.findByRole("button", { name: "Create Feature Branch" }));
-    expect(await screen.findByText("This branch cannot be created.")).toBeInTheDocument();
+    expect(await screen.findByText("This branch cannot be created")).toBeInTheDocument();
     backend.on("GET", /branches\/preview\?/, () => ({ can_create: false, reason: "Branch already exists", branch_name: "b", repository_full_name: "r", base_branch: "m" }));
     await user.type(screen.getByLabelText("Base branch"), "z"); // editing the base discards the preview
     await user.click(screen.getByRole("button", { name: "Create Feature Branch" }));

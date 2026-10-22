@@ -1,6 +1,6 @@
 /** Owns onboarding state for the signed-in person: loads their saved preferences, shows the welcome
  * screen on first login and runs the resumable tour. Everything is stored on the server
- * (/api/me/preferences) so it follows them across browsers; a failed load simply shows nothing. */
+ * (/api/me/preferences) so it follows them across browsers; a failed load shows nothing. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
@@ -88,7 +88,7 @@ export default function OnboardingHost() {
           onIndex={(i) => void save({ tour_step: i })}
           onPause={() => {
             void save({ tour_status: "dismissed", tour_step: index });
-            toast("Tour paused. Resume it from the account menu.");
+            toast("Tour paused, resume it from the account menu");
           }}
           onFinish={() => void save({ tour_status: "done", tour_step: 0 })}
         />

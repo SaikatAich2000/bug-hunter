@@ -1,4 +1,4 @@
-// App shell — TopChrome + SuperNav + Sidebar/main frame. Only the active view is mounted;
+// App shell: TopChrome + SuperNav + Sidebar/main frame. Only the active view is mounted;
 // list/analytics re-fetch here because they read shared context, other views fetch on mount.
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";

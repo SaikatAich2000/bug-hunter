@@ -9,10 +9,10 @@ import time
 from collections import deque
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import (
     Depends,
@@ -119,7 +119,7 @@ def _compute_asset_version(static_dir: Path) -> str:
                 st = path.stat()
                 if st.st_size > _MAX_ASSET_FILE_BYTES:
                     # Path + size still shifts the version if the file is replaced.
-                    h.update(f"size={st.st_size}".encode("utf-8"))
+                    h.update(f"size={st.st_size}".encode())
                 else:
                     h.update(path.read_bytes())
             except OSError:
@@ -312,7 +312,7 @@ def _board_schema_ready(db) -> bool:
     defer to the next boot after _add_missing_columns has run."""
     from sqlalchemy import inspect as _inspect
     # get_columns() returns a list of per-column dicts (unhashable),
-    # so collect the names directly — set() on the dicts raises
+    # so collect the names directly, set() on the dicts raises
     # "TypeError: cannot use 'dict' as a set element".
     board_col_names = {col["name"] for col in _inspect(db.bind).get_columns("boards")}
     required = {"display_id"}
@@ -368,7 +368,7 @@ def _reconcile_status_transitions(db) -> bool:
 
 def _reconcile_existing_boards() -> None:
     """Additive backfill: boards activated before the Testing
-    column existed only have todo/in_progress/done. Idempotent — a no-op on
+    column existed only have todo/in_progress/done. Idempotent, a no-op on
     every subsequent boot once every board has a testing column. Also
     backfills WorkflowTransition rows for any status added to a work-item
     type after its transitions were first seeded (e.g. Testing added to
@@ -566,7 +566,7 @@ app.state.asset_version = _compute_asset_version(settings.STATIC_DIR)
 
 
 # CORS
-# The SPA uses cookies, so responses must echo a concrete allowlisted Origin —
+# The SPA uses cookies, so responses must echo a concrete allowlisted Origin,
 # the spec forbids "*" with credentials.
 _origins = list(settings.CORS_ORIGINS)
 _allow_credentials = True
@@ -585,7 +585,7 @@ elif "*" in _origins:
 # CORSMiddleware is registered last: Starlette stacks middleware in reverse,
 # and CORS must be outermost to intercept OPTIONS before other middleware.
 
-# Gzip compression — skips bodies under 1 KB.
+# Gzip compression: skips bodies under 1 KB.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
@@ -680,7 +680,7 @@ class BodyLimitMiddleware:
 app.add_middleware(BodyLimitMiddleware)
 
 
-# Cache-Control middleware — prevents stale HTML after redeploy.
+# Cache-Control middleware: prevents stale HTML after redeploy.
 #   HTML / api -> no-store; /static/assets/ -> immutable 1y (content-hashed);
 #   /static/ -> 1h.
 def _apply_cache_headers(h, path: str) -> None:
@@ -690,7 +690,7 @@ def _apply_cache_headers(h, path: str) -> None:
     if path.startswith("/api/"):
         h["Cache-Control"] = "no-store"
     elif path.startswith("/static/assets/"):
-        # Vite content-hashed filenames — safe to cache for a year.
+        # Vite content-hashed filenames, safe to cache for a year.
         h["Cache-Control"] = "public, max-age=31536000, immutable"
     elif path.startswith("/static/"):
         # Not fingerprinted; shorter cache.
@@ -701,7 +701,7 @@ def _apply_cache_headers(h, path: str) -> None:
         h["Pragma"] = "no-cache"
 
 
-# Security headers — applied to every response.
+# Security headers: applied to every response.
 # style-src needs 'unsafe-inline' (app sets .style.x); HSTS is gated on
 # COOKIE_SECURE so a dev/HTTP deploy isn't locked into HTTPS.
 # Endpoints the Firebase SDK needs for token mint/refresh; added to
@@ -780,7 +780,7 @@ app.add_middleware(ResponseHeadersMiddleware)
 class _GateMiddleware:
     """Pure ASGI: answer a request early (``check`` returns a response) or pass it on."""
 
-    check: Callable[[Request], Optional[Response]]
+    check: Callable[[Request], Response | None]
 
     def __init__(self, app):
         self.app = app
@@ -794,7 +794,7 @@ class _GateMiddleware:
         await self.app(scope, receive, send)
 
 
-def _blocked(status_code: int, detail: str, headers: Optional[dict] = None) -> JSONResponse:
+def _blocked(status_code: int, detail: str, headers: dict | None = None) -> JSONResponse:
     resp = JSONResponse(status_code=status_code, content={"detail": detail}, headers=headers)
     _apply_security_headers(resp.headers)
     resp.headers.setdefault("Cache-Control", "no-store")
@@ -808,7 +808,7 @@ _RATE_RULES: dict[str, tuple[int, int]] = {
     # (max_requests, window_seconds)
     "/api/auth/login": (settings.RATE_LOGIN_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
     "/api/auth/forgot-password": (settings.RATE_FORGOT_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
-    # change-password bcrypt-verifies on every call — throttle the amplification.
+    # change-password bcrypt-verifies on every call, throttle the amplification.
     "/api/auth/reset-password": (settings.RATE_RESET_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
     "/api/auth/change-password": (settings.RATE_CHANGE_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
 }
@@ -822,7 +822,7 @@ _MAX_RATE_WINDOW = max((w for _, w in _RATE_RULES.values()), default=60)
 
 def _evict_one_rate_bucket(now: float) -> None:
     """Make room for a new bucket: reclaim idle buckets first, then the
-    least-recently-active — never insertion order, so an attacker can't churn
+    least-recently-active: never insertion order, so an attacker can't churn
     keys to flush their own throttle. Caller holds _rate_lock."""
     horizon = now - _MAX_RATE_WINDOW
     dead = [k for k, b in _rate_buckets.items() if not b or b[-1] < horizon]
@@ -848,7 +848,7 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def rate_limit_check(request: Request) -> Optional[Response]:
+def rate_limit_check(request: Request) -> Response | None:
     """429 when this IP has used up the endpoint's window; None lets it through."""
     path = request.url.path
     rule = _RATE_RULES.get(path)
@@ -884,7 +884,7 @@ class RateLimitMiddleware(_GateMiddleware):
 app.add_middleware(RateLimitMiddleware)
 
 
-# CSRF defense in depth — SameSite=Lax has gaps (subdomains, older browsers),
+# CSRF defense in depth, SameSite=Lax has gaps (subdomains, older browsers),
 # so mutating /api/ requests must present a matching Origin/Referer. Clients
 # sending neither (curl, httpx) pass: CSRF needs a browser as deputy.
 def _allowed_origins() -> set[str]:
@@ -899,7 +899,7 @@ _CSRF_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_EXEMPT_PATHS: frozenset[str] = frozenset()
 
 
-def csrf_check(request: Request) -> Optional[Response]:
+def csrf_check(request: Request) -> Response | None:
     """403 for a mutating /api/ request whose Origin (or Referer) isn't this app's."""
     method = request.method.upper()
     path = request.url.path
@@ -981,7 +981,7 @@ def _serve_html(filename: str) -> HTMLResponse:
 def _has_valid_session(request: Request) -> bool:
     """True if the request carries a valid, non-revoked session cookie.
 
-    Must check revocation, not just the signature — accepting a revoked cookie
+    Must check revocation, not just the signature, accepting a revoked cookie
     here makes / and /login.html redirect-loop each other.
     """
     parsed = parse_session_token(session_cookie_value(request))
@@ -1000,8 +1000,8 @@ def _has_valid_session(request: Request) -> bool:
             return False
         expires = sess.expires_at
         if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        return expires >= datetime.now(timezone.utc)
+            expires = expires.replace(tzinfo=UTC)
+        return expires >= datetime.now(UTC)
     except SQLAlchemyError:
         # DB momentarily down: send to login rather than 500.
         logger.exception("_has_valid_session: DB lookup failed for jti=%s", jti)
@@ -1010,9 +1010,9 @@ def _has_valid_session(request: Request) -> bool:
         db.close()
 
 
-def _auto_login(request: Request, db: OrmSession) -> Optional[tuple[User, str]]:
+def _auto_login(request: Request, db: OrmSession) -> tuple[User, str] | None:
     """When AUTO_LOGIN_ENABLED, sign in as the bootstrap admin with no
-    credentials — a convenience switch for trusted local/dev deployments,
+    credentials: a convenience switch for trusted local/dev deployments,
     not a hardened auth mode (see the startup warning in
     _runtime_config_warnings). Returns None (falling back to the normal
     login flow) if the flag is off or that account is missing/deactivated.
@@ -1024,7 +1024,7 @@ def _auto_login(request: Request, db: OrmSession) -> Optional[tuple[User, str]]:
     if user is None or not user.is_active:
         return None
     jti = new_jti()
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+    expires_at = datetime.now(UTC) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
     db.add(SessionRow(
         user_id=user.id,
         jti=jti,
@@ -1073,7 +1073,7 @@ def login_page(request: Request, db: Annotated[OrmSession, Depends(get_db)]):
 @app.get("/reset.html", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/reset", response_class=HTMLResponse, include_in_schema=False)
 def reset_page() -> HTMLResponse:
-    # Always reachable — even a logged-in user may follow a reset link.
+    # Always reachable: even a logged-in user may follow a reset link.
     return _serve_html("reset.html")
 
 

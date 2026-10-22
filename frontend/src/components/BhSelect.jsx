@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-// placeholder labels look like "— … —"
+// placeholder labels look like ",  …, "
 const PLACEHOLDER_RE = /^—.*—$/;
 
 export default function BhSelect({ value, onChange, options, disabled, id, name, ariaLabel }) {
@@ -77,7 +77,7 @@ export default function BhSelect({ value, onChange, options, disabled, id, name,
     return () => document.removeEventListener("keydown", onKey, true);
   }, [open]);
 
-  // unmatched value → selectedIndex -1, label "—"
+  // unmatched value → selectedIndex -1, label ", "
   const selectedIndex = options.findIndex((o) => o.value === value);
   const selOpt = selectedIndex >= 0 ? options[selectedIndex] : undefined;
   const labelText = selOpt ? selOpt.label : "";

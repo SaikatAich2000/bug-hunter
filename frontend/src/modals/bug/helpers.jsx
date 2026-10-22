@@ -34,7 +34,7 @@ function isDangerousFile(name) {
 }
 import VideoLightbox from "../../components/VideoLightbox";
 
-// --- Plain-text description bridge (API stores plain text, editor is HTML) ---
+// Plain-text description bridge (API stores plain text, editor is HTML)
 
 /** Escape text so it can be embedded as editor HTML text content. */
 export function escapeHtmlText(text) {
@@ -223,7 +223,7 @@ export function useStagedFiles() {
     const allowed = sized.filter((f) => !isDangerousFile(f.name));
     if (blocked.length) {
       toast(
-        `Can't attach ${blocked.map((f) => f.name).join(", ")} — for safety, programs and scripts aren't allowed.`,
+        `Can't attach ${blocked.map((f) => f.name).join(", ")} — for safety, programs and scripts aren't allowed`,
         "error",
       );
     }

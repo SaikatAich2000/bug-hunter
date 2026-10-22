@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.common import MIN_PROJECT_NAME_LENGTH, _strip_and_check_min_length
 
 
-# --- Project ---
+# Project
 class ProjectIn(BaseModel):
     name: str = Field(max_length=120)
     description: str = Field(default="", max_length=1000)

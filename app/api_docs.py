@@ -5,7 +5,7 @@ responses with one of these maps. Maps are shared **only** where the raised
 status codes (and their user-facing meaning) are genuinely identical; a route
 with a unique response documents it inline instead.
 
-The values are plain descriptions — the app's error contract carries details in
+The values are plain descriptions, the app's error contract carries details in
 the JSON ``detail`` body and the ``X-Error-Code`` header, which FastAPI emits
 from the raised exception itself.
 """
@@ -93,7 +93,7 @@ GIT_REMOVE_FORBIDDEN_NOT_FOUND_CONFLICT_VALIDATION_422: Final = _doc(403, 404, 4
 #: Branch create/list/preview/discovery: missing scope + conflict + bad input.
 GIT_BRANCH_CONFLICT_NOT_FOUND_VALIDATION_422: Final = _doc(404, 409, 422)
 
-# --- Further endpoint combinations ---------------------------------------
+# Further endpoint combinations
 #: Codes an endpoint family raises: 400, 403, 404, 413, 429.
 BAD_REQUEST_FORBIDDEN_NOT_FOUND_PAYLOAD_TOO_LARGE_429: Final = _doc(400, 403, 404, 413, 429)
 #: Codes an endpoint family raises: 400, 403, 404, 422.

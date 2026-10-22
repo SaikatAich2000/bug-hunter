@@ -1,7 +1,7 @@
 /** Contract tests for the navigation model (`./navItems.js` + `../types.js`).
  *
  * TopChrome and the mobile Sidebar render from the same NAV_ITEMS list, and
- * restricted views defer to VIEW_MIN_ROLE — these tests pin the shared
+ * restricted views defer to VIEW_MIN_ROLE, these tests pin the shared
  * source of truth so a renamed view cannot orphan the sidebar links.
  */
 import { describe, expect, it } from "vitest";

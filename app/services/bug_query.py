@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import (
     HTTPException,
 )
@@ -19,7 +17,7 @@ from app.schemas import (
 from app.util import MAX_PK_INT, like_escape
 
 
-def normalize_choice_list(values: Optional[list[str]], allowed: list[str], label: str) -> list[str]:
+def normalize_choice_list(values: list[str] | None, allowed: list[str], label: str) -> list[str]:
     """Normalize a multi-valued enum query param; strip empties, reject unknowns with 400."""
     if not values:
         return []
@@ -67,7 +65,7 @@ def reject_overflow_ids(**named_ids) -> None:
             continue
         values = value if isinstance(value, list) else [value]
         for v in values:
-            # Small negatives like -1 are in range and simply match nothing;
+            # Small negatives like -1 are in range and match nothing;
             # reject only values truly outside int4.
             if v is not None and (v > MAX_PK_INT or v < -MAX_PK_INT - 1):
                 raise HTTPException(status_code=422, detail=f"{name} is out of range")

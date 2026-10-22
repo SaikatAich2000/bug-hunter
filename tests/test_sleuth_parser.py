@@ -3,7 +3,7 @@ freshly-seeded SQLite DB. Read-only by design; write actions are covered separat
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -56,7 +56,7 @@ def seed() -> None:
         db.add_all([proj_a, proj_b])
         db.commit()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         bugs = [
             models.Bug(title="Login button does nothing on Safari",
                        description="Safari 17 does not fire click",
@@ -191,7 +191,7 @@ def test_executor() -> None:
         admin = db.query(models.User).filter_by(email="admin@example.com").one()
         bob = db.query(models.User).filter_by(email="bob@example.com").one()
 
-        # 1. open bugs assigned to bob — expect IDs 1, 2, 6
+        # 1. open bugs assigned to bob, expect IDs 1, 2, 6
         resp = executor.execute("show open bugs assigned to bob", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         check("open bugs vs bob — table present", tbl is not None)
@@ -304,7 +304,7 @@ def test_executor() -> None:
             ids = sorted(tbl.payload.get("row_bug_ids", []))
             check("text search 'login' — finds Bug #1", 1 in ids, f"got {ids}")
 
-        # 17. SQL injection — must not crash and must not alter the table
+        # 17. SQL injection, must not crash and must not alter the table
         before = db.query(models.Bug).count()
         resp = executor.execute("'; DROP TABLE bugs; --", db, admin)
         check("injection — no crash", len(resp.blocks) > 0)
@@ -321,7 +321,7 @@ def test_executor() -> None:
         resp = executor.execute("показать все баги", db, admin)
         check("unicode — no crash", len(resp.blocks) > 0)
 
-        # 20. No filters — should return all seeded bugs
+        # 20. No filters, should return all seeded bugs
         resp = executor.execute("show me all bugs", db, admin)
         tbl = next((b for b in resp.blocks if b.kind == "table"), None)
         check("all bugs — table present", tbl is not None)

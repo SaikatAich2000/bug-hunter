@@ -6,7 +6,7 @@ out-of-scope resources as 404 so the restriction doesn't leak what exists.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.models import ROLE_ADMIN, Bug, Event, User, user_projects
 
 
-def accessible_project_ids(db: Session, user: User) -> Optional[set[int]]:
+def accessible_project_ids(db: Session, user: User) -> set[int] | None:
     """Project ids ``user`` may access; ``None`` for admins, empty set = sees nothing."""
     if user.role == ROLE_ADMIN:
         return None
@@ -34,21 +34,21 @@ def project_ids_for_user(db: Session, user_id: int) -> list[int]:
     return [int(pid) for pid in rows]
 
 
-def can_access_project(accessible: Optional[set[int]], project_id: Optional[int]) -> bool:
+def can_access_project(accessible: set[int] | None, project_id: int | None) -> bool:
     """True if ``project_id`` is in scope; admins always pass, ``None`` project never matches restricted actors."""
     if accessible is None:
         return True
     return project_id is not None and project_id in accessible
 
 
-def scope_bug_query(stmt, accessible: Optional[set[int]]):
+def scope_bug_query(stmt, accessible: set[int] | None):
     """Restrict a Bug statement to the actor's projects; no-op for admins."""
     if accessible is None:
         return stmt
     return stmt.where(Bug.project_id.in_(accessible))
 
 
-def scope_event_query(stmt, accessible: Optional[set[int]]):
+def scope_event_query(stmt, accessible: set[int] | None):
     """Restrict an Event statement to the actor's projects; NULL-project events stay admin-only."""
     if accessible is None:
         return stmt

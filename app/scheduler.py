@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone, tzinfo
+from datetime import UTC, datetime, tzinfo
 from zoneinfo import ZoneInfo
 
 from app.config import get_settings
@@ -119,7 +119,7 @@ class CronSchedule:
 def _resolve_tz(name: str) -> tzinfo:
     """Return the IANA timezone for the cron expression, or UTC if unset/unknown."""
     if not name:
-        return timezone.utc
+        return UTC
     try:
         return ZoneInfo(name)
     except Exception:  # noqa: BLE001 — unknown tz must not break startup
@@ -130,7 +130,7 @@ def _resolve_tz(name: str) -> tzinfo:
             "ensure the 'tzdata' package is installed (it is in requirements.txt).",
             name,
         )
-        return timezone.utc
+        return UTC
 
 
 def _run_digest_once() -> dict:

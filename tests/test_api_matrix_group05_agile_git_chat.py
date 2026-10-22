@@ -1,5 +1,5 @@
 """API validation matrix group05+: agile taxonomy/board/sprints, git, chat read
-APIs — positive lifecycle + auth + not-found coverage per operation family."""
+APIs: positive lifecycle + auth + not-found coverage per operation family."""
 from __future__ import annotations
 
 

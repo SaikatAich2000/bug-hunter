@@ -302,7 +302,7 @@ def update_item_taxonomy(
     return _issue_out(db, item, actor)
 
 
-# --- Quick filters ---
+# Quick filters
 
 @router.get("/boards/{board_id}/quick-filters", response_model=list[QuickFilterOut], responses=NOT_FOUND_404)
 def list_quick_filters(

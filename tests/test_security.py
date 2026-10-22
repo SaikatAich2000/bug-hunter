@@ -33,9 +33,9 @@ def _make_bug(client, title: str, project_id: int = 1) -> int:
     return res.json()["id"]
 
 
-# --- Login timing equality ---
+# Login timing equality
 class TestLoginTimingEquality:
-    """Unknown-email and wrong-password branches both run one bcrypt verify — no timing oracle."""
+    """Unknown-email and wrong-password branches both run one bcrypt verify, no timing oracle."""
 
     def test_unknown_email_still_runs_bcrypt(self, client):
         # Spy on verify_password rather than paying the real bcrypt cost.
@@ -78,7 +78,7 @@ class TestLoginTimingEquality:
         assert a.json()["detail"] == b.json()["detail"]
 
 
-# --- Spreadsheet formula injection (XLSX) ---
+# Spreadsheet formula injection (XLSX)
 # Excel treats cells starting with = + - @ \t \r as formulas; xlsx.py::_defang_formula_text prefixes them.
 class TestXlsxFormulaInjectionGuard:
 
@@ -120,7 +120,7 @@ class TestXlsxFormulaInjectionGuard:
         assert found_defanged, "expected the malicious title to appear (defanged) somewhere"
 
 
-# --- Body size middleware ---
+# Body size middleware
 class TestBodySizeMiddleware:
 
     def test_normal_request_under_limit_succeeds(self, admin_client):
@@ -346,7 +346,7 @@ class TestImageStripEdgeCases:
         assert strip_image_metadata(raw, "image/jpeg; charset=binary") == raw
 
 
-# --- X-Forwarded-For trust gate ---
+# X-Forwarded-For trust gate
 class TestXffTrustGate:
 
     def test_xff_ignored_when_trust_disabled(self, admin_client):
@@ -401,7 +401,7 @@ class TestXffTrustGate:
             )
 
 
-# --- Email masking in logs ---
+# Email masking in logs
 class TestEmailMasking:
 
     @pytest.mark.parametrize("raw,expected", [
@@ -441,7 +441,7 @@ class TestEmailMasking:
             assert "d***@test.local" in line
 
 
-# --- Account lockout ---
+# Account lockout
 class TestAccountLockout:
 
     def test_unit_check_locked_passes_when_no_state(self):
@@ -512,7 +512,7 @@ class TestAccountLockout:
         account_lockout.check_locked(BOOTSTRAP_EMAIL)
 
 
-# --- HIBP breach check ---
+# HIBP breach check
 class TestPasswordBreachCheck:
     """conftest disables the breach check globally; integration tests re-enable it per body, unit tests use the module default."""
 
@@ -606,7 +606,7 @@ class TestPasswordBreachCheck:
         assert res.status_code == 204
 
 
-# --- EXIF strip ---
+# EXIF strip
 def _jpeg_with_exif(gps_value: str = "secret-gps-tag") -> bytes:
     """8x8 JPEG with ``gps_value`` in EXIF tag 270 (ImageDescription)."""
     from PIL import Image

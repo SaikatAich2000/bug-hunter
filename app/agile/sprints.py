@@ -14,7 +14,7 @@ Every mutation flushes within the caller's transaction; the route commits.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
@@ -43,7 +43,7 @@ def board_today(board: Board | None) -> date:
     try:
         tz = ZoneInfo(tz_name)
     except (ZoneInfoNotFoundError, ValueError):
-        tz = timezone.utc
+        tz = UTC
     return datetime.now(tz).date()
 
 
@@ -165,7 +165,7 @@ def update_sprint(
     return sprint
 
 
-# --- Planning: which issues are in which sprint, in what order ---------------
+# Planning: which issues are in which sprint, in what order
 
 def _plannable_items(db: Session, project_id: int, item_ids: list[int]) -> list[Bug]:
     items: list[Bug] = []
@@ -358,7 +358,7 @@ def remove_item_from_sprint(db: Session, sprint: Sprint, item_id: int, actor: Us
     return move_items(db, sprint.project_id, [item_id], None, actor)[0]
 
 
-# --- Start / complete / delete ----------------------------------------------
+# Start / complete / delete
 
 def start_sprint(
     db: Session, sprint: Sprint, actor: User, allow_parallel: bool,

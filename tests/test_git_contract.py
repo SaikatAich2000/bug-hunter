@@ -1,6 +1,6 @@
 """Git OpenAPI contract tests: documented S8415 responses are genuine.
 
-Pins decorator-level ``responses=`` metadata on every git route — paths,
+Pins decorator-level ``responses=`` metadata on every git route, paths,
 methods, auth requirements and the exact documented status codes.
 """
 from __future__ import annotations

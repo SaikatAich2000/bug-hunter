@@ -1,13 +1,14 @@
-"""Sleuth actions — the write-side of the assistant (executor.py is read-only).
+"""Sleuth actions: the write-side of the assistant (executor.py is read-only).
 
 Every action re-validates permissions, runs one short transaction, and audits.
 All writes are staged behind a Yes/Cancel confirm; destructive ops stay UI-only.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Iterable, Literal, Optional
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,7 +45,7 @@ _BULK_KINDS = frozenset({
 })
 
 
-# --- ActionPlan — a fully-resolved write request awaiting execution ---
+# ActionPlan — a fully-resolved write request awaiting execution
 @dataclass
 class ActionPlan:
     """A concrete change built at parse time and executed on confirm.
@@ -55,19 +56,19 @@ class ActionPlan:
         "create_bug", "create_project",
     ]
     actor_user_id: int
-    bug_id: Optional[int] = None
+    bug_id: int | None = None
     # When non-empty, the action applies to every id here. bug_id stays None.
     bug_ids: list[int] = field(default_factory=list)
     target_user_ids: list[int] = field(default_factory=list)
     target_user_names: list[str] = field(default_factory=list)
     # unassign only: drop EVERY assignee, ignoring target_user_ids.
     unassign_all: bool = False
-    new_value: Optional[str] = None      # status / priority / env / due_date
-    comment_body: Optional[str] = None
-    new_title: Optional[str] = None
-    new_description: Optional[str] = None
-    new_project_id: Optional[int] = None
-    new_project_name: Optional[str] = None
+    new_value: str | None = None      # status / priority / env / due_date
+    comment_body: str | None = None
+    new_title: str | None = None
+    new_description: str | None = None
+    new_project_id: int | None = None
+    new_project_name: str | None = None
     # Shown in the confirm prompt and the post-execution message.
     summary_human: str = ""
 
@@ -91,7 +92,7 @@ class ActionPlan:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "ActionPlan":
+    def from_dict(cls, d: dict[str, Any]) -> ActionPlan:
         return cls(
             kind=d.get("kind", ""),
             actor_user_id=d.get("actor_user_id", 0),
@@ -110,8 +111,8 @@ class ActionPlan:
         )
 
 
-# --- Permission helpers ---
-def _check_can_edit_bug(actor: User, bug: Bug) -> Optional[str]:
+# Permission helpers
+def _check_can_edit_bug(actor: User, bug: Bug) -> str | None:
     """Return None if the actor may edit this item, otherwise an error string.
     Passes the item's real type so per-type rules match PUT /api/bugs/{id}."""
     itype = getattr(bug, "item_type", None) or "Bug"
@@ -120,29 +121,29 @@ def _check_can_edit_bug(actor: User, bug: Bug) -> Optional[str]:
     return None
 
 
-def _check_can_create_project(actor: User) -> Optional[str]:
+def _check_can_create_project(actor: User) -> str | None:
     if not can_manage_projects(actor):
         return ("Only admins or managers can create projects. "
                 "Ask one of them to do it for you")
     return None
 
 
-def _check_can_create_bug(actor: User) -> Optional[str]:
+def _check_can_create_bug(actor: User) -> str | None:
     # Any authenticated user can file a bug (mirrors POST /api/bugs).
     if not actor.is_active:
         return "Your account is inactive"
     return None
 
 
-# --- Audit helper ---
-def _audit(db: Session, bug_id: Optional[int], actor: User,
+# Audit helper
+def _audit(db: Session, bug_id: int | None, actor: User,
            action: str, detail: str,
-           entity_type: str = "bug", entity_id: Optional[int] = None) -> None:
+           entity_type: str = "bug", entity_id: int | None = None) -> None:
     audit(db, actor, entity_type, entity_id if entity_id is not None else bug_id,
           action, detail, bug_id=bug_id)
 
 
-# --- Block helpers ---
+# Block helpers
 def _confirm_response(plan: ActionPlan, prompt: str) -> Response:
     """Confirm response: frontend renders Yes/No buttons; Yes dispatches the plan."""
     return Response(
@@ -160,7 +161,7 @@ def _confirm_response(plan: ActionPlan, prompt: str) -> Response:
 
 
 def _success_response(message: str, intent: str = "action_done",
-                      bug_id: Optional[int] = None) -> Response:
+                      bug_id: int | None = None) -> Response:
     blocks: list[Block] = [Block("text", {"text": message})]
     if bug_id is not None:
         blocks.append(Block("suggestions", {
@@ -184,8 +185,8 @@ def _error_response(message: str, intent: str = "action_error") -> Response:
     )
 
 
-# --- Plan execution — the actual writes ---
-def _load_bug(db: Session, bug_id: int) -> Optional[Bug]:
+# Plan execution — the actual writes
+def _load_bug(db: Session, bug_id: int) -> Bug | None:
     return db.scalar(
         select(Bug)
         .options(selectinload(Bug.project),
@@ -202,7 +203,7 @@ def _itype_of(bug: Bug) -> str:
 def _notify_chat_op(db: Session, bug: Bug, actor: User, *, kind: str,
                     title: str, body: str, extra_user_ids: Iterable[int] = ()) -> None:
     """In-app notification to stakeholders (reporter + assignees + actor + extras).
-    In-app only — no immediate email/push is wired through the chat path."""
+    In-app only: no immediate email/push is wired through the chat path."""
     recipients: set[int] = {actor.id}
     if bug.reporter_id is not None:
         recipients.add(bug.reporter_id)
@@ -214,7 +215,7 @@ def _notify_chat_op(db: Session, bug: Bug, actor: User, *, kind: str,
     )
 
 
-def _resolve_targets(db: Session, ids: list[int]) -> tuple[list[User], Optional[str]]:
+def _resolve_targets(db: Session, ids: list[int]) -> tuple[list[User], str | None]:
     """Resolve user ids to active User objects, or return an error string.
     Unknown ids are a hard error; deactivated users can't be assignees (as in REST)."""
     if not ids:
@@ -230,7 +231,7 @@ def _resolve_targets(db: Session, ids: list[int]) -> tuple[list[User], Optional[
     return users, None
 
 
-def _outsider_error(db: Session, users: list[User], project_id: int) -> Optional[str]:
+def _outsider_error(db: Session, users: list[User], project_id: int) -> str | None:
     """Assignees are notified, so each must be able to open the item (as in REST)."""
     outsiders = non_members(db, users, project_id)
     if not outsiders:
@@ -259,13 +260,13 @@ def _apply_assign(db: Session, plan: ActionPlan, actor: User,
     if oerr:
         return _error_response(oerr)
     if not added:
-        # No-op — signal "skipped" to the bulk caller; no audit/version bump.
+        # No-op: signal "skipped" to the bulk caller; no audit/version bump.
         return _success_response(
             f"No change — those user(s) are already assigned to bug #{bug.id}",
             intent=_INTENT_NOOP, bug_id=bug.id,
         )
     bug.assignees = list(bug.assignees) + added
-    # Assignee change touches no Bug column — bump version for optimistic concurrency.
+    # Assignee change touches no Bug column, bump version for optimistic concurrency.
     bug.version = (bug.version or 1) + 1
     after = sorted(a.name for a in bug.assignees)
     _audit(db, bug.id, actor, "assignees_changed",
@@ -302,7 +303,7 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
     bug.assignees = [a for a in bug.assignees if a.id not in drop_ids]
     after = sorted(a.name for a in bug.assignees)
     if before == after:
-        # Nobody to drop — signal "skipped" to the bulk caller.
+        # Nobody to drop, signal "skipped" to the bulk caller.
         msg = ("Nothing changed — that bug had no assignees" if plan.unassign_all
                else "Nothing changed — those users weren't assigned to this bug")
         return _success_response(msg, intent=_INTENT_NOOP, bug_id=bug.id)
@@ -326,7 +327,7 @@ def _apply_unassign(db: Session, plan: ActionPlan, actor: User,
     )
 
 
-def _validate_field_value(bug: Bug, field_name: str, value: Any) -> Optional[str]:
+def _validate_field_value(bug: Bug, field_name: str, value: Any) -> str | None:
     """Return an error string if value is invalid for this field, else None.
     Mirrors REST enum/date validation."""
     if field_name == "status":
@@ -360,7 +361,7 @@ def _apply_set_field(db: Session, plan: ActionPlan, actor: User,
     if invalid:
         return _error_response(invalid)
     if old == new:
-        # No-op — skip the audit row and signal "skipped" to the bulk caller.
+        # No-op: skip the audit row and signal "skipped" to the bulk caller.
         return _success_response(
             f"Bug #{bug.id} {label} is already **{old}** — nothing to do",
             intent=_INTENT_NOOP, bug_id=bug.id,
@@ -447,7 +448,7 @@ def _apply_create_bug(db: Session, plan: ActionPlan, actor: User) -> Response:
         project_id = first.id
     elif db.get(Project, project_id) is None:
         return _error_response("That project doesn't exist anymore")
-    # Same validator as the REST create payload — no out-of-enum priority.
+    # Same validator as the REST create payload, no out-of-enum priority.
     try:
         priority = normalize_choice(plan.new_value or "Medium", ALLOWED_PRIORITIES, "priority")
     except ValueError:
@@ -512,7 +513,7 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
     _audit(db, None, actor, "project_created",
            f"Created project '{name}'",
            entity_type="project", entity_id=proj.id)
-    # Projects have no stakeholders — notify the actor so it surfaces in the bell.
+    # Projects have no stakeholders, notify the actor so it surfaces in the bell.
     notification_service.notify(
         db, [actor.id], kind="updated",
         title="Project created",
@@ -527,8 +528,8 @@ def _apply_create_project(db: Session, plan: ActionPlan, actor: User) -> Respons
     )
 
 
-# --- Public dispatch ---
-def sleuth_write_denied(actor: User) -> Optional[str]:
+# Public dispatch
+def sleuth_write_denied(actor: User) -> str | None:
     """Return a refusal string if the actor may not write via Sleuth, else None.
     Chat writes are admin-only; everyone else is read-only here."""
     if actor.role == ROLE_ADMIN:
@@ -624,7 +625,7 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
     here as a safety net."""
     if plan.actor_user_id != actor.id:
         return _error_response("That action was staged for a different user")
-    # Re-check write policy at execute time (TOCTOU) — actor may have been demoted.
+    # Re-check write policy at execute time (TOCTOU), actor may have been demoted.
     denied = sleuth_write_denied(actor)
     if denied is not None:
         return _error_response(denied)
@@ -642,7 +643,7 @@ def execute_plan(plan: ActionPlan, db: Session, actor: User) -> Response:
         return _error_response(f"Action failed: {exc}")
 
 
-# --- Confirmation-prompt builder ---
+# Confirmation-prompt builder
 def stage_with_confirm(plan: ActionPlan) -> Response:
     """Return a confirm Response for a plan the caller already staged in memory.store."""
     prompt = (

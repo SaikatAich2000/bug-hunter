@@ -3,7 +3,7 @@
  * The component is the contract every dropdown in the app renders through
  * (repository, base branch, statuses), so these tests pin: the native-select
  * passthrough for forms and keyboard users, the custom-button label rules
- * (selected option, "—" fallback, placeholder dimming), the portaled popover
+ * (selected option, ", " fallback, placeholder dimming), the portaled popover
  * (select + close, outside-click, Escape), and flip placement above/below.
  */
 import React, { act } from "react";

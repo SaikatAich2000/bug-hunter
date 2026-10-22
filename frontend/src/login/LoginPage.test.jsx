@@ -77,7 +77,7 @@ describe("sign in", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     render(<LoginPage />);
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("Network error. Try again")).toBeVisible();
+    expect(await screen.findByText("Network error, try again")).toBeVisible();
   });
 
   it("the button shows progress while signing in", async () => {
@@ -138,7 +138,7 @@ describe("forgot password", () => {
     expect(await screen.findByText("Request failed")).toBeVisible();
     fetchMock.mockImplementationOnce(async () => { throw new TypeError("offline"); });
     await user.click(screen.getByRole("button", { name: "Send reset link" }));
-    expect(await screen.findByText("Network error. Try again")).toBeVisible();
+    expect(await screen.findByText("Network error, try again")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "← Back to sign in" }));
     expect(document.getElementById("loginForm")).not.toHaveAttribute("hidden");
     expect(document.getElementById("forgotAlert")).toHaveAttribute("hidden");
@@ -198,7 +198,7 @@ describe("reset password page", () => {
       render(<ResetPage />);
       await fill(user, "Longpass1!", "Longpass1!");
       await user.click(screen.getByRole("button", { name: "Set new password" }));
-      expect(await screen.findByText("Password updated. Redirecting to sign in…")).toBeVisible();
+      expect(await screen.findByText("Password updated, redirecting to sign in…")).toBeVisible();
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ token: "abc123", new_password: "Longpass1!" });
       vi.advanceTimersByTime(1600);
       expect(loc.replace).toHaveBeenCalledWith("/login.html");
@@ -233,7 +233,7 @@ describe("reset password page", () => {
     expect(await screen.findByText("Reset failed")).toBeVisible();
     fetchMock.mockImplementationOnce(async () => { throw new TypeError("offline"); });
     await user.click(screen.getByRole("button", { name: "Set new password" }));
-    expect(await screen.findByText("Network error. Try again")).toBeVisible();
+    expect(await screen.findByText("Network error, try again")).toBeVisible();
   });
 
   it("shows Saving… while the request is in flight", async () => {

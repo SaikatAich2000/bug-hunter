@@ -32,20 +32,20 @@ const ENFORCEMENT = [
 /** Problems that would make the server refuse the column set, or leave issues stuck. */
 function columnProblems(columns) {
   const problems = [];
-  if (!columns.length) problems.push("A board needs at least one column.");
+  if (!columns.length) problems.push("A board needs at least one column");
   const names = new Set();
   for (const col of columns) {
     const key = col.name.trim().toLowerCase();
-    if (!key) problems.push("Every column needs a name.");
-    else if (names.has(key)) problems.push(`Two columns are named "${col.name.trim()}".`);
+    if (!key) problems.push("Every column needs a name");
+    else if (names.has(key)) problems.push(`Two columns are named "${col.name.trim()}"`);
     names.add(key);
     if (col.wip_limit != null && col.min_cards != null && col.min_cards > col.wip_limit) {
-      problems.push(`"${col.name}": the minimum is above the maximum.`);
+      problems.push(`"${col.name}": the minimum is above the maximum`);
     }
   }
   const last = columns.at(-1);
-  if (last && last.category !== "done") problems.push("The right-most column must have the Done category: issues there count as finished.");
-  if (last && !last.statuses.length) problems.push("The right-most column needs at least one status.");
+  if (last && last.category !== "done") problems.push("The right-most column must have the Done category: issues there count as finished");
+  if (last && !last.statuses.length) problems.push("The right-most column needs at least one status");
   return problems;
 }
 
@@ -103,7 +103,7 @@ function GeneralSettings({ board, onSaved }) {
         <BhSelect ariaLabel="Estimation statistic" value={form.estimation_mode}
           onChange={(v) => setForm({ ...form, estimation_mode: v })}
           options={Object.entries(STATISTIC_LABELS).map(([value, label]) => ({ value, label }))} />
-        <small className="muted">Used by the backlog totals, the sprint dialogs and every report.</small>
+        <small className="muted">Used by the backlog totals, the sprint dialogs and every report</small>
       </div>
       <div className="field"><span>Default swimlanes</span>
         <BhSelect ariaLabel="Default swimlanes" value={form.swimlane_mode}
@@ -123,7 +123,7 @@ function GeneralSettings({ board, onSaved }) {
         <datalist id="ag-timezones">
           {TIMEZONES.map((tz) => <option key={tz} value={tz} />)}
         </datalist>
-        <small className="muted">Sprint dates and report days use this timezone.</small>
+        <small className="muted">Sprint dates and report days use this timezone</small>
       </label>
       <div className="ag-dialog-actions">
         <button type="submit" className="btn primary" disabled={busy}>Save general settings</button>
@@ -169,7 +169,7 @@ function ColumnsSettings({ board, onSaved }) {
   const remove = async (index) => {
     const col = columns[index];
     const ok = await confirmDialog(
-      `Remove the "${col.name}" column? Its statuses become unmapped until you place them in another column.`,
+      `Remove the "${col.name}" column? Its statuses become unmapped until you place them in another column`,
       { title: "Remove column", okLabel: "Remove", danger: true },
     );
     if (ok) setColumns((cols) => cols.filter((_, n) => n !== index));
@@ -208,8 +208,8 @@ function ColumnsSettings({ board, onSaved }) {
     <section className="ag-settings-card" aria-labelledby="ag-columns-title">
       <h3 id="ag-columns-title">Columns and statuses</h3>
       <p className="muted small">
-        Each status shows in one column. Issues whose status is in the right-most column are done:
-        that decides sprint completion and every report. Min/max set the column constraints (WIP).
+        Each status shows in one column, issues whose status is in the right-most column are done:
+        that decides sprint completion and every report, min/max set the column constraints (WIP)
       </p>
       <div className="ag-col-editor">
         {columns.map((col, index) => (
@@ -255,13 +255,13 @@ function ColumnsSettings({ board, onSaved }) {
                   <button type="button" className="ag-link" aria-label={`Unmap ${status}`} onClick={() => unmap(status)}>✕</button>
                 </li>
               ))}
-              {!col.statuses.length && <li className="muted small">No statuses: cards cannot enter this column.</li>}
+              {!col.statuses.length && <li className="muted small">No statuses: cards cannot enter this column</li>}
             </ul>
           </div>
         ))}
         <div className="ag-col-edit ag-col-unmapped">
           <div className="ag-col-edit-head"><strong>Unmapped statuses</strong></div>
-          <p className="muted small">Issues with these statuses are not shown on the board.</p>
+          <p className="muted small">Issues with these statuses are not shown on the board</p>
           <ul className="ag-status-list">
             {unmapped.map((status) => (
               <li key={status} className="ag-status-chip">
@@ -270,7 +270,7 @@ function ColumnsSettings({ board, onSaved }) {
                   onChange={(v) => v !== "" && moveStatus(status, Number(v))} />
               </li>
             ))}
-            {!unmapped.length && <li className="muted small">Every status is on the board.</li>}
+            {!unmapped.length && <li className="muted small">Every status is on the board</li>}
           </ul>
         </div>
       </div>
@@ -346,7 +346,7 @@ function QuickFilterSettings({ board }) {
   return (
     <section className="ag-settings-card" aria-labelledby="ag-qf-title">
       <h3 id="ag-qf-title">Quick filters</h3>
-      <p className="muted small">Shown above the board next to “Only my issues” and “Recently updated”. Active filters combine.</p>
+      <p className="muted small">Shown above the board next to “Only my issues” and “Recently updated”. Active filters combine</p>
       <ul className="ag-qf-list">
         {(list.data || []).map((qf) => (
           <li key={qf.id}>
@@ -356,7 +356,7 @@ function QuickFilterSettings({ board }) {
             <button type="button" className="btn ghost btn-sm" onClick={() => remove(qf)}>Delete</button>
           </li>
         ))}
-        {!list.data?.length && <li className="muted small">No custom quick filters yet.</li>}
+        {!list.data?.length && <li className="muted small">No custom quick filters yet</li>}
       </ul>
       {draft ? (
         <form className="ag-qf-form" onSubmit={save}>

@@ -1,5 +1,5 @@
 /** Behavioral tests for the real upload/format helpers (`./upload.js`,
- * `./format.js`) — the exact modules attachment flows import.
+ * `./format.js`), the exact modules attachment flows import.
  *
  * They exercise production code (size caps, partition messages, byte/time
  * formatting, debounce cancellation) so a drift in the app logic fails here.

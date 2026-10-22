@@ -60,7 +60,7 @@ export default function BulkImportModal() {
       id="modalBulkImport"
       open={bulkImportOpen}
       title="Bulk upload"
-      subtitle="Upload a filled-in copy of the template — one row per bug, requirement, or task."
+      subtitle="Upload a filled-in copy of the template — one row per bug, requirement, or task"
       onClose={close}
     >
       <div className="modal-body">
@@ -95,7 +95,7 @@ export default function BulkImportModal() {
                     </li>
                   ))}
                 </ul>
-                {result.errors_truncated && <p className="muted small">More rows were skipped than shown here.</p>}
+                {result.errors_truncated && <p className="muted small">More rows were skipped than shown here</p>}
               </div>
             )}
             {result.warnings.length > 0 && (
@@ -108,7 +108,7 @@ export default function BulkImportModal() {
                     </li>
                   ))}
                 </ul>
-                {result.warnings_truncated && <p className="muted small">More warnings were reported than shown here.</p>}
+                {result.warnings_truncated && <p className="muted small">More warnings were reported than shown here</p>}
               </div>
             )}
           </div>

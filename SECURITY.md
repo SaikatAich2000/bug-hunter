@@ -15,7 +15,7 @@ Open a private **GitHub Security Advisory** instead (*Security* tab → *Report 
 Include:
 
 - The affected version (`GET /api/health` returns it, or see `APP_VERSION` in `.env`).
-- Steps to reproduce — a minimal proof of concept is fine.
+- Steps to reproduce, a minimal proof of concept is fine.
 - Impact.
 - A suggested fix, if you have one.
 
@@ -28,31 +28,31 @@ Include:
 
 ## Security posture
 
-- **Login** — passwords are hashed with bcrypt. The session cookie holds an encrypted, signed token (the user id is not readable by the client); it is HttpOnly and `SameSite=Lax`. Over HTTPS (`COOKIE_SECURE=true` or an `https://` `APP_BASE_URL`) it is `Secure` and named `__Host-bh_session`, so browsers pin it to the exact host (no `Domain`, `Path=/`); over plain HTTP it is `bh_session`. A cookie without a live server-side session id is refused, and admins can revoke any session.
-- **Account protection** — failed sign-ins are counted per email+IP pair (`LOGIN_FAIL_LIMIT`, default 10 within `LOGIN_FAIL_WINDOW_SECONDS`, 15 min) and per email overall (`LOGIN_FAIL_EMAIL_LIMIT`, default 50, never below the pair limit). A pair that reaches its limit is locked for `LOGIN_LOCKOUT_SECONDS` (15 min), so a stranger guessing a known address locks only their own IP, not the owner. The check runs before bcrypt and unknown emails count too. Counters are in memory, per process. A HaveIBeenPwned k-anonymity check (only a 5-character hash prefix leaves the server; an outage never blocks) runs when a password is set, unless `PASSWORD_BREACH_CHECK_ENABLED=false`.
-- **Password reset** — reset does not reveal whether an email exists. Tokens are single-use, hashed, and expire.
-- **Email** — outbound headers are stripped of line breaks to block header injection. The console backend never logs message bodies (including live reset links).
-- **CSRF** — state-changing requests get an Origin/Referer check on top of SameSite cookies.
-- **Rate limiting** — per-IP sliding windows on `POST /api/auth/login` (8/min), `forgot-password` (3/min), `reset-password` and `change-password` (5/min each); per-user limits on comments (30/min), attachment uploads (20/min) and chat (30/min). All are in memory and per process; add a proxy-level limit if you run several workers or replicas.
-- **HTTP headers** — Content-Security-Policy (`script-src 'self'`, no CDN), plus `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, cross-origin isolation headers, and HSTS over HTTPS. The same headers apply to error responses (`429`, `403`, and a generic `500`).
-- **API surface** — interactive API docs (`/docs`, `/redoc`, `/openapi.json`) are served in development. A production deploy (`APP_ENV=production` or `COOKIE_SECURE=true`) disables them unless `ENABLE_API_DOCS=true`; the pages are self-hosted and CSP-safe.
-- **Request limits** — body ceilings of `MAX_REQUEST_BODY_BYTES` (uploads, 60 MiB) and `MAX_JSON_BODY_BYTES` (everything else, 2 MiB), checked before the body is read; 50 MB per attachment; `MAX_REPORT_ROWS` for Excel exports; paged work-item lists.
-- **Validation errors** — every `422` has one shape, `{"detail": [{"type", "loc", "msg"}]}`, and never echoes the submitted value (it can be a password).
-- **Authorization** — role checks are enforced the same way on both the REST and chat write paths, with a guard against mass-assignment when an item's type changes.
-- **Concurrent edits** — bug updates use optimistic concurrency. A stale save returns `409` instead of silently overwriting another user's change.
-- **Uploads** — Metadata is stripped from images on upload: JPEG, PNG and WebP at the byte level without decoding; GIF, BMP and TIFF are re-encoded within a 16-megapixel budget and refused above it (`app/image_strip.py`). Attachments are accepted by allowlist, not denylist: images, PDF, video, Office documents (`doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`, `odt`, `ods`, `odp`, `rtf`), and `txt`, `csv`, `log` or `zip` files. A file must carry an allowed extension and its leading bytes must match that format (a `.png` that is not a PNG is refused). The stored content type comes from the extension, never from the client. SVG and HTML are not accepted. Downloads of anything other than images, video, PDF and plain text are forced to attachment with `nosniff` and a sandboxing CSP.
-- **Output** — stored rich text is sanitized server-side against an allowlist, then again in the browser with DOMPurify before rendering.
-- **Data export** — the Excel writer defends against spreadsheet formula injection.
-- **Assistant egress** — the optional cloud LLM is off by default. When enabled, all outbound text passes through a secret-redaction filter first. Sleuth never writes data through the model: even the multi-step agent uses only read-only tools, which re-check through the same write firewall as the REST API.
-- **Audit trail** — work-item, project, user, sprint, board, release, label and component changes are recorded, as are sign-ins, failed sign-ins, lockouts, logouts and password changes or resets. Audit rows survive deletion of the item they refer to. Not every read or setting change is logged. Each response carries an `X-Request-ID` (a safe client-supplied one is kept) that also appears on every log line it causes.
-- **Telemetry egress** — OTLP export to SigNoz stays off until `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the collector URL and any auth headers live in `.env`/platform secrets (never in code or the image), and exported attributes matching password/token/secret/cookie patterns are stripped first (`OTEL_LOG_REDACT_SENSITIVE=true`).
+- **Login**, passwords are hashed with bcrypt. The session cookie holds an encrypted, signed token (the user id is not readable by the client); it is HttpOnly and `SameSite=Lax`. Over HTTPS (`COOKIE_SECURE=true` or an `https://` `APP_BASE_URL`) it is `Secure` and named `__Host-bh_session`, so browsers pin it to the exact host (no `Domain`, `Path=/`); over plain HTTP it is `bh_session`. A cookie without a live server-side session id is refused, and admins can revoke any session.
+- **Account protection**, failed sign-ins are counted per email+IP pair (`LOGIN_FAIL_LIMIT`, default 10 within `LOGIN_FAIL_WINDOW_SECONDS`, 15 min) and per email overall (`LOGIN_FAIL_EMAIL_LIMIT`, default 50, never below the pair limit). A pair that reaches its limit is locked for `LOGIN_LOCKOUT_SECONDS` (15 min), so a stranger guessing a known address locks only their own IP, not the owner. The check runs before bcrypt and unknown emails count too. Counters are in memory, per process. A HaveIBeenPwned k-anonymity check (only a 5-character hash prefix leaves the server; an outage never blocks) runs when a password is set, unless `PASSWORD_BREACH_CHECK_ENABLED=false`.
+- **Password reset**, reset does not reveal whether an email exists. Tokens are single-use, hashed, and expire.
+- **Email**, outbound headers are stripped of line breaks to block header injection. The console backend never logs message bodies (including live reset links).
+- **CSRF**, state-changing requests get an Origin/Referer check on top of SameSite cookies.
+- **Rate limiting**, per-IP sliding windows on `POST /api/auth/login` (8/min), `forgot-password` (3/min), `reset-password` and `change-password` (5/min each); per-user limits on comments (30/min), attachment uploads (20/min) and chat (30/min). All are in memory and per process; add a proxy-level limit if you run several workers or replicas.
+- **HTTP headers**, Content-Security-Policy (`script-src 'self'`, no CDN), plus `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, cross-origin isolation headers, and HSTS over HTTPS. The same headers apply to error responses (`429`, `403`, and a generic `500`).
+- **API surface**, interactive API docs (`/docs`, `/redoc`, `/openapi.json`) are served in development. A production deploy (`APP_ENV=production` or `COOKIE_SECURE=true`) disables them unless `ENABLE_API_DOCS=true`; the pages are self-hosted and CSP-safe.
+- **Request limits**, body ceilings of `MAX_REQUEST_BODY_BYTES` (uploads, 60 MiB) and `MAX_JSON_BODY_BYTES` (everything else, 2 MiB), checked before the body is read; 50 MB per attachment; `MAX_REPORT_ROWS` for Excel exports; paged work-item lists.
+- **Validation errors**, every `422` has one shape, `{"detail": [{"type", "loc", "msg"}]}`, and never echoes the submitted value (it can be a password).
+- **Authorization**, role checks are enforced the same way on both the REST and chat write paths, with a guard against mass-assignment when an item's type changes.
+- **Concurrent edits**, bug updates use optimistic concurrency. A stale save returns `409` instead of silently overwriting another user's change.
+- **Uploads**, Metadata is stripped from images on upload: JPEG, PNG and WebP at the byte level without decoding; GIF, BMP and TIFF are re-encoded within a 16-megapixel budget and refused above it (`app/image_strip.py`). Attachments are accepted by allowlist, not denylist: images, PDF, video, Office documents (`doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`, `odt`, `ods`, `odp`, `rtf`), and `txt`, `csv`, `log` or `zip` files. A file must carry an allowed extension and its leading bytes must match that format (a `.png` that is not a PNG is refused). The stored content type comes from the extension, never from the client. SVG and HTML are not accepted. Downloads of anything other than images, video, PDF and plain text are forced to attachment with `nosniff` and a sandboxing CSP.
+- **Output**, stored rich text is sanitized server-side against an allowlist, then again in the browser with DOMPurify before rendering.
+- **Data export**, the Excel writer defends against spreadsheet formula injection.
+- **Assistant egress**, the optional cloud LLM is off by default. When enabled, all outbound text passes through a secret-redaction filter first. Sleuth never writes data through the model: even the multi-step agent uses only read-only tools, which re-check through the same write firewall as the REST API.
+- **Audit trail**, work-item, project, user, sprint, board, release, label and component changes are recorded, as are sign-ins, failed sign-ins, lockouts, logouts and password changes or resets. Audit rows survive deletion of the item they refer to. Not every read or setting change is logged. Each response carries an `X-Request-ID` (a safe client-supplied one is kept) that also appears on every log line it causes.
+- **Telemetry egress**, OTLP export to SigNoz stays off until `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the collector URL and any auth headers live in `.env`/platform secrets (never in code or the image), and exported attributes matching password/token/secret/cookie patterns are stripped first (`OTEL_LOG_REDACT_SENSITIVE=true`).
 
 ## Git integration (branch creation and removal)
 
 Creating one branch for a persisted User Story, and removing that exact branch,
 are the only Git automations in the product. Project Git Settings configures the
 integration only (API URL, organization, default base branch, credential,
-connection test, read-only repository discovery) — it never selects, allow-lists
+connection test, read-only repository discovery), it never selects, allow-lists
 or activates individual repositories. Repository choice happens in the Story's
 branch dialog, where the browser picks a provider repository id returned by the
 read-only discovery endpoint.

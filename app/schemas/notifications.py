@@ -2,22 +2,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-# --- Notification — per-user in-app notification row. ---
+# Notification — per-user in-app notification row.
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     kind: str
     title: str
     body: str
-    bug_id: Optional[int] = None
-    event_id: Optional[int] = None
+    bug_id: int | None = None
+    event_id: int | None = None
     actor_name: str
-    read_at: Optional[datetime] = None
+    read_at: datetime | None = None
     created_at: datetime
 
 
@@ -25,7 +24,7 @@ class UnreadCountOut(BaseModel):
     unread: int
 
 
-# --- Web push (Firebase Cloud Messaging) ---
+# Web push (Firebase Cloud Messaging)
 class PushSubscribeIn(BaseModel):
     """A browser/device registering its FCM token for push."""
     token: str = Field(min_length=1, max_length=512)

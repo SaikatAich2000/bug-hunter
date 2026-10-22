@@ -12,7 +12,7 @@ import { formatDate, initials } from "../lib/format";
 import { confirmDialog } from "../components/ConfirmHost";
 import BhSelect from "../components/BhSelect";
 import { itemTypeEmoji } from "../modals/bug/helpers";
-// Column config per tab — which columns to show and what to call them.
+// Column config per tab, which columns to show and what to call them.
 
 const TAB_COLUMNS = {
   all: [
@@ -162,7 +162,7 @@ export default function ListView() {
   const bulkDelete = async ()=> {
     const n = selected.size;
     const ok = await confirmDialog(
-      `Delete ${n} selected item${n === 1 ? "" : "s"}? This also deletes their comments and attachments. Cannot be undone`,
+      `Delete ${n} selected item${n === 1 ? "" : "s"}? This also deletes their comments and attachments, cannot be undone`,
     );
     if (!ok) return;
     await applyBulk("delete", undefined, [...selected].map(rowEl));
@@ -174,7 +174,7 @@ export default function ListView() {
     const itype = cached?.item_type || "Bug";
     const noun = itype.toLowerCase();
     const ok = await confirmDialog(
-      `Delete ${noun} #${bugId}? This will also delete its comments and attachments. Cannot be undone`,
+      `Delete ${noun} #${bugId}? This will also delete its comments and attachments, cannot be undone`,
     );
     if (!ok) return;
     const undoLeave = await exitRows([rowEl(bugId)]);
@@ -405,7 +405,7 @@ export default function ListView() {
         <p>No items match your filters</p>
         <EmptyGuide
           guide="items"
-          hint="New here? Create your first item, or clear the filters to see everything."
+          hint="New here? Create your first item, or clear the filters to see everything"
           action={{ label: "+ New Item", onClick: () => openBugForm({ defaultType: activeTab !== "all" ? activeTab : defaultNewType }) }}
         />
       </div>

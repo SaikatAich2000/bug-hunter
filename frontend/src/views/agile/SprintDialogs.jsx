@@ -68,7 +68,7 @@ function DateFields({ start, end, duration, onChange }) {
 }
 
 function validDates(start, end) {
-  if (start && end && end < start) return "The end date cannot be before the start date.";
+  if (start && end && end < start) return "The end date cannot be before the start date";
   return null;
 }
 
@@ -89,7 +89,7 @@ export function SprintFormDialog({ open, boardId, sprint, defaultName, onClose }
 
   // A future sprint may have no dates yet; a running one keeps them.
   const error = sprint?.state === "active" && !(dates.start && dates.end)
-    ? "An active sprint needs a start and an end date."
+    ? "An active sprint needs a start and an end date"
     : validDates(dates.start, dates.end);
   const submit = async (e) => {
     e.preventDefault();
@@ -150,7 +150,7 @@ export function StartSprintDialog({ open, sprint, issues, mode, onClose }) {
   }, [open, sprint]);
 
   const totals = useMemo(() => categoryTotals(issues || [], mode), [issues, mode]);
-  const error = validDates(dates.start, dates.end) || (!dates.start || !dates.end ? "Pick the sprint's dates." : null);
+  const error = validDates(dates.start, dates.end) || (!dates.start || !dates.end ? "Pick the sprint's dates" : null);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -179,7 +179,7 @@ export function StartSprintDialog({ open, sprint, issues, mode, onClose }) {
           <strong>{totals.count}</strong> issue{totals.count === 1 ? "" : "s"} will be included in this sprint
           {mode !== "item_count" && <> ({formatNumber(totals.total)} {statisticUnit(mode)})</>}.
           {totals.unestimated > 0 && mode !== "item_count" && (
-            <> <span className="ag-warn">{totals.unestimated} not estimated.</span></>
+            <> <span className="ag-warn">{totals.unestimated} not estimated</span></>
           )}
         </p>
         <label className="field">
@@ -206,8 +206,8 @@ export function deleteSprintPrompt(sprint, issueCount) {
   const running = sprint.state === "active";
   const plural = issueCount === 1 ? "" : "s";
   return `Delete ${running ? "the running sprint " : ""}${sprint.name}?`
-    + (running ? " It has already started, so this ends it without completing it." : "")
-    + (issueCount ? ` Its ${issueCount} issue${plural} move to the top of the backlog.` : "");
+    + (running ? " It has already started, so this ends it without completing it" : "")
+    + (issueCount ? ` Its ${issueCount} issue${plural} move to the top of the backlog` : "");
 }
 
 /** Maps a destination picker value to the API's destination fields. */
@@ -289,8 +289,8 @@ export function CompleteSprintDialog({ open, sprint, issues, futureSprints, onCl
           <li><strong>{openIssues.length}</strong> open issue{openIssues.length === 1 ? "" : "s"}</li>
         </ul>
         <p className="muted small">
-          Completed issues stay in this sprint. An issue counts as completed only when it and all its
-          sub-tasks are in the board&apos;s last column.
+          Completed issues stay in this sprint, an issue counts as completed only when it and all its
+          sub-tasks are in the board&apos;s last column
         </p>
         {openIssues.length > 0 && (
           <>

@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
 import { confirmDialog } from "./ConfirmHost";
 
-const AUTH_NOT_CONFIGURED = "GitHub authentication is not configured on the server.";
+const AUTH_NOT_CONFIGURED = "GitHub authentication is not configured on the server";
 
 function checkedAt(value) {
   return value ? new Date(value).toLocaleString() : "Never";
@@ -13,9 +13,9 @@ function checkedAt(value) {
 
 function statusText(config) {
   if (!config.credentials_configured) return AUTH_NOT_CONFIGURED;
-  if (!config.enabled) return "Git integration is disabled for this project.";
-  if (!config.branch_creation_enabled) return "Branch creation is disabled by the server.";
-  return "GitHub authentication is configured on the server.";
+  if (!config.enabled) return "Git integration is disabled for this project";
+  if (!config.branch_creation_enabled) return "Branch creation is disabled by the server";
+  return "GitHub authentication is configured on the server";
 }
 
 function RepositoryCard({ repository }) {
@@ -97,7 +97,7 @@ export default function ProjectGitSettings({ projectId }) {
   // optional newly typed PAT. A blank PAT field is omitted entirely, which is
   // what tells the backend to keep the stored project credential (and then to
   // fall back to the deployment token). The token is never read back from state
-  // or from a response — it only ever travels outward, once.
+  // or from a response, it only ever travels outward, once.
   function configPayload(extra = {}) {
     return {
       ...configDraft,
@@ -146,7 +146,7 @@ export default function ProjectGitSettings({ projectId }) {
   async function clearCredential() {
     if (!config || !configDraft || busy || testing) return;
     const confirmed = await confirmDialog(
-      "Remove the stored credential for this project? The deployment-wide token, if one is configured, will be used instead.",
+      "Remove the stored credential for this project? The deployment-wide token, if one is configured, will be used instead",
       { title: "Clear credential", okLabel: "Clear credential", danger: true },
     );
     if (!confirmed) return;
@@ -206,7 +206,7 @@ export default function ProjectGitSettings({ projectId }) {
   }
 
   if (loading && !config) return <section className="project-git-settings"><Skeleton lines={3} label="Loading Git integration" /></section>;
-  if (!config || !configDraft) return <section className="project-git-settings"><p className="muted">Git integration settings could not be loaded.</p></section>;
+  if (!config || !configDraft) return <section className="project-git-settings"><p className="muted">Git integration settings could not be loaded</p></section>;
 
   // A draft test is worth allowing whenever a credential could exist: either one
   // is already stored, or the operator has just typed a replacement.
@@ -255,8 +255,8 @@ export default function ProjectGitSettings({ projectId }) {
           />
           <span className="muted small">
             {config.credentials_configured && !credentialDraft
-              ? "Credential configured — type a token here to replace it."
-              : "Leave blank to keep the stored credential. The token is never displayed, returned or logged."}
+              ? "Credential configured — type a token here to replace it"
+              : "Leave blank to keep the stored credential, the token is never displayed, returned or logged"}
           </span>
         </label>
       </div>
@@ -286,12 +286,12 @@ export default function ProjectGitSettings({ projectId }) {
           </button>
         </div>
         {availableLoaded && available.length === 0 && (
-          <p className="no-content">No GitHub repositories are available.</p>
+          <p className="no-content">No GitHub repositories are available</p>
         )}
         {available.length > 0 ? available.map((repository) => (
           <RepositoryCard key={repository.provider_repo_id || repository.full_name} repository={repository} />
         )) : (!availableLoaded && (
-          <p className="muted small">Repositories are loaded from live provider discovery when you need them.</p>
+          <p className="muted small">Repositories are loaded from live provider discovery when you need them</p>
         ))}
       </div>
     </section>

@@ -1,5 +1,5 @@
 """REST-level tests for app/routes/agile_taxonomy.py: Epics, Releases,
-Components, Labels, Collections — get/update/archive, version conflicts,
+Components, Labels, Collections: get/update/archive, version conflicts,
 duplicate-name conflicts, and access/visibility checks not already covered
 by the taxonomy/release smoke tests.
 """
@@ -15,7 +15,7 @@ def _make_project(admin_client, name="Taxonomy Route Suite"):
     return project
 
 
-# --- Epics ---
+# Epics
 
 def test_epic_get_update_archive_and_version_conflict(admin_client):
     project = _make_project(admin_client, "Epic Routes Suite")
@@ -55,7 +55,7 @@ def test_epic_routes_404_for_non_epic_or_missing(admin_client):
     assert admin_client.post(f"/api/agile/epics/{bug['id']}/archive").status_code == 404
 
 
-# --- Releases / Versions ---
+# Releases / Versions
 
 def test_release_get_update_archive_and_conflicts(admin_client):
     project = _make_project(admin_client, "Release Routes Suite")
@@ -98,7 +98,7 @@ def test_release_update_duplicate_name_conflict(admin_client):
     assert conflict_res.status_code == 409
 
 
-# --- Components ---
+# Components
 
 def test_component_get_update_archive_and_conflicts(admin_client):
     project = _make_project(admin_client, "Component Routes Suite")
@@ -141,7 +141,7 @@ def test_component_update_duplicate_name_conflict(admin_client):
     assert conflict_res.status_code == 409
 
 
-# --- Labels ---
+# Labels
 
 def test_label_get_update_delete_and_conflicts(admin_client):
     project = _make_project(admin_client, "Label Routes Suite")

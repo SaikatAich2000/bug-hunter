@@ -122,18 +122,18 @@ describe("columns editor", () => {
     const added = within(region).getByRole("textbox", { name: "Column 3 name" });
     expect(added).toHaveValue("New column");
     await user.clear(added);
-    expect(within(region).getByRole("alert")).toHaveTextContent("Every column needs a name.");
+    expect(within(region).getByRole("alert")).toHaveTextContent("Every column needs a name");
     await user.type(added, "to do");
-    expect(within(region).getByRole("alert")).toHaveTextContent('Two columns are named "to do".');
+    expect(within(region).getByRole("alert")).toHaveTextContent('Two columns are named "to do"');
     await user.type(within(region).getByRole("spinbutton", { name: "to do minimum" }), "9");
     await user.type(within(region).getByRole("spinbutton", { name: "to do maximum" }), "2");
-    expect(within(region).getByRole("alert")).toHaveTextContent('"to do": the minimum is above the maximum.');
+    expect(within(region).getByRole("alert")).toHaveTextContent('"to do": the minimum is above the maximum');
     expect(within(region).getByRole("button", { name: "Save columns" })).toBeDisabled();
     await user.selectOptions(within(region).getByLabelText("Done category"), "todo");
     expect(within(region).getByRole("alert")).toHaveTextContent("The right-most column must have the Done category");
     await user.click(within(region).getByRole("button", { name: "Unmap Resolved" }));
-    expect(within(region).getByRole("alert")).toHaveTextContent("The right-most column needs at least one status.");
-    expect(within(region).getAllByText("No statuses: cards cannot enter this column.")).toHaveLength(2);
+    expect(within(region).getByRole("alert")).toHaveTextContent("The right-most column needs at least one status");
+    expect(within(region).getAllByText("No statuses: cards cannot enter this column")).toHaveLength(2);
     expect(backend.called("PUT", /columns$/)).toHaveLength(0);
   });
 
@@ -169,7 +169,7 @@ describe("columns editor", () => {
     const region = await screen.findByRole("region", { name: "Columns and statuses" });
     await user.selectOptions(within(region).getByLabelText("Add Testing to column"), "1");
     await user.selectOptions(within(region).getByLabelText("Add Closed to column"), "2");
-    expect(within(region).getByText("Every status is on the board.")).toBeInTheDocument();
+    expect(within(region).getByText("Every status is on the board")).toBeInTheDocument();
     expect(backend.called("PUT", /columns$/)).toHaveLength(0);
   });
 });
@@ -197,7 +197,7 @@ describe("quick filters", () => {
     backend.on("GET", /^\/agile\/labels/, () => [{ id: 5, display_name: "backend" }]);
     await open(user, { backend });
     const region = await screen.findByRole("region", { name: "Quick filters" });
-    expect(within(region).getByText("No custom quick filters yet.")).toBeInTheDocument();
+    expect(within(region).getByText("No custom quick filters yet")).toBeInTheDocument();
     await user.click(within(region).getByRole("button", { name: "+ Add quick filter" }));
     expect(within(region).getByRole("button", { name: "Save quick filter" })).toBeDisabled();
     await user.type(within(region).getByRole("textbox", { name: /Name/ }), "  My bugs ");

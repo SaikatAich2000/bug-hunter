@@ -4,7 +4,7 @@ Uses the conftest fixtures; row-level setups go through the app's SessionLocal.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,7 +57,7 @@ def _new_client() -> TestClient:
     return TestClient(app)
 
 
-# --- projects.py ---
+# projects.py
 def test_cov_get_project_by_id_ok(admin_client):
     """GET /api/projects/{id} returns the created row."""
     p = _mk_project(admin_client, "Cov Get OK")
@@ -117,7 +117,7 @@ def test_cov_delete_project_conflict_when_bugs_exist(admin_client):
     assert "bug(s) belong to this project" in r.json()["detail"]
 
 
-# --- users.py ---
+# users.py
 def test_cov_list_users_exclude_inactive(admin_client):
     """GET /api/users?include_inactive=false omits deactivated users."""
     dormant = _mk_user(admin_client, "Cov Dormant", "cov.dormant@example.com")
@@ -239,7 +239,7 @@ def test_cov_delete_user_success(admin_client):
     assert admin_client.get(f"/api/users/{u['id']}").status_code == 404
 
 
-# --- sessions.py ---
+# sessions.py
 def test_cov_sessions_list_and_is_current(admin_client):
     """Session list returns multiple rows and marks exactly the admin's own as is_current."""
     _mk_user(admin_client, "Cov SessU", "cov.sessu@example.com")
@@ -256,7 +256,7 @@ def test_cov_sessions_list_and_is_current(admin_client):
 
 def test_cov_sessions_hides_then_retention_removes_expired_rows(admin_client):
     """Listing sessions hides rows whose expires_at is past; the retention job deletes them."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.database import SessionLocal
     from app.models import Session as SessionRow
@@ -272,7 +272,7 @@ def test_cov_sessions_hides_then_retention_removes_expired_rows(admin_client):
         uid = db.query(User).filter(User.email == "cov.expired@example.com").one().id
         row = db.query(SessionRow).filter(SessionRow.user_id == uid).one()
         target_id = row.id
-        row.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         db.commit()
     finally:
         db.close()
@@ -320,7 +320,7 @@ def test_cov_revoke_session_404(admin_client):
     assert r.json()["detail"] == "Session not found"
 
 
-# --- audit.py ---
+# audit.py
 def test_cov_audit_filter_by_entity_actor_and_numeric_query(admin_client):
     """Audit filter/pagination: entity_type, actor_user_id, numeric free-text (OR-clause builder), limit/offset."""
     me = admin_client.get("/api/auth/me").json()
@@ -354,7 +354,7 @@ def test_cov_audit_query_with_hash_and_offset(admin_client):
     assert isinstance(r.json(), list)
 
 
-# --- notifications.py ---
+# notifications.py
 def test_cov_mark_read_already_read_skips_commit(admin_client):
     """Mark-read on an already-read notification short-circuits (read_at set) and still returns {'ok': True}."""
     p = _mk_project(admin_client, "Cov Notif Proj")
@@ -382,14 +382,14 @@ def test_cov_mark_read_already_read_skips_commit(admin_client):
 
 
 # Intentionally-uncovered defensive/dead-code paths (unreachable by clean API tests):
-#   sessions.py _is_current `if not parsed` — auth rejects malformed cookies before the handler runs.
-#   audit.py `except ValueError` after int() — the group is re.search(r"\d+"), always ASCII digits.
-#   users.py last-admin guardrail raises (update/delete) — self-edit guard or count>=1 always pre-empts them
+#   sessions.py _is_current `if not parsed`, auth rejects malformed cookies before the handler runs.
+#   audit.py `except ValueError` after int(), the group is re.search(r"\d+"), always ASCII digits.
+#   users.py last-admin guardrail raises (update/delete), self-edit guard or count>=1 always pre-empts them
 #     (count queries covered by test_cov_update_user_demote_other_admin_runs_last_admin_check /
 #      test_cov_delete_user_admin_runs_last_admin_count).
 
 
-# app/routes/bugs.py — helpers + route edge cases
+# app/routes/bugs.py: helpers + route edge cases
 def test_upload_policy_extension_check(client):
     from app.upload_policy import check_extension
     assert "without an extension" in check_extension("README")
@@ -508,7 +508,7 @@ def test_bugs_directional_link_reaches_diamond_revisits_node(client):
 def test_bugs_reject_updated_at_drift_aware_current(client):
     # tz-aware current_updated skips naive coercion; same instant, no conflict.
     from app.services.bug_update import reject_if_updated_at_drifted as _reject_if_updated_at_drifted
-    aware = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    aware = datetime(2026, 6, 21, 12, 0, 0, tzinfo=UTC)
     _reject_if_updated_at_drifted(aware.isoformat(), aware)
 
 
@@ -566,7 +566,7 @@ def test_bugs_update_changes_reporter_and_notifies(admin_client):
 def test_bugs_update_reporter_change_same_display_name_not_tracked(admin_client):
     # Two different users sharing a display name: the reporter_id genuinely
     # changes, and even though the plain display-name label is identical, the
-    # write must not be silently rolled back as a no-op — the audit entry
+    # write must not be silently rolled back as a no-op, the audit entry
     # disambiguates via email instead.
     proj = admin_client.post("/api/projects", json={"name": "SameNameProj"}).json()
     uid1 = _mk_user_via_api(admin_client, "Same Name", "same1@test.local", [proj["id"]])

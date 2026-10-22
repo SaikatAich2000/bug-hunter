@@ -1,5 +1,5 @@
 /**
- * Events view — list mode (card grid, debounced search, date filter) and
+ * Events view: list mode (card grid, debounced search, date filter) and
  * detail mode (one event + filterable item table).
  */
 import EmptyGuide from "../onboarding/EmptyGuide";
@@ -29,7 +29,7 @@ function addExistingTasksLabel(count) {
   return `Add ${shown} task${plural}`.trim();
 }
 
-/* Items-table columns — "All" minus actions (items are deleted via the bug modal). */
+/* Items-table columns: "All" minus actions (items are deleted via the bug modal). */
 
 const DETAIL_COLS = [
   "id", "title-with-type", "project", "status", "priority", "due", "assignees", "att",
@@ -258,7 +258,7 @@ function EventItemRow({ b, onOpen }) {
   );
 }
 
-/* Items table — standard bug-table layout without the actions column. */
+/* Items table: standard bug-table layout without the actions column. */
 function EventItemsTable({ items, onOpen }) {
   return (
     <div className="table-scroll">
@@ -290,7 +290,7 @@ function EventsGrid({ loading, events, rows, total, onOpen }) {
   if (total === 0) return null;
   return (
     <div className="events-empty muted">
-      <p>No events match the current filter. Try clearing the search or date</p>
+      <p>No events match the current filter, try clearing the search or date</p>
     </div>
   );
 }
@@ -310,7 +310,7 @@ function DetailItems({ loading, allItems, filteredItems, onOpen }) {
     return (
       <div className="event-detail-empty muted">
         <p>
-          No items yet. Click <strong>+ Add Task</strong> to create one inside this event, or
+          No items yet, click <strong>+ Add Task</strong> to create one inside this event, or
           open any existing work item and assign it to this event from its Event field
         </p>
       </div>
@@ -319,7 +319,7 @@ function DetailItems({ loading, allItems, filteredItems, onOpen }) {
   if (filteredItems.length === 0) {
     return (
       <div className="event-detail-empty muted">
-        <p>No tasks in this event match the current filter. Try clearing the search or filters</p>
+        <p>No tasks in this event match the current filter, try clearing the search or filters</p>
       </div>
     );
   }
@@ -400,7 +400,7 @@ export default function EventsView() {
     void openEventDetail(eventDeepLinkId);
   }, [eventDeepLinkId, setEventDeepLinkId, openEventDetail]);
 
-  // Background refetch — skips the detailLoading flag so the table doesn't flash.
+  // Background refetch: skips the detailLoading flag so the table doesn't flash.
   const refreshDetailSilently = useCallback(async (id) => {
     try {
       setDetail(await api(`/events/${id}`));
@@ -445,7 +445,7 @@ export default function EventsView() {
     prevView.current = view;
   }, [view, refreshEvents, showListMode]);
 
-  // Live poll — list mode refreshes the grid; detail mode refreshes silently.
+  // Live poll: list mode refreshes the grid; detail mode refreshes silently.
   // Tick body lives in a ref so the interval always reads the latest state
   // without being restarted on every render.
   const pollRef = useRef(() => {});
@@ -467,7 +467,7 @@ export default function EventsView() {
     };
   }, [view]);
 
-  // Refetch detail when the bug modal closes — the user may have changed an item.
+  // Refetch detail when the bug modal closes, the user may have changed an item.
   const prevBugOpen = useRef(bugModal.open);
   useEffect(() => {
     const was = prevBugOpen.current;
@@ -480,7 +480,7 @@ export default function EventsView() {
   // delete
   const handleDeleteEvent = useCallback(async (event) => {
       const ok = await confirmDialog(
-        `Delete event "${event.name}"? Its tasks will be kept but unlinked from this event. Cannot be undone`,
+        `Delete event "${event.name}"? Its tasks will be kept but unlinked from this event, cannot be undone`,
       );
       if (!ok) return;
       try {
@@ -624,7 +624,7 @@ export default function EventsView() {
           <div className="events-grid" id="eventsGrid">{gridContent}</div>
           <div className="events-empty" id="eventsEmpty" hidden={!showEmptyBanner}>
             <p>
-              No events yet. Click <strong>+ New Event</strong> to create one — a standup, a
+              No events yet, click <strong>+ New Event</strong> to create one — a standup, a
               sprint meeting, whatever you want to track
             </p>
             <EmptyGuide

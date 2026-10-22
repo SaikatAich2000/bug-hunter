@@ -13,7 +13,7 @@ _PW = "ProjAccess9X"
 _World = namedtuple("_World", "pa pb ba bb")
 
 
-# Helpers — sequential logins on a single TestClient (each call replaces the cookie).
+# Helpers: sequential logins on a single TestClient (each call replaces the cookie).
 def _login(c, email, pw=_PW):
     r = c.post("/api/auth/login", json={"email": email, "password": pw})
     assert r.status_code == 200, r.text
@@ -117,7 +117,7 @@ def test_access_helpers_direct(client):
         db.close()
 
 
-# Users API — project_ids plumbing
+# Users API: project_ids plumbing
 def test_create_user_with_project_tags_roundtrips(client):
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
@@ -195,7 +195,7 @@ def test_manager_can_only_grant_own_projects(client):
     assert r.status_code == 403
 
 
-# Bugs — list / detail / create / update / sub-resources / bulk
+# Bugs: list / detail / create / update / sub-resources / bulk
 def test_bug_list_scoped_by_membership(client):
     w = _two_project_world(client)
     ids, total = _bug_ids(client)
@@ -329,7 +329,7 @@ def test_attachment_download_in_scope_succeeds(client):
     assert r.content == b"hi there"
 
 
-# Events — require/validate project + scoped visibility
+# Events: require/validate project + scoped visibility
 def test_event_project_scoping(client):
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
@@ -398,7 +398,7 @@ def test_event_detail_items_filtered_to_scope(client):
     assert item_ids == {in_scope["id"]}
 
 
-# Stats — scoped aggregations
+# Stats: scoped aggregations
 def test_stats_scoped(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -419,7 +419,7 @@ def test_stats_scoped(client):
     assert s["by_type"].get("Event", 0) == 0
 
 
-# Audit — scoped to a manager's projects
+# Audit: scoped to a manager's projects
 def test_audit_scoped_for_manager(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -439,7 +439,7 @@ def test_audit_empty_for_untagged_manager(client):
     assert client.get("/api/audit").json() == []
 
 
-# Reports — scoped, and not wideable via the payload
+# Reports: scoped, and not wideable via the payload
 def test_reports_scoped_and_not_wideable(client):
     w = _two_project_world(client)
     _as_admin(client)
@@ -481,7 +481,7 @@ def test_reports_throughput_scoped(client):
     assert "Beta bug" not in str(r.json()["rows"])
 
 
-# Projects — scoped list/detail + auto-enroll the manager creator
+# Projects: scoped list/detail + auto-enroll the manager creator
 def test_projects_scoped_and_creator_autoenrolled(client):
     _as_admin(client)
     pa = _mk_project(client, "Alpha")
@@ -510,7 +510,7 @@ def test_admin_sees_all_projects(client):
     assert {"Alpha", "Beta"} <= names
 
 
-# Sleuth chatbot — read handlers scoped
+# Sleuth chatbot: read handlers scoped
 def test_sleuth_list_bugs_scoped(client):
     w = _two_project_world(client)
     _as_admin(client)

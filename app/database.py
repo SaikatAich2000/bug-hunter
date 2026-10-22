@@ -8,7 +8,7 @@ import asyncio
 import logging
 import weakref
 from collections.abc import AsyncGenerator, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
@@ -156,7 +156,7 @@ async def get_db() -> AsyncGenerator[Session, None]:
             db.close()
 
 
-# --- Audit bridge: mirror Activity rows into the logging stream -------------
+# Audit bridge: mirror Activity rows into the logging stream
 # The audit trail itself stays in the activity_log table; these listeners emit
 # one log record per committed Activity so the same trail reaches SigNoz when
 # OTEL_EXPORTER_OTLP_ENDPOINT is enabled (app/telemetry.py). Registered on this
@@ -258,12 +258,12 @@ def _add_missing_columns(conn) -> None:
         # No FK at ALTER level (SQLite can't add one); ORM enforces integrity.
         _add_column_safely(conn, "ALTER TABLE bugs ADD COLUMN event_id INTEGER")
 
-    # bugs.version — optimistic-concurrency counter; DEFAULT 1, no backfill.
+    # bugs.version: optimistic-concurrency counter; DEFAULT 1, no backfill.
     if bug_cols and "version" not in bug_cols:
         _add_column_safely(conn,
             "ALTER TABLE bugs ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
-    # notifications.emailed_at — nullable; digest lookback window skips the
+    # notifications.emailed_at: nullable; digest lookback window skips the
     # historical NULL backlog. tz-aware type on Postgres to match the ORM.
     notif_cols = _column_names(inspector, "notifications")
     if notif_cols and "emailed_at" not in notif_cols:
@@ -275,7 +275,7 @@ def _add_missing_columns(conn) -> None:
         _add_column_safely(conn,
             f"ALTER TABLE notifications ADD COLUMN emailed_at {tstype}")
 
-    # events.project_id — optional owning project; nullable, no FK at ALTER
+    # events.project_id: optional owning project; nullable, no FK at ALTER
     # level (see event_id note). NULL rows stay admin-only until assigned.
     event_cols = _column_names(inspector, "events")
     if event_cols and "project_id" not in event_cols:
@@ -356,7 +356,7 @@ def _add_missing_git_columns(conn, inspector) -> None:
 
 
 # Agile-only additive columns. Every
-# column is nullable or safely defaulted; no backfill required at boot —
+# column is nullable or safely defaulted; no backfill required at boot,
 # rank/rank_scope backfill happens at per-project Agile activation instead
 # (app/agile/boards.py::activate_agile_for_project), never here.
 def _add_missing_bug_display_id(conn, bug_cols: set[str]) -> None:
@@ -432,7 +432,7 @@ def _run_once(conn, name: str, migrate: Callable[[object], None]) -> None:
             migrate(conn)
             conn.execute(
                 text("INSERT INTO app_migrations (name, applied_at) VALUES (:n, :t)"),
-                {"n": name, "t": datetime.now(timezone.utc).replace(microsecond=0)},
+                {"n": name, "t": datetime.now(UTC).replace(microsecond=0)},
             )
     except SQLAlchemyError:
         # Rolled back and not recorded, so the next boot retries it; serving continues.
@@ -686,7 +686,7 @@ def _retire_legacy_branch_index(conn) -> None:
     The old ``idx_work_item_branches_unique`` made a removed branch's name
     permanently block a recreated branch. Branch uniqueness is now enforced by
     the partial ``idx_work_item_branches_active_unique`` (Active rows only).
-    Only the index is dropped — branch rows and history are never touched.
+    Only the index is dropped, branch rows and history are never touched.
     """
     from sqlalchemy import text
     try:
@@ -778,7 +778,7 @@ def init_db(on_migrated: Callable[[], None] | None = None) -> bool:
 
 # Explicit, source-controlled seed data for the global workflow statuses
 #: (persisted_value, key, category,
-# is_initial, is_terminal) per item type. Never derived/guessed at runtime —
+# is_initial, is_terminal) per item type. Never derived/guessed at runtime,
 # every persisted_value here must exactly match app.schemas.STATUSES_BY_TYPE;
 # a mismatch is logged as an ERROR and that item type is skipped (not seeded)
 # rather than silently invented.

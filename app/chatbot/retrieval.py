@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -70,7 +69,7 @@ def _snippet(text: str, terms: list[str]) -> str:
 
 
 def retrieve_bugs(db: Session, message: str, *,
-                  accessible: Optional[set[int]] = None,
+                  accessible: set[int] | None = None,
                   limit: int = 5) -> list[RetrievedBug]:
     """Top bugs matching the message's keywords, ranked by distinct hits.
 

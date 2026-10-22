@@ -79,7 +79,7 @@ def test_create_rejects_agile_type_via_legacy_endpoint(admin_client):
 
 
 def test_default_item_type_is_bug(admin_client):
-    """Omitting item_type defaults to 'Bug' — keeps legacy clients working."""
+    """Omitting item_type defaults to 'Bug', keeps legacy clients working."""
     p = _make_project(admin_client)
     r = admin_client.post("/api/bugs", json={
         "title": "no type specified",
@@ -354,7 +354,7 @@ def test_existing_row_without_type_defaults_to_bug(client, tmp_path, monkeypatch
         assert rows["items"][0]["item_type"] == "Bug"
 
 
-# --- Item-type conversion (same-table, explicit validation) ---------------
+# Item-type conversion (same-table, explicit validation)
 # Conversions keep the same `bugs` row id, common data and relations. Story is
 # included because a User Story created through /api/agile/work-items lives in
 # the same table. The hierarchy-only types are refused, and an Active feature branch blocks a Story from leaving the Story type.

@@ -72,14 +72,14 @@ describe("quick filters and swimlanes", () => {
     view.columns[1].cards[0].updated_at = stamp(72);
     await openSprints(user, { backend: makeAgile(createBackend(), { view }) });
     await user.click(await screen.findByRole("button", { name: "Only my issues" }));
-    expect(screen.getByText("2 cards hidden by quick filters.")).toBeInTheDocument();
+    expect(screen.getByText("2 cards hidden by quick filters")).toBeInTheDocument();
     expect(screen.queryByText("Fix export")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Recently updated" }));
     expect(screen.getByText("Wire login")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.getByText("Fix export")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Recently updated" }));
-    expect(screen.getByText("1 card hidden by quick filters.")).toBeInTheDocument();
+    expect(screen.getByText("1 card hidden by quick filters")).toBeInTheDocument();
   });
 
   it("applies custom quick filters saved on the board", async () => {
@@ -166,7 +166,7 @@ describe("moving and flagging cards", () => {
     const backend = makeAgile(createBackend());
     let first = true;
     backend.on("POST", /transition$/, () => {
-      if (first) { first = false; return reply(400, { detail: "In Progress is at its limit; acknowledge to proceed." }); }
+      if (first) { first = false; return reply(400, { detail: "In Progress is at its limit; acknowledge to proceed" }); }
       return {};
     });
     await openSprints(user, { backend });
@@ -180,7 +180,7 @@ describe("moving and flagging cards", () => {
   it("declining the WIP warning puts the card back", async () => {
     const user = userEvent.setup();
     const backend = makeAgile(createBackend());
-    backend.on("POST", /transition$/, () => reply(400, { detail: "In Progress is at its limit; acknowledge to proceed." }));
+    backend.on("POST", /transition$/, () => reply(400, { detail: "In Progress is at its limit; acknowledge to proceed" }));
     await openSprints(user, { backend });
     await user.click(await screen.findByRole("button", { name: "Actions for ALP-301" }));
     await user.click(await screen.findByRole("menuitem", { name: "Move to In Progress (In Progress)" }));
@@ -273,7 +273,7 @@ describe("dragging cards", () => {
       const backend = await openSprints(user, { backend: makeAgile(createBackend(), { view }) });
       const dragged = await screen.findByRole("group", { name: "ALP-301 Wire login, New" });
       await drag(dragged, 450);
-      expect(await screen.findByText("Done has no status mapped to it. Map one in Board settings.")).toBeInTheDocument();
+      expect(await screen.findByText("Done has no status mapped to it, map one in Board settings")).toBeInTheDocument();
       expect(backend.called("POST", /transition/)).toHaveLength(0);
     } finally { restore(); }
   });

@@ -3,7 +3,7 @@ Rows seeded on a real DB session; the job runs in-process with email_service.del
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from tests.conftest import BOOTSTRAP_EMAIL
 
@@ -218,7 +218,7 @@ def test_main_sends_when_enabled(admin_client, monkeypatch):
     assert "activity digest" in sent[0][0].lower()
 
 
-# Suppression of immediate work-item emails — but not security emails
+# Suppression of immediate work-item emails, but not security emails
 def test_digest_on_suppresses_work_item_email_but_not_password_reset(
     admin_client, monkeypatch,
 ):
@@ -302,7 +302,7 @@ def test_digest_off_keeps_immediate_work_item_email(admin_client, monkeypatch):
     assert "New bug #2" in sent[0][0]
 
 
-# app/jobs/email_digest.py — concurrent-claim continue branch
+# app/jobs/email_digest.py: concurrent-claim continue branch
 def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
     # A concurrent runner stamps emailed_at inside patched _group_by_user, so the guarded UPDATE claims 0 rows.
     from app import models
@@ -316,7 +316,7 @@ def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
                         password_hash=hash_password("User12345"), is_active=True)
         db.add(u)
         db.flush()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         n = models.Notification(
             user_id=u.id, kind="updated", title="t", body="b",
             created_at=now, emailed_at=None,
@@ -335,7 +335,7 @@ def test_email_digest_skips_already_claimed_rows(client, monkeypatch):
         try:
             other.query(models.Notification).filter(
                 models.Notification.id == nid
-            ).update({models.Notification.emailed_at: datetime.now(timezone.utc)},
+            ).update({models.Notification.emailed_at: datetime.now(UTC)},
                      synchronize_session=False)
             other.commit()
         finally:

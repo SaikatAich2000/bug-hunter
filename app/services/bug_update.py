@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import (
     HTTPException,
@@ -144,7 +143,7 @@ def audit_conversion_failure(db: Session, bug: Bug, actor: User, conversion: tup
 
     The request's own work has been rolled back, so this is committed
     separately; a failure to audit must never mask the original error. Only the
-    human-readable refusal message is stored — never a credential or payload.
+    human-readable refusal message is stored, never a credential or payload.
     """
     detail = str(getattr(exc, "detail", "") or exc)[:300]
     try:
@@ -296,10 +295,10 @@ def reject_if_updated_at_drifted(
             detail="expected_updated_at is not a valid ISO-8601 timestamp.",
         ) from exc
     if seen.tzinfo is None:
-        seen = seen.replace(tzinfo=timezone.utc)
+        seen = seen.replace(tzinfo=UTC)
     current = current_updated
     if current.tzinfo is None:
-        current = current.replace(tzinfo=timezone.utc)
+        current = current.replace(tzinfo=UTC)
     # updated_at is whole-second resolution, so compare at second granularity.
     if int(seen.timestamp()) != int(current.timestamp()):
         raise stale_edit_conflict()
@@ -307,8 +306,8 @@ def reject_if_updated_at_drifted(
 
 def enforce_optimistic_concurrency(
     db: Session, bug_id: int,
-    expected_version: Optional[int],
-    expected_updated_at: Optional[str],
+    expected_version: int | None,
+    expected_updated_at: str | None,
 ) -> None:
     """Opt-in optimistic concurrency check.
 
@@ -344,12 +343,12 @@ def compute_tracked_changes(bug: Bug, fields: dict) -> list[tuple[str, str, str]
     return changes
 
 
-def apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int],
+def apply_reporter_change(bug: Bug, db: Session, new_reporter_id: int | None,
                            changes: list[tuple[str, str, str]]) -> None:
     """Swap the reporter and record the change.
     Only called when the reporter id actually changed (see
-    reporter_actually_changes), so this must always append to `changes` — even
-    when two different users share a display name — or persist_update treats
+    reporter_actually_changes), so this must always append to `changes`, even
+    when two different users share a display name, or persist_update treats
     an empty `changes` list as a no-op and rolls back the FK write along with it.
     Permission is checked by the caller.
     """
@@ -372,7 +371,7 @@ def apply_reporter_change(bug: Bug, db: Session, new_reporter_id: Optional[int],
     changes.append(("reporter", old_reporter_label, new_reporter_label))
 
 
-def apply_assignee_diff(bug: Bug, db: Session, assignee_ids: Optional[list[int]],
+def apply_assignee_diff(bug: Bug, db: Session, assignee_ids: list[int] | None,
                         changes: list[tuple[str, str, str]]) -> tuple[list[User], list[User]]:
     """Diff and re-bind assignees. Returns (added, removed) so the caller
     can notify both sides (removal is as worth notifying as a new assignment)."""

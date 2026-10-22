@@ -8,7 +8,7 @@ import io
 import secrets
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 from app.config import get_settings
 from app.util import defang_formula
@@ -72,7 +72,7 @@ _COLUMNS: list[tuple[str, str, int]] = [
 
 def _build_workbook(rows: list[dict[str, Any]], description: str) -> bytes:
     if not OPENPYXL_AVAILABLE:
-        # user-facing message — don't leak dependency name / server internals
+        # user-facing message: don't leak dependency name / server internals
         raise ExcelGenerationError(
             "The spreadsheet exporter is unavailable on this server right now."
         )
@@ -131,7 +131,7 @@ def stage_bytes(payload: bytes, filename: str, owner_id: int) -> tuple[str, int]
     return token, len(payload)
 
 
-def fetch_staged(token: str, owner_id: int) -> Optional[tuple[bytes, str]]:
+def fetch_staged(token: str, owner_id: int) -> tuple[bytes, str] | None:
     """Return (bytes, filename) if token is valid AND owned by ``owner_id``, else None.
 
     Owner check makes the token a per-user capability; mismatch returns None so

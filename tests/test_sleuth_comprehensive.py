@@ -2,7 +2,7 @@
 synonyms, time windows, verbs, permissions, HTTP edges, robustness."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app import models
 from app.auth import hash_password
@@ -52,7 +52,7 @@ def seed():
             for u in (alice, bob, carol) for p in (proj_a, proj_b, proj_c)
         ])
         db.commit()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         bugs = []
         for _i, (status, prio, env, proj, age_days, title) in enumerate([
             ("New",         "Critical", "PROD", proj_a,  1, "Service down"),
@@ -382,9 +382,7 @@ def test_create_bug_phrasings() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
 # Pronoun resolution edges
-# ---------------------------------------------------------------------------
 def test_pronoun_edges() -> None:
     section("Pronoun edges: 'it' before any context")
     ids = seed()
@@ -419,9 +417,7 @@ def test_pronoun_edges() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
 # Confirmation-flow edges
-# ---------------------------------------------------------------------------
 def test_confirm_flow_edges() -> None:
     section("Confirmation-flow edges")
     ids = seed()
@@ -471,9 +467,7 @@ def test_confirm_flow_edges() -> None:
         db.close()
 
 
-# ---------------------------------------------------------------------------
 # HTTP edge cases
-# ---------------------------------------------------------------------------
 def test_http_edges() -> None:
     section("HTTP edge cases")
     seed()
@@ -520,9 +514,7 @@ def test_http_edges() -> None:
           r.status_code == 404, f"got {r.status_code}")
 
 
-# ---------------------------------------------------------------------------
 # Full conversation: realistic multi-turn scenario
-# ---------------------------------------------------------------------------
 def test_full_conversation() -> None:
     section("Full conversation scenario")
     ids = seed()

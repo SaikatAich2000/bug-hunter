@@ -1,4 +1,4 @@
-/** Imperative toasts via the shell's #toast div — callable anywhere without prop-drilling. */
+/** Imperative toasts via the shell's #toast div, callable anywhere without prop-drilling. */
 import { ApiError } from "./api";
 import { MOTION_MS, prefersReducedMotion } from "./motion";
 

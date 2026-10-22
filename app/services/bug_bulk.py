@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import (
     BackgroundTasks,
     HTTPException,
@@ -44,7 +42,7 @@ from app.services.work_items import (
 # Bulk actions. Each item goes through the same permission, audit, and
 # notification path as its single-item endpoint. Items the caller can't touch
 # are skipped so a mixed selection partially succeeds.
-def norm_or_400(value: Optional[str], allowed: list[str], label: str) -> str:
+def norm_or_400(value: str | None, allowed: list[str], label: str) -> str:
     try:
         return normalize_choice(value or "", allowed, label)
     except ValueError as exc:

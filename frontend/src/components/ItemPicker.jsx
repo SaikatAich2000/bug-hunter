@@ -114,7 +114,7 @@ export default function ItemPicker({
     return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
-  // Toggle membership — the dropdown stays open so several items can be picked.
+  // Toggle membership: the dropdown stays open so several items can be picked.
   const toggle = (item) => {
     if (selectedIds.has(item.id)) {
       onChange(selected.filter((s) => s.id !== item.id));

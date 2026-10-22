@@ -3,7 +3,7 @@
 No persisted permission configuration; every check uses the existing global
 user role (app.models.ROLE_ADMIN/ROLE_MANAGER/ROLE_USER) plus project
 membership (app.access.can_access_project). UI hiding is never authorization
-— every route calls has_permission()/require_permission() itself.
+every route calls has_permission()/require_permission() itself.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 
 from app.models import ROLE_ADMIN, ROLE_MANAGER, ROLE_USER, User
 
-# --- Permission names ---
+# Permission names
 VIEW_PROJECT = "view_project"
 VIEW_BOARD = "view_board"
 CREATE_ITEM = "create_item"
@@ -88,7 +88,7 @@ def require_item_edit(user: User, item) -> None:
 
 def require_permission(user: User, permission: str) -> None:
     """Raise 403 if `user` lacks `permission`. Callers must separately verify
-    project membership (app.access.can_access_project) — this only checks the
+    project membership (app.access.can_access_project), this only checks the
     role-based Agile permission matrix."""
     if not has_permission(user, permission):
         raise HTTPException(

@@ -134,7 +134,7 @@ def test_comment_delete_notifies_assignee(admin_client):
     assert _titles_containing(db, bob["id"], "Comment deleted"), "assignee not notified of delete"
 
 
-# Bug delete — notification must outlive the deleted row
+# Bug delete: notification must outlive the deleted row
 def test_bug_delete_notifies_assignee_and_survives(admin_client):
     _proj, bob, bug = _setup(admin_client, "bugdel")
 
@@ -148,7 +148,7 @@ def test_bug_delete_notifies_assignee_and_survives(admin_client):
     assert deleted[0].bug_id is None
 
 
-# Digest — operations must be batched into the daily email
+# Digest: operations must be batched into the daily email
 def test_new_operation_is_batched_into_digest(admin_client, monkeypatch):
     from app.config import get_settings
     # With digest mode on, notify() leaves emailed_at NULL and the job sends the email.

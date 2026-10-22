@@ -1,7 +1,7 @@
 """Small dependency-free helpers shared across the app."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # A leading one of these makes a spreadsheet treat the cell as a formula.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
@@ -9,12 +9,12 @@ _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 def utcnow() -> datetime:
     """Second-resolution UTC now, so SQLite and Postgres round-trip identical values."""
-    return datetime.now(timezone.utc).replace(microsecond=0)
+    return datetime.now(UTC).replace(microsecond=0)
 
 
 def utcnow_precise() -> datetime:
     """UTC now with microseconds, for ordering rows written within the same second."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def like_escape(needle: str) -> str:

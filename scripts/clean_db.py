@@ -3,7 +3,7 @@
 Deletes every user/business row and keeps exactly what `init_db()` and
 `_bootstrap()` create on an empty database:
 
-  * the bootstrap admin account (`BOOTSTRAP_ADMIN_EMAIL`) — the row, its
+  * the bootstrap admin account (`BOOTSTRAP_ADMIN_EMAIL`), the row, its
     password hash and role are untouched, so the credentials in `.env` keep
     working;
   * the seeded default project (`app.database.DEFAULT_PROJECT_NAME`);
@@ -16,7 +16,7 @@ notifications, push subscriptions, chat history, git configurations, quick
 filters, idempotency keys, password-reset tokens, the audit trail and all
 sessions (everyone is logged out and signs back in with the kept account).
 
-Usage (dry-run first — nothing is deleted without --yes):
+Usage (dry-run first: nothing is deleted without --yes):
 
     # Docker/app container database, from DATABASE_URL in the environment:
     python scripts/clean_db.py               # show what would be deleted
@@ -118,9 +118,9 @@ def cleanup_session_factory(database_url: str | None = None) -> sessionmaker:
 
     ``database_url`` wins; otherwise the app configuration (``DATABASE_URL`` env
     or the local SQLite fallback) is used. A new engine is always built for the
-    resolved URL — the app-wide ``SessionLocal`` must not be reused because it
+    resolved URL: the app-wide ``SessionLocal`` must not be reused because it
     is bound to whatever ``DATABASE_URL`` the environment had at import time.
-    No secrets are printed here — the masked host is logged by ``main``.
+    No secrets are printed here, the masked host is logged by ``main``.
     """
     raw = str(database_url).strip() if database_url else None
     source = "--database-url" if raw else "app configuration"
@@ -146,7 +146,7 @@ def resolve_baseline_user(db: Session) -> User | None:
 
     Falling back to the oldest admin (then the oldest account of any role) means
     a renamed bootstrap account can never lock the operator out. Returns None
-    only when the table is empty — then the next boot re-seeds it from `.env`.
+    only when the table is empty, then the next boot re-seeds it from `.env`.
     """
     email = (get_settings().BOOTSTRAP_ADMIN_EMAIL or "").strip()
     if email:

@@ -14,15 +14,15 @@ export default function WelcomeModal({ open, name, onTour, onHelp, onLater }) {
       id="welcomeModal"
       open={open}
       title={`Welcome to ${appName}${greeting}`}
-      subtitle="Here is the quickest way to get going."
+      subtitle="Here is the quickest way to get going"
       cardClass="welcome-card"
       onClose={() => onLater(dontShow)}
     >
       <div className="modal-body welcome-body">
         <ul className="welcome-points">
-          <li><strong>Track work.</strong> Bugs, requirements, tasks and stories in one list, with filters and bulk updates.</li>
-          <li><strong>Plan sprints.</strong> A ranked backlog, a sprint board and reports once a manager turns Scrum on.</li>
-          <li><strong>Ask Sleuth.</strong> The assistant answers questions and makes changes after you confirm.</li>
+          <li><strong>Track work</strong> Bugs, requirements, tasks and stories in one list, with filters and bulk updates</li>
+          <li><strong>Plan sprints</strong> A ranked backlog, a sprint board and reports once a manager turns Scrum on</li>
+          <li><strong>Ask Sleuth</strong> The assistant answers questions and makes changes after you confirm</li>
         </ul>
         <label className="welcome-check">
           <input type="checkbox" checked={dontShow} onChange={(e) => setDontShow(e.target.checked)} />

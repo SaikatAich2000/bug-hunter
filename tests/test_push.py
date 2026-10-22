@@ -255,7 +255,7 @@ def test_bulk_delete_fires_push_immediately(admin_client, monkeypatch):
     assert "deleted" in pushed[0]["title"].lower()
 
 
-# app/routes/push.py — token already bound to another account
+# app/routes/push.py: token already bound to another account
 def test_push_subscribe_conflict_returns_409(admin_client):
     # A token bound to one account is 409 when a second user claims it.
     admin_client.post("/api/push/subscribe", json={"token": "shared-token", "platform": "web"})

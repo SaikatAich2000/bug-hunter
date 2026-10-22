@@ -1,12 +1,12 @@
 """Sessions admin API: list active sessions and revoke one device at a time.
 
-Admin-only (narrower than user/project management) — silently logging
+Admin-only (narrower than user/project management), silently logging
 people out is sensitive.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -34,7 +34,7 @@ def _audit(db: Session, actor: User, action: str, detail: str, entity_id: int | 
 
 
 def _is_current(request: Request, sess: SessionRow) -> bool:
-    """True when the row matches the caller's cookie — labels it and blocks self-revoke."""
+    """True when the row matches the caller's cookie, labels it and blocks self-revoke."""
     parsed = parse_session_token(session_cookie_value(request))
     if not parsed:
         return False
@@ -49,14 +49,14 @@ def list_sessions(
     actor: User = Depends(require_admin),
 ) -> list[dict]:
     """List non-expired sessions with user info (expired rows are removed by the retention job)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = db.scalars(
         select(SessionRow)
         .where(SessionRow.expires_at >= now)
         .order_by(SessionRow.last_seen_at.desc(), SessionRow.id.desc())
     ).all()
 
-    # batch-load users — avoids N+1
+    # batch-load users: avoids N+1
     user_ids = sorted({r.user_id for r in rows})
     user_map: dict[int, User] = {}
     if user_ids:
@@ -94,7 +94,7 @@ def revoke_session(
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # no undo — admins must use logout, not self-revocation
+    # no undo: admins must use logout, not self-revocation
     if _is_current(request, sess):
         raise HTTPException(
             status_code=400,

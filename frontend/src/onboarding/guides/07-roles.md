@@ -1,6 +1,6 @@
 # Roles and permissions
 
-There are three roles. Your role is shown in the account menu at the top right. The server checks it on every action, so a hidden button is never the only protection.
+There are three roles. Your role is shown in the account menu at the top right. The server checks it on every action, so a hidden button is never the only protection
 
 | Capability | User | Manager | Admin |
 |---|---|---|---|
@@ -18,10 +18,10 @@ There are three roles. Your role is shown in the account menu at the top right. 
 
 ## Project access
 
-Non-admins only see items in projects they are a member of. If something you expect is missing, ask a manager to add you to the project.
+Non-admins only see items in projects they are a member of. If something you expect is missing, ask a manager to add you to the project
 
 ## Why a button might be missing
 
-Sections such as Reports, Audit Trail and Sessions only appear for roles that may use them. If you need access, ask an admin to change your role.
+Sections such as Reports, Audit Trail and Sessions only appear for roles that may use them. If you need access, ask an admin to change your role
 
-See also [Admin setup](#help/admin).
+See also [Admin setup](#help/admin)

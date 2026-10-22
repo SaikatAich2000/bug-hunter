@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 try:
@@ -58,7 +58,7 @@ def _coerce(value: Any) -> Any:
     if value is None:
         return ""
     if isinstance(value, bool):
-        # bool is a subclass of int — keep this branch above the int one.
+        # bool is a subclass of int, keep this branch above the int one.
         return value
     if isinstance(value, (int, float)):
         return value
@@ -162,13 +162,13 @@ def _write_filters_sheet(ws, result: ReportResult) -> None:
     ws.column_dimensions["A"].width = 24
     ws.column_dimensions["B"].width = 50
     ws.append([_cell(ws, f"{get_settings().APP_NAME} — {result.report_label}", font=Font(bold=True, size=12))])
-    ws.append([f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}"])
+    ws.append([f"Generated: {datetime.now(UTC).isoformat(timespec='seconds')}"])
     ws.append([f"Total rows: {result.total}"])
     ws.append([])
     ws.append([_cell(ws, "Filter", font=bold), _cell(ws, "Value", font=bold)])
     f = result.filters or {}
     for key, label in _FILTER_LABELS:
-        # text_search/label are user free-text — defang like data cells.
+        # text_search/label are user free-text, defang like data cells.
         ws.append([label, _coerce(_format_filter_display(f.get(key)))])
     if result.summary:
         ws.append([])

@@ -148,7 +148,7 @@ def run_digest(
     by_user = _group_by_user(rows)
     # Claim rows with a guarded UPDATE (emailed_at IS NULL) rather than SELECT
     # FOR UPDATE, which SQLite silently ignores. This way two concurrent runs
-    # can't both claim and send the same rows — the loser sees rowcount 0 and
+    # can't both claim and send the same rows, the loser sees rowcount 0 and
     # skips. We commit the claims before the SMTP loop so a slow mail server
     # can't hold a DB connection for the entire batch.
     outbox: list[tuple[str, str, str, list[int]]] = []  # (email, subject, body, row ids)
@@ -175,12 +175,12 @@ def run_digest(
     db.commit()  # claimed rows are now stamped (at-most-once)
 
     # Deliver outside the transaction (no DB locks across network I/O). When
-    # the backend reports a failed send (deliver() returns False — e.g. SMTP
+    # the backend reports a failed send (deliver() returns False, e.g. SMTP
     # down or rejecting at exactly this moment), release that user's rows by
     # clearing emailed_at so the next scheduled run retries them instead of
     # silently losing the day's digest. At-most-once still holds: rows are only
     # released when nothing was sent. A disabled backend also returns False,
-    # but that is an operator choice, not a failure — those rows stay stamped
+    # but that is an operator choice, not a failure, those rows stay stamped
     # (same pattern as notify_password_reset). A crash mid-loop still drops the
     # remaining batch (already stamped), which beats double-sending.
     failed = 0

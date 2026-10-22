@@ -1,4 +1,4 @@
-"""Reports REST router: /types, /run, /export.xlsx — all manager-or-admin only.
+"""Reports REST router: /types, /run, /export.xlsx, all manager-or-admin only.
 
 The sidebar hiding is UI convenience; the role dependency is the access gate.
 """
@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response, StreamingResponse
@@ -47,8 +47,8 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 class FilterIn(BaseModel):
     """Inbound filter blob; omitted fields mean no filter."""
-    date_from: Optional[str] = None
-    date_to: Optional[str] = None
+    date_from: str | None = None
+    date_to: str | None = None
     item_types: list[str] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=list)
     priorities: list[str] = Field(default_factory=list)
@@ -56,10 +56,10 @@ class FilterIn(BaseModel):
     project_ids: list[int] = Field(default_factory=list, max_length=1000)
     assignee_ids: list[int] = Field(default_factory=list, max_length=1000)
     reporter_ids: list[int] = Field(default_factory=list, max_length=1000)
-    event_id: Optional[int] = None
+    event_id: int | None = None
     include_not_a_bug: bool = False
-    text_search: Optional[str] = Field(default=None, max_length=400)
-    label: Optional[str] = Field(default=None, max_length=120)
+    text_search: str | None = Field(default=None, max_length=400)
+    label: str | None = Field(default=None, max_length=120)
 
     @field_validator("item_types")
     @classmethod
@@ -120,7 +120,7 @@ def _run_or_400(payload: ReportRunIn, db: Session, user: User):
             ),
         )
     filters = _build_filters(payload)
-    # restrict_project_ids is route-set, never payload — a manager can't widen scope
+    # restrict_project_ids is route-set, never payload, a manager can't widen scope
     filters.restrict_project_ids = accessible_project_ids(db, user)
     try:
         return run_report(payload.report_key, filters, db), filters
@@ -157,7 +157,7 @@ def _safe_filename(report_key: str, label: str) -> str:
         suffix = _FILENAME_SAFE_RE.sub("_", label.strip()).strip("_")[:40]
         if suffix:
             base = f"{base}_{suffix}"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"bug-hunter-report-{base}-{stamp}.xlsx"
 
 

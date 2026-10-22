@@ -63,7 +63,7 @@ def test_password_forms_use_password_input(path):
 
 
 def test_password_input_count_matches_fields():
-    # One PasswordInput per field — no field may share or be skipped.
+    # One PasswordInput per field, no field may share or be skipped.
     assert _read(CHANGE_PW).count("<PasswordInput") == 3  # current/new/confirm
     assert _read(RESET).count("<PasswordInput") == 2  # new/confirm
 

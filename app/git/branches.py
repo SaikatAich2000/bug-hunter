@@ -255,7 +255,7 @@ def create_branch(
     actor: User,
     base_branch_override: str | None = None,
 ) -> tuple[WorkItemBranch, bool]:
-    """Create — or reconcile — the branch. Returns ``(row, created)``.
+    """Create: or reconcile, the branch. Returns ``(row, created)``.
 
     Idempotent by construction: an existing record is returned untouched, and a
     remote branch that already exists is adopted rather than duplicated under
@@ -305,7 +305,7 @@ def create_branch(
             repository.owner, repository.name, branch_name, base_sha
         )
     except GitProviderError as exc:
-        # Step 16: reconcile an uncertain remote success — the ref may exist
+        # Step 16: reconcile an uncertain remote success, the ref may exist
         # even though the create response was lost.
         if exc.retryable and provider.branch_exists(
             repository.owner, repository.name, branch_name

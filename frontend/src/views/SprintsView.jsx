@@ -41,14 +41,14 @@ function EnableAgile({ projectName, canManage, onEnabled }) {
       <h2>Scrum isn&apos;t set up for {projectName} yet</h2>
       <p className="muted">
         Turning it on creates the project&apos;s board (To Do, In Progress, Testing, Done) and a
-        backlog ranked from the project&apos;s open issues. Nothing is deleted or changed.
+        backlog ranked from the project&apos;s open issues, nothing is deleted or changed
       </p>
       {canManage ? (
         <button type="button" className="btn primary" disabled={busy} onClick={enable}>
           {busy ? "Setting up…" : "Set up Scrum board"}
         </button>
       ) : (
-        <p className="muted small">Ask an admin or manager to set it up.</p>
+        <p className="muted small">Ask an admin or manager to set it up</p>
       )}
     </div>
   );

@@ -203,7 +203,7 @@ export default function UserModal() {
         </label>
         <div className="field" id="userProjectsField">
           <span>Projects</span>
-          <HelpHint label="Projects" guide="roles">People only see items in the projects tagged here. Admins always see every project.</HelpHint>
+          <HelpHint label="Projects" guide="roles">People only see items in the projects tagged here, admins always see every project</HelpHint>
           <ChipPicker
             id="userProjects"
             items={projects.map((p) => ({ id: p.id, label: p.name }))}
@@ -212,8 +212,8 @@ export default function UserModal() {
           />
           <small className="hint">
             Managers and users only see the bugs, requirements, tasks and events
-            in the projects tagged here. Leave empty for no access. Admins always
-            see everything, regardless of tags.
+            in the projects tagged here, leave empty for no access, admins always
+            see everything, regardless of tags
           </small>
         </div>
         <div className="modal-foot">

@@ -104,7 +104,7 @@ def _get_project_or_404(db: Session, project_id: int, user: User) -> Project:
     return project
 
 
-# --- Epics ---
+# Epics
 
 def _epic_out(epic: Bug, detail: EpicDetail | None, progress: dict, categories: dict) -> dict:
     return {
@@ -204,7 +204,7 @@ def archive_epic(
     return _epics_out(db, [epic])[0]
 
 
-# --- Versions / Releases (core: CRUD/archive/item-association only) ---
+# Versions / Releases (core: CRUD/archive/item-association only)
 
 @router.get("/releases", response_model=list[VersionOut], responses=NOT_FOUND_404)
 def list_versions(
@@ -331,7 +331,7 @@ def get_roadmap(
     return releases_svc.roadmap_data(db, project_id)
 
 
-# --- Components ---
+# Components
 
 @router.get("/components", response_model=list[ComponentOut], responses=NOT_FOUND_404)
 def list_components(
@@ -415,7 +415,7 @@ def archive_component(
     return c
 
 
-# --- Labels ---
+# Labels
 
 @router.get("/labels", response_model=list[LabelOut], responses=NOT_FOUND_404)
 def list_labels(

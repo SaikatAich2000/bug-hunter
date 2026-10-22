@@ -168,7 +168,7 @@ def test_remove_link_via_source(admin_client):
     b = _mk_bug(admin_client, proj["id"], "Item B")
     link = admin_client.post(f"/api/bugs/{a['id']}/links",
                              json={"target_bug_id": b["id"], "link_type": "blocks"}).json()
-    # Delete through A's endpoint — exercises the source branch of remove_link.
+    # Delete through A's endpoint, exercises the source branch of remove_link.
     assert admin_client.delete(f"/api/bugs/{a['id']}/links/{link['id']}").status_code == 200
     assert admin_client.get(f"/api/bugs/{b['id']}/links").json() == []
 

@@ -20,7 +20,7 @@ export function unsentFilesProblem(attachmentCount, commentFileCount) {
     return (
       `You have ${n} attachment${plural(n, "", "s")} that ${plural(n, "hasn't", "haven't")} been uploaded yet. `
       + 'Click "Upload" in the Attachments section, or remove '
-      + `${plural(n, "it", "them")}, before saving.`
+      + `${plural(n, "it", "them")}, before saving`
     );
   }
   if (commentFileCount > 0) {
@@ -28,7 +28,7 @@ export function unsentFilesProblem(attachmentCount, commentFileCount) {
     return (
       `You have ${n} file${plural(n, "", "s")} attached to a comment you haven't posted yet. `
       + 'Click "Post" to add the comment, or remove '
-      + `${plural(n, "it", "them")}, before saving.`
+      + `${plural(n, "it", "them")}, before saving`
     );
   }
   return null;
@@ -48,6 +48,6 @@ export function dueOutsideSprintMessage(sprint, due) {
 
 /** Why an Agile-only type cannot be created while the project's Agile surface is off. */
 export function agileOffMessage(typeLabel, canManage) {
-  const how = canManage ? " Use “Enable Agile” above." : " Ask a manager or admin to enable it.";
+  const how = canManage ? " Use “Enable Agile” above" : " Ask a manager or admin to enable it";
   return `Agile is not enabled for this project, so ${typeLabel} items cannot be created yet.${how}`;
 }

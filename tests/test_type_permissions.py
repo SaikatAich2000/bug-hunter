@@ -4,9 +4,7 @@ event-manager email delivery, manager-role validation, admin-only event deletion
 from __future__ import annotations
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _login(client, email, password):
     client.post("/api/auth/logout")
     r = client.post("/api/auth/login", json={"email": email, "password": password})
@@ -99,7 +97,7 @@ def test_manager_can_edit_task_and_requirement(admin_client):
 
 
 def test_manager_cannot_delete_anything(admin_client):
-    """Managers can edit, never delete — every item type AND events."""
+    """Managers can edit, never delete, every item type AND events."""
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")
     task = _make_item(admin_client, p["id"], item_type="Task")
@@ -129,9 +127,9 @@ def test_admin_can_delete_everything(admin_client):
     assert r.status_code == 200, r.text
 
 
-# Event managers — emails, role validation.
+# Event managers: emails, role validation.
 def test_event_create_emails_only_managers(admin_client, monkeypatch):
-    """Creating an event emails its managers only — not item assignees or random users."""
+    """Creating an event emails its managers only, not item assignees or random users."""
     team = _make_project(admin_client, "Team")
     m1 = _make_user(admin_client, "Mgr-a", role="manager", email="mgra@x.test")
     m2 = _make_user(admin_client, "Mgr-b", role="manager", email="mgrb@x.test")

@@ -24,7 +24,7 @@ const VIEW_SUBTITLES = {
   audit:
     "Every create, update, delete, login and session event across __APP_NAME__ — for incident review and compliance",
   sessions:
-    "Every device currently signed in. Revoke a session to log that device out without touching anything else",
+    "Every device currently signed in, revoke a session to log that device out without touching anything else",
   reports:
     "Build a report from any combination of filters, preview it inline, then download the full data as Excel",
   help: "Guides for tracking work, running sprints, reports, notifications and administration",

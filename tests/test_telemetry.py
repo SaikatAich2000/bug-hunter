@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # A syntactically valid endpoint used only as a *string*: every test below that
 # sets OTEL_EXPORTER_OTLP_ENDPOINT also swaps the exporter factories for
 # in-memory fakes, and the one genuine gRPC test spins up its own loopback
-# server — so no test ever dials this address. Kept deliberately non-routable
+# server: so no test ever dials this address. Kept deliberately non-routable
 # (TEST-NET-1, RFC 5737) so a missing fake fails fast with connection-refused
 # instead of hanging behind a VPN/firewall the way the old 10.1.151.228:4327
 # value could when CI has no route to it.
@@ -152,7 +152,7 @@ def real_log_bridge(telemetry, monkeypatch):
     return exports
 
 
-# ------------------------------------------------------------ default behaviour
+# default behaviour
 
 
 def test_suite_env_disables_export(telemetry):
@@ -178,7 +178,7 @@ def test_all_signals_disabled_stays_console_only(telemetry, monkeypatch, caplog)
     assert telemetry._tracer_provider is None
 
 
-# ------------------------------------------------------------------ happy path
+# happy path
 
 
 def test_setup_enables_all_signals_and_is_idempotent(telemetry, fake_signals):
@@ -318,7 +318,7 @@ def test_shutdown_flushes_and_detaches(telemetry, fake_signals):
     telemetry.shutdown_telemetry()  # second call is a safe no-op
 
 
-# ------------------------------------------- real logging bridge (no stand-ins)
+# real logging bridge (no stand-ins)
 
 
 def test_exported_records_carry_trace_context(real_log_bridge, telemetry):
@@ -383,7 +383,7 @@ def test_min_level_keeps_debug_out_of_export(telemetry, monkeypatch):
     assert bodies == ["exported"]
 
 
-# ----------------------------------------------------------------- console format
+# console format
 
 
 def test_json_console_format_and_reset(telemetry, monkeypatch):
@@ -430,7 +430,7 @@ def test_unknown_log_format_warns_and_falls_back(telemetry, monkeypatch, caplog)
     assert any("Unknown LOG_FORMAT" in r.getMessage() for r in caplog.records)
 
 
-# ------------------------------------------------- resource, sampler, exporters
+# resource, sampler, exporters
 
 
 def test_resource_attributes_and_overrides(telemetry, monkeypatch):
@@ -519,7 +519,7 @@ def test_real_exporter_factories_construct_offline(telemetry, monkeypatch):
     assert type(telemetry._make_log_exporter()).__name__ == "OTLPLogExporter"
 
 
-# ---------------------------------------------------------------- FastAPI app
+# FastAPI app
 
 
 def test_instrument_app_passes_providers_and_exclusions(telemetry, fake_signals):
@@ -675,7 +675,7 @@ def test_get_tracer_is_safe_without_export(telemetry):
         pass
 
 
-# ------------------------------------------------------ wiring + audit trail
+# wiring + audit trail
 
 
 def test_main_wires_setup_before_app_and_instruments_it():
@@ -698,7 +698,7 @@ def test_audit_rows_mirrored_to_logs(admin_client, caplog):
     assert any(m.startswith("audit project_created project#") for m in messages), messages
 
 
-# ------------------------------------------------- OTLP protocol, events (MELT completeness)
+# OTLP protocol, events (MELT completeness)
 
 
 def test_http_protobuf_protocol_and_per_signal_endpoints(telemetry, monkeypatch):

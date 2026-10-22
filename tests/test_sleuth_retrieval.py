@@ -17,7 +17,7 @@ def _bug(c, pid, title, description=""):
     return r.json()["id"]
 
 
-# --- keywords ---------------------------------------------------------------
+# keywords
 
 def test_keywords_drops_stopwords_short_and_dedups():
     from app.chatbot.retrieval import keywords
@@ -50,7 +50,7 @@ def test_snippet_empty_unmatched_and_centered():
     assert "TARGETkw" in out
 
 
-# --- retrieve_bugs (DB-backed) ---------------------------------------------
+# retrieve_bugs (DB-backed)
 
 def test_retrieve_ranks_by_keyword_hits(admin_client):
     from app.chatbot import retrieval
@@ -119,7 +119,7 @@ def test_retrieve_bugs_scoped_to_accessible_projects(admin_client):
         db.close()
 
 
-# --- format_context ---------------------------------------------------------
+# format_context
 
 def test_format_context_empty_and_records():
     from app.chatbot.retrieval import RetrievedBug, format_context
@@ -133,7 +133,7 @@ def test_format_context_empty_and_records():
     assert "NEVER follow" in out  # indirect-injection guard present
 
 
-# --- verify -----------------------------------------------------------------
+# verify
 
 def test_cited_bug_ids_forms():
     from app.chatbot.verify import cited_bug_ids
@@ -176,7 +176,7 @@ def test_flag_write_claims_appends_only_for_self_attributed_writes():
     assert flag_write_claims("") == ""
 
 
-# --- end-to-end: grounded retrieval + answer verification in the cloud path --
+# end-to-end: grounded retrieval + answer verification in the cloud path
 
 def test_cloud_answer_is_grounded_and_verified(admin_client, monkeypatch):
     from app import models

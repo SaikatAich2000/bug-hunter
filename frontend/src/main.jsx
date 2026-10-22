@@ -10,7 +10,7 @@ import "./styles/onboarding.css";
 import "./styles/motion.css";
 
 // Theme + collapsed-sidebar state read before first render (CSP blocks inline
-// scripts) — no wrong-theme flash / collapse animation on reload. Guarded:
+// scripts), no wrong-theme flash / collapse animation on reload. Guarded:
 // blocked storage (e.g. SecurityError) must not abort SPA boot.
 let storedTheme = null;
 let collapsed = false;

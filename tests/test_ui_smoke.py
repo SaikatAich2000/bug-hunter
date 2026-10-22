@@ -98,7 +98,7 @@ def test_create_bug_button_actually_creates(live_server, browser):
     page = ctx.new_page()
     _login(page, live_server)
 
-    # Create a project — the bug form requires at least one.
+    # Create a project, the bug form requires at least one.
     page.click("#newProjectBtn")
     page.wait_for_selector("#modalProject", state="visible", timeout=2000)
     page.fill('#formProject input[name="name"]', "UI Smoke Project")
@@ -217,7 +217,7 @@ def test_v3_shell_account_menu_and_bell_top_right(live_server, browser):
 
     # The bell's left edge must be well into the right half of the viewport on
     # non-list views (the CSS bug put it near x=0). Target the desktop chrome bar
-    # explicitly — the nav also lives in the mobile drawer which comes first in
+    # explicitly: the nav also lives in the mobile drawer which comes first in
     # the DOM, so an unscoped selector would resolve to the wrong hidden element.
     page.click('.chrome .nav-btn[data-view="events"]')
     page.wait_for_selector("#viewEvents, .view", timeout=3000)
@@ -521,7 +521,7 @@ def test_linked_items_picker_multiselect_and_link(nav_page):
     # Multi-select keeps the dropdown open and shows chips for each selection.
     assert page.locator(".item-picker-chips .item-picker-chip").count() == 2
 
-    # Link — one POST per selected item.
+    # Link: one POST per selected item.
     page.click("#bugLinkAdd .btn.primary")
 
     # Both targets must appear in the linked-items list.

@@ -67,7 +67,7 @@
 }
 .sleuth-fab:hover .sleuth-fab-icon { transform: rotate(-8deg) scale(1.05); }
 
-/* Unread badge — visible only when chatbot.js sets data-unread > 0 */
+/* Unread badge: visible only when chatbot.js sets data-unread > 0 */
 .sleuth-fab[data-unread]:not([data-unread="0"])::before {
   content: attr(data-unread);
   position: absolute;
@@ -351,7 +351,7 @@
   40%           { transform: translateY(-4px); opacity: 1; }
 }
 
-/* Confirm prompts (yes/no) — class names match chatbot.js renderConfirmBlock */
+/* Confirm prompts (yes/no), class names match chatbot.js renderConfirmBlock */
 .sleuth-confirm {
   margin-top: 10px;
   padding: 10px 12px;
@@ -403,7 +403,7 @@
 .sleuth-confirm-yes:disabled,
 .sleuth-confirm-no:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 
-/* Table block — for "show me bugs" tabular results */
+/* Table block: for "show me bugs" tabular results */
 .sleuth-table-wrap {
   margin-top: 6px;
   border: 1px solid var(--border, #232c47);
@@ -446,7 +446,7 @@
 }
 .sleuth-table tbody tr:last-child td { border-bottom: none; }
 
-/* File block — Excel export download card */
+/* File block: Excel export download card */
 .sleuth-file {
   display: flex;
   align-items: center;
@@ -513,7 +513,7 @@ a.sleuth-file-btn:active,
 }
 .sleuth-file-btn:active { transform: translateY(0); }
 
-/* Suggestions block — quick-action chips Sleuth offers after a reply */
+/* Suggestions block: quick-action chips Sleuth offers after a reply */
 .sleuth-suggestions {
   display: flex;
   flex-wrap: wrap;
@@ -599,7 +599,7 @@ a.sleuth-file-btn:active,
   box-shadow: none;
 }
 
-/* Admin-only document-import button — sits left of the composer. */
+/* Admin-only document-import button, sits left of the composer. */
 .sleuth-upload-btn {
   flex-shrink: 0;
   width: 38px;

@@ -1,7 +1,7 @@
 """One writer for Activity (audit-trail) rows."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -12,11 +12,11 @@ def audit(
     db: Session,
     actor: Any,
     entity_type: str,
-    entity_id: Optional[int],
+    entity_id: int | None,
     action: str,
     detail: str,
     *,
-    bug_id: Optional[int] = None,
+    bug_id: int | None = None,
 ) -> None:
     """Queue an Activity row. actor may be None (recorded as "system")."""
     db.add(Activity(

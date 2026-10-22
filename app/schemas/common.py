@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
-from typing import Optional
 
 # Display-ID prefix mapping for user-facing entity references.
 _DISPLAY_ID_PREFIX: dict[str, str] = {
@@ -14,7 +13,7 @@ _DISPLAY_ID_PREFIX: dict[str, str] = {
     # Its own prefix: a Sub-task (child of an issue) is not a Task.
     "Sub-task": "SUB",
     "Story": "USRSTR",
-    # UI alias of "Story" — same canonical work-item type.
+    # UI alias of "Story", same canonical work-item type.
     "User Story": "USRSTR",
     "Epic": "EPIC",
     "Sprint": "SPRINT",
@@ -55,7 +54,7 @@ _ALLOWED_ATTRS = {
 # Allowed URL schemes for href/src; data: is handled separately below.
 _ALLOWED_URL_SCHEMES = ("http:", "https:", "mailto:", "/", "#")
 
-# Raster data: URLs only — data:image/svg+xml is scriptable, so it's excluded.
+# Raster data: URLs only, data:image/svg+xml is scriptable, so it's excluded.
 _DATA_IMAGE_RASTER_PREFIXES = (
     "data:image/png", "data:image/jpeg", "data:image/jpg",
     "data:image/gif", "data:image/webp", "data:image/bmp", "data:image/avif",
@@ -79,7 +78,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
         # Nesting depth inside RCDATA elements, so their text is suppressed.
         self._drop_text_depth = 0
 
-    def _safe_url(self, raw: str) -> Optional[str]:
+    def _safe_url(self, raw: str) -> str | None:
         if not raw:
             return None
         s = raw.strip()
@@ -97,7 +96,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
                 return s
         return None
 
-    def _kept_attrs(self, t: str, attrs: list[tuple[str, Optional[str]]]) -> list[str]:
+    def _kept_attrs(self, t: str, attrs: list[tuple[str, str | None]]) -> list[str]:
         """Return the allowed name="value" attribute strings for tag t."""
         kept: list[str] = []
         allowed_attrs = _ALLOWED_ATTRS.get(t, set())
@@ -119,7 +118,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
             kept.append('rel="noopener nofollow"')
         return kept
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         t = tag.lower()
         if t in _RCDATA_DROP_TAGS:
             self._drop_text_depth += 1
@@ -143,7 +142,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
             return
         self.out.append(f"</{t}>")
 
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         # <br/> / <img .../> re-emit as a start tag. A self-closing RCDATA tag
         # is skipped without touching _drop_text_depth (it opens+closes at once).
         if tag.lower() in _RCDATA_DROP_TAGS:
@@ -168,7 +167,7 @@ class _HTMLAllowlistSanitizer(HTMLParser):
         self.out.append(f"&#{name};")
 
 
-def sanitize_html(value: Optional[str]) -> str:
+def sanitize_html(value: str | None) -> str:
     """Return allowlist-sanitized HTML for storage/display; idempotent, "" for None."""
     if value is None:
         return ""
@@ -188,7 +187,7 @@ _RELEASE_BEFORE_START = "The release date cannot be before the start date"
 _ACCEPTANCE_CRITERION_NOT_FOUND = "Acceptance criterion not found"
 _NOT_SET = "(not set)"
 
-# Canonical status vocabulary — the same set is valid for every work-item type
+# Canonical status vocabulary, the same set is valid for every work-item type
 # so that any configured board status can be applied to any item. The board column
 # categories (todo/in_progress/testing/done) are what drive workflow, not the
 # item type.
@@ -205,7 +204,7 @@ STATUSES_BY_TYPE = {
     # Both share the exact same status vocabulary.
     "Task": list(CANONICAL_STATUSES),
     # Agile hierarchy types. Stored Title Case,
-    # same convention as the legacy types above — never lowercased in the DB.
+    # same convention as the legacy types above, never lowercased in the DB.
     "Epic": list(CANONICAL_STATUSES),
     "Story": list(CANONICAL_STATUSES),
     "Sub-task": list(CANONICAL_STATUSES),
@@ -229,7 +228,7 @@ ALLOWED_ENVIRONMENTS = ["DEV", "UAT", "PROD"]
 # Work-item flavors; a classifier for filtering/badges, other fields apply to all.
 # Legacy types remain creatable/editable through /api/bugs. The Agile hierarchy
 # types are additive and only creatable/editable through
-# /api/agile/work-items — /api/bugs explicitly refuses to create/convert into them
+# /api/agile/work-items: /api/bugs explicitly refuses to create/convert into them
 # (see _validate_create_item_type in routes/bugs.py), so existing behavior for
 # Bug/Requirement/Task is completely unaffected.
 LEGACY_ITEM_TYPES = ["Bug", "Requirement", "Task"]
@@ -250,7 +249,7 @@ MIN_NAME_LENGTH = 2
 MIN_PROJECT_NAME_LENGTH = 2
 _DATE_FORMAT_ERROR = "Dates must be YYYY-MM-DD"
 
-# --- Agile constants ---
+# Agile constants
 ALLOWED_ESTIMATION_MODES = ["story_points", "time", "item_count"]
 ALLOWED_SWIMLANE_MODES = ["none", "assignee", "epic", "story", "priority"]
 ALLOWED_WIP_ENFORCEMENT = ["off", "warn", "block"]
@@ -261,7 +260,7 @@ ALLOWED_COLUMN_CATEGORIES = ["todo", "in_progress", "testing", "done"]
 ALLOWED_SPRINT_DISPOSITIONS = ["backlog", "sprint", "new_sprint"]
 DEFAULT_WORKING_WEEKDAYS = [1, 2, 3, 4, 5]
 
-# --- Agile constants ---
+# Agile constants
 ALLOWED_CAPACITY_UNITS = ["points", "minutes"]
 ALLOWED_EPIC_HEALTH = ["on_track", "at_risk", "off_track", "unknown"]
 ALLOWED_VERSION_STATUSES = ["unreleased", "released", "archived"]
@@ -307,7 +306,7 @@ def single_line(value: str) -> str:
     return _LINE_BREAKS_AND_CONTROLS.sub(" ", value).strip()
 
 
-def plain_text(value: Optional[str]) -> str:
+def plain_text(value: str | None) -> str:
     """User-written plain text (descriptions, goals, notes), stored as typed. It is never HTML:
     every renderer escapes it, so ``a < b`` and ``<div>`` survive exactly as written."""
     if not value:

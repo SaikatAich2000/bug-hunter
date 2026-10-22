@@ -175,9 +175,7 @@ def test_html_templates_receive_the_configured_version(admin_client):
         assert f'content="{version}"' in response.text, f"{path} missing the version meta"
 
 
-# ---------------------------------------------------------------------------
 # No mobile-application claims
-# ---------------------------------------------------------------------------
 
 def test_documentation_makes_no_mobile_app_claim():
     pattern = re.compile(r"android|mobile app|mobile client|mobile application", re.I)
@@ -196,9 +194,7 @@ def test_frontend_title_has_no_mobile_wording():
         assert not re.search(r"android|mobile app", text, re.I), path.name
 
 
-# ---------------------------------------------------------------------------
 # No secrets or local environment files in the tree
-# ---------------------------------------------------------------------------
 
 def test_no_secret_environment_file_is_committed():
     """A local .env may exist in a developer working tree; it must only be
@@ -254,9 +250,7 @@ def test_no_known_release_artifacts_remain():
     assert not any((ROOT / ".ai").glob("*")) if (ROOT / ".ai").exists() else True
 
 
-# ---------------------------------------------------------------------------
 # Release archive contract (scripts/make_release.py)
-# ---------------------------------------------------------------------------
 
 ROOT_FOLDER = "bug-hunter"
 

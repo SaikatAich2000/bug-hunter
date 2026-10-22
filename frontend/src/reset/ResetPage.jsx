@@ -13,7 +13,7 @@ export default function ResetPage() {
     token
       ? null
       : {
-          msg: "Reset link is missing or malformed. Request a new one from the sign-in page",
+          msg: "Reset link is missing or malformed, request a new one from the sign-in page",
           kind: "error",
         },
   );
@@ -43,12 +43,12 @@ export default function ResetPage() {
         body: JSON.stringify({ token, new_password: newPw }),
       });
       if (res.status === 204) {
-        setResetAlert({ msg: "Password updated. Redirecting to sign in…", kind: "success" });
+        setResetAlert({ msg: "Password updated, redirecting to sign in…", kind: "success" });
         setTimeout(() => {
           location.replace("/login.html");
         }, 1500);
       } else {
-        // 422 `detail` may be a Pydantic error array — stringify items to avoid "[object Object]".
+        // 422 `detail` may be a Pydantic error array, stringify items to avoid "[object Object]".
         let msg = "Reset failed";
         try {
           const detail = (await res.json()).detail;
@@ -67,12 +67,12 @@ export default function ResetPage() {
             msg = detail;
           }
         } catch {
-          /* non-JSON error body — keep the fallback message */
+          /* non-JSON error body, keep the fallback message */
         }
         setResetAlert({ msg, kind: "error" });
       }
     } catch {
-      setResetAlert({ msg: "Network error. Try again", kind: "error" });
+      setResetAlert({ msg: "Network error, try again", kind: "error" });
     } finally {
       setBusy(false);
     }

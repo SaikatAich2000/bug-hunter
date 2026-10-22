@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import jsxA11y from "eslint-plugin-jsx-a11y";
 import globals from "globals";
 
-// Flat config (ESLint 10). Plain JS/JSX only — no TypeScript parser/plugin,
+// Flat config (ESLint 10). Plain JS/JSX only, no TypeScript parser/plugin,
 // per Slice J (Section 23.1 of the Agile plan): zero .ts/.tsx in this repo.
 export default [
   js.configs.recommended,

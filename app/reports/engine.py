@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 
 from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -26,7 +26,7 @@ from app.models import (
 )
 from app.reports.catalog import REPORT_CATALOG
 
-# Resolution maps — keep in sync with app/schemas.py::STATUSES_BY_TYPE.
+# Resolution maps: keep in sync with app/schemas.py::STATUSES_BY_TYPE.
 RESOLVED_STATUSES_BY_TYPE: dict[str, list[str]] = {
     "Bug": ["Resolved", "Closed"],
     "Requirement": ["Implemented"],
@@ -67,8 +67,8 @@ RESOLUTION_OLD_STATUS_RE = re.compile(
 class Filters:
     """Universal filter set; every field defaults to "no filter". date_from/
     date_to are inclusive dates, converted to start/end-of-day UTC for comparison."""
-    date_from: Optional[date] = None
-    date_to: Optional[date] = None
+    date_from: date | None = None
+    date_to: date | None = None
     item_types: list[str] = field(default_factory=list)
     statuses: list[str] = field(default_factory=list)
     priorities: list[str] = field(default_factory=list)
@@ -76,9 +76,9 @@ class Filters:
     project_ids: list[int] = field(default_factory=list)
     assignee_ids: list[int] = field(default_factory=list)
     reporter_ids: list[int] = field(default_factory=list)
-    event_id: Optional[int] = None
+    event_id: int | None = None
     include_not_a_bug: bool = False
-    text_search: Optional[str] = None
+    text_search: str | None = None
 
     # Free-form label to identify a saved or downloaded run.
     label: str = ""
@@ -86,10 +86,10 @@ class Filters:
     # Route-set from the actor's accessible projects (never user-supplied, so
     # scope can't be widened via the payload). None = unrestricted; empty set =
     # see nothing. Omitted from from_dict/to_meta since it isn't user-chosen.
-    restrict_project_ids: Optional[set[int]] = None
+    restrict_project_ids: set[int] | None = None
 
     @classmethod
-    def from_dict(cls, d: Optional[dict[str, Any]]) -> "Filters":
+    def from_dict(cls, d: dict[str, Any] | None) -> Filters:
         d = d or {}
         return cls(
             date_from=_parse_date(d.get("date_from")),
@@ -125,13 +125,13 @@ class Filters:
             "label": self.label,
         }
 
-    def with_overrides(self, **overrides: Any) -> "Filters":
+    def with_overrides(self, **overrides: Any) -> Filters:
         """Typed wrapper over dataclasses.replace() so callers get back a
         properly-typed Filters, not the generic DataclassInstance."""
         return replace(self, **overrides)
 
 
-def _parse_date(v: Any) -> Optional[date]:
+def _parse_date(v: Any) -> date | None:
     if v is None or v == "":
         return None
     if isinstance(v, date) and not isinstance(v, datetime):
@@ -146,7 +146,7 @@ def _parse_date(v: Any) -> Optional[date]:
     return None
 
 
-def _parse_int(v: Any) -> Optional[int]:
+def _parse_int(v: Any) -> int | None:
     if v is None or v == "":
         return None
     try:
@@ -242,11 +242,11 @@ class ReportResult:
 
 
 def _start_of_day(d: date) -> datetime:
-    return datetime.combine(d, time.min, tzinfo=timezone.utc)
+    return datetime.combine(d, time.min, tzinfo=UTC)
 
 
 def _end_of_day(d: date) -> datetime:
-    return datetime.combine(d, time.max, tzinfo=timezone.utc)
+    return datetime.combine(d, time.max, tzinfo=UTC)
 
 
 def _apply_text_search(stmt, needle: str):
@@ -336,15 +336,15 @@ def _eager_bug():
     )
 
 
-def _days_open_value(created_at: Optional[datetime],
-                     resolved_at: Optional[datetime]) -> Optional[int]:
+def _days_open_value(created_at: datetime | None,
+                     resolved_at: datetime | None) -> int | None:
     """Days open, creation to resolution (or now); None without a creation time."""
     if created_at is None:
         return None
-    open_until = resolved_at if resolved_at is not None else datetime.now(timezone.utc)
+    open_until = resolved_at if resolved_at is not None else datetime.now(UTC)
     # Coerce legacy naive timestamps defensively.
-    ca = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
-    ou = open_until if open_until.tzinfo else open_until.replace(tzinfo=timezone.utc)
+    ca = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+    ou = open_until if open_until.tzinfo else open_until.replace(tzinfo=UTC)
     return max(0, (ou - ca).days)
 
 
@@ -376,7 +376,7 @@ def _bug_relation_fields(b: Bug) -> dict[str, Any]:
 
 
 def _bug_to_detail_row(b: Bug, attachments_by_bug: dict[int, int],
-                      resolved_info: dict[int, tuple[Optional[str], Optional[datetime]]]) -> dict[str, Any]:
+                      resolved_info: dict[int, tuple[str | None, datetime | None]]) -> dict[str, Any]:
     """Full detail row: every column on the bug plus computed extras."""
     resolved_by, resolved_at = resolved_info.get(b.id, (None, None))
     days_open = _days_open_value(b.created_at, resolved_at)
@@ -389,11 +389,11 @@ def _bug_to_detail_row(b: Bug, attachments_by_bug: dict[int, int],
     return row
 
 
-def _fmt_dt(dt: Optional[datetime]) -> str:
+def _fmt_dt(dt: datetime | None) -> str:
     if dt is None:
         return ""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.isoformat(timespec="seconds")
 
 
@@ -405,7 +405,7 @@ def _is_open_status(status: str, item_type: str) -> bool:
     return status in OPEN_STATUSES_BY_TYPE.get(item_type or "Bug", [])
 
 
-def _parse_resolution_status(detail: str) -> Optional[str]:
+def _parse_resolution_status(detail: str) -> str | None:
     """Pull the new status from an activity_log detail string, or None."""
     if not detail:
         return None
@@ -416,7 +416,7 @@ def _parse_resolution_status(detail: str) -> Optional[str]:
     return matches[-1].strip()
 
 
-def _parse_prior_status(detail: str) -> Optional[str]:
+def _parse_prior_status(detail: str) -> str | None:
     """Pull the old (pre-arrow) status; rightmost match, as _parse_resolution_status."""
     if not detail:
         return None
@@ -429,7 +429,7 @@ def _parse_prior_status(detail: str) -> Optional[str]:
 def _fetch_resolution_info(
     db: Session,
     bug_ids: list[int],
-) -> dict[int, tuple[Optional[str], Optional[datetime]]]:
+) -> dict[int, tuple[str | None, datetime | None]]:
     """Return (resolver_name, resolved_at) per bug id from the most recent
     status_changed activity into a resolved state. Absent when never resolved."""
     if not bug_ids:
@@ -450,7 +450,7 @@ def _fetch_resolution_info(
         )
         .order_by(Activity.bug_id.asc(), Activity.created_at.desc())
     ).all()
-    out: dict[int, tuple[Optional[str], Optional[datetime]]] = {}
+    out: dict[int, tuple[str | None, datetime | None]] = {}
     seen: set[int] = set()
     for bug_id, actor_name, created_at, detail, item_type, current_status in rows:
         if bug_id in seen:
@@ -699,7 +699,7 @@ def _accumulate_throughput(rows_raw) -> tuple[dict[Any, dict[str, Any]], list[di
 
 def _report_throughput(db: Session, filters: Filters) -> ReportResult:
     """Per-user count of items resolved in the window (a reopened-then-re-resolved
-    bug counts twice — two units of work)."""
+    bug counts twice: two units of work)."""
     # Bound the detail list so the 413 guard can't be outrun into an OOM.
     rows_raw = db.execute(_build_throughput_query(filters).limit(_detail_cap())).all()
     truncated = len(rows_raw) >= _detail_cap()
@@ -948,8 +948,8 @@ def _utc_day_key(value) -> str:
     """ISO UTC date string matching _utc_date's SQL bucketing, so resolved and
     created counts align."""
     if isinstance(value, datetime):
-        v = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-        return v.astimezone(timezone.utc).date().isoformat()
+        v = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return v.astimezone(UTC).date().isoformat()
     return value.isoformat()
 
 
@@ -976,7 +976,7 @@ def _bucket_resolved_by_day(res_rows) -> dict[str, int]:
 
 def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     """Per-day created vs resolved counts; defaults to the last 30 days."""
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     start = filters.date_from or (today - timedelta(days=29))
     end = filters.date_to or today
     # Clamp the span to _MAX_TIMELINE_DAYS.
@@ -1043,7 +1043,7 @@ def _report_timeline(db: Session, filters: Filters) -> ReportResult:
     )
 
 
-def _ttr_row(raw, bug_created: Optional[datetime]) -> Optional[dict[str, Any]]:
+def _ttr_row(raw, bug_created: datetime | None) -> dict[str, Any] | None:
     """Build one Time-to-Resolution row from a throughput-query tuple.
     Returns None if the row isn't a resolved transition or the creation time is unknown."""
     (bug_id, _actor_id, actor_name, created_at, detail,
@@ -1053,8 +1053,8 @@ def _ttr_row(raw, bug_created: Optional[datetime]) -> Optional[dict[str, Any]]:
         return None
     if bug_created is None or created_at is None:
         return None
-    ca = bug_created if bug_created.tzinfo else bug_created.replace(tzinfo=timezone.utc)
-    ra = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+    ca = bug_created if bug_created.tzinfo else bug_created.replace(tzinfo=UTC)
+    ra = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
     hours = round(max(0.0, (ra - ca).total_seconds()) / 3600, 2)
     return {
         "bug_id": bug_id,

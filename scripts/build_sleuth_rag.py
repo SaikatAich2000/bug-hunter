@@ -1,6 +1,6 @@
 """Build/refresh the Sleuth RAG index (bugs, comments, docs/) in the local Chroma store.
 
-Safe to re-run — upserts, so existing vectors are replaced, not duplicated.
+Safe to re-run: upserts, so existing vectors are replaced, not duplicated.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def main() -> int:
             # Fail so a cron/CI wrapper notices.
             print("Indexed 0 documents — misconfigured: " + "; ".join(reasons))
             return 1
-        # Empty corpus is a no-op, not a failure — don't alert schedulers.
+        # Empty corpus is a no-op, not a failure, don't alert schedulers.
         print("Indexed 0 documents — nothing to index yet (empty corpus).")
         return 0
     print(f"Indexed {n} documents into the Sleuth RAG store.")

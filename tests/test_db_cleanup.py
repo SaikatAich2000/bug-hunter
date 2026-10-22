@@ -27,7 +27,7 @@ def test_clean_db_keeps_first_launch_baseline_and_drops_business_data(admin_clie
 
     settings = get_settings()
 
-    # --- business data on top of the bootstrap baseline -----------------------
+    # business data on top of the bootstrap baseline
     general = admin_client.get("/api/projects").json()[0]
     second = admin_client.post("/api/projects", json={
         "name": "Cleanup Me", "color": "#112233", "agile_enabled": True,
@@ -60,7 +60,7 @@ def test_clean_db_keeps_first_launch_baseline_and_drops_business_data(admin_clie
         assert db.query(Bug).count() >= 1
         assert db.query(Project).count() == 2
 
-    # --- dry run changes nothing ---------------------------------------------
+    # dry run changes nothing
     with SessionLocal() as db:
         report = clean_database(db, dry_run=True)
         planned = dict((name, deleted) for name, deleted, _ in report)
@@ -69,7 +69,7 @@ def test_clean_db_keeps_first_launch_baseline_and_drops_business_data(admin_clie
         assert db.query(Bug).count() == 1, "dry run must not delete anything"
         assert db.query(Project).count() == 2
 
-    # --- real run -------------------------------------------------------------
+    # real run
     with SessionLocal() as db:
         clean_database(db, dry_run=False)
 
@@ -99,7 +99,7 @@ def test_clean_db_keeps_first_launch_baseline_and_drops_business_data(admin_clie
         assert gone["workflow_statuses"] == global_statuses
         assert db.query(Project).filter(Project.id == second_id).count() == 0
 
-    # --- the reset database still works end to end ---------------------------
+    # the reset database still works end to end
     # Sessions were cleared, so the old cookie is gone: sign in again with the
     # preserved bootstrap credentials, then write a row.
     relogin = admin_client.post("/api/auth/login", json={

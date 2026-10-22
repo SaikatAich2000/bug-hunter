@@ -3,7 +3,7 @@ audit log, reset tokens, sessions, notifications, push, chat, links, agile, git)
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
@@ -42,7 +42,7 @@ class UTCDateTime(TypeDecorator):
 
     def process_result_value(self, value, dialect):
         if value is not None and value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
 
 
@@ -57,7 +57,7 @@ _FK_EVENTS_ID = "events.id"
 _CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
 _ONDELETE_SET_NULL = "SET NULL"
 
-# --- Junctions ---
+# Junctions
 bug_assignees = Table(
     "bug_assignees",
     Base.metadata,
@@ -185,19 +185,19 @@ class Project(Base):
         UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    bugs: Mapped[list["Bug"]] = relationship(
+    bugs: Mapped[list[Bug]] = relationship(
         "Bug", back_populates="project", cascade=_CASCADE_ALL_DELETE_ORPHAN
     )
 
     # One Git configuration per project; deleting the project removes it.
-    git_config: Mapped["ProjectGitConfig | None"] = relationship(
+    git_config: Mapped[ProjectGitConfig | None] = relationship(
         "ProjectGitConfig", back_populates="project", uselist=False,
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
 
     # Repository allow-list. No delete-orphan: branch history keeps referencing
     # these rows by FK, so removal is an explicit, guarded operation.
-    repositories: Mapped[list["ProjectRepository"]] = relationship(
+    repositories: Mapped[list[ProjectRepository]] = relationship(
         "ProjectRepository", back_populates="project",
     )
 
@@ -225,16 +225,16 @@ class Event(Base):
         UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    items: Mapped[list["Bug"]] = relationship(
+    items: Mapped[list[Bug]] = relationship(
         "Bug", back_populates="event",
         # App code nulls the FK; items aren't deleted with the event.
         passive_deletes=True,
     )
-    managers: Mapped[list["User"]] = relationship(
+    managers: Mapped[list[User]] = relationship(
         "User", secondary=event_managers, lazy="selectin",
     )
     # Eager-loaded so responses include project_name without N+1.
-    project: Mapped["Project | None"] = relationship("Project")
+    project: Mapped[Project | None] = relationship("Project")
 
     __table_args__ = (
         Index("idx_events_scheduled_for", "scheduled_for"),
@@ -284,7 +284,7 @@ class Bug(Base):
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
-    # --- Agile fields; all additive/nullable. ---
+    # Agile fields; all additive/nullable.
     # Sub-task-only parent link (Level 3 -> Level 2). NULL for every other type.
     parent_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_BUGS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True,
@@ -303,7 +303,7 @@ class Bug(Base):
         active_history=True,
     )
     # LexoRank backlog/sprint ordering token; app-level uniqueness per
-    # (rank_scope, rank) — see app/agile/ranking.py. Nullable until backfilled
+    # (rank_scope, rank), see app/agile/ranking.py. Nullable until backfilled
     # at Agile activation.
     rank_scope: Mapped[str | None] = mapped_column(String(64), nullable=True)
     rank: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -315,37 +315,37 @@ class Bug(Base):
     resolution: Mapped[str | None] = mapped_column(String(50), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # Distinct from reporter_id (creator) and the assignees M2M (contributors) —
+    # Distinct from reporter_id (creator) and the assignees M2M (contributors),
     # the single accountable owner the hierarchy contract requires.
     owner_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey(_FK_USERS_ID, ondelete=_ONDELETE_SET_NULL), nullable=True
     )
     # Story-only: gates entry into a future Sprint; default false per contract.
     ready_for_sprint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # Flag + reason, not a workflow column — applies to Story and Sub-task rows.
+    # Flag + reason, not a workflow column, applies to Story and Sub-task rows.
     blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     blocked_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # Sub-task-only: mandatory Tasks block their parent Story's completion.
     mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     project: Mapped[Project] = relationship("Project", back_populates="bugs")
-    reporter: Mapped["User | None"] = relationship("User", foreign_keys=[reporter_id])
-    sprint: Mapped["Sprint | None"] = relationship("Sprint", foreign_keys=[sprint_id], viewonly=True)
-    event: Mapped["Event | None"] = relationship("Event", back_populates="items")
-    assignees: Mapped[list["User"]] = relationship(
+    reporter: Mapped[User | None] = relationship("User", foreign_keys=[reporter_id])
+    sprint: Mapped[Sprint | None] = relationship("Sprint", foreign_keys=[sprint_id], viewonly=True)
+    event: Mapped[Event | None] = relationship("Event", back_populates="items")
+    assignees: Mapped[list[User]] = relationship(
         "User", secondary=bug_assignees, lazy="selectin"
     )
-    comments: Mapped[list["Comment"]] = relationship(
+    comments: Mapped[list[Comment]] = relationship(
         "Comment", back_populates="bug", cascade=_CASCADE_ALL_DELETE_ORPHAN,
         # Newest first; id DESC breaks same-second ties.
         order_by="(Comment.created_at.desc(), Comment.id.desc())",
     )
     # Audit rows outlive deleted bugs: on delete the route nulls bug_id while
     # entity_id/detail keep the original id and title (not cascade-deleted).
-    activities: Mapped[list["Activity"]] = relationship(
+    activities: Mapped[list[Activity]] = relationship(
         "Activity", back_populates="bug",
         order_by="(Activity.created_at.desc(), Activity.id.desc())",
     )
-    attachments: Mapped[list["Attachment"]] = relationship(
+    attachments: Mapped[list[Attachment]] = relationship(
         "Attachment", back_populates="bug", cascade=_CASCADE_ALL_DELETE_ORPHAN,
         order_by="Attachment.created_at.desc()",
         primaryjoin="Bug.id == Attachment.bug_id",
@@ -597,7 +597,7 @@ class ChatConversation(Base):
         UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    messages: Mapped[list["ChatMessage"]] = relationship(
+    messages: Mapped[list[ChatMessage]] = relationship(
         "ChatMessage", back_populates="conversation",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
         # id tiebreaker: utcnow() truncates to whole seconds, so a same-second
@@ -656,8 +656,8 @@ class BugLink(Base):
         UTCDateTime(), default=utcnow, nullable=False
     )
 
-    source: Mapped["Bug"] = relationship("Bug", foreign_keys=[source_bug_id])
-    target: Mapped["Bug"] = relationship("Bug", foreign_keys=[target_bug_id])
+    source: Mapped[Bug] = relationship("Bug", foreign_keys=[source_bug_id])
+    target: Mapped[Bug] = relationship("Bug", foreign_keys=[target_bug_id])
 
     __table_args__ = (
         # One edge per (source, target, type); re-linking is a no-op.
@@ -667,11 +667,9 @@ class BugLink(Base):
     )
 
 
-# =====================================================================
-# Agile — foundation, boards, backlog, sprint lifecycle.
+# Agile: foundation, boards, backlog, sprint lifecycle.
 #
 # All additive: new tables only, plus the Project/Bug columns declared above.
-# =====================================================================
 _FK_BOARDS_ID = "boards.id"
 _FK_SPRINTS_ID = "sprints.id"
 _FK_WORKFLOW_STATUSES_ID = "workflow_statuses.id"
@@ -735,7 +733,7 @@ class Board(Base):
     )
     # selectin: a board is always read with its columns, their statuses and those statuses'
     # workflow rows; batching keeps that at three queries instead of one per mapping.
-    columns: Mapped[list["BoardColumn"]] = relationship(
+    columns: Mapped[list[BoardColumn]] = relationship(
         "BoardColumn", back_populates="board", cascade=_CASCADE_ALL_DELETE_ORPHAN,
         order_by="BoardColumn.position", lazy="selectin",
     )
@@ -760,7 +758,7 @@ class BoardColumn(Base):
     wip_enforcement: Mapped[str] = mapped_column(String(10), nullable=False, default="off")
     color: Mapped[str] = mapped_column(String(20), nullable=False, default="")
     board: Mapped[Board] = relationship("Board", back_populates="columns")
-    statuses: Mapped[list["BoardColumnStatus"]] = relationship(
+    statuses: Mapped[list[BoardColumnStatus]] = relationship(
         "BoardColumnStatus", back_populates="column", cascade=_CASCADE_ALL_DELETE_ORPHAN,
         lazy="selectin",
     )
@@ -772,7 +770,7 @@ class BoardColumn(Base):
 
 
 # Composite-PK join: which workflow statuses map into which board column.
-# No independent version — mutated only via the parent Board's optimistic
+# No independent version, mutated only via the parent Board's optimistic
 # lock.
 class BoardColumnStatus(Base):
     __tablename__ = "board_column_statuses"
@@ -814,7 +812,7 @@ class Sprint(Base):
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="future")
     start_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     end_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    # daily|weekly|monthly|custom — purely advisory, used to auto-suggest the
+    # daily|weekly|monthly|custom: purely advisory, used to auto-suggest the
     # next sprint's dates; never drives background automation (no workers).
     cadence: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Exact start instant (sub-second). Reports read sprint membership and
@@ -839,7 +837,7 @@ class Sprint(Base):
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False
     )
-    assignees: Mapped[list["User"]] = relationship(
+    assignees: Mapped[list[User]] = relationship(
         "User", secondary=sprint_assignees, lazy="selectin"
     )
 
@@ -925,7 +923,7 @@ class WorkItemChange(Base):
     # Why the change happened when it was a side effect, e.g. "sprint_completed"
     # for issues carried over by Complete Sprint. NULL for direct edits.
     reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    work_item: Mapped["Bug"] = relationship("Bug", foreign_keys=[work_item_id])
+    work_item: Mapped[Bug] = relationship("Bug", foreign_keys=[work_item_id])
 
     __table_args__ = (
         Index("idx_work_item_changes_item_time", "work_item_id", "changed_at"),
@@ -962,9 +960,7 @@ class IdempotencyKey(Base):
     )
 
 
-# =====================================================================
-# Agile — workflow transitions, quick filters (board UX).
-# =====================================================================
+# Agile: workflow transitions, quick filters (board UX).
 # Global (unscoped) transition rule between two workflow statuses for a work
 # item type. Only global workflow_statuses are seeded, so transitions are
 # global too; project-specific transition overrides are a later slice.
@@ -1009,9 +1005,7 @@ class QuickFilter(Base):
     __table_args__ = (Index("idx_quick_filters_board_id", "board_id"),)
 
 
-# =====================================================================
-# Agile — per-sprint, per-person capacity (Planning tab).
-# =====================================================================
+# Agile: per-sprint, per-person capacity (Planning tab).
 class SprintCapacity(Base):
     __tablename__ = "sprint_capacity"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -1037,9 +1031,7 @@ class SprintCapacity(Base):
     )
 
 
-# =====================================================================
-# Agile — Epics, Releases/Versions, Components, Labels, Collections.
-# =====================================================================
+# Agile: Epics, Releases/Versions, Components, Labels, Collections.
 # Epic-only extension fields; the Epic itself is a Bug row (item_type="Epic").
 class EpicDetail(Base):
     __tablename__ = "epic_details"
@@ -1202,14 +1194,12 @@ class WorkItemLabel(Base):
     __table_args__ = (Index("idx_work_item_labels_label", "label_id"),)
 
 
-# =====================================================================
 # GitHub Enterprise integration: per-project configuration, the repository
 # allow-list and the per-work-item branch records.
 #
 # No secret ever lives in these tables. Credentials come from the environment
 # layer (app/config.py + app/git/github.py). API responses expose only the safe
 # metadata below.
-# =====================================================================
 
 class ProjectGitConfig(Base):
     """One Git provider configuration per project (unique on project_id)."""
@@ -1262,7 +1252,7 @@ class ProjectRepository(Base):
     This row is NOT an allow-list and is never user-selected: repositories are
     discovered live from the provider and re-verified at branch-creation time.
     The stable identity key is ``(project_id, provider, provider_repo_id)``.
-    Branch records reference this row, so it is never deleted — branch history
+    Branch records reference this row, so it is never deleted, branch history
     must survive, and a renamed repository keeps its row id.
     """
 
@@ -1295,7 +1285,7 @@ class ProjectRepository(Base):
     )
 
     project: Mapped[Project] = relationship("Project", back_populates="repositories")
-    branches: Mapped[list["WorkItemBranch"]] = relationship(
+    branches: Mapped[list[WorkItemBranch]] = relationship(
         "WorkItemBranch", back_populates="repository"
     )
 

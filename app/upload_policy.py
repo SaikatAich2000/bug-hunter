@@ -8,7 +8,7 @@ SVG is absent on purpose: it is scriptable.
 from __future__ import annotations
 
 import codecs
-from typing import Callable, Optional
+from collections.abc import Callable
 
 _ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06")
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -110,7 +110,7 @@ def upload_extension(filename: str) -> str:
     return name.rsplit(".", 1)[1].strip().lower()
 
 
-def check_extension(filename: str) -> Optional[str]:
+def check_extension(filename: str) -> str | None:
     """Return an error message when the extension is not allowed, else None."""
     ext = upload_extension(filename)
     if ext in ALLOWED_UPLOADS:

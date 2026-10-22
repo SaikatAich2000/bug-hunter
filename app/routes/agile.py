@@ -81,7 +81,7 @@ router = APIRouter(prefix="/api/agile", tags=["agile"])
 _DETAIL_PROJECT_NOT_FOUND = "Project not found"
 # Kept as 404 so an inaccessible project stays indistinguishable, but the reason
 # is stated honestly: callers can already read agile_enabled from the settings
-# endpoint, and "Project not found" for a project they can list is simply wrong.
+# endpoint, and "Project not found" for a project they can list is wrong.
 _DETAIL_AGILE_NOT_ENABLED = "Agile is not enabled for this project"
 _DETAIL_BOARD_NOT_FOUND = "Sprint Board not found"
 _DETAIL_SPRINT_NOT_FOUND = "Sprint not found"
@@ -105,7 +105,7 @@ def _get_project_or_404(db: Session, project_id: int, user: User) -> Project:
 
 
 def _get_agile_project_or_404(db: Session, project_id: int, user: User) -> Project:
-    """Like _get_project_or_404 but also 404s when Agile is disabled —
+    """Like _get_project_or_404 but also 404s when Agile is disabled, 
     use for real Agile data endpoints, never for the settings/enable/disable routes."""
     project = _get_project_or_404(db, project_id, user)
     if not project.agile_enabled:
@@ -148,9 +148,7 @@ def _get_sprint_or_404(db: Session, sprint_id: int, user: User, *, lock: bool = 
     return sprint
 
 
-# =====================================================================
 # Project activation / settings
-# =====================================================================
 
 @router.get("/projects/{project_id}/settings", response_model=AgileSettingsOut, responses=NOT_FOUND_404)
 def get_agile_settings(
@@ -215,9 +213,7 @@ def disable_agile(
     }
 
 
-# =====================================================================
 # Boards
-# =====================================================================
 
 @router.get("/boards", response_model=list[BoardOut], responses=NOT_FOUND_404)
 def list_boards(
@@ -377,9 +373,7 @@ def replace_board_columns(
     return boards_svc.serialize_board(board)
 
 
-# =====================================================================
 # Backlog
-# =====================================================================
 
 
 @router.get("/boards/{board_id}/backlog", response_model=list[BacklogItemOut], responses=NOT_FOUND_404)
@@ -414,9 +408,7 @@ def rank_backlog_item(
     return backlog_item_out(item)
 
 
-# =====================================================================
 # Sprints
-# =====================================================================
 
 
 @router.get("/sprints", response_model=list[SprintOut], responses=NOT_FOUND_404)
@@ -683,9 +675,7 @@ def get_sprint_history(
     return sprints_svc.get_history(db, sprint.id)
 
 
-# =====================================================================
 # Work-item hierarchy + Agile-type creation
-# =====================================================================
 
 _PLANNING_BLOCKED = {
     "Epic": "Epics are not planned into sprints",
@@ -817,7 +807,7 @@ def set_ready_for_sprint(
 ) -> dict:
     """Ready for Sprint can only become true when the Story's
     mandatory fields are complete. Setting it false is always allowed (a Story
-    already in an active Sprint is not silently removed by this — that
+    already in an active Sprint is not silently removed by this, that
     requires an explicit Sprint action, which this endpoint never performs)."""
     item = db.get(Bug, item_id)
     if item is None or not can_access_project(accessible_project_ids(db, actor), item.project_id):
@@ -847,7 +837,7 @@ def update_work_item_dates(
     db: Session = Depends(get_db), actor: User = Depends(get_current_user),
 ) -> dict:
     """Only path to change a Story/Task's start_date/end_date after creation
-    ('do not silently alter dates' — this is the sole controlled entry point)."""
+    ('do not silently alter dates', this is the sole controlled entry point)."""
     item = db.get(Bug, item_id)
     if item is None or not can_access_project(accessible_project_ids(db, actor), item.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_WORK_ITEM_NOT_FOUND)

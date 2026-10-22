@@ -512,7 +512,7 @@ export default function ReportsView() {
             </table>
           </div>
           <div className="reports-empty" id="reportEmpty" hidden={!result || result.rows.length > 0}>
-            <p>No rows match your filters. Try widening the date range or removing a filter</p>
+            <p>No rows match your filters, try widening the date range or removing a filter</p>
             <EmptyGuide guide="reports" />
           </div>
           <div className="reports-truncated" id="reportTruncated" hidden={!showTruncated}>
@@ -521,7 +521,7 @@ export default function ReportsView() {
               <span id="reportTruncatedCount">
                 {result ? String(result.truncated_cap || result.rows.length) : "1000"}
               </span>{" "}
-              rows. Download the XLSX for the full set
+              rows, download the XLSX for the full set
             </p>
           </div>
         </section>

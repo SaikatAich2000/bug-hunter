@@ -56,7 +56,7 @@ export default function AuditView() {
   }, [entity, actor, q]);
   // Running count of loaded rows, used  next page offset.
   const loadedCountRef = useRef(0);
-  // Last-fetched q — lets the debounce skip a request Clear already fired.
+  // Last-fetched q: lets the debounce skip a request Clear already fired.
   const lastFetchedQRef = useRef(null);
 
   const fetchAudit = useCallback(async (clean) => {
@@ -73,7 +73,7 @@ export default function AuditView() {
     try {
       const page = await api(`/audit?${params.toString()}`);
       loadedCountRef.current += page.length;
-      // Offset paging over a growing table can repeat rows — de-dupe by id.
+      // Offset paging over a growing table can repeat rows, de-dupe by id.
       setRows((prev) => {
         if (clean) return page;
         const seen = new Set(prev.map((r) => r.id));
@@ -180,7 +180,7 @@ export default function AuditView() {
         {loaded && rows.length === 0 ? (
           <>
             <p className="no-content">No audit events match</p>
-            <EmptyGuide guide="admin" hint="Creates, updates, deletes and logins appear here as people use the app." />
+            <EmptyGuide guide="admin" hint="Creates, updates, deletes and logins appear here as people use the app" />
           </>
         ) : null}
         {rows.map((r) => <AuditRowView key={r.id} r={r} />)}

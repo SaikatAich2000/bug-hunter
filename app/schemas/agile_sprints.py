@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,13 +18,13 @@ from app.schemas.users import UserBrief
 _SPRINT_NAME_LABEL = "Sprint name"
 
 
-# --- Sprints ---
+# Sprints
 class SprintCreateIn(BaseModel):
     name: str = Field(max_length=120)
     goal: str = Field(default="", max_length=2000)
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    cadence: Optional[str] = None
+    start_date: str | None = None
+    end_date: str | None = None
+    cadence: str | None = None
     assignee_ids: list[int] = Field(default_factory=list, max_length=200)
 
     @field_validator("name")
@@ -40,7 +39,7 @@ class SprintCreateIn(BaseModel):
 
     @field_validator("cadence")
     @classmethod
-    def _check_cadence(cls, v: Optional[str]) -> Optional[str]:
+    def _check_cadence(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         if v not in ("daily", "weekly", "monthly", "custom"):
@@ -49,7 +48,7 @@ class SprintCreateIn(BaseModel):
 
     @field_validator("start_date", "end_date")
     @classmethod
-    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+    def _check_date(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         try:
@@ -59,38 +58,38 @@ class SprintCreateIn(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _normalize(self) -> "SprintCreateIn":
+    def _normalize(self) -> SprintCreateIn:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date cannot be before start_date")
         return self
 
 
 class SprintUpdateIn(BaseModel):
-    name: Optional[str] = Field(default=None, max_length=120)
-    goal: Optional[str] = Field(default=None, max_length=2000)
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    cadence: Optional[str] = None
-    assignee_ids: Optional[list[int]] = Field(default=None, max_length=200)
+    name: str | None = Field(default=None, max_length=120)
+    goal: str | None = Field(default=None, max_length=2000)
+    start_date: str | None = None
+    end_date: str | None = None
+    cadence: str | None = None
+    assignee_ids: list[int] | None = Field(default=None, max_length=200)
     version: int = Field(ge=0)
 
     @field_validator("name")
     @classmethod
-    def _strip_name(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_name(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return _strip_and_check_min_length(v, _AGILE_NAME_MIN, _SPRINT_NAME_LABEL)
 
     @field_validator("goal")
     @classmethod
-    def _strip_goal(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_goal(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return plain_text(v) if isinstance(v, str) else v
 
     @field_validator("cadence")
     @classmethod
-    def _check_cadence(cls, v: Optional[str]) -> Optional[str]:
+    def _check_cadence(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         if v not in ("daily", "weekly", "monthly", "custom"):
@@ -99,7 +98,7 @@ class SprintUpdateIn(BaseModel):
 
     @field_validator("start_date", "end_date")
     @classmethod
-    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+    def _check_date(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         try:
@@ -118,12 +117,12 @@ class SprintOut(BaseModel):
     name: str
     goal: str
     state: str
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    cadence: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    cancelled_at: Optional[datetime] = None
+    start_date: str | None = None
+    end_date: str | None = None
+    cadence: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
     sequence_number: int
     version: int = 1
     created_at: datetime
@@ -136,8 +135,8 @@ class SprintItemsAddIn(BaseModel):
     item_ids: list[int] = Field(min_length=1, max_length=500)
     # Optional drop position inside the sprint: right after before_id and/or
     # right before after_id. Omitted = appended at the bottom.
-    before_id: Optional[int] = None
-    after_id: Optional[int] = None
+    before_id: int | None = None
+    after_id: int | None = None
 
     @field_validator("item_ids")
     @classmethod
@@ -153,7 +152,7 @@ class SprintDispositionEntry(BaseModel):
     """Where one incomplete item goes on Complete/Cancel Sprint."""
     item_id: int
     destination: str = "backlog"
-    target_sprint_id: Optional[int] = None
+    target_sprint_id: int | None = None
 
     @field_validator("destination")
     @classmethod
@@ -161,7 +160,7 @@ class SprintDispositionEntry(BaseModel):
         return normalize_choice(v, ALLOWED_SPRINT_DISPOSITIONS, "destination")
 
     @model_validator(mode="after")
-    def _check_target(self) -> "SprintDispositionEntry":
+    def _check_target(self) -> SprintDispositionEntry:
         if self.destination == "sprint" and self.target_sprint_id is None:
             raise ValueError("target_sprint_id is required when destination is 'sprint'")
         return self
@@ -171,9 +170,9 @@ class SprintMoveIn(BaseModel):
     """Backlog drag-and-drop: move issues (in this order) into a sprint, or to
     the backlog when sprint_id is null, at a position between neighbours."""
     item_ids: list[int] = Field(min_length=1, max_length=500)
-    sprint_id: Optional[int] = None
-    before_id: Optional[int] = None
-    after_id: Optional[int] = None
+    sprint_id: int | None = None
+    before_id: int | None = None
+    after_id: int | None = None
 
     @field_validator("item_ids")
     @classmethod
@@ -185,28 +184,28 @@ class SprintStartIn(BaseModel):
     """The Start Sprint dialog: name, goal and dates may be set on start."""
     version: int = Field(ge=0)
     acknowledged_warnings: bool = False
-    name: Optional[str] = Field(default=None, max_length=120)
-    goal: Optional[str] = Field(default=None, max_length=2000)
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    name: str | None = Field(default=None, max_length=120)
+    goal: str | None = Field(default=None, max_length=2000)
+    start_date: str | None = None
+    end_date: str | None = None
 
     @field_validator("name")
     @classmethod
-    def _strip_name(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_name(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return _strip_and_check_min_length(v, _AGILE_NAME_MIN, _SPRINT_NAME_LABEL)
 
     @field_validator("goal")
     @classmethod
-    def _strip_goal(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_goal(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return plain_text(v)
 
     @field_validator("start_date", "end_date")
     @classmethod
-    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+    def _check_date(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         try:
@@ -216,7 +215,7 @@ class SprintStartIn(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _check_order(self) -> "SprintStartIn":
+    def _check_order(self) -> SprintStartIn:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date cannot be before start_date")
         return self
@@ -230,11 +229,11 @@ class SprintCompleteIn(BaseModel):
     # sprint (named new_sprint_name, or the next default name) for them.
     dispositions: list[SprintDispositionEntry] = Field(default_factory=list, max_length=5000)
     default_destination: str = "backlog"
-    default_target_sprint_id: Optional[int] = None
-    new_sprint_name: Optional[str] = Field(default=None, max_length=120)
+    default_target_sprint_id: int | None = None
+    new_sprint_name: str | None = Field(default=None, max_length=120)
 
     @model_validator(mode="after")
-    def _check_default_target(self) -> "SprintCompleteIn":
+    def _check_default_target(self) -> SprintCompleteIn:
         if self.default_destination == "sprint" and self.default_target_sprint_id is None:
             raise ValueError("default_target_sprint_id is required when default_destination is 'sprint'")
         return self
@@ -255,7 +254,7 @@ class SprintCancelIn(BaseModel):
     version: int = Field(ge=0)
     dispositions: list[SprintDispositionEntry] = Field(default_factory=list, max_length=5000)
     default_destination: str = "backlog"
-    default_target_sprint_id: Optional[int] = None
+    default_target_sprint_id: int | None = None
 
     @field_validator("cancellation_note")
     @classmethod
@@ -274,11 +273,11 @@ class SprintHistoryOut(BaseModel):
     sprint_id: int
     work_item_id: int
     event_type: str
-    from_sprint_id: Optional[int] = None
-    to_sprint_id: Optional[int] = None
-    old_status_id: Optional[int] = None
-    new_status_id: Optional[int] = None
-    old_estimate: Optional[float] = None
-    new_estimate: Optional[float] = None
+    from_sprint_id: int | None = None
+    to_sprint_id: int | None = None
+    old_status_id: int | None = None
+    new_status_id: int | None = None
+    old_estimate: float | None = None
+    new_estimate: float | None = None
     occurred_at: datetime
-    actor_id: Optional[int] = None
+    actor_id: int | None = None

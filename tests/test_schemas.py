@@ -82,7 +82,7 @@ def test_cov_sanitize_attr_disallowed_dropped():
 
 
 def test_cov_sanitize_attr_none_value_skipped():
-    # <a href> — href is in the allowlist but has no value, so it is skipped.
+    # <a href>, href is in the allowlist but has no value, so it is skipped.
     s = _S()
     out = s.sanitize_html("<a href>link</a>")
     assert "href=" not in out
@@ -330,7 +330,7 @@ def test_cov_userin_rejects_former_legacy_password():
         s.UserIn(name="Alice", email="a@b.com", password="legacy-default")
 
 
-# --- UserUpdate  (Optional fields: None -> early-return branches) ---
+# UserUpdate  (Optional fields: None -> early-return branches)
 def test_cov_userupdate_all_none_passes():
     # Pydantic only runs a field validator when a value is explicitly supplied,
     # so we pass None explicitly to exercise each optional validator's early-return.
@@ -384,7 +384,7 @@ def test_cov_userupdate_bad_password_raises():
         s.UserUpdate(password="short")
 
 
-# --- Auth schemas ---
+# Auth schemas
 def test_cov_loginin_email_validated():
     s = _S()
     assert s.LoginIn(email="A@B.com", password="x").email == "a@b.com"
@@ -417,7 +417,7 @@ def test_cov_resetpassword_validates_new():
         s.ResetPasswordIn(token="t", new_password="short")
 
 
-# --- ProjectIn ---
+# ProjectIn
 def test_cov_projectin_valid_and_trims():
     s = _S()
     p = s.ProjectIn(name="  Proj ", description="  d  ", color="#aabbcc")
@@ -447,7 +447,7 @@ def test_cov_projectin_bad_color_raises():
         s.ProjectIn(name="Proj", color="#fff")  # 3 hex not 6
 
 
-# --- BugCreate — field + model validators ---
+# BugCreate — field + model validators
 def test_cov_bugcreate_valid_defaults():
     s = _S()
     b = s.BugCreate(project_id=1, title="  A valid title ")
@@ -550,7 +550,7 @@ def test_cov_bugcreate_strip_desc_non_string_passthrough():
     assert s.BugCreate._strip_desc(None) is None
 
 
-# --- BugUpdate — Optional everything (None early-returns) ---
+# BugUpdate — Optional everything (None early-returns)
 def test_cov_bugupdate_nullable_fields_accept_none():
     # Explicit None exercises each optional validator's early-return branch.
     s = _S()
@@ -633,7 +633,7 @@ def test_cov_bugupdate_strip_desc_non_string_passthrough():
     assert s.BugUpdate._strip_desc(123) == 123
 
 
-# --- CommentIn ---
+# CommentIn
 def test_cov_commentin_valid_sanitized():
     s = _S()
     c = s.CommentIn(body="  <b>hello</b><script>x</script> ")
@@ -670,7 +670,7 @@ def test_cov_commentin_non_string_body_raises():
         s.CommentIn._strip(123)
 
 
-# --- EventCreate ---
+# EventCreate
 def test_cov_eventcreate_valid_trims_desc():
     # Name and description are stripped; manager_ids are deduplicated.
     s = _S()
@@ -707,7 +707,7 @@ def test_cov_eventcreate_strip_desc_non_string_passthrough():
     assert s.EventCreate._strip_desc(None) is None
 
 
-# --- EventUpdate  (Optional: None early-returns + dedup) ---
+# EventUpdate  (Optional: None early-returns + dedup)
 def test_cov_eventupdate_all_none_passes():
     # Explicit None exercises the None-return branch in each optional validator; the name
     # may be left out but never set to null.
@@ -757,7 +757,7 @@ def test_cov_eventupdate_strip_desc_non_string_passthrough():
     assert s.EventUpdate._strip_desc(123) == 123
 
 
-# --- Push schemas (simple Field constraints) ---
+# Push schemas (simple Field constraints)
 def test_cov_push_subscribe_valid_and_invalid():
     s = _S()
     ok = s.PushSubscribeIn(token="abc")
@@ -773,7 +773,7 @@ def test_cov_push_unsubscribe_valid_and_invalid():
         s.PushUnsubscribeIn(token="")
 
 
-# --- statuses_for_type helper ---
+# statuses_for_type helper
 def test_cov_statuses_for_type_known_and_unknown():
     s = _S()
     assert s.statuses_for_type("Task") == s.STATUSES_BY_TYPE["Task"]
@@ -782,7 +782,7 @@ def test_cov_statuses_for_type_known_and_unknown():
     assert s.statuses_for_type("") == s.STATUSES_BY_TYPE["Bug"]
 
 
-# app/schemas.py — HTML sanitizer + bulk-action dedup validator edge cases
+# app/schemas.py: HTML sanitizer + bulk-action dedup validator edge cases
 def test_schema_sanitize_rejects_svg_data_url():
     # data:image/svg+xml is scriptable; the src must be dropped entirely.
     from app.schemas import sanitize_html
@@ -813,7 +813,7 @@ def test_bulk_action_dedup_skips_duplicate_id():
     assert ba.ids == [5, 7]
 
 
-# --- agile and git payload validators --------------------------------------------------------
+# agile and git payload validators
 
 def _rejects(model, **fields):
     with pytest.raises(ValidationError) as excinfo:

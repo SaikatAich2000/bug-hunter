@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from openpyxl import load_workbook
@@ -14,7 +14,7 @@ _MANAGER_LOGIN = ("mona@test.local", "Mana123456")
 _DEFAULT_USER_SECRET = ("UserPass99",)
 
 
-# --- Fixtures ---
+# Fixtures
 @pytest.fixture
 def manager_client(client):
     """Return a TestClient logged in as a newly-created manager."""
@@ -73,7 +73,7 @@ def _change_status(client, bug_id, new_status):
     return r.json()
 
 
-# --- Auth gate ---
+# Auth gate
 def test_reports_unauthenticated_401(client):
     for path in ("/api/reports/types",):
         r = client.get(path)
@@ -114,7 +114,7 @@ def test_reports_manager_can_run(manager_client):
     assert r.status_code == 200
 
 
-# --- Item Detail Export — universal SQL-query view ---
+# Item Detail Export — universal SQL-query view
 def test_item_detail_returns_every_matching_item(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="alpha")
@@ -213,7 +213,7 @@ def test_item_detail_attribute_and_entity_filters(admin_client):
     )
     _make_item(admin_client, p["id"], title="filter-decoy",
                priority="Low", environment="DEV")
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     r = admin_client.post("/api/reports/run", json={
         "report_key": "item_detail",
         "filters": {
@@ -233,7 +233,7 @@ def test_item_detail_attribute_and_entity_filters(admin_client):
     assert body["rows"][0]["id"] == target["id"]
 
 
-# --- Throughput — derived from activity_log ---
+# Throughput — derived from activity_log
 def test_throughput_counts_resolution_events_per_user(admin_client):
     """Basic throughput check: admin resolves two items, both appear in the summary."""
     p = _make_project(admin_client)
@@ -293,7 +293,7 @@ def test_throughput_filters_date_window(admin_client):
     })
     assert r.json()["summary"]["total_resolved"] == 0
     # Open-ended from today → the just-made resolution is included.
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     r = admin_client.post("/api/reports/run", json={
         "report_key": "throughput",
         "filters": {"date_from": today},
@@ -301,7 +301,7 @@ def test_throughput_filters_date_window(admin_client):
     assert r.json()["summary"]["total_resolved"] == 1
 
 
-# --- Pending snapshot — currently-open items ---
+# Pending snapshot — currently-open items
 def test_pending_snapshot_includes_only_open_items(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="still-open-1")
@@ -317,7 +317,7 @@ def test_pending_snapshot_includes_only_open_items(admin_client):
     assert titles == {"still-open-1", "still-open-2"}
 
 
-# --- Distributions ---
+# Distributions
 def test_status_distribution_groups_by_status(admin_client):
     p = _make_project(admin_client)
     b1 = _make_item(admin_client, p["id"], title="status-1")
@@ -348,7 +348,7 @@ def test_priority_distribution_groups_by_priority(admin_client):
     assert by_priority.get("Low") == 1
 
 
-# --- Aging ---
+# Aging
 def test_aging_orders_oldest_first(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="open-1")
@@ -362,7 +362,7 @@ def test_aging_orders_oldest_first(admin_client):
         assert "age_bucket" in row
 
 
-# --- Timeline — created vs resolved per day ---
+# Timeline — created vs resolved per day
 def test_timeline_counts_created_and_resolved_per_day(admin_client):
     p = _make_project(admin_client)
     a = _make_item(admin_client, p["id"], title="tl-1")
@@ -381,7 +381,7 @@ def test_timeline_counts_created_and_resolved_per_day(admin_client):
     assert body["summary"]["net"] == 1  # created - resolved
     for row in body["rows"]:
         assert set(row) >= {"date", "created", "resolved", "delta"}
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     today_row = next(row for row in body["rows"] if row["date"] == today)
     assert today_row["created"] == 2
     assert today_row["resolved"] == 1
@@ -401,7 +401,7 @@ def test_timeline_respects_explicit_window(admin_client):
     assert body["summary"]["total_created"] == 0
 
 
-# --- Time to Resolution — hours from creation to resolution + stats ---
+# Time to Resolution — hours from creation to resolution + stats
 def test_time_to_resolution_reports_resolved_items(admin_client):
     p = _make_project(admin_client)
     b1 = _make_item(admin_client, p["id"], title="ttr-1")
@@ -441,7 +441,7 @@ def test_time_to_resolution_empty_when_nothing_resolved(admin_client):
     assert body["summary"]["average_hours"] == 0
 
 
-# --- Project breakdown ---
+# Project breakdown
 def test_project_breakdown_counts_per_project(admin_client):
     p1 = _make_project(admin_client, name="ProjA")
     p2 = _make_project(admin_client, name="ProjB")
@@ -457,7 +457,7 @@ def test_project_breakdown_counts_per_project(admin_client):
     assert by_proj["ProjB"]["created"] == 1
 
 
-# --- Unknown report key ---
+# Unknown report key
 def test_unknown_report_key_returns_400(admin_client):
     r = admin_client.post("/api/reports/run", json={
         "report_key": "not_a_real_report", "filters": {},
@@ -465,7 +465,7 @@ def test_unknown_report_key_returns_400(admin_client):
     assert r.status_code == 400
 
 
-# --- XLSX export ---
+# XLSX export
 def test_xlsx_export_returns_valid_workbook(admin_client):
     p = _make_project(admin_client)
     _make_item(admin_client, p["id"], title="export-this")
@@ -506,7 +506,7 @@ def test_xlsx_export_for_throughput_has_drilldown_sheet(admin_client):
     assert "Items" in wb.sheetnames
 
 
-# --- Sleuth chatbot integration ---
+# Sleuth chatbot integration
 def test_sleuth_report_intent_returns_report_with_file(admin_client):
     p = _make_project(admin_client)
     b = _make_item(admin_client, p["id"], title="for-sleuth")
@@ -541,7 +541,7 @@ def test_sleuth_report_intent_forbidden_for_regular_user(user_client):
     assert body["intent"] == "report_forbidden"
 
 
-# --- Legacy CSV endpoint must be gone ---
+# Legacy CSV endpoint must be gone
 def test_legacy_csv_endpoint_removed(admin_client):
     """Removed /api/bugs/export.csv now 404s (no handler) or 422s (catchall can't parse "export.csv" as int)."""
     r = admin_client.get("/api/bugs/export.csv")
@@ -635,7 +635,7 @@ def test_cov_xlsx_coerce_branches():
     assert _coerce(True) is True                      # bool kept as-is
     assert _coerce(7) == 7
     assert _coerce(3.5) == 3.5
-    dt = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    dt = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
     assert _coerce(dt) == dt.isoformat(timespec="seconds")
     assert _coerce(["a", "b"]) == "['a', 'b']"
     # Formula-leading characters are prefixed with a quote to prevent injection.
@@ -682,7 +682,7 @@ def test_cov_run_statuses_filter_validator(admin_client):
 def test_cov_item_detail_one_sided_date_windows(admin_client):
     p = _make_project_reports_branches(admin_client)
     _make_item_reports_branches(admin_client, p["id"], title="dated")
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     b_from = _run(admin_client, "item_detail", {"date_from": today})
     assert any(r["title"] == "dated" for r in b_from["rows"])
     b_to = _run(admin_client, "item_detail", {"date_to": today})
@@ -699,7 +699,7 @@ def test_cov_twice_resolved_bug_resolution_paths(admin_client):
     _change_status_reports_branches(admin_client, b["id"], "Resolved")
     _change_status_reports_branches(admin_client, b["id"], "Reopened")
     _change_status_reports_branches(admin_client, b["id"], "Resolved")
-    # Second bug never resolves — exercises the row-is-None path in _ttr_row.
+    # Second bug never resolves, exercises the row-is-None path in _ttr_row.
     wip = _make_item_reports_branches(admin_client, p["id"], title="wip-only")
     _change_status_reports_branches(admin_client, wip["id"], "In Progress")
 
@@ -825,7 +825,7 @@ def test_cov_export_xlsx_over_row_limit_returns_413(admin_client, monkeypatch):
     assert "row" in r.json()["detail"].lower()
 
 
-# Bulk-inserts via the app's DB session — 1001 HTTP POSTs would be too slow.
+# Bulk-inserts via the app's DB session, 1001 HTTP POSTs would be too slow.
 def test_cov_run_inline_render_cap_truncates(admin_client):
     p = _make_project_reports_branches(admin_client, name="BulkProj")
     from app.database import SessionLocal

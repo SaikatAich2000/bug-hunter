@@ -27,7 +27,7 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-# Kept features — item links + bulk + ingest
+# Kept features: item links + bulk + ingest
 def test_models_define_buglink_only():
     models = _read(APP / "models.py")
     assert "class BugLink(" in models, "item-linking model must stay"
@@ -72,9 +72,9 @@ def test_sleuth_panel_admin_upload_and_text():
     assert ">Online<" in src, "status must read just 'Online'"
 
 
-# Removed features — watchers and (the old per-bug) labels must be gone everywhere.
+# Removed features: watchers and (the old per-bug) labels must be gone everywhere.
 # NOTE: Agile later added its own, unrelated project-scoped taxonomy
-# `Label`/`LabelOut` (app/models.py Label, app/schemas.py LabelOut) — a
+# `Label`/`LabelOut` (app/models.py Label, app/schemas.py LabelOut), a
 # same-named but different feature, so "class Label(" is intentionally not
 # banned here anymore; the fields below are what actually distinguished the
 # old per-bug watch/label feature and remain gone.

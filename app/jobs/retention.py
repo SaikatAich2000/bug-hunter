@@ -6,13 +6,13 @@ Removed on every run:
 * expired sessions, used or expired password-reset tokens, and expired idempotency keys.
 
 Deletes go in batches of ids so a large backlog never holds one long lock, and the job is
-safe to run on several replicas at once (a row deleted twice is simply gone). The app runs it
+safe to run on several replicas at once (a row deleted twice is gone). The app runs it
 daily; ``python -m app.jobs.retention`` runs it once from an external scheduler.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
@@ -40,7 +40,7 @@ def _purge(db: Session, model, condition) -> int:
 
 def run_retention(db: Session, now: datetime | None = None) -> dict[str, int]:
     settings = get_settings()
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     stats = {
         "sessions": _purge(db, SessionRow, SessionRow.expires_at < now),
         "reset_tokens": _purge(db, PasswordResetToken, or_(

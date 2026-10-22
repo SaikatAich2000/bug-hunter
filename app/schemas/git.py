@@ -3,19 +3,16 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.users import UserBrief
 
-# =====================================================================
 # GitHub Enterprise branch creation.
 #
 # Every response model here is deliberately secret-free: credentials and
 # authorization headers never appear, in any form, in an API payload.
-# =====================================================================
 
 # A git ref fragment. Base-branch names arrive from Project Admins, so they are
 # validated rather than trusted (mirrors the rules in app/git/naming.py).
@@ -104,7 +101,7 @@ def _validate_git_identifier(value: str) -> str:
     return candidate
 
 
-def _validate_git_credential(value: Optional[str]) -> Optional[str]:
+def _validate_git_credential(value: str | None) -> str | None:
     """Trim a submitted PAT; blank means "keep the stored credential".
 
     No provider-specific visible prefix is required, because enterprise token
@@ -140,11 +137,11 @@ class GitIntegrationIn(BaseModel):
     organization: str = Field(default="", max_length=120)
     default_base_branch: str = Field(default="dev", max_length=120)
     # Write-only project PAT. Blank/omitted means "keep the stored credential".
-    credential: Optional[str] = Field(default=None, max_length=_GIT_CREDENTIAL_MAX_LENGTH)
+    credential: str | None = Field(default=None, max_length=_GIT_CREDENTIAL_MAX_LENGTH)
     # Explicit removal of the stored project credential.
     clear_credential: bool = False
     # Optimistic concurrency, matching the Sprint/Collection/Feature pattern.
-    version: Optional[int] = Field(default=None, ge=1)
+    version: int | None = Field(default=None, ge=1)
 
     @field_validator("base_url")
     @classmethod
@@ -153,7 +150,7 @@ class GitIntegrationIn(BaseModel):
 
     @field_validator("credential")
     @classmethod
-    def _check_credential(cls, v: Optional[str]) -> Optional[str]:
+    def _check_credential(cls, v: str | None) -> str | None:
         return _validate_git_credential(v)
 
     @model_validator(mode="after")
@@ -183,35 +180,35 @@ class GitConnectionDraftIn(BaseModel):
     but ignored for transport so the draft shape can mirror the settings form.
     """
 
-    enabled: Optional[bool] = None
-    base_url: Optional[str] = Field(default=None, max_length=500)
-    organization: Optional[str] = Field(default=None, max_length=120)
-    default_base_branch: Optional[str] = Field(default=None, max_length=120)
+    enabled: bool | None = None
+    base_url: str | None = Field(default=None, max_length=500)
+    organization: str | None = Field(default=None, max_length=120)
+    default_base_branch: str | None = Field(default=None, max_length=120)
     # Write-only draft PAT for this request only; never persisted.
-    credential: Optional[str] = Field(default=None, max_length=_GIT_CREDENTIAL_MAX_LENGTH)
+    credential: str | None = Field(default=None, max_length=_GIT_CREDENTIAL_MAX_LENGTH)
 
     @field_validator("base_url")
     @classmethod
-    def _check_draft_base_url(cls, v: Optional[str]) -> Optional[str]:
+    def _check_draft_base_url(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return _validate_git_base_url((v or "").strip().rstrip("/"))
 
     @field_validator("credential")
     @classmethod
-    def _check_draft_credential(cls, v: Optional[str]) -> Optional[str]:
+    def _check_draft_credential(cls, v: str | None) -> str | None:
         return _validate_git_credential(v)
 
     @field_validator("organization")
     @classmethod
-    def _check_draft_identifier(cls, v: Optional[str]) -> Optional[str]:
+    def _check_draft_identifier(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return _validate_git_identifier(v)
 
     @field_validator("default_base_branch")
     @classmethod
-    def _check_draft_default_branch(cls, v: Optional[str]) -> Optional[str]:
+    def _check_draft_default_branch(cls, v: str | None) -> str | None:
         if v is None:
             return None
         candidate = (v or "").strip()
@@ -224,7 +221,7 @@ class GitIntegrationOut(BaseModel):
 
     # False when no row exists yet (the UI then shows the safe defaults below).
     configured: bool = False
-    id: Optional[int] = None
+    id: int | None = None
     project_id: int
     provider: str = "github_enterprise"
     enabled: bool = False
@@ -233,8 +230,8 @@ class GitIntegrationOut(BaseModel):
     default_base_branch: str = "dev"
     # unknown | ok | error
     connection_status: str = "unknown"
-    last_checked_at: Optional[datetime] = None
-    # Sanitized provider message only — never a token, header or error body.
+    last_checked_at: datetime | None = None
+    # Sanitized provider message only, never a token, header or error body.
     last_error: str = ""
     version: int = 1
     # Runtime capability flags (non-secret) so the UI can explain a disabled state.
@@ -250,7 +247,7 @@ class GitConnectionTestOut(BaseModel):
     message: str = ""
     # Non-secret label of what was reached (organization login or API host).
     target: str = ""
-    checked_at: Optional[datetime] = None
+    checked_at: datetime | None = None
     error_code: str = ""
 
 class GitProviderRepositoryOut(BaseModel):
@@ -339,14 +336,14 @@ class GitBranchOut(BaseModel):
     provider_branch_ref: str = ""
     # Active | Deleted | Unknown
     status: str = "Active"
-    created_by_id: Optional[int] = None
+    created_by_id: int | None = None
     created_by_name: str = ""
-    created_at: Optional[datetime] = None
-    last_checked_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    last_checked_at: datetime | None = None
     # Sanitized message only.
     last_error: str = ""
     # Removal metadata (Deleted rows keep their creation history too).
-    removed_at: Optional[datetime] = None
+    removed_at: datetime | None = None
     removed_by_name: str = ""
     removal_reason: str = ""
     version: int = 1
@@ -366,12 +363,12 @@ class GitBranchPreviewOut(BaseModel):
     # False when a branch already exists here, or the pair is not permitted.
     can_create: bool = True
     reason: str = ""
-    existing_branch: Optional[GitBranchOut] = None
+    existing_branch: GitBranchOut | None = None
 
 class GitWorkItemBranchesOut(BaseModel):
     """Development section payload: existing branches plus what the actor may do.
 
-    `can_create_branch` / `can_remove_branch` are usability hints only — every
+    `can_create_branch` / `can_remove_branch` are usability hints only, every
     action is re-authorized on the server. Repository selection is never part
     of this payload; the create dialog discovers repositories live.
     """

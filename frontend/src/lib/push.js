@@ -160,7 +160,7 @@ export async function unsubscribeOnLogout() {
   }
 }
 
-/** Show a system notification without FCM — corporate networks often block FCM's
+/** Show a system notification without FCM, corporate networks often block FCM's
  * own push channel outright, but this only needs the page running (tab may be
  * backgrounded/minimised, just not closed). Tag matches FCM's so a duplicate replaces
  * rather than stacks. */

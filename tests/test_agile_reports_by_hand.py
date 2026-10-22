@@ -6,13 +6,13 @@ expected series can be worked out by hand in the docstrings.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 
 def _ts(text: str) -> datetime:
-    return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(text).replace(tzinfo=UTC)
 
 
 class Clock:

@@ -246,7 +246,7 @@ export default function VideoPlayer({ src, type, label, autoPlay = false }) {
         toggleFs();
         break;
       default:
-        // Use live element duration — React state lags briefly after load.
+        // Use live element duration, React state lags briefly after load.
         if (/^\d$/.test(e.key) && Number.isFinite(v.duration)) {
           e.preventDefault();
           seekTo((Number(e.key) / 10) * v.duration);

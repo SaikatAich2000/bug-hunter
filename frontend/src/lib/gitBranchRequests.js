@@ -10,7 +10,7 @@ export function branchListEndpoint(targetId) {
   return `/git/work-items/${targetId}/branches`;
 }
 
-/** Preview query string — exactly the two accepted fields. */
+/** Preview query string, exactly the two accepted fields. */
 export function buildPreviewQuery({ providerRepoId, baseBranch }) {
   return new URLSearchParams({
     provider_repo_id: providerRepoId,
@@ -18,7 +18,7 @@ export function buildPreviewQuery({ providerRepoId, baseBranch }) {
   }).toString();
 }
 
-/** Create body — exactly the two accepted fields, with the repo default fallback. */
+/** Create body: exactly the two accepted fields, with the repo default fallback. */
 export function buildBranchCreateBody({ providerRepoId, baseBranch, fallbackBaseBranch }) {
   return {
     provider_repo_id: providerRepoId,
@@ -76,6 +76,6 @@ export function removalConfirmationMessage(branch) {
   return (
     `Repository: ${branch.repository_full_name || branch.repository_name}\n` +
     `Branch: ${branch.branch_name}\n\n` +
-    "The exact remote branch will be deleted and this history record will be retained."
+    "The exact remote branch will be deleted and this history record will be retained"
   );
 }

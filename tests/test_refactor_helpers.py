@@ -1,7 +1,7 @@
 """Direct unit tests for chatbot nlu/executor/llm and routes/bugs helpers."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +9,7 @@ import pytest
 
 def test_named_window_today():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, 30, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("today", today_start, now)
     assert win is not None
@@ -20,7 +20,7 @@ def test_named_window_today():
 
 def test_named_window_yesterday():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, 30, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("yesterday", today_start, now)
     assert win.label == "yesterday"
@@ -29,7 +29,7 @@ def test_named_window_yesterday():
 
 def test_named_window_this_week():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, 30, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("this week", today_start, now)
     assert win is not None
@@ -38,7 +38,7 @@ def test_named_window_this_week():
 
 def test_named_window_last_week():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, 30, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("last week", today_start, now)
     assert win is not None
@@ -47,7 +47,7 @@ def test_named_window_last_week():
 
 def test_named_window_this_month():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("this month", today_start, now)
     assert win.start.day == 1
@@ -55,7 +55,7 @@ def test_named_window_this_month():
 
 def test_named_window_last_month():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("last month", today_start, now)
     assert win is not None
@@ -64,7 +64,7 @@ def test_named_window_last_month():
 
 def test_named_window_this_quarter():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("this quarter", today_start, now)
     assert win.start.month in (1, 4, 7, 10)
@@ -72,7 +72,7 @@ def test_named_window_this_quarter():
 
 def test_named_window_last_quarter():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("last quarter", today_start, now)
     assert win is not None
@@ -81,7 +81,7 @@ def test_named_window_last_quarter():
 
 def test_named_window_this_year():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("this year", today_start, now)
     assert win.start.month == 1
@@ -90,7 +90,7 @@ def test_named_window_this_year():
 
 def test_named_window_last_year():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _named_window("last year", today_start, now)
     assert win.start.year == 2025
@@ -98,7 +98,7 @@ def test_named_window_last_year():
 
 def test_named_window_unknown_returns_none():
     from app.chatbot.nlu import _named_window
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     assert _named_window("not a phrase", today_start, now) is None
 
@@ -106,7 +106,7 @@ def test_named_window_unknown_returns_none():
 def test_since_weekday_window():
     from app.chatbot.nlu import _since_weekday_window
     # June 3 2026 is a Wednesday (weekday=2). "since monday" → Monday June 1.
-    now = datetime(2026, 6, 3, 14, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _since_weekday_window("monday", today_start, now)
     assert win.start.day == 1
@@ -116,7 +116,7 @@ def test_since_weekday_window():
 def test_since_weekday_window_same_day_means_week_ago():
     from app.chatbot.nlu import _since_weekday_window
     # June 3 2026 is Wednesday. "since wednesday" → previous Wednesday (7 days ago).
-    now = datetime(2026, 6, 3, 14, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, tzinfo=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     win = _since_weekday_window("wednesday", today_start, now)
     assert (today_start - win.start).days == 7
@@ -124,35 +124,35 @@ def test_since_weekday_window_same_day_means_week_ago():
 
 def test_relative_window_hours():
     from app.chatbot.nlu import _relative_window
-    now = datetime(2026, 6, 3, 14, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, 14, tzinfo=UTC)
     win = _relative_window(6, "hours", now)
     assert (now - win.start).total_seconds() == 6 * 3600
 
 
 def test_relative_window_days():
     from app.chatbot.nlu import _relative_window
-    now = datetime(2026, 6, 3, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, tzinfo=UTC)
     win = _relative_window(7, "days", now)
     assert (now - win.start).days == 7
 
 
 def test_relative_window_weeks():
     from app.chatbot.nlu import _relative_window
-    now = datetime(2026, 6, 3, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, tzinfo=UTC)
     win = _relative_window(2, "weeks", now)
     assert (now - win.start).days == 14
 
 
 def test_relative_window_months_approx():
     from app.chatbot.nlu import _relative_window
-    now = datetime(2026, 6, 3, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, tzinfo=UTC)
     win = _relative_window(2, "months", now)
     assert (now - win.start).days == 60
 
 
 def test_relative_window_unknown_unit():
     from app.chatbot.nlu import _relative_window
-    now = datetime(2026, 6, 3, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 3, tzinfo=UTC)
     assert _relative_window(2, "centuries", now) is None
 
 

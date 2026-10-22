@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
@@ -143,7 +143,7 @@ def _sprint_summary_rows(sprint, report: dict) -> list[dict]:
         {"field": "Added after start", "value": report["added_count"]},
         {"field": "Removed during sprint", "value": report["removed_count"]},
         {"field": "Estimate changes", "value": report["estimate_change_count"]},
-        {"field": "Generated", "value": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+        {"field": "Generated", "value": datetime.now(UTC).isoformat(timespec="seconds")},
     ]
 
 
@@ -445,7 +445,7 @@ def get_scope_change_report(
     return reports_svc.scope_change_report(db, sprint, board)
 
 
-# --- Reporting follow-on: velocity, cumulative flow, control chart ---
+# Reporting follow-on: velocity, cumulative flow, control chart
 
 @router.get("/velocity", response_model=VelocityReportOut, responses=FORBIDDEN_NOT_FOUND_VALIDATION_422)
 def get_velocity_report(
@@ -663,7 +663,7 @@ def export_report(
         include_subtasks,
     )
     csv_bytes = _report_to_csv_bytes(data, report_key)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     filename = f"agile-report-{report_key}-{stamp}.csv"
     return StreamingResponse(
         iter([csv_bytes]),

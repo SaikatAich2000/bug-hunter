@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import ALLOWED_CAPACITY_UNITS, normalize_choice
 
 
-# =====================================================================
-# Agile — capacity, planning readiness.
-# =====================================================================
+# Agile: capacity, planning readiness.
 class SprintCapacityIn(BaseModel):
     user_id: int
     capacity_value: float = Field(ge=0)
@@ -62,7 +59,7 @@ class PlanningOut(BaseModel):
     board_id: int
     estimation_mode: str
     item_count: int
-    total_estimate: Optional[float] = None
+    total_estimate: float | None = None
     unestimated_count: int = 0
     capacity: list[SprintCapacityOut] = Field(default_factory=list)
     readiness: list[ReadinessCheckOut] = Field(default_factory=list)

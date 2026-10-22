@@ -5,9 +5,7 @@ from app.chatbot import memory as mem
 from app.chatbot.redaction import redact
 
 
-# ---------------------------------------------------------------------------
 # Redaction
-# ---------------------------------------------------------------------------
 def test_redact_empty_and_none():
     assert redact("") == ""
     assert redact(None) == ""  # type: ignore[arg-type]  # negative-path test
@@ -61,9 +59,7 @@ def test_redact_keeps_label_when_scrubbing_value():
     assert "superSecretValue" not in out
 
 
-# ---------------------------------------------------------------------------
 # Conversation memory store
-# ---------------------------------------------------------------------------
 def _fresh_store():
     s = mem._Store()
     return s

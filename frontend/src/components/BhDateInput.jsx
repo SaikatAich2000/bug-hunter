@@ -1,4 +1,4 @@
-// BhDateInput — controlled custom date picker; bh-date-* class names must match styles.css.
+// BhDateInput: controlled custom date picker; bh-date-* class names must match styles.css.
 // Popover is portaled to <body> so transformed ancestors can't break its fixed positioning.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";

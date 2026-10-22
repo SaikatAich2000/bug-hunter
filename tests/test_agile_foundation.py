@@ -56,12 +56,12 @@ def test_enable_agile_is_idempotent(admin_client):
 
 
 def test_enable_agile_requires_permission(user_client):
-    # Regular users cannot see /api/projects create (manager/admin only) — use
+    # Regular users cannot see /api/projects create (manager/admin only), use
     # an existing accessible project instead by checking 403 on settings write.
     res = user_client.get("/api/projects")
     assert res.status_code == 200
     # No projects visible to a fresh user with no memberships; nothing to
-    # enable — assert the enable endpoint 404s (no access) rather than 200.
+    # enable: assert the enable endpoint 404s (no access) rather than 200.
     enable_res = user_client.post("/api/agile/projects/1/enable", json={"feature_flags": {}})
     assert enable_res.status_code in (403, 404)
 
@@ -126,7 +126,7 @@ def test_disabled_project_create_reports_agile_not_enabled(admin_client):
     """An Agile-only create in a project with Agile off must explain itself.
 
     The status stays 404 (inaccessible projects remain indistinguishable), but a
-    project the caller can list must not be reported as "Project not found" —
+    project the caller can list must not be reported as "Project not found", 
     that was the misleading error users hit when creating an Epic/Story/Sub-task.
     Legacy /api/bugs creation keeps working in the same project.
     """
@@ -233,7 +233,7 @@ def test_project_update_cannot_toggle_agile_without_a_board(admin_client):
     assert enable.json()["board_id"] is not None
 
 
-# --- board provisioning and reconciliation (service level) --------------------------
+# board provisioning and reconciliation (service level)
 
 def _agile_project(db, name="Board Unit"):
     from app.agile import boards as boards_svc

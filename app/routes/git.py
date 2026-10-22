@@ -16,7 +16,6 @@ role included) and is never implied by project visibility alone.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
@@ -236,9 +235,7 @@ def build_provider(
     )
 
 
-# =====================================================================
 # Serialization (secret-free by construction)
-# =====================================================================
 
 
 def _verified_provider_metadata(
@@ -374,7 +371,7 @@ def _resolve_creation_repository(
 ) -> tuple[ProjectRepository, str | None]:
     """Resolve the verified provider repository for a confirmed creation.
 
-    Only the provider repository id is accepted — the historical internal
+    Only the provider repository id is accepted, the historical internal
     ``repository_id`` is never a client input. The default base branch for the
     action comes from the project configuration.
     """
@@ -394,9 +391,7 @@ def _resolve_creation_repository(
     return repository, base_branch
 
 
-# =====================================================================
 # 1+2. Project Git configuration (Project Admin only)
-# =====================================================================
 
 _CONFIG_FIELDS = (
     "enabled",
@@ -500,9 +495,7 @@ def test_git_connection(
         return git_connection.check_saved(db, actor, project, config, build_provider)
     return git_connection.check_draft(db, actor, project, config, draft, build_provider)
 
-# =====================================================================
 # 3. Read-only repository discovery (no selection, no persistence)
-# =====================================================================
 
 @router.get(
     "/projects/{project_id}/available-repositories",
@@ -518,7 +511,7 @@ def list_available_repositories(
 
     Readable by any project member: the branch-create dialog needs the picker.
     Creating a branch is authorized separately on the create endpoint. Only
-    safe metadata is returned — never selection state, allow-list membership or
+    safe metadata is returned, never selection state, allow-list membership or
     an internal identity row id. The only write is the audit row recording the
     lookup: no configuration change and no repository-history row.
     """
@@ -554,9 +547,7 @@ def list_available_repositories(
         for repository in discovered
     ]
 
-# =====================================================================
 # 4-9. Branch creation for a work item
-# =====================================================================
 
 
 def _preview_payload(
@@ -569,7 +560,7 @@ def _preview_payload(
 ) -> dict:
     """Confirmation-dialog data for one provider repository.
 
-    Read-only by contract: provider reads are allowed, but nothing is written —
+    Read-only by contract: provider reads are allowed, but nothing is written, 
     no ProjectRepository identity row, no WorkItemBranch, no flush, no audit.
     """
     require_story(target)
@@ -663,7 +654,7 @@ def _create_branch(
     """Run the create/reconcile flow. Returns ``(payload, created)``.
 
     The transaction is committed here because an idempotent replay must be able
-    to read back what a concurrent request already wrote — on both the
+    to read back what a concurrent request already wrote, on both the
     IntegrityError path and the "remote branch already exists" path.
     """
     require_story(target)
@@ -818,7 +809,7 @@ def _remove_branch_record(
     version); it can never steer what is deleted.
     """
     row = db.get(WorkItemBranch, branch_record_id)
-    # Scoped 404: a record of another project is simply invisible. This is the
+    # Scoped 404: a record of another project is invisible. This is the
     # whole authorization: removal is a project-level action available to any
     # project member (the user role included); outsiders get the same 404.
     if row is None or not can_access_project(
@@ -844,7 +835,7 @@ def _remove_branch_record(
             db.commit()
             raise _translate_provider_error(exc) from exc
         # Exact 404 from a provider that raises instead of returning False:
-        # the remote branch is already absent — treat as removed.
+        # the remote branch is already absent, treat as removed.
         already_absent = True
     row.status = branch_svc.STATUS_DELETED
     row.version += 1
@@ -873,14 +864,14 @@ def _create_route(
     actor: User, response: Response,
 ) -> dict:
     body, created = _create_branch(db, target, payload, actor)
-    # 201 on first creation, 200 when an existing record is returned — the
+    # 201 on first creation, 200 when an existing record is returned, the
     # request was idempotent, not a new resource.
     response.status_code = (
         status.HTTP_201_CREATED if created else status.HTTP_200_OK
     )
     return body
 
-# --- Bug-table work items (Bug / Requirement / Task / Sub-task / Story) ---
+# Bug-table work items (Bug / Requirement / Task / Sub-task / Story)
 
 @router.get("/work-items/{work_item_id}/branches", response_model=GitWorkItemBranchesOut,
             responses=_DISCOVERY_RESPONSES)
@@ -898,7 +889,7 @@ def list_work_item_branches(
 def preview_work_item_branch(
     work_item_id: int,
     provider_repo_id: str = Query(max_length=64),
-    base_branch: Optional[str] = Query(default=None, max_length=255),
+    base_branch: str | None = Query(default=None, max_length=255),
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:
@@ -927,7 +918,7 @@ def create_work_item_branch(
                responses=_REMOVE_RESPONSES)
 def remove_branch_record(
     branch_record_id: int,
-    expected_version: Optional[int] = Query(default=None, gt=0),
+    expected_version: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
 ) -> dict:

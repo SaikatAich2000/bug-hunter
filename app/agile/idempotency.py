@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta, timezone
+from datetime import UTC, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -51,8 +51,8 @@ def get_cached_response(
     expires_at = row.expires_at
     if expires_at.tzinfo is None:
         # SQLite round-trips DateTime(timezone=True) as naive; treat as UTC
-        # (all Agile timestamps are written in UTC — see utcnow()).
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        # (all Agile timestamps are written in UTC, see utcnow()).
+        expires_at = expires_at.replace(tzinfo=UTC)
     if expires_at < utcnow():
         db.execute(delete(IdempotencyKey).where(IdempotencyKey.id == row.id))
         db.flush()

@@ -13,7 +13,7 @@ USER_EMAIL = "member@test.local"
 USER_PASSWORD = "Member12345"
 
 
-# --- helpers ---------------------------------------------------------------
+# helpers
 
 def _login(client, email, password):
     client.post("/api/auth/logout")
@@ -104,7 +104,7 @@ def _audit_actions():
         return [a.action for a in db.query(Activity).all()]
 
 
-# --- Agile edit policy -------------------------------------------------------
+# Agile edit policy
 
 def test_user_cannot_change_a_task_through_agile_endpoints(admin_client):
     """Defect: Agile routes skipped can_edit_bug, so a regular user could drag,
@@ -143,7 +143,7 @@ def test_board_transition_keeps_a_legacy_task_a_task(admin_client):
     assert task["id"] in {row["id"] for row in backlog}
 
 
-# --- Board view ------------------------------------------------------------
+# Board view
 
 def test_board_cards_carry_display_ids_and_sit_in_one_column(admin_client):
     """The board shows the sprint's issues and their Sub-tasks, each once, with
@@ -196,10 +196,10 @@ def test_wip_limit_counts_only_the_moving_items_sprint(admin_client):
     assert res.status_code == 200, res.text
 
 
-# --- Sprint membership and status bookkeeping outside the board -------------
+# Sprint membership and status bookkeeping outside the board
 
 def test_put_sprint_change_moves_rank_scope_and_records_history(admin_client):
-    """Defect: PUT /api/bugs set sprint_id raw — no rank-scope move and no
+    """Defect: PUT /api/bugs set sprint_id raw, no rank-scope move and no
     history; taking it back out left it invisible in the backlog."""
     project, board_id = _project(admin_client, "Sprint PUT Suite")
     sprint = _sprint(admin_client, board_id)
@@ -270,7 +270,7 @@ def test_project_move_takes_subtasks_along_but_not_epic_children(admin_client):
     assert _bug_row(story["id"]).epic_id == epic["id"]
 
 
-# --- Agile create ------------------------------------------------------------
+# Agile create
 
 def test_agile_create_validates_assignees_and_places_sprint_properly(admin_client):
     """Defect: unknown assignee ids were silently dropped, sprint_id was set
@@ -298,7 +298,7 @@ def test_agile_create_validates_assignees_and_places_sprint_properly(admin_clien
     assert "not planned" in res.json()["detail"][0]["msg"]
 
 
-# --- Taxonomy ----------------------------------------------------------------
+# Taxonomy
 
 def test_subtask_sprint_follows_its_parent_on_every_route(admin_client):
     """A Sub-task is always in its parent's sprint: it cannot be planned alone
@@ -342,7 +342,7 @@ def test_taxonomy_changes_are_audited(admin_client):
         assert action in actions
 
 
-# --- Reports -----------------------------------------------------------------
+# Reports
 
 def test_report_csv_neutralises_formulas(admin_client):
     project, board_id = _project(admin_client, "CSV Suite")
@@ -376,7 +376,7 @@ def test_sprint_workbook_export_survives_a_non_ascii_name(admin_client):
     assert res.status_code == 200, res.text
 
 
-# --- Planning ------------------------------------------------------------------
+# Planning
 
 def test_capacity_rejects_duplicates_and_unknown_users(admin_client):
     """Defect: both reached the database and surfaced as a 500."""
@@ -394,7 +394,7 @@ def test_capacity_rejects_duplicates_and_unknown_users(admin_client):
     assert "sprint_capacity_updated" in _audit_actions()
 
 
-# --- Bulk import -------------------------------------------------------------
+# Bulk import
 
 def test_bulk_import_reports_an_overlong_title_instead_of_failing(admin_client):
     """Defect: a >200-char title passed validation and crashed the insert on Postgres."""
@@ -408,7 +408,7 @@ def test_bulk_import_reports_an_overlong_title_instead_of_failing(admin_client):
     assert "at most 200" in out["errors"][0]["error"]
 
 
-# --- Sleuth tools --------------------------------------------------------------
+# Sleuth tools
 
 def test_sleuth_tools_match_rest_create_rules(admin_client):
     from app.chatbot import tools
@@ -435,7 +435,7 @@ def test_sleuth_tools_match_rest_create_rules(admin_client):
     assert "bug_created" in _audit_actions()
 
 
-# --- Git -------------------------------------------------------------------------
+# Git
 
 def test_branch_verification_searches_the_same_window_as_discovery(monkeypatch):
     """Defect: discovery listed up to 200 repositories but create verified
@@ -455,7 +455,7 @@ def test_branch_verification_searches_the_same_window_as_discovery(monkeypatch):
     assert seen["limit"] == git_routes._DISCOVERY_LIMIT == 200
 
 
-# --- Startup ----------------------------------------------------------------------
+# Startup
 
 def test_https_deploy_without_app_env_keeps_the_lighter_gate():
     """Defect: COOKIE_SECURE alone triggered the APP_ENV=production gate, so an

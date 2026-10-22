@@ -5,7 +5,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 // jsdom has no media pipeline: HTMLMediaElement.play()/pause() throw "Not
 // implemented". Resolve/no-op them so video components behave like a browser
-// that simply isn't playing anything.
+// that isn't playing anything.
 if (typeof window !== "undefined" && window.HTMLMediaElement) {
   window.HTMLMediaElement.prototype.play = function play() { return Promise.resolve(); };
   window.HTMLMediaElement.prototype.pause = function pause() {};

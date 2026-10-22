@@ -1,15 +1,15 @@
 """LLM-as-judge scoring of free-form answers (SLEUTH_EVAL_ENABLED).
 
-A weak verdict only appends a caveat — the judge can never rewrite, block,
+A weak verdict only appends a caveat, the judge can never rewrite, block,
 or write; judge failure fails open. Model call is injected for testability.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 # Parsed JSON verdict dict on success, None on provider failure.
-CallModel = Callable[[str], Optional[dict]]
+CallModel = Callable[[str], dict | None]
 
 _DEFAULT_MIN_SCORE = 0.5
 
@@ -87,7 +87,7 @@ def _as_bool(value: object, default: bool) -> bool:
     return default
 
 
-def parse_verdict(raw: Optional[dict]) -> Optional[Verdict]:
+def parse_verdict(raw: dict | None) -> Verdict | None:
     """Coerce a model reply into a Verdict; missing fields default to "fine"."""
     if not raw:
         return None
@@ -105,13 +105,13 @@ def parse_verdict(raw: Optional[dict]) -> Optional[Verdict]:
 
 
 def judge(question: str, context: str, answer: str, *,
-          call_model: CallModel) -> Optional[Verdict]:
+          call_model: CallModel) -> Verdict | None:
     """Score an answer with an injected model call. None on any failure."""
     raw = call_model(build_judge_prompt(question, context, answer))
     return parse_verdict(raw)
 
 
-def apply_verdict(answer: str, verdict: Optional[Verdict], *,
+def apply_verdict(answer: str, verdict: Verdict | None, *,
                   min_score: float = _DEFAULT_MIN_SCORE) -> str:
     """Append a verify-it-yourself caveat to a weak answer; never rewrite it."""
     if verdict is None:

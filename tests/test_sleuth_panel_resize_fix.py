@@ -4,7 +4,7 @@ Before this fix, `clampSize(w)` was missing its `h` parameter while the body
 still referenced `h`, so calling it (e.g. from the window `resize` listener)
 threw an uncaught `ReferenceError: h is not defined` that crashed the entire
 React tree (no error boundary). All three call sites always passed two
-arguments — only the function signature was wrong. See
+arguments: only the function signature was wrong. See
 frontend/src/sleuth/SleuthPanel.jsx.
 """
 from __future__ import annotations

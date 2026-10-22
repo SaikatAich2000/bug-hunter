@@ -2,7 +2,7 @@
 (HttpOnly + SameSite=Lax), reset tokens, and role-check dependencies.
 
 Token payload is `user_id:session_version:jti`, encrypted so the client cannot read the
-user id — bumping session_version logs out every device; revoking a jti row logs out one.
+user id: bumping session_version logs out every device; revoking a jti row logs out one.
 """
 from __future__ import annotations
 
@@ -11,9 +11,8 @@ import hashlib
 import ipaddress
 import logging
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Optional
 
 import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
@@ -42,7 +41,7 @@ COOKIE_NAME = "bh_session"
 HOST_COOKIE_NAME = "__Host-bh_session"
 
 
-def trusted_forwarded_ip(xff: str, hops: int) -> Optional[str]:
+def trusted_forwarded_ip(xff: str, hops: int) -> str | None:
     """Pick the client IP from X-Forwarded-For: with N trusted proxies, only the
     Nth-from-the-right entry is trustworthy (left-most is client-controlled)."""
     parts = [p.strip() for p in (xff or "").split(",") if p.strip()]
@@ -84,7 +83,7 @@ def hash_password(plain: str) -> str:
     return bcrypt.hashpw(pre, bcrypt.gensalt(rounds=_bcrypt_rounds())).decode("utf-8")
 
 
-def verify_password(plain: str, hashed: Optional[str]) -> bool:
+def verify_password(plain: str, hashed: str | None) -> bool:
     """Constant-time check of a plaintext password against a stored hash."""
     if not hashed or not plain:
         return False
@@ -114,10 +113,10 @@ def _sealer_for(secret: str) -> Fernet:
 
 def make_session_token(user_id: int, session_version: int, jti: str) -> str:
     """Encrypted, authenticated token of user id, session version and session id (jti)."""
-    return _sealer().encrypt(f"{user_id}:{session_version}:{jti}".encode("utf-8")).decode("utf-8")
+    return _sealer().encrypt(f"{user_id}:{session_version}:{jti}".encode()).decode("utf-8")
 
 
-def _open_session_token(token: str) -> Optional[bytes]:
+def _open_session_token(token: str) -> bytes | None:
     ttl = get_settings().SESSION_TTL_SECONDS
     try:
         data = token if isinstance(token, bytes) else token.encode("utf-8")
@@ -132,7 +131,7 @@ def _open_session_token(token: str) -> Optional[bytes]:
         return None
 
 
-def parse_session_token(token: str) -> Optional[tuple[int, int, str]]:
+def parse_session_token(token: str) -> tuple[int, int, str] | None:
     """Verify a session cookie; return (user_id, session_version, jti) or None. A cookie
     without a session id (from before per-device sessions) can't be revoked, so it is refused."""
     if not token:
@@ -217,7 +216,7 @@ def hash_reset_token(raw: str) -> str:
 def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
     """Mark the user's unused reset tokens as used (atomic guarded UPDATE) so
     old email links can't be replayed. Returns the count for audit logging."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return (
         db.query(PasswordResetToken)
         .filter(
@@ -230,7 +229,7 @@ def invalidate_outstanding_reset_tokens(db: Session, user_id: int) -> int:
 
 def purge_consumed_reset_tokens(db: Session) -> int:
     """Delete expired/used reset tokens (only pruning path for this table)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return (
         db.query(PasswordResetToken)
         .filter(
@@ -259,7 +258,7 @@ def _maybe_bump_last_seen(db: Session, sess: SessionRow, now: datetime, jti: str
     """Throttled write of sess.last_seen_at, skipped if recent."""
     last_seen = sess.last_seen_at
     if last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
+        last_seen = last_seen.replace(tzinfo=UTC)
     if (now - last_seen).total_seconds() < _LAST_SEEN_THROTTLE_SECONDS:
         return
     try:
@@ -270,15 +269,15 @@ def _maybe_bump_last_seen(db: Session, sess: SessionRow, now: datetime, jti: str
         db.rollback()
 
 
-def _session_row_usable(db: Session, sess: Optional[SessionRow], jti: str, user: User) -> bool:
+def _session_row_usable(db: Session, sess: SessionRow | None, jti: str, user: User) -> bool:
     """True iff the fetched session row belongs to this user and has not expired; also
     prunes an expired row and refreshes last_seen_at."""
     if sess is None or sess.user_id != user.id:
         return False
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires = sess.expires_at
     if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
+        expires = expires.replace(tzinfo=UTC)
     if expires < now:
         _delete_expired_session(db, sess, jti)
         return False
@@ -291,7 +290,7 @@ def _validate_session_row(db: Session, jti: str, user: User) -> bool:
     return _session_row_usable(db, db.scalar(select(SessionRow).where(SessionRow.jti == jti)), jti, user)
 
 
-def _user_from_request(request: Request, db: Session) -> Optional[User]:
+def _user_from_request(request: Request, db: Session) -> User | None:
     parsed = parse_session_token(session_cookie_value(request))
     if parsed is None:
         return None

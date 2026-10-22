@@ -15,15 +15,15 @@ import { CycleChart, FlowChart, SprintChart, VelocityChart } from "./charts/Char
 import { formatNumber, statisticLabel } from "./logic/estimates";
 
 const REPORTS = [
-  { key: "burndown", label: "Burndown chart", scope: "sprint", help: "Work left in the sprint against the ideal guideline." },
-  { key: "burnup", label: "Burnup chart", scope: "sprint", help: "Work completed against the sprint's total scope." },
-  { key: "sprint", label: "Sprint report", scope: "sprint", help: "What was committed, completed, carried over and removed." },
-  { key: "velocity", label: "Velocity chart", scope: "board", help: "Commitment and completed work of recent sprints." },
-  { key: "cfd", label: "Cumulative flow diagram", scope: "range", help: "Issues in each board column, day by day." },
-  { key: "control", label: "Control chart", scope: "range", help: "Cycle time of completed issues." },
-  { key: "epic", label: "Epic report", scope: "epic", help: "An epic's progress and the work each sprint completed." },
-  { key: "daily", label: "Daily summary", scope: "sprint", help: "Where every sprint issue stood at the end of a day." },
-  { key: "workload", label: "Workload", scope: "sprint", help: "Assigned work per person against their capacity." },
+  { key: "burndown", label: "Burndown chart", scope: "sprint", help: "Work left in the sprint against the ideal guideline" },
+  { key: "burnup", label: "Burnup chart", scope: "sprint", help: "Work completed against the sprint's total scope" },
+  { key: "sprint", label: "Sprint report", scope: "sprint", help: "What was committed, completed, carried over and removed" },
+  { key: "velocity", label: "Velocity chart", scope: "board", help: "Commitment and completed work of recent sprints" },
+  { key: "cfd", label: "Cumulative flow diagram", scope: "range", help: "Issues in each board column, day by day" },
+  { key: "control", label: "Control chart", scope: "range", help: "Cycle time of completed issues" },
+  { key: "epic", label: "Epic report", scope: "epic", help: "An epic's progress and the work each sprint completed" },
+  { key: "daily", label: "Daily summary", scope: "sprint", help: "Where every sprint issue stood at the end of a day" },
+  { key: "workload", label: "Workload", scope: "sprint", help: "Assigned work per person against their capacity" },
 ];
 
 function daysAgo(n) {
@@ -97,7 +97,7 @@ function SprintReport({ report, onOpen }) {
         )}
       </div>
       {!report.history_complete && (
-        <p className="ag-notice">This sprint started before full change history was recorded; its figures come from the sprint&apos;s start and completion records.</p>
+        <p className="ag-notice">This sprint started before full change history was recorded; its figures come from the sprint&apos;s start and completion records</p>
       )}
       <IssueTable title="Completed issues" rows={report.completed} mode={mode} onOpen={onOpen} showStart />
       <IssueTable title="Issues not completed" rows={report.not_completed} mode={mode} onOpen={onOpen} showStart />
@@ -105,13 +105,13 @@ function SprintReport({ report, onOpen }) {
       {report.completed_outside.length > 0 && (
         <IssueTable title="Issues completed outside of this sprint" rows={report.completed_outside} mode={mode} onOpen={onOpen} />
       )}
-      <p className="muted small">* Added to the sprint after it started. Estimates in {statisticLabel(mode).toLowerCase()}.</p>
+      <p className="muted small">* Added to the sprint after it started, estimates in {statisticLabel(mode).toLowerCase()}</p>
     </div>
   );
 }
 
 function BurnTable({ report }) {
-  if (!report.events.length) return <p className="muted small">No changes since the sprint started.</p>;
+  if (!report.events.length) return <p className="muted small">No changes since the sprint started</p>;
   return (
     <table className="reports-table ag-table">
       <caption className="muted small">Changes during the sprint</caption>
@@ -143,7 +143,7 @@ function EpicReport({ report, onOpen }) {
       </div>
       <section className="ag-report-section">
         <h4>By sprint</h4>
-        {report.sprints.length === 0 ? <p className="muted small">No sprint has worked on this epic yet.</p> : (
+        {report.sprints.length === 0 ? <p className="muted small">No sprint has worked on this epic yet</p> : (
           <table className="reports-table ag-table">
             <thead><tr><th>Sprint</th><th className="num">Completed in sprint</th><th className="num">Epic scope at sprint end</th><th className="num">Remaining at sprint end</th></tr></thead>
             <tbody>
@@ -193,7 +193,7 @@ function DailyReport({ report }) {
         </tbody>
       </table>
       <h4>What moved that day</h4>
-      {report.transitions.length === 0 ? <p className="muted small">Nothing changed.</p> : (
+      {report.transitions.length === 0 ? <p className="muted small">Nothing changed</p> : (
         <table className="reports-table ag-table">
           <thead><tr><th>When</th><th>Issue</th><th>Event</th><th>Detail</th></tr></thead>
           <tbody>
@@ -257,9 +257,9 @@ function exportQuery({ meta, exportKey, sprintId, epicId, range, boardId }) {
 
 /** Why there is nothing to chart yet, or null when the report can run. */
 function reportNotice({ meta, hasSprints, hasEpics, rangeValid }) {
-  if (meta.scope === "sprint" && !hasSprints) return <p className="muted ag-empty">Start a sprint to see this report.</p>;
-  if (meta.scope === "epic" && !hasEpics) return <p className="muted ag-empty">Create an epic to see this report.</p>;
-  if (meta.scope === "range" && !rangeValid) return <p className="ag-error">Pick a start date on or before the end date.</p>;
+  if (meta.scope === "sprint" && !hasSprints) return <p className="muted ag-empty">Start a sprint to see this report</p>;
+  if (meta.scope === "epic" && !hasEpics) return <p className="muted ag-empty">Create an epic to see this report</p>;
+  if (meta.scope === "range" && !rangeValid) return <p className="ag-error">Pick a start date on or before the end date</p>;
   return null;
 }
 
@@ -314,14 +314,14 @@ function ControlReport({ data }) {
         [data.median_days, "Median (days)"],
         [`${data.min_days}–${data.max_days}`, "Min–max (days)"],
       ]} />
-      <p className="muted small">Cycle time = time spent in {data.work_columns.join(", ") || "the working columns"}.</p>
+      <p className="muted small">Cycle time = time spent in {data.work_columns.join(", ") || "the working columns"}</p>
       <CycleChart report={data} />
     </>
   );
 }
 
 function WorkloadReport({ data }) {
-  if (data.entries.length === 0 && !data.unassigned_count) return <p className="muted ag-empty">Nobody has work in this sprint yet.</p>;
+  if (data.entries.length === 0 && !data.unassigned_count) return <p className="muted ag-empty">Nobody has work in this sprint yet</p>;
   return (
     <table className="reports-table ag-table">
       <thead><tr><th>Person</th><th className="num">Issues</th><th className="num">Assigned</th><th className="num">Capacity</th><th className="num">Load</th></tr></thead>

@@ -4,6 +4,8 @@ planning/capacity, epics/components/labels, and core reports.
 """
 from __future__ import annotations
 
+from datetime import UTC
+
 
 def _setup_project_with_board(admin_client, name="Agile Suite"):
     res = admin_client.post("/api/projects", json={"name": name, "description": "", "color": "#c9764f"})
@@ -22,7 +24,7 @@ def _create_story(admin_client, project_id, title, **extra):
     return res.json()
 
 
-# --- Board view + transitions + WIP ---
+# Board view + transitions + WIP
 
 def test_board_view_shows_active_sprint_cards(admin_client):
     project, board_id = _setup_project_with_board(admin_client, "Board View Suite")
@@ -66,13 +68,13 @@ def test_task_transition_to_blocked_repairs_missing_live_transition_state(admin_
 
 
 def test_daily_sprint_report_includes_each_item_snapshot(admin_client):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     project, board_id = _setup_project_with_board(admin_client, "Daily Report Items Suite")
     item = _create_story(admin_client, project["id"], "Daily report item")
     sprint = admin_client.post(f"/api/agile/sprints?board_id={board_id}", json={"name": "Daily S1"}).json()
     admin_client.post(f"/api/agile/sprints/{sprint['id']}/items", json={"item_ids": [item["id"]]})
-    today = datetime.now(timezone.utc).date()  # the board's timezone is UTC
+    today = datetime.now(UTC).date()  # the board's timezone is UTC
     report = admin_client.get(
         f"/api/agile/reports/daily?sprint_id={sprint['id']}&report_date={today.isoformat()}"
     )
@@ -216,7 +218,7 @@ def test_quick_filter_crud(admin_client):
     assert del_res.status_code == 200
 
 
-# --- Planning + capacity ---
+# Planning + capacity
 
 def test_planning_readiness_and_capacity(admin_client):
     project, board_id = _setup_project_with_board(admin_client, "Planning Suite")
@@ -250,7 +252,7 @@ def test_planning_not_ready_when_empty(admin_client):
     assert plan_res.json()["ready_to_start"] is False
 
 
-# --- Epics, components, labels, collections ---
+# Epics, components, labels, collections
 
 def test_epic_update_and_progress(admin_client):
     project, _board_id = _setup_project_with_board(admin_client, "Epic Suite")
@@ -339,12 +341,12 @@ def test_release_version_crud(admin_client):
     assert upd_res.json()["status"] == "released"
 
 
-# --- Core reports ---
+# Core reports
 
 def _sprint_dates(days=7):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    start = datetime.now(timezone.utc).date()
+    start = datetime.now(UTC).date()
     return start.isoformat(), (start + timedelta(days=days - 1)).isoformat()
 
 
@@ -418,7 +420,7 @@ def test_report_export_streams_csv(admin_client):
     assert missing_param_res.status_code == 400
 
 
-# --- sprint workbook, epic/release reports and export parameters ------------------------------
+# sprint workbook, epic/release reports and export parameters
 
 def test_sprint_report_workbook_lists_every_sheet_and_work_item(admin_client):
     import io

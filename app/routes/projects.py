@@ -96,7 +96,7 @@ def get_project(
     user: User = Depends(get_current_user),
 ) -> Project:
     p = db.get(Project, project_id)
-    # 404 not 403 — scoping must not leak existence
+    # 404 not 403, scoping must not leak existence
     if p is None or not can_access_project(accessible_project_ids(db, user), project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     return p
@@ -110,7 +110,7 @@ def update_project(
     actor: User = Depends(require_manager_or_admin),
 ) -> Project:
     p = db.get(Project, project_id)
-    # 404 not 403 — scoping must not leak existence
+    # 404 not 403, scoping must not leak existence
     if p is None or not can_access_project(accessible_project_ids(db, actor), project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_PROJECT_NOT_FOUND)
     # exclude_unset so omitted fields aren't reset to schema defaults

@@ -1,1 +1,1 @@
-"""Bug Hunter — self-hosted bug, requirement and sprint tracker."""
+"""Bug Hunter: self-hosted bug, requirement and sprint tracker."""

@@ -83,7 +83,7 @@ def test_post_comment_rejects_files_without_body():
     assert "const commentId = body ? await _postCommentCreate" not in src
 
 
-# Chip checkbox UI — custom indicator span + hidden native checkbox
+# Chip checkbox UI, custom indicator span + hidden native checkbox
 def test_reports_chip_indicator_span_is_rendered():
     """Indicator span replaces the native checkbox (hidden input + :has); if either side breaks, the chip degrades."""
     js = REPORTS_VIEW.read_text(encoding="utf-8")

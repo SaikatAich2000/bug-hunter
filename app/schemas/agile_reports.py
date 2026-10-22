@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -19,8 +19,8 @@ class ReportIssueOut(BaseModel):
     item_type: str
     status: str
     status_category: str = "todo"
-    estimate: Optional[float] = None
-    estimate_at_start: Optional[float] = None
+    estimate: float | None = None
+    estimate_at_start: float | None = None
     added_during_sprint: bool = False
     assignees: list[str] = Field(default_factory=list)
 
@@ -33,10 +33,10 @@ class SprintReportOut(BaseModel):
     goal: str
     estimation_mode: str
     statistic_label: str = _DEFAULT_STATISTIC_LABEL
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    start_date: str | None = None
+    end_date: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     committed_count: int = 0
     committed_estimate: float = 0
     completed_count: int = 0
@@ -102,9 +102,9 @@ class BurndownReportOut(BaseModel):
     state: str = ""
     estimation_mode: str
     statistic_label: str = _DEFAULT_STATISTIC_LABEL
-    start: Optional[datetime] = None
-    planned_end: Optional[datetime] = None
-    end: Optional[datetime] = None
+    start: datetime | None = None
+    planned_end: datetime | None = None
+    end: datetime | None = None
     committed_estimate: float = 0
     remaining_estimate: float = 0
     scope_estimate: float = 0
@@ -127,9 +127,9 @@ class WorkloadEntryOut(BaseModel):
     user_name: str
     assigned_estimate: float = 0
     assigned_count: int = 0
-    capacity_value: Optional[float] = None
-    capacity_unit: Optional[str] = None
-    utilization_pct: Optional[float] = None
+    capacity_value: float | None = None
+    capacity_unit: str | None = None
+    utilization_pct: float | None = None
 
 
 class WorkloadReportOut(BaseModel):
@@ -181,7 +181,7 @@ class ScopeChangeReportOut(BaseModel):
     entries: list[ScopeChangeEntryOut] = Field(default_factory=list)
 
 
-# --- Daily Sprint Report ---
+# Daily Sprint Report
 class DailyReportTransitionOut(BaseModel):
     work_item_id: int
     title: str
@@ -215,7 +215,7 @@ class DailyReportOut(BaseModel):
     goal: str
     report_date: str
     generated_at: datetime
-    generated_by_id: Optional[int] = None
+    generated_by_id: int | None = None
     committed_count: int = 0
     story_count: int = 0
     bug_count: int = 0
@@ -235,9 +235,7 @@ class DailyReportOut(BaseModel):
     items: list[DailyReportItemOut] = Field(default_factory=list)
 
 
-# =====================================================================
 # release readiness/roadmap, reporting follow-on.
-# =====================================================================
 class ReleaseActionIn(BaseModel):
     version: int = Field(ge=0)
 
@@ -246,9 +244,9 @@ class Release360Out(BaseModel):
     id: int
     name: str
     status: str
-    start_date: Optional[str] = None
-    release_date: Optional[str] = None
-    released_at: Optional[datetime] = None
+    start_date: str | None = None
+    release_date: str | None = None
+    released_at: datetime | None = None
     version: int = 1
     progress: dict[str, Any] = Field(default_factory=dict)
     readiness: list[ReadinessCheckOut] = Field(default_factory=list)
@@ -258,8 +256,8 @@ class RoadmapRowOut(BaseModel):
     kind: str  # "epic" | "release"
     id: int
     title: str
-    start_date: Optional[str] = None
-    target_date: Optional[str] = None
+    start_date: str | None = None
+    target_date: str | None = None
     scheduled: bool = True
     progress: dict[str, Any] = Field(default_factory=dict)
 
@@ -276,8 +274,8 @@ class RoadmapOut(BaseModel):
 class VelocityPointOut(BaseModel):
     sprint_id: int
     sprint_name: str
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    start_date: str | None = None
+    end_date: str | None = None
     committed_estimate: float
     completed_estimate: float
 
@@ -317,7 +315,7 @@ class ControlChartEntryOut(BaseModel):
     display_id: str = ""
     title: str = ""
     item_type: str = ""
-    started_at: Optional[datetime] = None
+    started_at: datetime | None = None
     completed_at: datetime
     cycle_time_days: float
     lead_time_days: float

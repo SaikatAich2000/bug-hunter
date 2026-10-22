@@ -1,4 +1,4 @@
-"""Sleuth Layer 2 — statistical intent classifier (pure-Python TF-IDF + cosine).
+"""Sleuth Layer 2: statistical intent classifier (pure-Python TF-IDF + cosine).
 
 Catches paraphrases the rule engine in nlu.py misses. Below the confidence
 threshold it returns None, leaving dispatch to the LLM or "unknown".
@@ -224,7 +224,7 @@ def predict(message: str, threshold: float = 0.35) -> Prediction | None:
         score = _cosine(qc, q_norm, dc, d_norm, _MODEL.idf)
         if score > best_score:
             if best_intent != intent:
-                # New top intent from a different class — demote old best.
+                # New top intent from a different class, demote old best.
                 runner_intent = best_intent
                 runner_score = best_score
             best_intent = intent

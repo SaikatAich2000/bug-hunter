@@ -52,7 +52,7 @@ class TestSessionLifecycle:
         })
         assert r.status_code == 204
 
-        # Old session cookie still works — this is the current (gap) behaviour.
+        # Old session cookie still works, this is the current (gap) behaviour.
         r = admin_client.get("/api/auth/me")
         assert r.status_code == 200, \
             "BUG: old session is invalidated after password change (good!) — update test"
@@ -122,7 +122,7 @@ class TestActivityOrdering:
             f"  detail:   {detail_ids}\n  activity: {activity_ids}"
 
 
-# Frontend contract tests — exercised through the API responses the SPA consumes.
+# Frontend contract tests, exercised through the API responses the SPA consumes.
 class TestFrontendContract:
     def test_bug_detail_attachments_only_includes_bug_level(self, admin_client):
         """BugDetail 'attachments' holds only bug-level files; comment files live under their comment."""
@@ -169,10 +169,10 @@ class TestFrontendContract:
         assert "row, has, commas" in text
 
 
-# Input validation — boundary checks on exposed fields.
+# Input validation: boundary checks on exposed fields.
 class TestInputValidation:
     def test_user_create_with_extreme_long_email(self, admin_client):
-        """email max=254. Pass 300 chars — must reject."""
+        """email max=254. Pass 300 chars, must reject."""
         r = admin_client.post("/api/users", json={
             "name": "longmail", "email": "a" * 250 + "@x.com",
             "role": "user", "password": "TestUserPwd9X",

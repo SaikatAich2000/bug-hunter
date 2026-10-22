@@ -41,7 +41,7 @@ def _remove(c, sid, iid):
     assert r.status_code in (200, 204), r.text
 
 
-# ---------------------------------------------------------------- S1
+# S1
 def test_s1_completed_outside_excluded_from_completed_and_velocity(admin_client):
     """A(3) committed, done Thu.  E(5) Done on Sun 1 Mar (before), added Wed 4.
     Expected: Completed issues = A, total 3; 'completed outside' = E (5) listed
@@ -76,7 +76,7 @@ def test_s1_completed_outside_excluded_from_completed_and_velocity(admin_client)
     assert [(v["committed_estimate"], v["completed_estimate"]) for v in vel] == [(3, 3)]
 
 
-# ---------------------------------------------------------------- S2
+# S2
 def test_s2_outside_issue_reopened_and_recompleted_counts_in_sprint(admin_client):
     """E(5) Done before; added Wed; reopened Thu; Done again Fri 6.
     Expected: E was completed during the sprint -> Completed issues [E], 5;
@@ -111,7 +111,7 @@ def test_s2_outside_issue_reopened_and_recompleted_counts_in_sprint(admin_client
     assert (bd["points"][-1]["scope"], bd["points"][-1]["completed"]) == (8, 5)
 
 
-# ---------------------------------------------------------------- S3
+# S3
 def test_s3_estimate_before_start_and_remove_readd(admin_client):
     """A 3->8 on Sun (before start).  B(5) committed.
     Tue 10:00 B removed (13->8), Tue 12:00 B 5->2 while out (no sprint event),
@@ -148,7 +148,7 @@ def test_s3_estimate_before_start_and_remove_readd(admin_client):
     assert rep["incomplete_estimate"] == 10
 
 
-# ---------------------------------------------------------------- S4
+# S4
 def test_s4_moved_between_parallel_sprints(admin_client):
     """X: A(3),B(5); Y: C(2); both start Mon 09:00.  Tue B moved X->Y,
     Wed B done.  Complete both Fri.
@@ -192,7 +192,7 @@ def test_s4_moved_between_parallel_sprints(admin_client):
     assert vel == [("SX", 8, 0), ("SY", 2, 5)]
 
 
-# ---------------------------------------------------------------- S5
+# S5
 def test_s5_board_timezone_dst_and_subsecond_start(admin_client):
     """Board America/New_York, Mon-Fri.  Sprint 2-13 Mar 2026, started
     2026-03-02T14:00:00.750Z (09:00:00.75 EST).  DST starts Sun 8 Mar.
@@ -231,7 +231,7 @@ def test_s5_board_timezone_dst_and_subsecond_start(admin_client):
     assert d3["completed_estimate_today"] == 0
 
 
-# ---------------------------------------------------------------- S6
+# S6
 def test_s6_control_chart_reopened_issue_is_one_dot(admin_client):
     """X: In Progress Mon 2 10:00, Done Tue 3 10:00, In Progress Wed 4 10:00,
     Done Fri 6 10:00.  Control chart: ONE dot for X, completed at the last
@@ -257,7 +257,7 @@ def test_s6_control_chart_reopened_issue_is_one_dot(admin_client):
     assert got[0][1] in (4.0, 3.0)
 
 
-# ---------------------------------------------------------------- S7
+# S7
 def test_s7_cfd_csv_export_matches_json(admin_client):
     c = admin_client
     p, bid = _project(c, "S7")
@@ -270,7 +270,7 @@ def test_s7_cfd_csv_export_matches_json(admin_client):
     assert len(rows) - 1 == 3
 
 
-# ---------------------------------------------------------------- S8
+# S8
 def test_s8_sprint_csv_export_has_all_outcomes(admin_client):
     """Sprint with 1 completed + 1 not completed: the CSV should carry both
     (it only carries the first non-empty list)."""
@@ -287,7 +287,7 @@ def test_s8_sprint_csv_export_has_all_outcomes(admin_client):
     assert sorted(int(x["id"]) for x in rows) == sorted([a["id"], b["id"]])
 
 
-# ---------------------------------------------------------------- S9
+# S9
 def test_s9_parent_done_with_open_subtask_burndown_vs_sprint_report(admin_client):
     """P(5) done, its sub-task open, sprint completed.  Sprint report: P not
     completed (sub-task rule).  Burndown/burnup end should agree:
@@ -307,7 +307,7 @@ def test_s9_parent_done_with_open_subtask_burndown_vs_sprint_report(admin_client
     assert bd["completed_estimate"] == rep["completed_estimate"]
 
 
-# ---------------------------------------------------------------- S10
+# S10
 def test_s10_closed_sprint_is_immutable(admin_client):
     """After closing, reopen the completed issue, re-estimate it and change
     the other issue's type.  Closed sprint report/velocity must not move."""
@@ -332,7 +332,7 @@ def test_s10_closed_sprint_is_immutable(admin_client):
     assert before[2]["points"] == after[2]["points"]
 
 
-# ---------------------------------------------------------------- S11
+# S11
 def test_s11_empty_sprint_all_removed(admin_client):
     c = admin_client
     p, bid = _project(c, "S11")
@@ -353,7 +353,7 @@ def test_s11_empty_sprint_all_removed(admin_client):
     assert r.status_code == 200
 
 
-# ---------------------------------------------------------------- S12
+# S12
 def test_s12_cfd_json_and_csv_honour_include_subtasks(admin_client):
     c = admin_client
     p, bid = _project(c, "S12")
@@ -374,7 +374,7 @@ def test_s12_cfd_json_and_csv_honour_include_subtasks(admin_client):
         assert sum(int(v) for k, v in rows[-1].items() if k != "date") == expected
 
 
-# ---------------------------------------------------------------- S13
+# S13
 def test_s13_issue_done_before_start_and_created_in_sprint(admin_client):
     """Z(2) Done on Sun, committed at Mon start; A(3) committed open.
     Tue: N(4) created directly into the active sprint.
@@ -405,7 +405,7 @@ def test_s13_issue_done_before_start_and_created_in_sprint(admin_client):
     assert c.get(f"/api/bugs/{n['id']}").json()["sprint_id"] == s["id"]
 
 
-# ---------------------------------------------------------------- S14
+# S14
 def test_s14_daily_completed_today_with_same_day_reopen(admin_client):
     """A(3) done Tue 10:00, reopened Tue 15:00.  Daily view: net 0
     completed that day (A is not done at end of day)."""
@@ -429,7 +429,7 @@ def test_s14_daily_completed_today_with_same_day_reopen(admin_client):
     assert d["completed_estimate_today"] == 0
 
 
-# ---------------------------------------------------------------- S15
+# S15
 def test_s15_legacy_sprint_without_history(admin_client):
     """Closed sprint whose started_at is NULL (pre-history): committed A3,B5;
     B removed, D(2) added, A done.  Expected: committed 8, completed 3,

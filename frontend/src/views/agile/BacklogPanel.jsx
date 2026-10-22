@@ -290,7 +290,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
         <Container
           id={key}
           empty={shown.length === 0 && (
-            <p className="ag-empty-drop">{filtering && (containers[key] || []).length ? "No issues match the filter." : emptyText}</p>
+            <p className="ag-empty-drop">{filtering && (containers[key] || []).length ? "No issues match the filter" : emptyText}</p>
           )}
         >
           {shown.map((issue) => (
@@ -394,7 +394,7 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
                 )}
               </header>
               {!isCollapsed && sprint.goal && <p className="ag-goal">🎯 {sprint.goal}</p>}
-              {!isCollapsed && renderList(key, canManage ? "Plan this sprint by dragging issues here from the backlog." : "No issues in this sprint.")}
+              {!isCollapsed && renderList(key, canManage ? "Plan this sprint by dragging issues here from the backlog" : "No issues in this sprint")}
               {!isCollapsed && canManage && (
                 <button type="button" className="ag-create-link"
                   onClick={() => openBugForm({ defaultProjectId: board.project_id, defaultSprintId: sprint.id })}>
@@ -419,10 +419,10 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
           </header>
           {data.backlog_total > (containers[BACKLOG_KEY] || []).length && (
             <p className="muted small ag-note">
-              Showing the top {(containers[BACKLOG_KEY] || []).length} issues by rank. Use search to find the rest.
+              Showing the top {(containers[BACKLOG_KEY] || []).length} issues by rank, use search to find the rest
             </p>
           )}
-          {renderList(BACKLOG_KEY, "Your backlog is empty.")}
+          {renderList(BACKLOG_KEY, "Your backlog is empty")}
           <button type="button" className="ag-create-link" onClick={() => openBugForm({ defaultProjectId: board.project_id })}>
             + Create issue
           </button>
@@ -447,8 +447,8 @@ export default function BacklogPanel({ canManage, board, onOpenTab }) {
 
       <p className="muted small ag-hint">
         {canManage
-          ? `Drag issues to rank them or plan them into a sprint (tick several to move them together; the ⋯ menu moves without dragging). Estimates in ${statisticUnit(mode)}; ${formatNumber(categoryTotals(allIssues, mode).total)} planned in total.`
-          : "Only admins and managers can re-rank or plan issues."}
+          ? `Drag issues to rank them or plan them into a sprint (tick several to move them together; the ⋯ menu moves without dragging), estimates in ${statisticUnit(mode)}; ${formatNumber(categoryTotals(allIssues, mode).total)} planned in total`
+          : "Only admins and managers can re-rank or plan issues"}
       </p>
 
       <SprintFormDialog open={dialog?.kind === "create" || dialog?.kind === "edit"} boardId={board.id}

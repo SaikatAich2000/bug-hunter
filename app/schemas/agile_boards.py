@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -19,16 +19,14 @@ from app.schemas.common import (
 )
 from app.schemas.users import UserBrief
 
-# =====================================================================
-# Agile — foundation, boards, backlog, sprint lifecycle.
+# Agile: foundation, boards, backlog, sprint lifecycle.
 #
-# =====================================================================
 _AGILE_NAME_MIN = 2
 
 
 class AgileFeatureFlagsIn(BaseModel):
     """Allow-listed boolean project feature flags. Unknown keys
-    are rejected (422) — no silent passthrough of arbitrary JSON."""
+    are rejected (422), no silent passthrough of arbitrary JSON."""
     automation: bool = False
     teams: bool = False
     parallel_sprints: bool = False
@@ -43,7 +41,7 @@ class AgileSettingsOut(BaseModel):
     project_id: int
     agile_enabled: bool
     agile_feature_flags: dict[str, Any] = Field(default_factory=dict)
-    board_id: Optional[int] = None
+    board_id: int | None = None
 
 
 class BoardColumnOut(BaseModel):
@@ -52,8 +50,8 @@ class BoardColumnOut(BaseModel):
     name: str
     position: int
     category: str
-    wip_limit: Optional[int] = None
-    min_cards: Optional[int] = None
+    wip_limit: int | None = None
+    min_cards: int | None = None
     wip_enforcement: str = "off"
     color: str = ""
     statuses: list[str] = Field(default_factory=list)
@@ -84,52 +82,52 @@ class BoardOut(BaseModel):
 class BoardUpdateIn(BaseModel):
     """Board settings write. All fields optional; omitted fields
     are unchanged. `version` is required (optimistic concurrency)."""
-    name: Optional[str] = Field(default=None, max_length=120)
-    estimation_mode: Optional[str] = None
-    swimlane_mode: Optional[str] = None
-    card_fields_json: Optional[list[Any]] = Field(default=None, max_length=50)
-    wip_enforcement: Optional[str] = None
-    card_color_scheme: Optional[str] = None
-    timezone: Optional[str] = Field(default=None, max_length=64)
-    working_weekdays: Optional[list[int]] = Field(default=None, max_length=7)
-    working_hours_per_day: Optional[float] = Field(default=None, gt=0, le=24)
+    name: str | None = Field(default=None, max_length=120)
+    estimation_mode: str | None = None
+    swimlane_mode: str | None = None
+    card_fields_json: list[Any] | None = Field(default=None, max_length=50)
+    wip_enforcement: str | None = None
+    card_color_scheme: str | None = None
+    timezone: str | None = Field(default=None, max_length=64)
+    working_weekdays: list[int] | None = Field(default=None, max_length=7)
+    working_hours_per_day: float | None = Field(default=None, gt=0, le=24)
     version: int = Field(ge=0)
 
     @field_validator("name")
     @classmethod
-    def _strip_name(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_name(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return _strip_and_check_min_length(v, _AGILE_NAME_MIN, "Board name")
 
     @field_validator("estimation_mode")
     @classmethod
-    def _check_estimation(cls, v: Optional[str]) -> Optional[str]:
+    def _check_estimation(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_ESTIMATION_MODES, "estimation_mode")
 
     @field_validator("swimlane_mode")
     @classmethod
-    def _check_swimlane(cls, v: Optional[str]) -> Optional[str]:
+    def _check_swimlane(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_SWIMLANE_MODES, "swimlane_mode")
 
     @field_validator("wip_enforcement")
     @classmethod
-    def _check_wip(cls, v: Optional[str]) -> Optional[str]:
+    def _check_wip(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_WIP_ENFORCEMENT, "wip_enforcement")
 
     @field_validator("card_color_scheme")
     @classmethod
-    def _check_color(cls, v: Optional[str]) -> Optional[str]:
+    def _check_color(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_CARD_COLOR_SCHEMES, "card_color_scheme")
 
     @field_validator("timezone")
     @classmethod
-    def _check_timezone(cls, v: Optional[str]) -> Optional[str]:
+    def _check_timezone(cls, v: str | None) -> str | None:
         return None if v is None else validate_timezone(v)
 
     @field_validator("working_weekdays")
     @classmethod
-    def _check_weekdays(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+    def _check_weekdays(cls, v: list[int] | None) -> list[int] | None:
         if v is None:
             return None
         if not v or any((not isinstance(d, int) or d < 1 or d > 7) for d in v):
@@ -139,11 +137,11 @@ class BoardUpdateIn(BaseModel):
 
 class BoardColumnIn(BaseModel):
     """One column in a PUT .../columns request; send ``id`` to keep an existing column."""
-    id: Optional[int] = None
+    id: int | None = None
     name: str = Field(max_length=80)
     category: str
-    wip_limit: Optional[int] = Field(default=None, ge=1)
-    min_cards: Optional[int] = Field(default=None, ge=1)
+    wip_limit: int | None = Field(default=None, ge=1)
+    min_cards: int | None = Field(default=None, ge=1)
     wip_enforcement: str = "off"
     color: str = Field(default="", max_length=20)
     statuses: list[str] = Field(default_factory=list, max_length=100)
@@ -169,7 +167,7 @@ class BoardColumnsReplaceIn(BaseModel):
     columns: list[BoardColumnIn] = Field(min_length=1, max_length=20)
 
 
-# --- Backlog ---
+# Backlog
 class BacklogItemOut(BaseModel):
     id: int
     project_id: int
@@ -178,17 +176,17 @@ class BacklogItemOut(BaseModel):
     status: str
     priority: str
     assignees: list[UserBrief] = Field(default_factory=list)
-    epic_id: Optional[int] = None
-    owner_id: Optional[int] = None
-    story_points: Optional[float] = None
-    rank: Optional[str] = None
+    epic_id: int | None = None
+    owner_id: int | None = None
+    story_points: float | None = None
+    rank: str | None = None
     flagged: bool = False
     ready_for_sprint: bool = False
     blocked: bool = False
     blocked_reason: str = ""
     mandatory: bool = False
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    start_date: str | None = None
+    end_date: str | None = None
     version: int = 1
 
 
@@ -196,5 +194,5 @@ class BacklogRankIn(BaseModel):
     """Move `item_id` to a new backlog position, between `before_id`/`after_id`
     (either or both may be null = move to an end)."""
     item_id: int
-    before_id: Optional[int] = None
-    after_id: Optional[int] = None
+    before_id: int | None = None
+    after_id: int | None = None

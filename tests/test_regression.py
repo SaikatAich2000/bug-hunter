@@ -5,9 +5,7 @@ import io
 import time
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _login_admin(c):
     r = c.post("/api/auth/login", json={
         "email": "admin@test.local", "password": "Admin1234",
@@ -243,7 +241,7 @@ class TestProjects:
         assert r.status_code == 422
 
     def test_create_project_with_3char_hex_color_rejected(self, admin_client):
-        """Schema requires #RRGGBB — short form #fff must be rejected."""
+        """Schema requires #RRGGBB: short form #fff must be rejected."""
         r = admin_client.post("/api/projects", json={
             "name": "ShortHex", "color": "#fff",
         })
@@ -764,7 +762,7 @@ class TestSecurity:
 class TestV321Security:
     """CSRF origin checks, upload rate limit (20/60s/user), hardened response headers."""
 
-    # ---- CSRF Origin check ----
+    # CSRF Origin check
     def test_csrf_blocks_state_change_from_foreign_origin(self, admin_client):
         """A POST with a foreign Origin must 403 before any work is done."""
         # Valid project first so the 403 clearly comes from the CSRF check.
@@ -844,7 +842,7 @@ class TestV321Security:
         )
         assert r.status_code == 403, r.text
 
-    # ---- Upload rate limit ----
+    # Upload rate limit
     def test_attachment_upload_rate_limit_fires(self, admin_client):
         """20 uploads/min/user is the cap; the 21st in the window must get 429."""
         p = _create_project(admin_client, name="RL1")
@@ -868,7 +866,7 @@ class TestV321Security:
         # the limiter prunes entries as they age out.
         assert any(s == 201 for s in statuses), statuses
 
-    # ---- Response headers ----
+    # Response headers
     def test_server_header_is_stripped(self, admin_client):
         """The Server header must be absent; exposing the stack (uvicorn) is minor info disclosure."""
         r = admin_client.get("/api/health")
@@ -888,7 +886,7 @@ class TestV321Security:
         assert "frame-ancestors 'none'" in csp
 
 
-# Not wall-clock timing (flaky on shared CI) — locks in query-count collapse
+# Not wall-clock timing (flaky on shared CI), locks in query-count collapse
 # on the dashboard, deferred BLOB loading on Attachment, and correct
 # attachment counts in list responses.
 class TestV321Performance:

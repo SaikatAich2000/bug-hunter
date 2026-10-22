@@ -1,4 +1,4 @@
-"""Direct unit tests for app/chatbot/tools.py — the Sleuth LLM tool
+"""Direct unit tests for app/chatbot/tools.py, the Sleuth LLM tool
 registry. These call the tool functions directly (db, actor, args) rather than
 through the (off-by-default) LLM agent loop, since every tool re-implements
 the same permission/validation path the REST routes use.
@@ -35,7 +35,7 @@ def _make_bug(admin_client, project_id, title="Direct tool test bug", **extra):
     return res.json()
 
 
-# --- _resolve_project / _resolve_user_by_name / _get_item ---
+# _resolve_project / _resolve_user_by_name / _get_item
 
 def test_resolve_project_not_found_and_no_access(admin_client):
     project = _make_project(admin_client, "Resolve Project Suite")
@@ -72,7 +72,7 @@ def test_get_item_not_found(admin_client):
         db.close()
 
 
-# --- Read tools ---
+# Read tools
 
 def test_search_work_items_filters(admin_client):
     project = _make_project(admin_client, "Search Tools Suite")
@@ -205,7 +205,7 @@ def test_get_epic_progress_tool(admin_client):
         db.close()
 
 
-# --- Write tools ---
+# Write tools
 
 def test_create_work_item_legacy_and_agile_types(admin_client):
     project = _make_project(admin_client, "Create Tool Suite")
@@ -329,7 +329,7 @@ def test_start_and_complete_sprint_tool(admin_client):
         db.close()
 
 
-# --- Registry integrity ---
+# Registry integrity
 
 def test_tool_registry_matches_names_and_specs():
     assert set(tools.TOOL_REGISTRY.keys()) == tools.ALL_TOOL_NAMES

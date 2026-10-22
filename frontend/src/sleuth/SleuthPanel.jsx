@@ -1,5 +1,5 @@
 /**
- * Sleuth — floating launcher (#sleuthFab) + dialog panel (#sleuthPanel); classes match chatbot.css.
+ * Sleuth: floating launcher (#sleuthFab) + dialog panel (#sleuthPanel); classes match chatbot.css.
  * Security pipeline: server text → escapeHtml → mdLite → fail-closed sanitizeSleuth allowlist before dangerouslySetInnerHTML; other blocks render via auto-escaped JSX; bug links use data-open-bug + a delegated CSP-safe click handler dispatching "sleuth:open-bug".
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -8,7 +8,7 @@ import { getAppName } from "../lib/branding";
 import { sanitizeSleuth } from "../lib/sanitize";
 import { useApp } from "../state/AppContext";
 import BrandMark from "../components/BrandMark";
-// Tiny helpers (.replace(/g) not replaceAll — tsconfig targets ES2020).
+// Tiny helpers (.replace(/g) not replaceAll, tsconfig targets ES2020).
 const ESCAPE_MAP = {
   "&": "&amp;",
   "<": "&lt;",
@@ -49,7 +49,7 @@ function _hasSafeUrlPrefix(url) {
 // are skipped so content isn't re-processed; lists become proper <ul> blocks.
 
 // Each reader looks at line[i] and returns { html, next } for the span it recognises, or null.
-// code span — emitted verbatim, no inner transforms
+// code span: emitted verbatim, no inner transforms
 function readCodeSpan(line, i) {
   const close = line.indexOf("`", i + 1);
   return close > i ? { html: `<code>${line.slice(i + 1, close)}</code>`, next: close + 1 } : null;
@@ -161,15 +161,15 @@ function welcomeHtml(appName) {
     "- *set bug 3 priority to high*\n" +
     "- *comment on #5: looks fixed*\n" +
     '- *create a bug titled "Login broken" in project Apollo*\n\n' +
-    "Type **help** for the full guide.",
+    "Type **help** for the full guide",
     ));
   }
 
-// Message log — discriminated union. Not persisted: chat may contain sensitive bug data.
+// Message log: discriminated union. Not persisted: chat may contain sensitive bug data.
 
 const KNOWN_KINDS = new Set(["text", "table", "file", "suggestions", "confirm"]);
 
-// Panel sizing — drag grip (top-left, grows up-and-left) or one-click expand/shrink; persisted in localStorage.
+// Panel sizing: drag grip (top-left, grows up-and-left) or one-click expand/shrink; persisted in localStorage.
 const SLEUTH_MIN_W = 340;
 const SLEUTH_MIN_H = 420;
 const SLEUTH_DEFAULT_W = 400;
@@ -193,12 +193,12 @@ function readStoredSize() {
       }
     }
   } catch {
-    /* malformed / unavailable storage — fall back to defaults */
+    /* malformed / unavailable storage, fall back to defaults */
   }
   return { w: SLEUTH_DEFAULT_W, h: SLEUTH_DEFAULT_H };
 }
 
-/** Occurrence-unique keys for rendered rows/blocks — never the array index.
+/** Occurrence-unique keys for rendered rows/blocks, never the array index.
  * Two equal payloads still get distinct keys via a per-signature ordinal. */
 function withStableKeys(items, signatureOf) {
   const seen = new Map();
@@ -220,7 +220,7 @@ function clampSize(w, h) {
   };
 }
 
-// Block renderers — one per ChatBlock.kind.
+// Block renderers: one per ChatBlock.kind.
 function TextBlock({ block }) {
   const safe = escapeHtml(str(block.payload.text) || "");
   let html = mdLite(safe);
@@ -374,7 +374,7 @@ function BotMessage({
   return (
     <div className="sleuth-msg bot">
       {known.length === 0 ? (
-        // No renderable blocks — keep the UI from going silent.
+        // No renderable blocks, keep the UI from going silent.
         <p>(no answer)</p>
       ) : (
         withStableKeys(known, (b) => String(b.kind)).map(({ item: b, key }) => {
@@ -446,7 +446,7 @@ export default function SleuthPanel() {
       inFlightRef.current = true;
       setInFlight(true);
 
-      push({ kind: "user", text }); // rendered , not HTML
+      push({ kind: "user", text }); // rendered, not HTML
       renderedAnyUserMsgRef.current = true;
       setTyping(true);
       try {
@@ -465,7 +465,7 @@ export default function SleuthPanel() {
         push({
           kind: "error",
           text:
-            err instanceof Error && err.message ? err.message : "Network error.",
+            err instanceof Error && err.message ? err.message : "Network error",
         });
         if (!openRef.current) setUnread((u) => u + 1);
       } finally {
@@ -504,7 +504,7 @@ export default function SleuthPanel() {
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
-      /* synthetic event — drag still works via pointermove */
+      /* synthetic event: drag still works via pointermove */
     }
   };
   const onResizePointerMove = (e) => {
@@ -534,7 +534,7 @@ export default function SleuthPanel() {
     );
   };
 
-  // Uncontrolled textarea — reads scrollHeight to auto-grow up to 120px.
+  // Uncontrolled textarea: reads scrollHeight to auto-grow up to 120px.
   const autosize = () => {
     const el = inputRef.current;
     if (!el) return;
@@ -542,7 +542,7 @@ export default function SleuthPanel() {
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   };
 
-  // Read, clear, then send — one place for all send paths.
+  // Read, clear, then send, one place for all send paths.
   const sendCurrent = () => {
     const el = inputRef.current;
     if (!el) return;
@@ -584,7 +584,7 @@ export default function SleuthPanel() {
       if (err instanceof ApiError && err.silent) return;
       push({
         kind: "error",
-        text: err instanceof Error && err.message ? err.message : "Upload failed.",
+        text: err instanceof Error && err.message ? err.message : "Upload failed",
       });
     } finally {
       inFlightRef.current = false;
@@ -616,8 +616,8 @@ export default function SleuthPanel() {
     );
   };
 
-  // Panel-level listeners are attached imperatively — the dialog container carries
-  // no JSX handlers — and the ref always holds the latest handler closures.
+  // Panel-level listeners are attached imperatively, the dialog container carries
+  // no JSX handlers, and the ref always holds the latest handler closures.
   const panelHandlersRef = useRef({ key: onPanelKeyDown, click: onPanelClick });
   useEffect(() => {
     panelHandlersRef.current = { key: onPanelKeyDown, click: onPanelClick };
@@ -783,7 +783,7 @@ export default function SleuthPanel() {
               default:
                 return (
                   <div key={m.id} className="sleuth-msg bot error">
-                    <p>{m.text || "Something went wrong."}</p>
+                    <p>{m.text || "Something went wrong"}</p>
                   </div>
                 );
             }

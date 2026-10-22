@@ -249,11 +249,9 @@ def test_epic_transition_via_work_items_endpoint(admin_client):
     assert updated["id"] == epic["id"]
 
 
-# ---------------------------------------------------------------------------
 # Focused regression tests for the four defects:
 #   1. Single Task Type   2. Universal Status Support
 #   3. False Concurrency  4. Unrestricted Status Movement
-# ---------------------------------------------------------------------------
 
 
 def _create_item(client, project_id, title, item_type, **extra):
@@ -391,7 +389,7 @@ def test_concurrency_rapid_repeated_moves(admin_client):
 def test_settings_self_heals_agile_enabled_without_board(admin_client):
     """Regression: a project flagged agile_enabled=True with no default board
     (e.g. after a database reset that dropped board rows) made the Sprint Board
-    and Sprint Items tabs render nothing at all — the settings gate
+    and Sprint Items tabs render nothing at all, the settings gate
     (`agile_enabled && board_id`) failed and the panels returned null. The
     settings endpoint must report a consistent, recoverable state instead.
     """
@@ -426,7 +424,7 @@ def test_settings_self_heals_agile_enabled_without_board(admin_client):
 
 
 
-# --- lifecycle guards: stale versions, bad edits, idempotent replays ---------
+# lifecycle guards: stale versions, bad edits, idempotent replays
 
 def _sprint(admin_client, board_id, name, **extra):
     res = admin_client.post(f"/api/agile/sprints?board_id={board_id}", json={"name": name, **extra})

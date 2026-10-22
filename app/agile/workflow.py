@@ -1,7 +1,7 @@
 """Workflow transitions, WIP enforcement, and board-view assembly."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -108,7 +108,7 @@ def allowed_transition_targets(db: Session, work_item_type: str, from_status_id:
 
 def seed_default_transitions(db: Session, work_item_type: str) -> bool:
     """Idempotent: allow every status -> every other status for `work_item_type`
-    (the default — a permissive baseline; project-specific restricted
+    (the default: a permissive baseline; project-specific restricted
     workflows are a later slice). Skipped if any transition already exists.
     Returns True when it wrote rows."""
     existing = db.scalar(
@@ -139,7 +139,7 @@ def reconcile_transitions(db: Session, work_item_type: str) -> bool:
     """Idempotent additive backfill: if new WorkflowStatus rows were added for
     `work_item_type` after seed_default_transitions() already ran (e.g. the
     Testing status added later to Bug/Task/Requirement), those new statuses
-    have no WorkflowTransition rows at all — connect them to every other
+    have no WorkflowTransition rows at all, connect them to every other
     active status for the type (permissive baseline, same as the initial
     seed). Returns True if any transition rows were inserted."""
     work_item_type = canonical_work_item_type(work_item_type)
@@ -288,7 +288,7 @@ def record_status_change(db: Session, item: Bug, actor: User, old_status_value: 
         return
     old_row = get_status_by_value(db, item_type, old_status_value) if old_status_value else None
     if new_row.is_terminal and item.resolved_at is None:
-        item.resolved_at = datetime.now(timezone.utc).replace(microsecond=0)
+        item.resolved_at = datetime.now(UTC).replace(microsecond=0)
     _record_sprint_status_history(db, item, actor, old_row, new_row)
 
 
@@ -309,7 +309,7 @@ def transition_work_item(
     old_status_row = from_status
     item.status = to_status.persisted_status_value
     if to_status.is_terminal:
-        item.resolved_at = item.resolved_at or datetime.now(timezone.utc).replace(microsecond=0)
+        item.resolved_at = item.resolved_at or datetime.now(UTC).replace(microsecond=0)
 
     _record_sprint_status_history(db, item, actor, old_status_row, to_status)
     db.flush()

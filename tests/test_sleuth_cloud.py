@@ -49,7 +49,7 @@ def db():
 
 @pytest.fixture
 def enabled(monkeypatch):
-    """Force the cloud layer on by patching is_available() (the single gate), robust to get_settings.cache_clear()."""
+    """Force the cloud layer on by patching is_available() (the single gate), to get_settings.cache_clear()."""
     monkeypatch.setattr(cloud_llm, "is_available", lambda: True)
 
 
@@ -57,7 +57,6 @@ def _groq_returns(monkeypatch, obj_json: str):
     monkeypatch.setattr(cloud_llm, "_call_groq", lambda system, user, **kw: obj_json)
 
 
-# ---------------------------------------------------------------------------
 
 def test_disabled_by_default(db, monkeypatch):
     st = get_settings()

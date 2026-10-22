@@ -1,4 +1,4 @@
-/* Bug Hunter UI styles ("Spectrum Tide" theme) — 5-colour system (cerulean/gold/steel/walnut/brick-red) driving KPI + badge coding; every selector/id/class/token NAME is retained, only token VALUES changed, so JS hooks + backend token tests stay green. */
+/* Bug Hunter UI styles ("Spectrum Tide" theme), 5-colour system (cerulean/gold/steel/walnut/brick-red) driving KPI + badge coding; every selector/id/class/token NAME is retained, only token VALUES changed, so JS hooks + backend token tests stay green. */
 
 /* Self-hosted Plus Jakarta Sans (UI) + JetBrains Mono (IDs/code) + Asap (fallback), CSP-safe.
    Paths are base-relative ("/fonts/…"): Vite resolves them against frontend/public/fonts and
@@ -262,13 +262,13 @@ html, body {
 }
 
 body {
-  /* Flat, static surface (no animated background — the chrome stays calm). */
+  /* Flat, static surface (no animated background, the chrome stays calm). */
   background: var(--bg-grad);
   background-attachment: fixed;
   color: var(--text);
 }
 
-/* Global form-control theme baseline — every native <select>/date-textsearch-
+/* Global form-control theme baseline, every native <select>/date-textsearch-
    number <input>/<textarea> in the app gets the same dark/light theme look
    even outside a .field wrapper or a page-specific scoped rule. Anything more
    specific (e.g. .field select) still wins on
@@ -325,7 +325,7 @@ body:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indic
 }
 
 /* App shell: two-tier chrome (top view-nav + supernav type-tabs/search) + frame (rail + main); chrome/supernav are fixed while rail/main scroll internally. */
-/* Global chrome bar — full-width top bar matching the mockup. */
+/* Global chrome bar, full-width top bar matching the mockup. */
 .chrome {
   position: relative;
   z-index: 20;
@@ -339,7 +339,7 @@ body:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indic
 }
 .chrome .menu-btn { display: none; }
 
-/* Brand mark — wordmark (first word + accent remainder, e.g. "BUG" + "HUNTER") + version; never truncated. */
+/* Brand mark: wordmark (first word + accent remainder, e.g. "BUG" + "HUNTER") + version; never truncated. */
 .brandmark { display: flex; align-items: center; gap: 11px; flex: none; }
 .brandmark .logo {
   width: 36px;
@@ -388,7 +388,7 @@ body:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indic
 .chrome .nav-btn .nav-icon { font-size: 14px; opacity: 0.85; }
 .chrome .nav-btn:hover { background: none; color: var(--chrome-fg-strong); }
 .chrome .nav-btn:active { transform: none; }
-/* Active view — theme-aware accent blue (bright on dark, AA-darkened on light). */
+/* Active view: theme-aware accent blue (bright on dark, AA-darkened on light). */
 .chrome .nav-btn.active { background: none; color: var(--chrome-accent); }
 .chrome .nav-btn.active::before { content: none; }
 .chrome .nav-btn.active::after {
@@ -599,7 +599,7 @@ body:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indic
   color: var(--accent);
   font-weight: 700;
 }
-/* Rail active marker — a glowing cyan bar on the left edge. */
+/* Rail active marker, a glowing cyan bar on the left edge. */
 .nav-btn.active::before {
   content: "";
   position: absolute;
@@ -646,7 +646,7 @@ body:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indic
 /* When collapsed, rotate the chevron to indicate the expand action. */
 body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(180deg); }
 
-/* Desktop only: collapsing narrows the rail to an icon strip. Mobile drawer (≤900px) ignores collapse state — sidebar is off-canvas there instead. */
+/* Desktop only: collapsing narrows the rail to an icon strip. Mobile drawer (≤900px) ignores collapse state, sidebar is off-canvas there instead. */
 @media (min-width: 901px) {
   body.sidebar-collapsed .frame { grid-template-columns: 46px 1fr; }
   body.sidebar-collapsed .sidebar { padding-left: 0; padding-right: 0; overflow: hidden; }
@@ -752,7 +752,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   flex-shrink: 0;
 }
 
-/* Main — the scrolling content column of the frame grid. */
+/* Main: the scrolling content column of the frame grid. */
 .main {
   display: flex;
   flex-direction: column;
@@ -778,7 +778,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
   font-size: 14px;
   outline: none;
   font-family: inherit;
-  /* Fields read as recessed steel — inset dark shadow, not a highlight. */
+  /* Fields read as recessed steel, inset dark shadow, not a highlight. */
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.28);
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
@@ -928,7 +928,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .notif-item:hover .notif-del { opacity: 1; }
 .notif-del:hover { background: var(--danger-soft); color: var(--danger); }
 
-/* Profile menu — top-right account control. */
+/* Profile menu: top-right account control. */
 .profile-wrap { position: relative; flex-shrink: 0; }
 .profile-btn {
   display: inline-flex;
@@ -1052,7 +1052,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .kpi[data-kpi="resolved"]      { --kc: #66c354; }
 .kpi[data-kpi="closed"]        { --kc: #c08552; }
 .kpi[data-kpi="resolve_later"] { --kc: #c9803a; }
-/* Tile corner glow — a soft disc of the tile colour, top-right. */
+/* Tile corner glow, a soft disc of the tile colour, top-right. */
 .kpi::before {
   content: "";
   position: absolute;
@@ -1407,7 +1407,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .sprints-backlog-table tbody tr:last-child td { border-bottom: none; }
 .sprints-backlog-table tbody tr:hover { background: var(--bg-elev-2); }
 /* Capacity/notes inputs inside the table need the same themed look as .field
-   inputs elsewhere — plain unstyled <input> looked out of place. */
+   inputs elsewhere: plain unstyled <input> looked out of place. */
 .sprints-backlog-table input[type="number"],
 .sprints-backlog-table input[type="text"],
 .sprints-backlog-table input:not([type]) {
@@ -1466,7 +1466,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .sprints-controls { display: flex; align-items: center; gap: 8px; }
 .sprints-loading { text-align: center; color: var(--text-muted); padding: 20px; }
 
-/* Shared select theme for the Sprints feature — matches .field select elsewhere
+/* Shared select theme for the Sprints feature, matches .field select elsewhere
    in the app (same border/hover/focus/cursor) instead of the unstyled native look. */
 .sprints-controls select,
 .board-toolbar select {
@@ -1509,13 +1509,13 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .agile-tab:hover { color: var(--text); }
 .agile-tab.active { background: var(--accent-fill); color: var(--on-accent-fill); box-shadow: var(--shadow-sm); }
 /* The custom web font (Asap) ships placeholder glyphs for these code points,
-   which blocks the browser's automatic fallback to the system emoji font — force it explicitly. */
+   which blocks the browser's automatic fallback to the system emoji font, force it explicitly. */
 .tab-icon {
   font-family: "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Twemoji Mozilla", sans-serif;
 }
 
 /* Label+control pairs (Sprint/From/To/Date) are single flex items so wrapping
-   only ever happens between pairs, never between a label and its own input —
+   only ever happens between pairs, never between a label and its own input, 
    and the BhSelect/BhDateInput's own width:100% no longer forces every
    sibling onto its own line. */
 
@@ -1543,7 +1543,7 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .sprints-create { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .sprints-create input { padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-field); background: var(--bg-elev); color: var(--text); }
 
-/* Drag overlay mimics the backlog-row layout but with no gap distortion —
+/* Drag overlay mimics the backlog-row layout but with no gap distortion, 
    the gaps work within flexbox but render differently in DragOverlay's portal. */
 
 .sp-badge {
@@ -2151,7 +2151,7 @@ fieldset.field > legend {
   box-shadow: var(--shadow-focus);
   background: var(--bg-elev-3);
 }
-/* Disabled must look different from enabled — the previous design made enabled fields look disabled; this fixes it by contrast. */
+/* Disabled must look different from enabled, the previous design made enabled fields look disabled; this fixes it by contrast. */
 .field input:disabled, .field select:disabled, .field textarea:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -2597,7 +2597,7 @@ input[type="checkbox"]:checked::after {
   transform: scale(1.08);
 }
 
-/* VideoPlayer — custom themed controls over the native <video>. */
+/* VideoPlayer: custom themed controls over the native <video>. */
 .vplayer {
   position: relative;
   width: 100%;
@@ -2650,7 +2650,7 @@ input[type="checkbox"]:checked::after {
   transition: background 0.15s ease, transform 0.15s ease;
 }
 .vplayer-bigplay:hover { background: var(--accent); transform: scale(1.06); }
-/* Control bar is always visible (not hover/auto-hide) — that proved unreliable inside the fullscreen top layer, where the bar vanished mid-play. */
+/* Control bar is always visible (not hover/auto-hide), that proved unreliable inside the fullscreen top layer, where the bar vanished mid-play. */
 .vplayer-bar {
   position: absolute;
   left: 0;
@@ -2765,7 +2765,7 @@ input[type="checkbox"]:checked::after {
 }
 .vplayer-range::-moz-range-track { background: transparent; }
 
-/* VideoLightbox — the "View" overlay. */
+/* VideoLightbox: the "View" overlay. */
 .video-lightbox {
   position: fixed;
   inset: 0;
@@ -2912,7 +2912,7 @@ input[type="checkbox"]:checked::after {
   }
 }
 @keyframes toast-rise-m { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-/* Variants stay fully opaque (solid fallback, then color-mix tint) — a translucent soft tint washed out over the page background. */
+/* Variants stay fully opaque (solid fallback, then color-mix tint), a translucent soft tint washed out over the page background. */
 .toast.error {
   border-color: var(--danger); border-width: 1.5px;
   color: var(--danger-strong); font-weight: 600;
@@ -3001,7 +3001,7 @@ input[type="checkbox"]:checked::after {
   .kpi-strip { grid-template-columns: repeat(2, 1fr); padding: 14px; gap: 8px; }
   .filter-bar { padding: 0 12px 12px; }
   .chrome { padding: 0 12px; gap: 12px; }
-  /* Title/actions row would otherwise push the "+ New" button off-screen —
+  /* Title/actions row would otherwise push the "+ New" button off-screen, 
      wrap onto a second line instead of clipping it. */
   .pagehead { padding: 16px 12px 4px; flex-wrap: wrap; }
   .pagehead .actions { flex-wrap: wrap; }
@@ -3035,7 +3035,7 @@ input[type="checkbox"]:checked::after {
   .kpi { padding: 12px 14px; }
   .kpi-num { font-size: 22px; }
   .pagehead h1 { font-size: 19px; }
-  /* Three action buttons never fit one line at this width — stack them full-width
+  /* Three action buttons never fit one line at this width, stack them full-width
      instead of relying on wrap, which can still clip the last button by a hair. */
   .pagehead .actions { flex-direction: column; align-items: stretch; width: 100%; }
   .pagehead .actions .btn, .pagehead .new-item-wrap { width: 100%; }
@@ -3057,7 +3057,7 @@ input[type="checkbox"]:checked::after {
 
 /* Responsive polish: additive tuning of existing breakpoints (filter-bar overflow, table scroll, multi-select clipping, attachment layout, touch targets). */
 
-/* Tablet portrait — keep filter buttons readable. */
+/* Tablet portrait: keep filter buttons readable. */
 @media (max-width: 820px) {
   .ms-btn { min-width: 120px; max-width: 200px; }
   /* Multi-select panel must not extend beyond the visible viewport. */
@@ -3081,7 +3081,7 @@ input[type="checkbox"]:checked::after {
   .supernav .search-wrap { flex: 0 0 auto; max-width: 46vw; }
 }
 
-/* Phone landscape & smaller — improve touch targets and modal density. */
+/* Phone landscape & smaller, improve touch targets and modal density. */
 @media (max-width: 600px) {
   /* Bigger tap targets (Apple HIG / Material ~44px); overlay icon buttons are absolutely positioned so growing them won't reflow. */
   .icon-btn { width: 44px; height: 44px; min-height: 44px; }
@@ -3092,7 +3092,7 @@ input[type="checkbox"]:checked::after {
   .chip { padding: 6px 10px; }
   /* Filter-bar wraps onto two rows on phones; keep margin tight. */
   .filter-bar { gap: 6px; padding: 0 10px 10px; }
-  /* Stack the label and previews vertically — the row would otherwise hide previews under the file button. */
+  /* Stack the label and previews vertically, the row would otherwise hide previews under the file button. */
   .bug-create-attach-section .comment-form-row {
     flex-direction: column;
     align-items: flex-start;
@@ -3115,7 +3115,7 @@ input[type="checkbox"]:checked::after {
   .auth-logo { width: 60px; height: 60px; }
 }
 
-/* Print: drop chrome for clean output — was missing entirely before. */
+/* Print: drop chrome for clean output, was missing entirely before. */
 @media print {
   .sidebar, .chrome, .supernav, .filter-bar, .sleuth-fab, .sleuth-panel,
   .modal-foot, .bug-modal-head-actions, .pagination, .empty-state { display: none !important; }
@@ -3463,7 +3463,7 @@ input[type="checkbox"]:checked::after {
 }
 .bug-activity-section details[open] > summary::before { content: "▾ "; }
 
-/* Work-item types — split "+ New" button + dropdown menu. */
+/* Work-item types: split "+ New" button + dropdown menu. */
 .new-item-wrap {
   position: relative;
   display: inline-flex;
@@ -3480,7 +3480,7 @@ input[type="checkbox"]:checked::after {
   min-width: 112px;
 }
 
-/* Events view — list (card grid) + detail (drill-in). */
+/* Events view: list (card grid) + detail (drill-in). */
 .events-controls {
   display: flex;
   align-items: center;
@@ -4505,7 +4505,7 @@ body.is-loading .events-detail-mode {
   border-color: var(--accent);
   box-shadow: var(--shadow-focus);
 }
-/* Native date picker icon — make it visible on dark backgrounds. */
+/* Native date picker icon, make it visible on dark backgrounds. */
 [data-theme="dark"] .reports-side input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(0.9) hue-rotate(180deg);
   cursor: pointer;
@@ -4597,7 +4597,7 @@ body.is-loading .events-detail-mode {
 }
 .reports-chip:has(input:focus-visible) { box-shadow: var(--shadow-focus); }
 
-/* Checkbox row (Include Not a Bug) — themed shell; checkbox itself inherits the global custom square (no native accent override). */
+/* Checkbox row (Include Not a Bug), themed shell; checkbox itself inherits the global custom square (no native accent override). */
 .reports-side .check-row {
   display: flex;
   flex-direction: row;
@@ -4721,7 +4721,7 @@ body.is-loading .events-detail-mode {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elev-2);
-  /* Must clip to the parent's width — otherwise the wide table extends the wrapper, which extends the panel past the viewport. */
+  /* Must clip to the parent's width, otherwise the wide table extends the wrapper, which extends the panel past the viewport. */
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -4838,7 +4838,7 @@ body.is-loading .events-detail-mode {
   min-width: 200px;
 }
 
-/* ItemPicker — searchable link target combobox. */
+/* ItemPicker: searchable link target combobox. */
 .item-picker {
   position: relative;
   width: 100%;
@@ -4867,7 +4867,7 @@ body.is-loading .events-detail-mode {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
 }
-/* Themed search input (was a plain unstyled box) — matches .field input. */
+/* Themed search input (was a plain unstyled box), matches .field input. */
 .item-picker-search {
   width: 100%;
   box-sizing: border-box;
@@ -5170,3 +5170,21 @@ body.is-loading .events-detail-mode {
 }
 .sleuth-fab-icon { padding: 6px; }
 .sleuth-avatar-icon { padding: 4px; }
+
+/* Gradient text (background-clip: text) is clipped to its line box, so leave room for descenders. */
+.auth-brand h1 { line-height: 1.2; padding-bottom: 0.1em; }
+.kpi-num, .reports-summary-value { line-height: 1.2; padding-bottom: 0.08em; }
+
+/* Small phones (320px): the top bar must fit without sticking out. */
+@media (max-width: 360px) {
+  .chrome { gap: 8px; padding: 0 10px; }
+  .chrome-right { gap: 6px; }
+  .chrome-sleuth-btn { padding: 0 10px 0 7px; }
+}
+/* Text-style controls get a comfortable tap height. */
+.auth-linkbtn, .auth-links a { min-height: 32px; display: inline-flex; align-items: center; }
+
+/* Active tab count: white on the bright dark-theme accent is only 2.8:1, so the dark theme uses dark text. */
+:root, [data-theme="dark"] { --chrome-count-text: #04121d; }
+[data-theme="light"] { --chrome-count-text: #ffffff; }
+.supernav .type-tab.active .type-tab-count { color: var(--chrome-count-text); }

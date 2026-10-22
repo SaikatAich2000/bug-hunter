@@ -21,7 +21,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import or_, select
@@ -42,7 +42,7 @@ from app.models import (
 )
 from app.schemas import display_id_for
 
-UTC = timezone.utc
+UTC = UTC
 STATISTIC_LABELS = {
     "story_points": "Story points",
     "time": "Original time estimate (hours)",
@@ -111,7 +111,7 @@ def item_statistic(mode: str, item: Bug) -> float:
     return statistic_value(mode, format_value(item.story_points), format_value(item.original_estimate_minutes))
 
 
-# --- Change-history replay -----------------------------------------------------
+# Change-history replay
 
 @dataclass
 class Change:
@@ -177,7 +177,7 @@ class IssueState:
     minutes: str | None
 
     @classmethod
-    def at(cls, history: History, item_id: int, instant: datetime) -> "IssueState":
+    def at(cls, history: History, item_id: int, instant: datetime) -> IssueState:
         return cls(
             exists=history.exists(item_id, instant),
             sprint=history.value(item_id, "sprint", instant),
@@ -197,7 +197,7 @@ class IssueState:
             self.minutes = change.new
 
 
-# --- Sprint analysis (shared by sprint report, burndown/burnup, velocity) ------
+# Sprint analysis (shared by sprint report, burndown/burnup, velocity)
 
 @dataclass
 class SprintAnalysis:
@@ -535,7 +535,7 @@ def _analyze_legacy(db: Session, analysis: SprintAnalysis) -> SprintAnalysis:
     return analysis
 
 
-# --- Report builders -------------------------------------------------------------
+# Report builders
 
 def _issue_row(analysis: SprintAnalysis, item_id: int, categories: dict, estimate: float | None) -> dict:
     item = analysis.items[item_id]

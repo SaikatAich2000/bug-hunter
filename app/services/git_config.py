@@ -48,7 +48,7 @@ def credentials_configured(config: ProjectGitConfig | None = None) -> bool:
 def integration_state(
     db: Session, project_id: int
 ) -> tuple[ProjectGitConfig | None, bool]:
-    """``(config_row, usable)`` — usable is False when disabled anywhere."""
+    """``(config_row, usable)``, usable is False when disabled anywhere."""
     config = get_config_row(db, project_id)
     if not get_settings().GIT_BRANCH_CREATION_ENABLED:
         return config, False
@@ -77,7 +77,7 @@ def config_out(config: ProjectGitConfig) -> dict:
 
 
 def config_defaults(project_id: int) -> dict:
-    """Payload for a project with no Git row yet — no secrets, no surprises."""
+    """Payload for a project with no Git row yet, no secrets, no surprises."""
     settings = get_settings()
     return {
         "configured": False,
@@ -121,9 +121,9 @@ def apply_credential_operation(
     Semantics:
 
     * ``clear_credential=True`` removes the stored project credential (idempotent:
-      an already-empty credential is simply kept empty).
+      an already-empty credential is kept empty).
     * A non-blank ``credential`` replaces the stored project credential.
-    * Both blank/False means "preserve whatever is stored" — the frontend's
+    * Both blank/False means "preserve whatever is stored", the frontend's
       password input is cleared after every submit, so a blank field can never
       wipe an existing credential.
 

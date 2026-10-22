@@ -56,7 +56,7 @@ function EpicDialog({ epic, onClose }) {
     setTarget(epic.target_date || "");
   }, [epic]);
   if (!epic) return null;
-  const error = start && target && target < start ? "The target date cannot be before the start date." : null;
+  const error = start && target && target < start ? "The target date cannot be before the start date" : null;
   const submit = async (e) => {
     e.preventDefault();
     if (error) return;
@@ -161,7 +161,7 @@ export default function HierarchyPanel({ projectId, canManage, board }) {
 
   const archive = async (epic) => {
     const ok = await confirmDialog(
-      `Archive ${epic.title}? It is hidden from planning; its issues keep their link and history.`,
+      `Archive ${epic.title}? It is hidden from planning; its issues keep their link and history`,
       { title: "Archive epic", okLabel: "Archive", danger: true },
     );
     if (!ok) return;
@@ -249,7 +249,7 @@ export default function HierarchyPanel({ projectId, canManage, board }) {
       </div>
 
       {epics.length === 0 && !search && (
-        <p className="muted ag-note">No epics yet. Epics group related stories, tasks, bugs and requirements across sprints.</p>
+        <p className="muted ag-note">No epics yet, epics group related stories, tasks, bugs and requirements across sprints</p>
       )}
 
       <ul className="ag-tree">
@@ -287,7 +287,7 @@ export default function HierarchyPanel({ projectId, canManage, board }) {
               </div>
               {expanded && (
                 <ul className="ag-tree-children">
-                  {children.length ? children.map(renderIssue) : <li className="muted small ag-tree-empty">No issues in this epic.</li>}
+                  {children.length ? children.map(renderIssue) : <li className="muted small ag-tree-empty">No issues in this epic</li>}
                 </ul>
               )}
             </li>
@@ -307,7 +307,7 @@ export default function HierarchyPanel({ projectId, canManage, board }) {
               {loose.map(renderIssue)}
               {data.unparented_total > loose.length && (
                 <li className="muted small ag-tree-empty">
-                  Showing {loose.length} of {data.unparented_total}. Search to find the others.
+                  Showing {loose.length} of {data.unparented_total}. Search to find the others
                 </li>
               )}
               {!loose.length && <li className="muted small ag-tree-empty">None.</li>}

@@ -49,7 +49,7 @@ describe("project without Scrum", () => {
     backend.state.me = { ...backend.state.me, role: "user" };
     await mountApp({ backend });
     await goSprints(user);
-    expect(await screen.findByText("Ask an admin or manager to set it up.")).toBeInTheDocument();
+    expect(await screen.findByText("Ask an admin or manager to set it up")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Set up Scrum board" })).not.toBeInTheDocument();
   });
 });

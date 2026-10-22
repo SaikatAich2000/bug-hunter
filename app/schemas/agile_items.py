@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -23,11 +23,11 @@ from app.schemas.common import (
 from app.schemas.users import UserBrief
 
 
-# --- Work-item hierarchy ---
+# Work-item hierarchy
 class WorkItemHierarchyIn(BaseModel):
     """Only path to change parent_id/epic_id. version is required."""
-    parent_id: Optional[int] = None
-    epic_id: Optional[int] = None
+    parent_id: int | None = None
+    epic_id: int | None = None
     version: int = Field(ge=0)
 
 
@@ -47,9 +47,9 @@ class AcceptanceCriterionIn(BaseModel):
 
 
 class AcceptanceCriterionUpdateIn(BaseModel):
-    description: Optional[str] = Field(default=None, max_length=2000)
-    required: Optional[bool] = None
-    met: Optional[bool] = None
+    description: str | None = Field(default=None, max_length=2000)
+    required: bool | None = None
+    met: bool | None = None
 
 
 class AcceptanceCriterionOut(BaseModel):
@@ -59,7 +59,7 @@ class AcceptanceCriterionOut(BaseModel):
     description: str
     required: bool
     met: bool
-    updated_by_id: Optional[int] = None
+    updated_by_id: int | None = None
     updated_at: datetime
 
 
@@ -73,13 +73,13 @@ class AgileWorkItemCreateIn(BaseModel):
     # Initial workflow status (e.g. the board's To Do column); "New" by default.
     status: str = Field(default="New")
     priority: str = Field(default="Medium")
-    parent_id: Optional[int] = None
-    epic_id: Optional[int] = None
-    story_points: Optional[float] = Field(default=None, ge=0)
+    parent_id: int | None = None
+    epic_id: int | None = None
+    story_points: float | None = Field(default=None, ge=0)
     assignee_ids: list[int] = Field(default_factory=list, max_length=200)
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    sprint_id: Optional[int] = None
+    start_date: str | None = None
+    end_date: str | None = None
+    sprint_id: int | None = None
 
     @field_validator("title")
     @classmethod
@@ -118,7 +118,7 @@ class AgileWorkItemCreateIn(BaseModel):
 
     @field_validator("start_date", "end_date")
     @classmethod
-    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+    def _check_date(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         try:
@@ -128,7 +128,7 @@ class AgileWorkItemCreateIn(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _check_date_order(self) -> "AgileWorkItemCreateIn":
+    def _check_date_order(self) -> AgileWorkItemCreateIn:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError(_END_DATE_CANNOT_PRECEDE_START)
         return self
@@ -136,13 +136,13 @@ class AgileWorkItemCreateIn(BaseModel):
 
 class WorkItemDatesIn(BaseModel):
     """Only path to change a Story/Task's start/end dates after creation."""
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    start_date: str | None = None
+    end_date: str | None = None
     version: int = Field(ge=0)
 
     @field_validator("start_date", "end_date")
     @classmethod
-    def _check_date(cls, v: Optional[str]) -> Optional[str]:
+    def _check_date(cls, v: str | None) -> str | None:
         if v in (None, ""):
             return None
         try:
@@ -152,7 +152,7 @@ class WorkItemDatesIn(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _check_date_order(self) -> "WorkItemDatesIn":
+    def _check_date_order(self) -> WorkItemDatesIn:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError(_END_DATE_CANNOT_PRECEDE_START)
         return self
@@ -160,20 +160,18 @@ class WorkItemDatesIn(BaseModel):
 
 class WorkItemTaskFlagsIn(BaseModel):
     """Only path to change mandatory/blocked/blocked_reason on a Story or Task."""
-    mandatory: Optional[bool] = None
-    blocked: Optional[bool] = None
-    blocked_reason: Optional[str] = Field(default=None, max_length=1000)
+    mandatory: bool | None = None
+    blocked: bool | None = None
+    blocked_reason: str | None = Field(default=None, max_length=1000)
     version: int = Field(ge=0)
 
     @field_validator("blocked_reason")
     @classmethod
-    def _strip_reason(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_reason(cls, v: str | None) -> str | None:
         return plain_text(v) if isinstance(v, str) else v
 
 
-# =====================================================================
-# Agile — transitions, quick filters, flag.
-# =====================================================================
+# Agile: transitions, quick filters, flag.
 class WorkItemTransitionIn(BaseModel):
     to_status: str = Field(max_length=100)
     version: int = Field(ge=0)
@@ -183,9 +181,9 @@ class WorkItemTransitionIn(BaseModel):
 
 
 class WorkItemEstimateIn(BaseModel):
-    story_points: Optional[float] = Field(default=None, ge=0)
-    original_estimate_minutes: Optional[int] = Field(default=None, ge=0)
-    remaining_estimate_minutes: Optional[int] = Field(default=None, ge=0)
+    story_points: float | None = Field(default=None, ge=0)
+    original_estimate_minutes: int | None = Field(default=None, ge=0)
+    remaining_estimate_minutes: int | None = Field(default=None, ge=0)
     version: int = Field(ge=0)
 
 
@@ -195,8 +193,8 @@ class WorkItemFlagIn(BaseModel):
 
 
 class WorkItemTaxonomyIn(BaseModel):
-    component_ids: Optional[list[int]] = Field(default=None, max_length=200)
-    label_ids: Optional[list[int]] = Field(default=None, max_length=200)
+    component_ids: list[int] | None = Field(default=None, max_length=200)
+    label_ids: list[int] | None = Field(default=None, max_length=200)
     version: int = Field(ge=0)
 
 
@@ -204,7 +202,7 @@ class WorkItemTaxonomyIn(BaseModel):
 _QUICK_FILTER_MAX_BYTES = 16 * 1024
 
 
-def _check_quick_filter_size(v: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+def _check_quick_filter_size(v: dict[str, Any] | None) -> dict[str, Any] | None:
     if v is not None and len(json.dumps(v, separators=(",", ":"))) > _QUICK_FILTER_MAX_BYTES:
         raise ValueError(f"filter_json must be at most {_QUICK_FILTER_MAX_BYTES // 1024} KB")
     return v
@@ -227,15 +225,15 @@ class QuickFilterIn(BaseModel):
 
 
 class QuickFilterUpdateIn(BaseModel):
-    name: Optional[str] = Field(default=None, max_length=120)
-    filter_json: Optional[dict[str, Any]] = None
-    is_shared: Optional[bool] = None
-    position: Optional[int] = None
+    name: str | None = Field(default=None, max_length=120)
+    filter_json: dict[str, Any] | None = None
+    is_shared: bool | None = None
+    position: int | None = None
     version: int = Field(ge=0)
 
     @field_validator("filter_json")
     @classmethod
-    def _check_filter(cls, v: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    def _check_filter(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
         return _check_quick_filter_size(v)
 
 
@@ -265,28 +263,28 @@ class AgileIssueOut(BaseModel):
     status: str
     status_category: str = "todo"
     priority: str
-    story_points: Optional[float] = None
-    original_estimate_minutes: Optional[int] = None
+    story_points: float | None = None
+    original_estimate_minutes: int | None = None
     assignees: list[UserBrief] = Field(default_factory=list)
-    epic_id: Optional[int] = None
-    parent_id: Optional[int] = None
-    parent_display_id: Optional[str] = None
-    parent_title: Optional[str] = None
+    epic_id: int | None = None
+    parent_id: int | None = None
+    parent_display_id: str | None = None
+    parent_title: str | None = None
     subtask_count: int = 0
     subtasks_done: int = 0
     flagged: bool = False
     blocked: bool = False
     labels: list[IssueLabelOut] = Field(default_factory=list)
-    sprint_id: Optional[int] = None
-    rank: Optional[str] = None
-    due_date: Optional[str] = None
-    updated_at: Optional[datetime] = None
+    sprint_id: int | None = None
+    rank: str | None = None
+    due_date: str | None = None
+    updated_at: datetime | None = None
     version: int = 1
     # Whether the viewer may move/edit it (Tasks and Requirements are
     # admin/manager-only, see app.auth.can_edit_bug).
     can_edit: bool = True
     # Board only: the column the issue's status is mapped to.
-    column_id: Optional[int] = None
+    column_id: int | None = None
 
 
 
@@ -296,8 +294,8 @@ class BoardViewColumnOut(BaseModel):
     name: str
     position: int
     category: str
-    wip_limit: Optional[int] = None
-    min_cards: Optional[int] = None
+    wip_limit: int | None = None
+    min_cards: int | None = None
     wip_enforcement: str = "off"
     statuses: list[str] = Field(default_factory=list)
     card_count: int = 0
@@ -309,10 +307,10 @@ class SprintBriefOut(BaseModel):
     name: str
     goal: str = ""
     state: str
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    start_date: str | None = None
+    end_date: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     version: int = 1
 
 
@@ -332,9 +330,9 @@ class BoardViewOut(BaseModel):
     estimation_mode: str = "story_points"
     swimlane_mode: str = "none"
     card_color_scheme: str = "none"
-    sprint_id: Optional[int] = None
-    sprint_name: Optional[str] = None
-    sprint: Optional[SprintBriefOut] = None
+    sprint_id: int | None = None
+    sprint_name: str | None = None
+    sprint: SprintBriefOut | None = None
     active_sprints: list[SprintBriefOut] = Field(default_factory=list)
     columns: list[BoardViewColumnOut] = Field(default_factory=list)
     # Sprint issues whose status is in no column (hidden from the columns, as
@@ -346,7 +344,7 @@ class BoardViewOut(BaseModel):
 class HierarchyViewOut(BaseModel):
     """Epic > issue > Sub-task tree of one project."""
     project_id: int
-    epics: list["EpicOut"] = Field(default_factory=list)
+    epics: list[EpicOut] = Field(default_factory=list)
     issues: list[AgileIssueOut] = Field(default_factory=list)
     subtasks: list[AgileIssueOut] = Field(default_factory=list)
     unparented_total: int = 0

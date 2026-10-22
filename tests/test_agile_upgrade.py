@@ -280,7 +280,7 @@ def test_appending_after_a_damaged_list_respaces_it_instead_of_failing(db_sessio
 
 def test_upgrade_runs_on_a_database_without_the_retired_tables(db_session):
     """A fresh install has no collections/features tables and no bugs columns
-    pointing at them; the upgrade must simply skip that step."""
+    pointing at them; the upgrade must skip that step."""
     from app.agile.upgrade import align_agile_hierarchy
     from app.database import engine
     from app.models import Project

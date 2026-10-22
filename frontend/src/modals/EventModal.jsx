@@ -1,5 +1,5 @@
 /**
- * EventModal — create/edit form for an Event (create defaults scheduled_for to today).
+ * EventModal: create/edit form for an Event (create defaults scheduled_for to today).
  * Manager picker offers active admins, plus managers who belong to the event's project.
  */
 import { useEffect, useRef, useState } from "react";
@@ -140,7 +140,7 @@ export default function EventModal({ open, event, onClose, onSaved }) {
             ))}
           </select>
           <small className="hint">
-            Only people with access to this project will see the event and its items.
+            Only people with access to this project will see the event and its items
           </small>
         </label>
         <label className="field" htmlFor="eventScheduledFor">
@@ -161,8 +161,8 @@ export default function EventModal({ open, event, onClose, onSaved }) {
           />
           <small className="hint">
             Managers get notified when the event is created, edited or deleted — but not for
-            individual tasks inside it. Admins, and managers in the event&apos;s project, can be
-            event managers.
+            individual tasks inside it, admins, and managers in the event&apos;s project, can be
+            event managers
           </small>
         </fieldset>
         <label className="field">

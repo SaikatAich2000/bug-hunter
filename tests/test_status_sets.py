@@ -186,7 +186,7 @@ def test_comment_creation_still_open_for_everyone(admin_client):
     assert r.status_code == 201
 
 
-# 3. Attachments — admin-only delete, upload still open
+# 3. Attachments: admin-only delete, upload still open
 def test_attachment_delete_is_admin_only(admin_client):
     p = _make_project(admin_client)
     bug = _make_item(admin_client, p["id"], item_type="Bug")

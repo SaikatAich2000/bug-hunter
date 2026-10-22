@@ -107,7 +107,7 @@ def _absolute_link(url: str) -> str:
 
 
 def _webpush_config(messaging, url: str):
-    """WebpushConfig with a click-through link — https only; FCM rejects other
+    """WebpushConfig with a click-through link, https only; FCM rejects other
     schemes and would abort the whole multicast. data["url"] still carries it."""
     link = _absolute_link(url)
     if link.startswith("https://"):

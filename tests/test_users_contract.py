@@ -1,7 +1,7 @@
 """Users OpenAPI contract tests: documented S8415 responses are genuine.
 
 Guards the decorator-level ``responses=`` metadata added for Sonar
-python:S8415 against drift — route paths, methods, auth requirements and
+python:S8415 against drift, route paths, methods, auth requirements and
 the exact documented status codes are pinned here.
 """
 from __future__ import annotations

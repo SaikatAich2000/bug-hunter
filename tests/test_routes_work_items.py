@@ -8,9 +8,7 @@ from __future__ import annotations
 import io
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _make_project(client, name="Eng"):
     r = client.post("/api/projects", json={"name": name, "color": "#c9764f"})
     assert r.status_code == 201, r.text
@@ -55,11 +53,9 @@ def _login(client, email, password):
     assert r.status_code == 200, r.text
 
 
-# ===========================================================================
 # events.py
-# ===========================================================================
 
-# --- list_events: filter by scheduled_for ---------------------------------
+# list_events: filter by scheduled_for
 def test_cov_events_list_filter_by_scheduled_for(admin_client):
     _make_event(admin_client, name="On 28th", scheduled_for="2026-05-28")
     _make_event(admin_client, name="On 29th", scheduled_for="2026-05-29")
@@ -69,7 +65,7 @@ def test_cov_events_list_filter_by_scheduled_for(admin_client):
     assert "On 29th" not in names
 
 
-# --- _resolve_managers: unknown user ids → 400 ----------------------------
+# _resolve_managers: unknown user ids → 400
 def test_cov_events_create_unknown_manager_id_400(admin_client):
     r = admin_client.post("/api/events", json={
         "name": "bad-mgr", "manager_ids": [999999],
@@ -78,7 +74,7 @@ def test_cov_events_create_unknown_manager_id_400(admin_client):
     assert "unknown user ids" in r.json()["detail"].lower()
 
 
-# --- _apply_event_manager_diff: manager set changes ----------------------
+# _apply_event_manager_diff: manager set changes
 def test_cov_events_update_changes_manager_set(admin_client):
     p = _make_project(admin_client)
     m1 = _make_user(admin_client, "MgrA", role="manager", email="mgra@cov.test", project_ids=[p["id"]])
@@ -106,7 +102,7 @@ def test_cov_events_update_same_manager_set_is_noop(admin_client):
     assert {m["id"] for m in r.json()["managers"]} == {m1["id"], m2["id"]}
 
 
-# --- _persist_event_update: rolls back when nothing changed ---------------
+# _persist_event_update: rolls back when nothing changed
 def test_cov_events_update_no_change_rolls_back(admin_client):
     ev = _make_event(admin_client, name="No-op event")
     audit_before = admin_client.get("/api/audit").json()
@@ -119,21 +115,21 @@ def test_cov_events_update_no_change_rolls_back(admin_client):
     assert n_after == n_before
 
 
-# --- update_event: 404 when missing ---------------------------------------
+# update_event: 404 when missing
 def test_cov_events_update_missing_404(admin_client):
     r = admin_client.put("/api/events/999999", json={"name": "ghost"})
     assert r.status_code == 404, r.text
     assert r.json()["detail"] == "Event not found"
 
 
-# --- delete_event: 404 when missing ----------------------------------------
+# delete_event: 404 when missing
 def test_cov_events_delete_missing_404(admin_client):
     r = admin_client.delete("/api/events/999999")
     assert r.status_code == 404, r.text
     assert r.json()["detail"] == "Event not found"
 
 
-# --- _event_brief: null creator -------------------------------------------
+# _event_brief: null creator
 def test_cov_events_brief_with_null_creator(admin_client):
     """Event with NULL created_by_user_id still renders (false branch of _event_brief's creator check)."""
     from app.database import SessionLocal
@@ -159,11 +155,9 @@ def test_cov_events_brief_with_null_creator(admin_client):
     assert any(r["id"] == ev_id and r["created_by_name"] is None for r in rows)
 
 
-# ===========================================================================
 # bugs.py
-# ===========================================================================
 
-# --- _check_user_rate: cap eviction and timestamp expiry ------------------
+# _check_user_rate: cap eviction and timestamp expiry
 def test_cov_bugs_rate_guard_cap_eviction_and_expiry(client):
     """Two inner branches of the sliding-window rate guard: at-capacity eviction, and stale-timestamp pop."""
     import threading
@@ -198,7 +192,7 @@ def test_cov_bugs_rate_guard_cap_eviction_and_expiry(client):
     assert len(buckets2[7]) == 1  # stale entry popped, one fresh entry remains
 
 
-# --- resolve_user: 400 for a non-existent reporter -----------------------
+# resolve_user: 400 for a non-existent reporter
 def test_cov_bugs_update_unknown_reporter_400(admin_client):
     p = _make_project(admin_client, name="ReporterProj")
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -208,7 +202,7 @@ def test_cov_bugs_update_unknown_reporter_400(admin_client):
     assert "does not exist" in r.json()["detail"].lower()
 
 
-# --- _apply_q_filter: early-return when cleaned query is empty ------------
+# _apply_q_filter: early-return when cleaned query is empty
 def test_cov_bugs_list_q_only_hash_returns_all(admin_client):
     p = _make_project(admin_client, name="QProj")
     _make_item(admin_client, p["id"], item_type="Bug", title="alpha")
@@ -218,7 +212,7 @@ def test_cov_bugs_list_q_only_hash_returns_all(admin_client):
     assert rows["total"] >= 2
 
 
-# --- list bugs: filter by reporter_id -------------------------------------
+# list bugs: filter by reporter_id
 def test_cov_bugs_list_filter_by_reporter_id(admin_client):
     me = admin_client.get("/api/auth/me").json()
     p = _make_project(admin_client, name="RepFilterProj")
@@ -234,7 +228,7 @@ def test_cov_bugs_list_filter_by_reporter_id(admin_client):
     assert mine["total"] >= 1  # sanity
 
 
-# --- _validate_update_payload: unknown project_id → 400 ------------------
+# _validate_update_payload: unknown project_id → 400
 def test_cov_bugs_update_unknown_project_400(admin_client):
     p = _make_project(admin_client, name="UpdProjA")
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -243,21 +237,21 @@ def test_cov_bugs_update_unknown_project_400(admin_client):
     assert "project does not exist" in r.json()["detail"].lower()
 
 
-# --- update_bug: 404 when missing -----------------------------------------
+# update_bug: 404 when missing
 def test_cov_bugs_update_missing_404(admin_client):
     r = admin_client.put("/api/bugs/999999", json={"title": "ghost title"})
     assert r.status_code == 404, r.text
     assert r.json()["detail"] == "Bug not found"
 
 
-# --- delete_bug: 404 when missing -----------------------------------------
+# delete_bug: 404 when missing
 def test_cov_bugs_delete_missing_404(admin_client):
     r = admin_client.delete("/api/bugs/999999")
     assert r.status_code == 404, r.text
     assert r.json()["detail"] == "Bug not found"
 
 
-# --- list_comments: comment with an attachment ----------------------------
+# list_comments: comment with an attachment
 def test_cov_bugs_list_comments_with_attachment(admin_client):
     p = _make_project(admin_client, name="CommentsProj")
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -284,7 +278,7 @@ def test_cov_bugs_list_comments_with_attachment(admin_client):
     assert by_id[c1.json()["id"]]["attachments"] == []
 
 
-# --- _read_upload_with_limit: oversized upload returns 413 ----------------
+# _read_upload_with_limit: oversized upload returns 413
 def test_cov_bugs_upload_too_large_413(admin_client, monkeypatch):
     """Shrink MAX_FILE_BYTES (read at call time) so a small upload trips the 413 guard."""
     import app.routes.bugs as bugs
@@ -298,7 +292,7 @@ def test_cov_bugs_upload_too_large_413(admin_client, monkeypatch):
     assert "too large" in r.json()["detail"].lower()
 
 
-# --- upload_attachment: 404 when bug doesn't exist ------------------------
+# upload_attachment: 404 when bug doesn't exist
 def test_cov_bugs_upload_missing_bug_404(admin_client):
     files = {"file": ("x.txt", io.BytesIO(b"hi"), "text/plain")}
     r = admin_client.post("/api/bugs/999999/attachments", files=files)
@@ -306,7 +300,7 @@ def test_cov_bugs_upload_missing_bug_404(admin_client):
     assert r.json()["detail"] == "Bug not found"
 
 
-# --- delete_attachment: 404 when missing ----------------------------------
+# delete_attachment: 404 when missing
 def test_cov_bugs_delete_attachment_missing_404(admin_client):
     p = _make_project(admin_client, name="DelAttProj")
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -315,7 +309,7 @@ def test_cov_bugs_delete_attachment_missing_404(admin_client):
     assert r.json()["detail"] == "Attachment not found"
 
 
-# --- update_comment: 404 when comment absent ------------------------------
+# update_comment: 404 when comment absent
 def test_cov_bugs_update_comment_missing_404(admin_client):
     p = _make_project(admin_client, name="UpdCmtProj")
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -326,7 +320,7 @@ def test_cov_bugs_update_comment_missing_404(admin_client):
     assert r.json()["detail"] == "Comment not found"
 
 
-# --- delete_comment: 404 when comment absent ------------------------------
+# delete_comment: 404 when comment absent
 def test_cov_bugs_delete_comment_missing_404(admin_client):
     p = _make_project(admin_client, name="DelCmtProj")
     bug = _make_item(admin_client, p["id"], item_type="Bug")
@@ -335,7 +329,7 @@ def test_cov_bugs_delete_comment_missing_404(admin_client):
     assert r.json()["detail"] == "Comment not found"
 
 
-# --- list_activity: 404 when bug doesn't exist ----------------------------
+# list_activity: 404 when bug doesn't exist
 def test_cov_bugs_list_activity_missing_bug_404(admin_client):
     r = admin_client.get("/api/bugs/999999/activity")
     assert r.status_code == 404, r.text

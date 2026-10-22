@@ -45,9 +45,7 @@ def _provider_error(code: str, message: str):
 
     return GitProviderError(code, message)
 
-# ---------------------------------------------------------------------------
 # Fake provider (never touches the network)
-# ---------------------------------------------------------------------------
 
 class FakeProvider:
     """In-memory `GitProvider`. Records every call for assertions."""
@@ -83,7 +81,7 @@ class FakeProvider:
                 return repository
         raise _provider_error(NOT_FOUND, "Repository was not found")
 
-    # --- GitProvider -----------------------------------------------------
+    # GitProvider
 
     def validate_connection(self) -> str:
         self._record("validate_connection")
@@ -118,9 +116,7 @@ class FakeProvider:
     def build_branch_url(self, owner: str, name: str, branch: str) -> str:
         return f"https://ghe.example.local/{owner}/{name}/tree/{branch}"
 
-# ===========================================================================
 # 1. Branch naming (pure, no client)
-# ===========================================================================
 
 @pytest.mark.parametrize(
     "item_type,item_id,title,expected",
@@ -185,9 +181,7 @@ def test_branch_name_rejects_unsupported_item_types():
         with pytest.raises(UnsupportedItemType):
             build_branch_name(item_type, "anything", item_id=1)
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def provider() -> FakeProvider:
@@ -230,9 +224,7 @@ def git_project(git_env, admin_client):
     return {"project": project}
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 def _make_project(client, name, color="#c9764f"):
     response = client.post(
@@ -337,9 +329,7 @@ def _table_count(model):
     with SessionLocal() as db:
         return len(list(db.scalars(select(model)).all()))
 
-# ===========================================================================
 # 4. Strict request input and the read-only preview
-# ===========================================================================
 
 def test_create_rejects_the_legacy_repository_id_and_extra_fields(
     git_project, admin_client, git_env, provider
@@ -408,9 +398,7 @@ def test_preview_reports_an_existing_branch_without_creating_one(
     assert body["existing_branch"]["branch_name"] == created.json()["branch_name"]
 
 
-# ===========================================================================
 # 5. Story-only enforcement (preview and create, zero provider calls)
-# ===========================================================================
 
 STORY_ONLY_MESSAGE = "Feature branches can be created only for User Stories."
 
@@ -431,9 +419,7 @@ def test_every_non_story_type_is_rejected_before_any_provider_call(
         assert created.json()["detail"][0]["msg"] == STORY_ONLY_MESSAGE
     assert provider.calls == []
 
-# ===========================================================================
 # 2. Project Git configuration authorization (unchanged surface)
-# ===========================================================================
 
 def test_git_config_requires_a_project_administrator(git_project, admin_client, git_env):
     project = git_project["project"]
@@ -472,9 +458,7 @@ def test_git_config_hides_the_credential_and_reports_it_present(
     assert "ghp_supersecretvalue" not in response.text
 
 
-# ===========================================================================
 # 3. Read-only repository discovery; legacy management endpoints are gone
-# ===========================================================================
 
 def test_discovery_lists_safe_provider_metadata_only(git_project, admin_client, git_env):
     project = git_project["project"]
@@ -561,9 +545,7 @@ def test_legacy_repository_management_endpoints_are_gone(
     assert admin_client.post(f"{base}/repositories/1/test").status_code == 404
     assert admin_client.delete(f"{base}/repositories/1").status_code == 404
 
-# ===========================================================================
 # 6. Creation: idempotency, latest SHA, reconciliation, multiple repositories
-# ===========================================================================
 
 def test_story_can_create_one_branch_per_repository(git_project, admin_client, git_env, provider):
     project = git_project["project"]
@@ -725,9 +707,7 @@ def test_creation_records_a_safe_audit_trail(git_project, admin_client, git_env)
     assert f"work_item=Story#{story['id']}" in detail
     assert "repository=acme/web-app" in detail
 
-# ===========================================================================
 # 7. Permissions and project isolation
-# ===========================================================================
 
 def test_assignee_can_create_a_branch(git_project, admin_client, git_env, provider):
     project = git_project["project"]
@@ -772,9 +752,7 @@ def test_work_item_without_project_access_is_invisible(git_project, admin_client
     assert _post_branch(admin_client, story["id"]).status_code == 404
 
 
-# ===========================================================================
 # 8. Provider-id repository identity (branch-history only)
-# ===========================================================================
 
 def _identity_rows(project_id):
     from app.database import SessionLocal
@@ -912,9 +890,7 @@ def test_confirmed_creation_creates_the_identity_row_preview_does_not(
     assert _post_branch(admin_client, story["id"]).status_code == 201
     assert _table_count(ProjectRepository) == 1
 
-# ===========================================================================
 # 9. Exact feature-branch removal
-# ===========================================================================
 
 def _branch_record_id(client, work_item_id):
     rows = client.get(f"/api/git/work-items/{work_item_id}/branches").json()["branches"]
@@ -1007,7 +983,7 @@ def test_removal_treats_exact_404_as_already_absent(
 def test_removal_reconciles_when_the_provider_raises_not_found(
     git_project, admin_client, git_env, provider
 ):
-    """A provider that raises NOT_FOUND is also "already absent" — never a failure."""
+    """A provider that raises NOT_FOUND is also "already absent", never a failure."""
 
     class RaisingGoneProvider(FakeProvider):
         def delete_branch(self, owner, name, full_ref):
@@ -1224,9 +1200,7 @@ def test_duplicate_removal_deletes_once_and_leaves_other_branches_alone(
     assert ("acme", "web-app", other["branch_name"]) in provider.remote_branches
 
 
-# ===========================================================================
 # Branch service guards (direct, with the in-memory provider)
-# ===========================================================================
 
 def _target(**overrides):
     from app.git.branches import BranchTarget

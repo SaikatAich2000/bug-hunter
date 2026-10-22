@@ -5,8 +5,6 @@ delete: admin only. Event managers must be admin/manager and get event emails.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -95,9 +93,9 @@ def _event_list_aggregates(
 
 def _event_brief(
     db: Session, ev: Event,
-    item_count: Optional[int] = None,
-    assignee_count: Optional[int] = None,
-    creator_names: Optional[dict[int, str]] = None,
+    item_count: int | None = None,
+    assignee_count: int | None = None,
+    creator_names: dict[int, str] | None = None,
 ) -> dict:
     if item_count is None:
         item_count = db.scalar(
@@ -180,7 +178,7 @@ def _resolve_managers(db: Session, ids: list[int]) -> list[User]:
     return [found[i] for i in dict.fromkeys(ids) if i in found]
 
 
-def _require_managers_can_see(db: Session, managers: list[User], project_id: Optional[int]) -> None:
+def _require_managers_can_see(db: Session, managers: list[User], project_id: int | None) -> None:
     """Managers are notified about the event, so each must be able to open it: a member of its
     project, or an admin for a project-less (admin-only) event."""
     if project_id is not None:
@@ -217,14 +215,14 @@ def _require_edit(actor: User) -> None:
 
 
 def _validate_event_project(db: Session, accessible, project_id: int) -> None:
-    """400 for missing or out-of-scope project — must not leak existence."""
+    """400 for missing or out-of-scope project, must not leak existence."""
     if db.get(Project, project_id) is None or not can_access_project(accessible, project_id):
         raise HTTPException(status_code=400, detail="Project does not exist")
 
 
 @router.get("", response_model=list[EventOut])
 def list_events(
-    scheduled_for: Optional[str] = Query(default=None),
+    scheduled_for: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=500, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -278,7 +276,7 @@ def get_event(
         select(Event).options(selectinload(Event.managers), selectinload(Event.project))
         .where(Event.id == event_id)
     )
-    # 404 not 403 — scoping must not leak existence
+    # 404 not 403, scoping must not leak existence
     if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
     items_stmt = select(Bug).options(
@@ -297,7 +295,7 @@ def get_event(
             select(func.count(Bug.id)).where(Bug.event_id == event_id), accessible,
         )
     ) or 0
-    # one aggregate query for attachment counts — avoids N+1
+    # one aggregate query for attachment counts, avoids N+1
     bug_ids = [b.id for b in items]
     if bug_ids:
         att_counts = dict(db.execute(
@@ -368,7 +366,7 @@ def _compute_event_changes(ev: Event, fields: dict) -> list[tuple[str, str, str]
     return changes
 
 
-def _apply_event_manager_diff(ev: Event, db: Session, new_manager_ids: Optional[list[int]],
+def _apply_event_manager_diff(ev: Event, db: Session, new_manager_ids: list[int] | None,
                               changes: list[tuple[str, str, str]]) -> None:
     """Order-insensitive diff: re-sending the same list produces no change."""
     if new_manager_ids is None:
@@ -413,7 +411,7 @@ def update_event(
         select(Event).options(selectinload(Event.managers), selectinload(Event.project))
         .where(Event.id == event_id)
     )
-    # 404 not 403 — scoping must not leak existence
+    # 404 not 403, scoping must not leak existence
     if ev is None or not can_access_project(accessible, ev.project_id):
         raise HTTPException(status_code=404, detail=_DETAIL_EVENT_NOT_FOUND)
 
@@ -479,7 +477,7 @@ def delete_event(
     name = ev.name
     manager_ids = [m.id for m in (ev.managers or [])]
     snap = _event_snapshot(ev) if ev.managers else None
-    # explicit NULL — SQLite can skip ondelete='SET NULL' for in-session objects
+    # explicit NULL: SQLite can skip ondelete='SET NULL' for in-session objects
     db.query(Bug).filter(Bug.event_id == event_id).update(
         {Bug.event_id: None}, synchronize_session=False,
     )
@@ -487,7 +485,7 @@ def delete_event(
     # keep the real event_id so the audit screen can find it after deletion
     _log(db, event_id, actor, "event_deleted",
          f"Deleted event #{event_id}: {name}")
-    # omit event_id — the FK cascade would delete the notification rows
+    # omit event_id: the FK cascade would delete the notification rows
     if manager_ids:
         notification_service.notify(
             db, manager_ids, kind="event", background=background,

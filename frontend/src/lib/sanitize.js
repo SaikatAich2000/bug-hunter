@@ -1,4 +1,4 @@
-/** Render-time sanitization for dangerouslySetInnerHTML — second line of defense vs stored XSS. */
+/** Render-time sanitization for dangerouslySetInnerHTML, second line of defense vs stored XSS. */
 import DOMPurify from "dompurify";
 
 export function sanitizeHtml(html) {

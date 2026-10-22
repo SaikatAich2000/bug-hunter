@@ -6,8 +6,8 @@ for ungrounded ones; answer text is never rewritten.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 # "#42" / "bug 42" / "issue #42"; (?!\d) keeps long numeric runs from matching.
 _CITE_RE = re.compile(r"(?:#|\bbug\s*#?|\bissue\s*#?)(\d{1,9})(?!\d)", re.IGNORECASE)

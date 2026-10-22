@@ -138,7 +138,7 @@ def test_unrelated_message_leaves_the_staged_doc_parked(admin_client):
     assert admin_client.get(f"/api/bugs?project_id={proj['id']}").json()["total"] == 2
 
 
-# Formats — all preview correctly
+# Formats: all preview correctly
 def test_csv_with_header_previews(admin_client):
     proj = _mk_project(admin_client, "CsvProj")
     doc = "Title,Description,Priority,Type\nAPI 500,trace attached,Critical,Bug\nDark mode,requested,Low,Requirement"

@@ -76,14 +76,14 @@ describe("burndown and burnup", () => {
     const data = burn({ days: undefined, non_working_days: ["2026-01-03"], events: [], guideline: [], state: "closed" });
     await open(user, { backend: withReports({ "reports/burndown": data }) });
     expect(await screen.findByRole("img", { name: /Burndown chart/ })).toBeInTheDocument();
-    expect(screen.getByText("No changes since the sprint started.")).toBeInTheDocument();
+    expect(screen.getByText("No changes since the sprint started")).toBeInTheDocument();
     expect(screen.queryByText("Today")).not.toBeInTheDocument();
   });
 
   it("an unstarted sprint has nothing to chart", async () => {
     const user = userEvent.setup();
     await open(user, { backend: withReports({ "reports/burndown": burn({ start: null, points: [] }) }) });
-    expect(await screen.findByText("This sprint has not started, so there is nothing to chart yet.")).toBeInTheDocument();
+    expect(await screen.findByText("This sprint has not started, so there is nothing to chart yet")).toBeInTheDocument();
   });
 
   it("a different sprint can be picked", async () => {
@@ -157,7 +157,7 @@ describe("board reports", () => {
     const user = userEvent.setup();
     await open(user, { backend: withReports({ "reports/velocity": { average_completed: 0, points: [] } }) });
     await pick(user, "Velocity chart");
-    expect(await screen.findByText("No completed sprints yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No completed sprints yet")).toBeInTheDocument();
   });
 
   it("cumulative flow stacks the columns over the date range", async () => {
@@ -178,7 +178,7 @@ describe("board reports", () => {
     const user = userEvent.setup();
     await open(user, { backend: withReports({ "cumulative-flow": { columns: [], points: [] } }) });
     await pick(user, "Cumulative flow diagram");
-    expect(await screen.findByText("No data for this range.")).toBeInTheDocument();
+    expect(await screen.findByText("No data for this range")).toBeInTheDocument();
   });
 
   it("the control chart summarises cycle times; none completed says so", async () => {
@@ -200,7 +200,7 @@ describe("board reports", () => {
     backend.on("GET", /control-chart/, () => ({ ...data, entries: [], work_columns: [] }));
     await user.click(screen.getByRole("button", { name: /^Cumulative flow/ }));
     await pick(user, "Control chart");
-    expect(await screen.findByText("No issues were completed in this range.")).toBeInTheDocument();
+    expect(await screen.findByText("No issues were completed in this range")).toBeInTheDocument();
     expect(screen.getByText(/spent in the working columns/)).toBeInTheDocument();
   });
 
@@ -209,12 +209,12 @@ describe("board reports", () => {
     const backend = withReports({ "cumulative-flow": { columns: [], points: [] } });
     await open(user, { backend });
     await pick(user, "Cumulative flow diagram");
-    await screen.findByText("No data for this range.");
+    await screen.findByText("No data for this range");
     const before = backend.called("GET", /cumulative-flow/).length;
     await user.click(document.querySelectorAll(".ag-report-head .bh-date-btn")[1]);
     for (let i = 0; i < 3; i += 1) await user.click(screen.getByRole("button", { name: "Previous month" }));
     await user.click(document.querySelector(".bh-date-cell:not(.muted)"));
-    expect(await screen.findByText("Pick a start date on or before the end date.")).toBeInTheDocument();
+    expect(await screen.findByText("Pick a start date on or before the end date")).toBeInTheDocument();
     expect(backend.called("GET", /cumulative-flow/)).toHaveLength(before);
   });
 });
@@ -247,7 +247,7 @@ describe("epic, daily and workload", () => {
     const backend = withReports({ "reports/epic/40": data });
     await open(user, { backend });
     await pick(user, "Epic report");
-    expect(await screen.findByText("No sprint has worked on this epic yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No sprint has worked on this epic yet")).toBeInTheDocument();
     expect(screen.queryByText("Estimate done")).not.toBeInTheDocument();
   });
 
@@ -257,7 +257,7 @@ describe("epic, daily and workload", () => {
     backend.state.planning.epics = [];
     await open(user, { backend });
     await pick(user, "Epic report");
-    expect(await screen.findByText("Create an epic to see this report.")).toBeInTheDocument();
+    expect(await screen.findByText("Create an epic to see this report")).toBeInTheDocument();
   });
 
   it("the daily summary shows counts, the day's items and what moved", async () => {
@@ -287,7 +287,7 @@ describe("epic, daily and workload", () => {
     };
     await open(user, { backend: withReports({ "reports/daily": data }) });
     await pick(user, "Daily summary");
-    expect(await screen.findByText("Nothing changed.")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing changed")).toBeInTheDocument();
     expect(screen.queryByText("Blocked or flagged now")).not.toBeInTheDocument();
   });
 
@@ -314,7 +314,7 @@ describe("epic, daily and workload", () => {
     const user = userEvent.setup();
     await open(user, { backend: withReports({ "reports/workload": { entries: [], unassigned_count: 0, unassigned_estimate: 0 } }) });
     await pick(user, "Workload");
-    expect(await screen.findByText("Nobody has work in this sprint yet.")).toBeInTheDocument();
+    expect(await screen.findByText("Nobody has work in this sprint yet")).toBeInTheDocument();
   });
 });
 
@@ -324,7 +324,7 @@ describe("empty states, exports and failures", () => {
     const backend = makeAgile(createBackend());
     backend.state.planning.sprints = backend.state.planning.sprints.filter((s) => s.state === "future");
     await open(user, { backend });
-    expect(await screen.findByText("Start a sprint to see this report.")).toBeInTheDocument();
+    expect(await screen.findByText("Start a sprint to see this report")).toBeInTheDocument();
   });
 
   it("exports the current report as CSV through the server", async () => {
@@ -358,7 +358,7 @@ describe("empty states, exports and failures", () => {
     await user.click(await screen.findByRole("button", { name: "⬇ CSV" }));
     await waitFor(() => expect(backend.called("POST", "/agile/reports/export")[0].path).toContain("report_key=velocity&board_id=9"));
     await pick(user, "Daily summary");
-    await screen.findByText("Nothing changed.");
+    await screen.findByText("Nothing changed");
     expect(screen.queryByRole("button", { name: "⬇ CSV" })).not.toBeInTheDocument();
   });
 

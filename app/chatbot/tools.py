@@ -2,12 +2,13 @@
 (app/chatbot/llm_tools_agent.py). Every tool function re-checks the calling
 user's permissions and project scope exactly as the equivalent REST endpoint
 would and mutates data only through the same
-domain services/models the REST routes use — never a shortcut, never a raw
+domain services/models the REST routes use, never a shortcut, never a raw
 write the REST API wouldn't also allow.
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -35,7 +36,7 @@ class ToolError(ValueError):
 _SPRINT_ID_REQUIRED = "sprint_id is required"
 
 
-# --- Shared resolution helpers ---
+# Shared resolution helpers
 
 def _resolve_project(db: Session, actor: User, name: str) -> Project:
     project = db.scalar(select(Project).where(func.lower(Project.name) == name.strip().lower()))
@@ -81,7 +82,7 @@ def _item_brief(item: Bug) -> dict[str, Any]:
     }
 
 
-# --- Read tools ---
+# Read tools
 
 def search_work_items(db: Session, actor: User, args: dict) -> dict:
     accessible = accessible_project_ids(db, actor)
@@ -175,8 +176,8 @@ def get_epic_progress_tool(db: Session, actor: User, args: dict) -> dict:
     return {"epic_id": epic.id, "title": epic.title, "progress": taxonomy_svc.epic_progress(db, epic)}
 
 
-# --- Write tools (never executed directly by the agent loop; always staged
-# for explicit user confirmation first — see llm_tools_agent.py) ---
+# Write tools (never executed directly by the agent loop; always staged
+# for explicit user confirmation first, see llm_tools_agent.py) ---
 
 def _choice(value: str, allowed: list[str], label: str) -> str:
     try:
@@ -352,7 +353,7 @@ def complete_sprint_tool(db: Session, actor: User, args: dict) -> dict:
     return {"id": sprint.id, "state": sprint.state}
 
 
-# --- Registry ---
+# Registry
 
 READ_TOOL_NAMES = frozenset({
     "search_work_items", "get_work_item", "get_backlog",

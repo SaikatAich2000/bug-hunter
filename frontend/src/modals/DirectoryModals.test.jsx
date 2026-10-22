@@ -185,8 +185,8 @@ describe("bulk import", () => {
     expect(within(dlg).getByText(/Row 4 \(“Bad”\): Missing project/)).toBeInTheDocument();
     expect(within(dlg).getByText(/Row 5: No title/)).toBeInTheDocument();
     expect(within(dlg).getByText("Created with a warning")).toBeInTheDocument();
-    expect(within(dlg).getByText("More rows were skipped than shown here.")).toBeInTheDocument();
-    expect(within(dlg).getByText("More warnings were reported than shown here.")).toBeInTheDocument();
+    expect(within(dlg).getByText("More rows were skipped than shown here")).toBeInTheDocument();
+    expect(within(dlg).getByText("More warnings were reported than shown here")).toBeInTheDocument();
     expect(toastText()).toBe("2 created, 1 skipped");
     await user.click(within(dlg).getAllByRole("button", { name: "Close" }).at(-1));
     await waitFor(() => expect(dlg).toHaveAttribute("hidden"));
@@ -251,7 +251,7 @@ describe("project Git settings", () => {
     backend.on("GET", /^\/git\/projects\/1\/config$/, () => config());
     backend.on("PUT", /^\/git\/projects\/1\/config$/, ({ body }) => config({ ...body, version: 5 }));
     await openProject(user, backend);
-    expect(screen.getByText("GitHub authentication is configured on the server.")).toBeInTheDocument();
+    expect(screen.getByText("GitHub authentication is configured on the server")).toBeInTheDocument();
     const org = document.getElementById("project-git-org-1");
     const enabled = screen.getByRole("combobox", { name: "Git integration enabled" });
     // a late refresh of the form can re-seed it: edit until the edits stick
@@ -275,7 +275,7 @@ describe("project Git settings", () => {
     backend.on("GET", /^\/git\/projects\/1\/config$/, () => config({ credentials_configured: false, configured: false }));
     backend.on("POST", /config\/test$/, () => ({ ok: true, message: "Connected", target: "acme" }));
     await openProject(user, backend);
-    expect(screen.getByText("GitHub authentication is not configured on the server.")).toBeInTheDocument();
+    expect(screen.getByText("GitHub authentication is not configured on the server")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Test Connection" })).toBeDisabled();
     await user.type(document.getElementById("project-git-credential-1"), "fake-credential-1234");
     await user.click(screen.getByRole("button", { name: "Test Connection" }));
@@ -330,7 +330,7 @@ describe("project Git settings", () => {
     expect(screen.getByRole("link", { name: "Open GitHub" })).toHaveAttribute("href", "https://github.com/acme/api");
     backend.on("GET", /available-repositories$/, () => []);
     await user.click(screen.getByRole("button", { name: "Load repositories" }));
-    expect(await screen.findByText("No GitHub repositories are available.")).toBeInTheDocument();
+    expect((await screen.findAllByText("No GitHub repositories are available")).length).toBeGreaterThan(0);
     backend.on("GET", /available-repositories$/, () => reply(502, { detail: "GitHub unreachable" }));
     await user.click(screen.getByRole("button", { name: "Load repositories" }));
     expect(await screen.findByText("GitHub unreachable")).toBeInTheDocument();
@@ -341,7 +341,7 @@ describe("project Git settings", () => {
     const backend = createBackend();
     backend.on("GET", /^\/git\/projects\/1\/config$/, () => config({ enabled: false }));
     await openProject(user, backend);
-    expect(screen.getByText("Git integration is disabled for this project.")).toBeInTheDocument();
+    expect(screen.getByText("Git integration is disabled for this project")).toBeInTheDocument();
   });
 
   it("branch creation switched off by the server is explained, and a failed load says so", async () => {
@@ -349,7 +349,7 @@ describe("project Git settings", () => {
     const backend = createBackend();
     backend.on("GET", /^\/git\/projects\/1\/config$/, () => config({ branch_creation_enabled: false }));
     await openProject(user, backend);
-    expect(screen.getByText("Branch creation is disabled by the server.")).toBeInTheDocument();
+    expect(screen.getByText("Branch creation is disabled by the server")).toBeInTheDocument();
   });
 
   it("when the settings cannot be loaded the section says so", async () => {
@@ -358,6 +358,6 @@ describe("project Git settings", () => {
     backend.on("GET", /^\/git\/projects\/1\/config$/, () => reply(500, { detail: "nope" }));
     await mountApp({ backend });
     await user.click(document.querySelector('[data-act="edit-project"][data-id="1"]'));
-    expect(await screen.findByText("Git integration settings could not be loaded.")).toBeInTheDocument();
+    expect(await screen.findByText("Git integration settings could not be loaded")).toBeInTheDocument();
   });
 });

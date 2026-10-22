@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from html.parser import HTMLParser
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -26,21 +25,21 @@ from app.schemas.common import (
 from app.schemas.users import UserBrief
 
 
-# --- Bug ---
+# Bug
 class BugCreate(BaseModel):
     project_id: int
     title: str = Field(max_length=200)
     # Rich HTML; 1 MB ceiling fits inline pasted screenshots. Sanitized below.
     description: str = Field(default="", max_length=1_000_000)
-    reporter_id: Optional[int] = None
+    reporter_id: int | None = None
     assignee_ids: list[int] = Field(default_factory=list, max_length=200)
     item_type: str = Field(default="Bug")
     status: str = Field(default="New")
     priority: str = Field(default="Medium")
     environment: str = Field(default="DEV")
-    due_date: Optional[str] = None
+    due_date: str | None = None
     # Link to an event at creation time.
-    event_id: Optional[int] = None
+    event_id: int | None = None
 
     @field_validator("title")
     @classmethod
@@ -79,7 +78,7 @@ class BugCreate(BaseModel):
 
     @field_validator("due_date")
     @classmethod
-    def _check_due(cls, v: Optional[str]) -> Optional[str]:
+    def _check_due(cls, v: str | None) -> str | None:
         if v in (None, ""): return None
         try:
             datetime.strptime(v, "%Y-%m-%d")
@@ -96,7 +95,7 @@ class BugCreate(BaseModel):
         return seen
 
     @model_validator(mode="after")
-    def _check_status_for_type(self) -> "BugCreate":
+    def _check_status_for_type(self) -> BugCreate:
         # Cross-field: status must be valid for the chosen item_type.
         allowed = statuses_for_type(self.item_type)
         if self.status not in allowed:
@@ -108,27 +107,27 @@ class BugCreate(BaseModel):
 
 
 class BugUpdate(BaseModel):
-    project_id: Optional[int] = None
-    title: Optional[str] = Field(default=None, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=1_000_000)
-    reporter_id: Optional[int] = None
-    assignee_ids: Optional[list[int]] = Field(default=None, max_length=200)
-    item_type: Optional[str] = None
-    status: Optional[str] = None
-    priority: Optional[str] = None
-    environment: Optional[str] = None
-    due_date: Optional[str] = None
+    project_id: int | None = None
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=1_000_000)
+    reporter_id: int | None = None
+    assignee_ids: list[int] | None = Field(default=None, max_length=200)
+    item_type: str | None = None
+    status: str | None = None
+    priority: str | None = None
+    environment: str | None = None
+    due_date: str | None = None
     # int to link, null/0 to unlink; route uses exclude_unset to tell "clear"
     # from "not provided".
-    event_id: Optional[int] = None
-    sprint_id: Optional[int] = None
+    event_id: int | None = None
+    sprint_id: int | None = None
     # Opt-in optimistic concurrency: echo the last-seen updated_at; a mismatch
     # returns 409. Omit for last-write-wins.
-    expected_updated_at: Optional[str] = Field(default=None, max_length=64)
+    expected_updated_at: str | None = Field(default=None, max_length=64)
 
     # Preferred concurrency token: the integer version counter (sub-second, no
     # clock skew). Omit both fields for last-write-wins.
-    expected_version: Optional[int] = Field(default=None, ge=0)
+    expected_version: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="before")
     @classmethod
@@ -139,13 +138,13 @@ class BugUpdate(BaseModel):
 
     @field_validator("title")
     @classmethod
-    def _strip_title(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_title(cls, v: str | None) -> str | None:
         if v is None: return None
         return _strip_and_check_min_length(v, MIN_TITLE_LENGTH, "Title")
 
     @field_validator("description")
     @classmethod
-    def _strip_desc(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_desc(cls, v: str | None) -> str | None:
         # Same plain-text policy as BugCreate.description.
         if v is None: return None
         if not isinstance(v, str): return v
@@ -153,27 +152,27 @@ class BugUpdate(BaseModel):
 
     @field_validator("item_type")
     @classmethod
-    def _check_item_type(cls, v: Optional[str]) -> Optional[str]:
+    def _check_item_type(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_ITEM_TYPES, "item_type")
 
     @field_validator("status")
     @classmethod
-    def _check_status(cls, v: Optional[str]) -> Optional[str]:
+    def _check_status(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_STATUSES, "status")
 
     @field_validator("priority")
     @classmethod
-    def _check_priority(cls, v: Optional[str]) -> Optional[str]:
+    def _check_priority(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_PRIORITIES, "priority")
 
     @field_validator("environment")
     @classmethod
-    def _check_env(cls, v: Optional[str]) -> Optional[str]:
+    def _check_env(cls, v: str | None) -> str | None:
         return None if v is None else normalize_choice(v, ALLOWED_ENVIRONMENTS, "environment")
 
     @field_validator("due_date")
     @classmethod
-    def _check_due(cls, v: Optional[str]) -> Optional[str]:
+    def _check_due(cls, v: str | None) -> str | None:
         if v in (None, ""): return None
         try:
             datetime.strptime(v, "%Y-%m-%d")
@@ -183,7 +182,7 @@ class BugUpdate(BaseModel):
 
     @field_validator("assignee_ids")
     @classmethod
-    def _dedup(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+    def _dedup(cls, v: list[int] | None) -> list[int] | None:
         if v is None: return None
         seen: list[int] = []
         for x in v:
@@ -197,9 +196,9 @@ class AttachmentBrief(BaseModel):
     filename: str
     content_type: str
     size_bytes: int
-    uploader_user_id: Optional[int] = None
+    uploader_user_id: int | None = None
     uploader_name: str
-    comment_id: Optional[int] = None
+    comment_id: int | None = None
     created_at: datetime
 
 
@@ -214,7 +213,7 @@ class _RichTextPlainifier(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         # <br> is always a hard break (the editor emits <div><br></div> spacers);
         # block elements open a fresh line only when none is already pending.
         if tag == "br" or (
@@ -266,34 +265,34 @@ class BugOut(BaseModel):
     # across a work-item type change so existing references keep resolving.
     display_id: str = ""
     project_id: int
-    project_name: Optional[str] = None
+    project_name: str | None = None
     title: str
     description: str
-    reporter: Optional[UserBrief] = None
+    reporter: UserBrief | None = None
     assignees: list[UserBrief] = Field(default_factory=list)
     item_type: str = "Bug"
     status: str
     priority: str
     environment: str
-    due_date: Optional[str] = None
+    due_date: str | None = None
     # Both nullable so standalone items (no event) keep the same shape.
-    event_id: Optional[int] = None
-    event_name: Optional[str] = None
+    event_id: int | None = None
+    event_name: str | None = None
     created_at: datetime
     updated_at: datetime
     version: int = 1
     attachment_count: int = 0
     can_edit: bool = False
     # Hierarchy and planning fields: epic link (standard issues), parent (Sub-tasks).
-    epic_id: Optional[int] = None
-    parent_id: Optional[int] = None
-    story_points: Optional[float] = None
-    owner_id: Optional[int] = None
+    epic_id: int | None = None
+    parent_id: int | None = None
+    story_points: float | None = None
+    owner_id: int | None = None
     mandatory: bool = False
     blocked: bool = False
     blocked_reason: str = ""
-    sprint_id: Optional[int] = None
-    sprint_name: Optional[str] = None
+    sprint_id: int | None = None
+    sprint_name: str | None = None
 
 
 class BugListResponse(BaseModel):
@@ -304,7 +303,7 @@ class BugListResponse(BaseModel):
     pages: int
 
 
-# --- Comment / Activity / Detail ---
+# Comment / Activity / Detail
 class CommentIn(BaseModel):
     # 200 KB ceiling fits a pasted screenshot; sanitizer strips dangerous payloads.
     body: str = Field(min_length=1, max_length=200_000)
@@ -312,7 +311,7 @@ class CommentIn(BaseModel):
     @field_validator("body")
     @classmethod
     def _strip(cls, v: str) -> str:
-        # Sanitize server-side, then require visible text or an <img src> —
+        # Sanitize server-side, then require visible text or an <img src>,
         # an all-tags/whitespace body is treated as empty.
         if not isinstance(v, str):
             raise ValueError("Comment body must be a string")
@@ -329,7 +328,7 @@ class CommentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     bug_id: int
-    author_user_id: Optional[int] = None
+    author_user_id: int | None = None
     author_name: str
     body: str
     created_at: datetime
@@ -339,17 +338,17 @@ class CommentOut(BaseModel):
 class ActivityOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    bug_id: Optional[int] = None
+    bug_id: int | None = None
     entity_type: str
-    entity_id: Optional[int] = None
-    actor_user_id: Optional[int] = None
+    entity_id: int | None = None
+    actor_user_id: int | None = None
     actor_name: str
     action: str
     detail: str
     created_at: datetime
 
 
-# --- Item linking ---
+# Item linking
 class BugLinkIn(BaseModel):
     target_bug_id: int
     link_type: str = "relates"
@@ -374,14 +373,14 @@ class BugLinkOut(BaseModel):
     created_at: datetime
 
 
-# Bulk actions — the multi-select toolbar on the list view.
+# Bulk actions: the multi-select toolbar on the list view.
 class BulkActionIn(BaseModel):
     action: str
     ids: list[int] = Field(min_length=1, max_length=500)
     # Value for set_status / set_priority / set_environment; route normalizes it.
-    value: Optional[str] = Field(default=None, max_length=20)
+    value: str | None = Field(default=None, max_length=20)
     # Optional {bug_id: version} map; drifted rows are reported as conflicts.
-    expected_versions: Optional[dict[int, int]] = Field(default=None, max_length=500)
+    expected_versions: dict[int, int] | None = Field(default=None, max_length=500)
 
     @field_validator("action")
     @classmethod
@@ -409,7 +408,7 @@ class BulkActionResult(BaseModel):
     message: str = ""
 
 
-# --- Bulk import (spreadsheet upload) — app/bulk_import.py does the work. ---
+# Bulk import (spreadsheet upload) — app/bulk_import.py does the work.
 class BulkImportRowIssue(BaseModel):
     row: int
     title: str = ""

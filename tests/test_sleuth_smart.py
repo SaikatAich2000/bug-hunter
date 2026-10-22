@@ -3,7 +3,7 @@ enum-word guard, quoted-search precedence, "did you mean" suggestions, and the u
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.chatbot import nlu  # noqa: E402
 from app.chatbot.executor import _did_you_mean, _handle_unknown  # noqa: E402
@@ -39,7 +39,7 @@ def test_trailing_filter_clause_is_stripped():
     assert nlu._extract_text_search("bugs about login in project Apollo") == "login"
 
 
-# -- "Did you mean" — best-effort, deterministic, never raises ---------------
+# -- "Did you mean", best-effort, deterministic, never raises ---------------
 def test_did_you_mean_is_safe_on_gibberish():
     # No signal in pure noise; must return None without raising.
     assert _did_you_mean("qwerty zxcvbn asdfgh") is None
@@ -67,9 +67,9 @@ def test_handle_unknown_response_shape():
     assert "help" in resp.blocks[0].payload["text"].lower()
 
 
-# app/chatbot/nlu.py — parser edge branches
+# app/chatbot/nlu.py: parser edge branches
 def _now():
-    return datetime(2026, 6, 21, 12, 0, tzinfo=timezone.utc)
+    return datetime(2026, 6, 21, 12, 0, tzinfo=UTC)
 
 
 def test_nlu_coerce_bug_id_rejects_non_int_and_out_of_range():

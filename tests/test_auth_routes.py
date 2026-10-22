@@ -3,14 +3,14 @@ Imports live inside tests: conftest re-imports app.* per test, so top-level refs
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from tests.conftest import BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD
 
 
-# Small helpers — kept local so re-imports never leave a stale module reference.
+# Small helpers: kept local so re-imports never leave a stale module reference.
 def _admin_user_id(client) -> int:
     """Log in as admin and return the bootstrap admin's id via /api/auth/me."""
     res = client.post("/api/auth/login", json={
@@ -29,7 +29,7 @@ def _insert_reset_token(user_id: int, *, expires_in_hours: float = 2.0,
     from app.models import PasswordResetToken
 
     raw, token_hash = generate_reset_token()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     db = SessionLocal()
     try:
         prt = PasswordResetToken(
@@ -198,7 +198,7 @@ def test_cov_reset_password_naive_expiry_is_handled(client):
     assert res.status_code == 204, res.text
 
 
-# Login edge cases — routes/auth.py
+# Login edge cases, routes/auth.py
 def test_cov_login_wrong_password_401(client):
     """Wrong password for a real account returns a unified 401."""
     res = client.post("/api/auth/login", json={
@@ -399,13 +399,13 @@ def test_cov_me_expired_token_401(client):
             return int(_time.time()) - 200_000
 
     old = _OldSigner(live.secret_keys[-1], salt=live.salt)
-    expired = old.sign(f"{uid}:0".encode("utf-8")).decode("utf-8")
+    expired = old.sign(f"{uid}:0".encode()).decode("utf-8")
 
     res = client.get("/api/auth/me", cookies={COOKIE_NAME: expired})
     assert res.status_code == 401
 
 
-# parse_session_token — non-UTF-8 payload
+# parse_session_token: non-UTF-8 payload
 def test_cov_parse_session_token_non_utf8_payload_returns_none(client):
     """A signed non-UTF-8 payload: parse_session_token swallows UnicodeDecodeError and returns None."""
     from app import auth
@@ -429,7 +429,7 @@ def test_cov_expired_session_row_deletes_and_rejects(client):
         sess = db.scalar(select(SessionRow).where(SessionRow.user_id == uid))
         assert sess is not None
         jti = sess.jti
-        sess.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)  # back-dated
+        sess.expires_at = datetime.now(UTC) - timedelta(hours=1)  # back-dated
         db.commit()
     finally:
         db.close()
@@ -479,7 +479,7 @@ def test_cov_last_seen_bump_runs_after_throttle_window(client):
     from app.database import SessionLocal
     from app.models import Session as SessionRow
 
-    old = datetime.now(timezone.utc) - timedelta(hours=1)
+    old = datetime.now(UTC) - timedelta(hours=1)
     db = SessionLocal()
     try:
         sess = db.scalar(select(SessionRow).where(SessionRow.user_id == uid))
@@ -498,7 +498,7 @@ def test_cov_last_seen_bump_runs_after_throttle_window(client):
         bumped = sess2.last_seen_at
     finally:
         db.close()
-    bumped_aware = bumped if bumped.tzinfo else bumped.replace(tzinfo=timezone.utc)
+    bumped_aware = bumped if bumped.tzinfo else bumped.replace(tzinfo=UTC)
     assert bumped_aware > old, "last_seen_at should have been bumped forward"
 
 
@@ -523,8 +523,8 @@ def test_cov_validate_session_row_aware_expiry_branch(client):
     from app.models import User
     uid, jti, db, sess = _persisted_session_row(client)
     try:
-        sess.expires_at = datetime.now(timezone.utc) + timedelta(hours=2)  # aware
-        sess.last_seen_at = datetime.now(timezone.utc)  # recent, bump skipped
+        sess.expires_at = datetime.now(UTC) + timedelta(hours=2)  # aware
+        sess.last_seen_at = datetime.now(UTC)  # recent, bump skipped
         user = db.get(User, uid)
         assert _validate_session_row(db, jti, user) is True
     finally:
@@ -536,7 +536,7 @@ def test_cov_maybe_bump_last_seen_aware_recent_is_noop(client):
     from app.auth import _maybe_bump_last_seen
     uid, jti, db, sess = _persisted_session_row(client)
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         sess.last_seen_at = now  # aware, within throttle window
         before = sess.last_seen_at
         _maybe_bump_last_seen(db, sess, now, jti)
@@ -587,7 +587,7 @@ def test_cov_maybe_bump_last_seen_commit_error_is_swallowed(client, monkeypatch)
             rolled_back["n"] += 1
             return real_rollback()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         sess.last_seen_at = now - timedelta(hours=1)  # aware, past the throttle window
         monkeypatch.setattr(db, "commit", _boom_commit)
         monkeypatch.setattr(db, "rollback", _count_rollback)
@@ -637,7 +637,7 @@ def test_cov_user_from_request_paths(client):
         db.close()
 
 
-# require_admin / require_manager_or_admin — 403 for low roles
+# require_admin / require_manager_or_admin, 403 for low roles
 def test_cov_require_admin_forbids_regular_user(user_client):
     """A regular user on an admin-only endpoint gets 403."""
     res = user_client.get("/api/sessions")
@@ -683,7 +683,7 @@ def test_cov_require_manager_or_admin_forbids_user():
     assert require_manager_or_admin(adm) is adm
 
 
-# app/auth.py — a cookie without a session id can't be revoked, so it is refused
+# app/auth.py: a cookie without a session id can't be revoked, so it is refused
 def test_auth_jtiless_session_cookie_is_rejected(client):
     from sqlalchemy import select
 
@@ -726,7 +726,7 @@ def test_reset_password_tzaware_expiry_branch(client):
         prt = PasswordResetToken(
             user_id=admin.id,
             token_hash=token_hash,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            expires_at=datetime.now(UTC) + timedelta(hours=2),
             used_at=None,
         )
         db.add(prt)
@@ -736,7 +736,7 @@ def test_reset_password_tzaware_expiry_branch(client):
 
     def _make_aware(target, _context):
         if target.expires_at is not None and target.expires_at.tzinfo is None:
-            target.expires_at = target.expires_at.replace(tzinfo=timezone.utc)
+            target.expires_at = target.expires_at.replace(tzinfo=UTC)
 
     event.listen(PasswordResetToken, "load", _make_aware)
     try:
@@ -748,7 +748,7 @@ def test_reset_password_tzaware_expiry_branch(client):
     assert res.status_code in (200, 204)
 
 
-# app/routes/sessions.py — empty list skips the user prefetch
+# app/routes/sessions.py: empty list skips the user prefetch
 def test_sessions_list_empty_skips_user_prefetch(client):
     from types import SimpleNamespace
 

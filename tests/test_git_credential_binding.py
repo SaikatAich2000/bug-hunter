@@ -51,7 +51,7 @@ def _save(client, url, **body):
     return client.put(url, json={"enabled": True, "default_base_branch": "dev", **body})
 
 
-# --- credentials.resolve_token ------------------------------------------------
+# credentials.resolve_token
 
 def test_global_token_only_goes_to_the_configured_api(git):
     from app.git import credentials
@@ -79,7 +79,7 @@ def test_project_token_only_goes_to_its_own_server(git):
     assert credentials.resolve_token(config, "https://api.github.com") is None
 
 
-# --- connection test -----------------------------------------------------------
+# connection test
 
 def test_draft_test_against_another_server_never_carries_a_saved_token(git, admin_client):
     assert _save(admin_client, git.url, base_url="https://ghe.example.com",
@@ -118,7 +118,7 @@ def test_saved_test_uses_the_saved_token_for_the_saved_server(git, admin_client)
     assert git.seen == [("https://ghe.example.com/api/v3", SAVED_PAT)]
 
 
-# --- saving the configuration --------------------------------------------------
+# saving the configuration
 
 def test_changing_the_server_requires_the_token_again(git, admin_client):
     first = _save(admin_client, git.url, base_url="https://ghe.example.com", credential=SAVED_PAT)
@@ -156,7 +156,7 @@ def test_a_non_ascii_token_is_refused(git, admin_client):
     assert "ASCII" in res.text
 
 
-# --- the connection itself ------------------------------------------------------
+# the connection itself
 
 @pytest.mark.parametrize("url", [
     "http://127.0.0.1:9/", "http://169.254.169.254/latest/meta-data", "http://[::ffff:169.254.169.254]/",
@@ -187,7 +187,7 @@ def test_the_provider_reports_a_refused_host_safely(monkeypatch):
     assert "GIT_ALLOW_PRIVATE_HOSTS" in excinfo.value.message
 
 
-# --- address classification and the guarded connection --------------------------------
+# address classification and the guarded connection
 
 @pytest.mark.parametrize("address,allow_private,expected", [
     ("0.0.0.0", True, "a reserved address"),
@@ -272,7 +272,7 @@ def test_precheck_applies_only_to_proxied_requests(monkeypatch):
     net_guard.precheck("https://only-the-proxy-knows.example/", allow_private=False)
 
 
-# --- credential storage failures --------------------------------------------------------
+# credential storage failures
 
 def test_encryption_needs_a_valid_key(monkeypatch):
     from app.config import Settings, get_settings

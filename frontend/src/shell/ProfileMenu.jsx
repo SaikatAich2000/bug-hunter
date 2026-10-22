@@ -48,7 +48,7 @@ export default function ProfileMenu() {
     try {
       await unsubscribeOnLogout();
     } catch {
-      /* push not configured or unavailable — proceed */
+      /* push not configured or unavailable, proceed */
     }
     try {
       await api("/auth/logout", { method: "POST" });
@@ -65,7 +65,7 @@ export default function ProfileMenu() {
     try {
       localStorage.setItem("theme", next);
     } catch {
-      /* private browsing — skip persistence */
+      /* private browsing: skip persistence */
     }
   };
 

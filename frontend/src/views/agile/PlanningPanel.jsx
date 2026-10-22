@@ -105,7 +105,7 @@ export default function PlanningPanel({ projectId, canManage }) {
   };
 
   if (loading) return <Skeleton lines={4} className="sprints-loading" />;
-  if (!board) return <div className="empty-state"><p>Scrum is not set up for this project yet.</p></div>;
+  if (!board) return <div className="empty-state"><p>Scrum is not set up for this project yet</p></div>;
 
   const unit = board.estimation_mode === "time" ? "minutes" : "points";
 
@@ -124,7 +124,7 @@ export default function PlanningPanel({ projectId, canManage }) {
       </div>
 
       {!planning ? (
-        <p className="muted small">Select a sprint to plan.</p>
+        <p className="muted small">Select a sprint to plan</p>
       ) : (
         <>
           <div className="planning-summary">
@@ -140,7 +140,7 @@ export default function PlanningPanel({ projectId, canManage }) {
           <div className="sprints-section">
             <h2>Readiness checks</h2>
             {planning.readiness.length === 0 ? (
-              <p className="muted small">No checks configured.</p>
+              <p className="muted small">No checks configured</p>
             ) : (
               <ul className="planning-readiness-list">
                 {planning.readiness.map((r) => (
@@ -156,7 +156,7 @@ export default function PlanningPanel({ projectId, canManage }) {
             <div className="sprints-section">
               <h2>Capacity</h2>
               <p className="muted small">
-                This board estimates by item count, so per-person capacity isn&apos;t tracked.
+                This board estimates by item count, so per-person capacity isn&apos;t tracked
               </p>
             </div>
           ) : (

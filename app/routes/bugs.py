@@ -6,7 +6,6 @@ import re
 import threading
 import time
 from collections import deque
-from typing import Optional
 from urllib.parse import quote
 
 from fastapi import (
@@ -244,7 +243,7 @@ _ACTIVE_CONTENT_TYPES = {
 }
 
 # Types safe to render inline. Everything else is forced to
-# Content-Disposition: attachment — a blocklist can't cover every executable
+# Content-Disposition: attachment, a blocklist can't cover every executable
 # type. SVG is absent because it's scriptable.
 _INLINE_SAFE_PREFIXES = ("image/", "video/", "audio/")
 _INLINE_SAFE_TYPES = {"application/pdf", "text/plain", "text/csv"}
@@ -332,7 +331,7 @@ def _bug_snapshot(bug: Bug) -> BugSnapshot:
     )
 
 
-def _eager_bug() -> "select":
+def _eager_bug() -> select:
     return select(Bug).options(
         selectinload(Bug.project),
         selectinload(Bug.reporter),
@@ -356,16 +355,16 @@ def _paging(page: int = 1, page_size: int = get_settings().PAGE_SIZE_DEFAULT) ->
 
 @router.get("", responses=BAD_REQUEST_422)
 def list_bugs(
-    project_id: Optional[list[int]] = Query(default=None),
-    status_filter: Optional[list[str]] = Query(default=None, alias="status"),
-    priority: Optional[list[str]] = Query(default=None),
-    environment: Optional[list[str]] = Query(default=None),
-    item_type: Optional[list[str]] = Query(default=None),
-    reporter_id: Optional[int] = None,
-    assignee_id: Optional[list[int]] = Query(default=None),
-    event_id: Optional[int] = None,
-    due_date: Optional[str] = None,
-    q: Optional[str] = Query(default=None, max_length=200),
+    project_id: list[int] | None = Query(default=None),
+    status_filter: list[str] | None = Query(default=None, alias="status"),
+    priority: list[str] | None = Query(default=None),
+    environment: list[str] | None = Query(default=None),
+    item_type: list[str] | None = Query(default=None),
+    reporter_id: int | None = None,
+    assignee_id: list[int] | None = Query(default=None),
+    event_id: int | None = None,
+    due_date: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
     paging: tuple[int, int] = Depends(_paging),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -466,7 +465,7 @@ async def bulk_import_bugs(
     actor: User = Depends(require_manager_or_admin),
 ) -> BulkImportResult:
     """Create many bugs/requirements/tasks from an uploaded .xlsx or .csv
-    file. Notifications are in-app only — see app/bulk_import.py for why a
+    file. Notifications are in-app only, see app/bulk_import.py for why a
     large import must not fan out into an email/push storm."""
     data = await _read_upload_with_limit(file, bulk_import.MAX_IMPORT_FILE_BYTES)
     try:
@@ -915,7 +914,7 @@ async def upload_attachment(
     bug_id: int,
     background: BackgroundTasks,
     file: UploadFile = File(...),
-    comment_id: Optional[int] = Form(default=None),
+    comment_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
     uploader: User = Depends(get_current_user),
 ) -> dict:
@@ -996,7 +995,7 @@ async def upload_attachment(
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
-def _parse_range(header: str | None, size: int) -> Optional[tuple[int, int]]:
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     """Parse a single-range ``Range: bytes=start-end`` header.
 
     Returns an inclusive (start, end) span clamped to [0, size-1], or None
@@ -1292,7 +1291,7 @@ def add_link(
         if reverse is not None:
             return serialize_link(reload_link(db, reverse.id), bug_id)
 
-    def _find_existing() -> Optional[BugLink]:
+    def _find_existing() -> BugLink | None:
         return db.scalar(
             select(BugLink).where(
                 BugLink.source_bug_id == bug_id,

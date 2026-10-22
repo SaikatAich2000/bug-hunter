@@ -7,7 +7,7 @@ Design
   ``GIT_CREDENTIAL_ENCRYPTION_KEY``. The key is never derived from
   ``SESSION_SECRET`` and never leaves the process.
 * A plaintext PAT is never written to the database, never logged, never audited
-  and never returned by an API response — the API only ever reports the boolean
+  and never returned by an API response, the API only ever reports the boolean
   ``credentials_configured``.
 * When no encryption key is configured, projects without their own credential
   keep working through the global ``GITHUB_TOKEN``, but storing a new project
@@ -77,7 +77,7 @@ def _fernet():
     try:
         return Fernet(key.encode("utf-8"))
     except Exception as exc:
-        # Never log the key itself — only the exception class.
+        # Never log the key itself, only the exception class.
         logger.exception(
             "git.credential.key_invalid exception=%s", type(exc).__name__
         )

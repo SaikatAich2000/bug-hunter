@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import ALLOWED_ROLES, MIN_NAME_LENGTH, _strip_and_check_min_length, _validate_email
 
 
-# --- User ---
+# User
 def _normalize_role(v: str) -> str:
     if not isinstance(v, str):
         raise ValueError("role must be a string")
@@ -22,7 +21,7 @@ def _normalize_role(v: str) -> str:
 def _check_password_strength(v: str) -> str:
     if not isinstance(v, str):
         raise ValueError("Password must be a string")
-    # DoS guard — bcrypt cost scales with input length.
+    # DoS guard: bcrypt cost scales with input length.
     if len(v) > 200:
         raise ValueError("Password is too long")
     from app.config import get_settings  # local import avoids an import cycle
@@ -85,24 +84,24 @@ class UserIn(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, max_length=120)
-    email: Optional[str] = Field(default=None, max_length=254)
-    role: Optional[str] = None
-    is_active: Optional[bool] = None
+    name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=254)
+    role: str | None = None
+    is_active: bool | None = None
     # Admin password reset; replaces the hash if present, omit to leave unchanged.
-    password: Optional[str] = None
+    password: str | None = None
     # Replace memberships. None/omit = unchanged; empty list = untag.
-    project_ids: Optional[list[int]] = Field(default=None, max_length=1000)
+    project_ids: list[int] | None = Field(default=None, max_length=1000)
 
     @field_validator("name")
     @classmethod
-    def _strip_name(cls, v: Optional[str]) -> Optional[str]:
+    def _strip_name(cls, v: str | None) -> str | None:
         if v is None: return None
         return _strip_and_check_min_length(v, MIN_NAME_LENGTH, "Name")
 
     @field_validator("project_ids")
     @classmethod
-    def _dedup_projects(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+    def _dedup_projects(cls, v: list[int] | None) -> list[int] | None:
         if v is None: return None
         seen: list[int] = []
         for x in v:
@@ -112,19 +111,19 @@ class UserUpdate(BaseModel):
 
     @field_validator("role")
     @classmethod
-    def _check_role(cls, v: Optional[str]) -> Optional[str]:
+    def _check_role(cls, v: str | None) -> str | None:
         if v is None: return None
         return _normalize_role(v)
 
     @field_validator("email")
     @classmethod
-    def _check_email(cls, v: Optional[str]) -> Optional[str]:
+    def _check_email(cls, v: str | None) -> str | None:
         if v is None: return None
         return _validate_email(v)
 
     @field_validator("password")
     @classmethod
-    def _check_password(cls, v: Optional[str]) -> Optional[str]:
+    def _check_password(cls, v: str | None) -> str | None:
         if v is None: return None
         return _check_password_strength(v)
 
@@ -143,7 +142,7 @@ class UserOut(BaseModel):
     project_ids: list[int] = Field(default_factory=list)
 
 
-# --- Auth ---
+# Auth
 class LoginIn(BaseModel):
     # Bounded so an unauthenticated caller can't burn bcrypt CPU on a huge body.
     email: str = Field(max_length=254)
@@ -204,15 +203,15 @@ class UserBrief(BaseModel):
     email: str
     role: str
 
-# --- Sessions (admin only) ---
+# Sessions (admin only)
 class SessionOut(BaseModel):
     """One row in the admin "active sessions" panel; `is_current` marks the
     admin's own session (self-revocation is rejected in routes/sessions.py)."""
     id: int
     user_id: int
-    user_name: Optional[str] = None
-    user_email: Optional[str] = None
-    user_role: Optional[str] = None
+    user_name: str | None = None
+    user_email: str | None = None
+    user_role: str | None = None
     ip_address: str
     user_agent: str
     created_at: datetime

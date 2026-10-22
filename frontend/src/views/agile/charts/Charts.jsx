@@ -75,7 +75,7 @@ export function SprintChart({ report, kind = "burndown", unitLabel }) {
     return { series, guide, committed, x, y, yTicks, xTicks, start, end };
   }, [report]);
 
-  if (!geometry) return <p className="muted ag-empty">This sprint has not started, so there is nothing to chart yet.</p>;
+  if (!geometry) return <p className="muted ag-empty">This sprint has not started, so there is nothing to chart yet</p>;
   const { series, guide, committed, x, y, yTicks, xTicks } = geometry;
   const nonWorking = report.days
     ? nonWorkingBands(report.days, [geometry.start, geometry.end])
@@ -133,7 +133,7 @@ export function SprintChart({ report, kind = "burndown", unitLabel }) {
 /** Commitment vs completed per sprint, with the average completed. */
 export function VelocityChart({ report, unitLabel }) {
   const points = report?.points || [];
-  if (!points.length) return <p className="muted ag-empty">No completed sprints yet.</p>;
+  if (!points.length) return <p className="muted ag-empty">No completed sprints yet</p>;
   const maxY = Math.max(1, ...points.map((p) => Math.max(p.committed_estimate, p.completed_estimate)));
   const yTicks = niceTicks(0, maxY, 5);
   const y = linearScale([0, yTicks.at(-1)], [H - M.bottom, M.top]);
@@ -174,7 +174,7 @@ const CATEGORY_CLASS = { todo: "todo", in_progress: "doing", testing: "testing",
 export function FlowChart({ report }) {
   const points = report?.points || [];
   const columns = report?.columns || [];
-  if (!points.length || !columns.length) return <p className="muted ag-empty">No data for this range.</p>;
+  if (!points.length || !columns.length) return <p className="muted ag-empty">No data for this range</p>;
   const xs = points.map((p) => dateMs(p.date));
   const order = [...columns].reverse();
   const totals = points.map((p) => columns.reduce((sum, c) => sum + (p.counts[String(c.id)] || 0), 0));
@@ -204,7 +204,7 @@ export function FlowChart({ report }) {
 /** Cycle time per completed issue with the rolling and overall averages. */
 export function CycleChart({ report }) {
   const entries = report?.entries || [];
-  if (!entries.length) return <p className="muted ag-empty">No issues were completed in this range.</p>;
+  if (!entries.length) return <p className="muted ag-empty">No issues were completed in this range</p>;
   const xs = entries.map((e) => toMs(e.completed_at));
   const lo = Math.min(...xs);
   const hi = Math.max(...xs);

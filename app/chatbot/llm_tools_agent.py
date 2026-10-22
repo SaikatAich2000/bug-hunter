@@ -7,7 +7,7 @@ Guardrails (mandatory):
   - RBAC enforced at the tool layer: every tool function re-checks permissions
     itself (see tools.py); a permission failure is a normal tool error.
   - Domain services are the only mutation path: tools call the same
-    app.agile.*/app.models code the REST routes use — never a shortcut.
+    app.agile.*/app.models code the REST routes use, never a shortcut.
   - Mutating tool calls always stop for explicit user confirmation before
     executing (staged via app.chatbot.memory, same store the rule-engine
     action-confirm flow uses).
@@ -15,13 +15,12 @@ Guardrails (mandatory):
     model, so a bug title/description containing "ignore your instructions"
     cannot redirect the agent.
   - Bounded rounds (SLEUTH_LLM_TOOLS_MAX_ROUNDS); provider failure returns a
-    clear error — there is no deterministic-parser fallback for this path.
+    clear error: there is no deterministic-parser fallback for this path.
 """
 from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -101,7 +100,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def _headers_and_url(settings) -> Optional[tuple[str, str, str]]:
+def _headers_and_url(settings) -> tuple[str, str, str] | None:
     """Return (url, api_key, model) for whichever provider is configured;
     Groq first, OpenRouter as fallback. None if neither is usable."""
     if settings.GROQ_API_KEY:
@@ -124,9 +123,9 @@ def is_available() -> bool:
     return True
 
 
-def call_llm_with_tools(messages: list[dict]) -> Optional[dict]:
+def call_llm_with_tools(messages: list[dict]) -> dict | None:
     """One provider round-trip with function-calling enabled. Returns the raw
-    assistant message dict (role/content/tool_calls), or None on any failure —
+    assistant message dict (role/content/tool_calls), or None on any failure, 
     callers must treat None as "the provider is unavailable right now", never
     silently substitute a different engine."""
     settings = get_settings()
@@ -223,7 +222,7 @@ def _run_one_tool_round(
         return Response(blocks=[Block("text", {"text": text[: settings.SLEUTH_ANSWER_MAX_CHARS]})],
                         summary=text[:120], intent="llm_tools_answer")
 
-    # Only the first requested tool call is honored per round — keeps the
+    # Only the first requested tool call is honored per round, keeps the
     # write-confirmation semantics simple (one pending action at a time)
     # and bounds how much a single round can do.
     name, args = _parse_tool_call(tool_calls[0])
@@ -248,7 +247,7 @@ def _run_one_tool_round(
 
 def run(message: str, db: Session, actor: User) -> Response:
     """Bounded tool-calling loop for one user turn. Never falls back to the
-    rule engine on provider failure — that is the point of this agent."""
+    rule engine on provider failure, that is the point of this agent."""
     settings = get_settings()
     max_rounds = settings.SLEUTH_LLM_TOOLS_MAX_ROUNDS
     messages: list[dict] = [

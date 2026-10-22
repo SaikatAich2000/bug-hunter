@@ -5,7 +5,7 @@ unknown, deactivated or out-of-project user is refused the same way everywhere.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -26,7 +26,7 @@ def resolve_users(db: Session, user_ids: Iterable[int]) -> list[User]:
     return list(rows)
 
 
-def resolve_user(db: Session, user_id: Optional[int]) -> Optional[User]:
+def resolve_user(db: Session, user_id: int | None) -> User | None:
     """The user with this id (None stays None); an unknown id is a 400."""
     if user_id is None:
         return None
@@ -36,7 +36,7 @@ def resolve_user(db: Session, user_id: Optional[int]) -> Optional[User]:
     return user
 
 
-def reject_inactive(users: Iterable[Optional[User]], noun: str = "user") -> None:
+def reject_inactive(users: Iterable[User | None], noun: str = "user") -> None:
     """Refuse new references to deactivated accounts (they can't sign in, so notifications
     would be dead ends). Existing references are left alone; only additions are checked."""
     inactive = sorted(u.name for u in users if u is not None and not u.is_active)
@@ -47,7 +47,7 @@ def reject_inactive(users: Iterable[Optional[User]], noun: str = "user") -> None
         )
 
 
-def non_members(db: Session, users: Iterable[Optional[User]], project_id: Optional[int]) -> list[User]:
+def non_members(db: Session, users: Iterable[User | None], project_id: int | None) -> list[User]:
     """The users who cannot see ``project_id``: neither an admin nor a member of it."""
     candidates = {u.id: u for u in users if u is not None and u.role != ROLE_ADMIN}
     if project_id is None or not candidates:
@@ -62,7 +62,7 @@ def non_members(db: Session, users: Iterable[Optional[User]], project_id: Option
 
 
 def require_project_members(
-    db: Session, users: Iterable[Optional[User]], project_id: Optional[int], noun: str = "assignee",
+    db: Session, users: Iterable[User | None], project_id: int | None, noun: str = "assignee",
 ) -> None:
     """Refuse to attach people who can't see the project: they would be notified about work
     they can't open, which leaks its title and description."""

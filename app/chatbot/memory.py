@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from app.config import get_settings
 
@@ -21,12 +21,12 @@ _CONFIRM_TTL_SECONDS = get_settings().SLEUTH_CONFIRM_TTL_SECONDS
 @dataclass
 class _Session:
     """The mutable state we keep for one user."""
-    last_bug_id: Optional[int] = None
-    pending_action: Optional[dict[str, Any]] = None
+    last_bug_id: int | None = None
+    pending_action: dict[str, Any] | None = None
     # Separate from last_seen so later activity doesn't extend the confirm window.
     pending_staged_at: float = 0.0
     # Candidate specs from an upload; created only on explicit confirmation.
-    pending_ingest: Optional[dict[str, Any]] = None
+    pending_ingest: dict[str, Any] | None = None
     pending_ingest_staged_at: float = 0.0
     last_seen: float = 0.0   # epoch seconds, for TTL eviction
 
@@ -71,7 +71,7 @@ class _Store:
             s.last_seen = now
             return s
 
-    def get(self, user_id: int) -> Optional[_Session]:
+    def get(self, user_id: int) -> _Session | None:
         """Read a session without extending its TTL or creating one."""
         now = time.time()
         with self._lock:
@@ -94,7 +94,7 @@ class _Store:
             s.pending_staged_at = now
             s.last_seen = now
 
-    def take_pending(self, user_id: int) -> Optional[dict[str, Any]]:
+    def take_pending(self, user_id: int) -> dict[str, Any] | None:
         """Pop and return the staged action (single-use), or None if none / the
         session expired / the confirm window closed. Clears a stale proposal
         rather than executing on a late "yes"."""
@@ -121,7 +121,7 @@ class _Store:
             s.pending_ingest_staged_at = now
             s.last_seen = now
 
-    def _ingest_if_fresh(self, s: Optional["_Session"], now: float) -> Optional[dict[str, Any]]:
+    def _ingest_if_fresh(self, s: _Session | None, now: float) -> dict[str, Any] | None:
         """Return the staged ingest if it's within the confirm window, else clear and return None."""
         if s is None or s.pending_ingest is None:
             return None
@@ -130,14 +130,14 @@ class _Store:
             return None
         return s.pending_ingest
 
-    def peek_ingest(self, user_id: int) -> Optional[dict[str, Any]]:
+    def peek_ingest(self, user_id: int) -> dict[str, Any] | None:
         """Return the staged ingest without consuming it (None if none/expired)."""
         now = time.time()
         with self._lock:
             self._evict_expired_locked(now)
             return self._ingest_if_fresh(self._sessions.get(user_id), now)
 
-    def take_ingest(self, user_id: int) -> Optional[dict[str, Any]]:
+    def take_ingest(self, user_id: int) -> dict[str, Any] | None:
         """Pop and return the staged ingest (single-use)."""
         now = time.time()
         with self._lock:

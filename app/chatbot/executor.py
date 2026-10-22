@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -174,7 +174,7 @@ def _apply_bug_filters(stmt, count_stmt, pq: ParsedQuery):
         stmt, count_stmt = _apply_both(
             stmt, count_stmt, Bug.assignees.any(User.id.in_(pq.assignee_ids)),
         )
-    # NOT EXISTS over the bug_assignees composite-PK index — a clean index seek.
+    # NOT EXISTS over the bug_assignees composite-PK index, a clean index seek.
     if pq.unassigned:
         stmt, count_stmt = _apply_both(stmt, count_stmt, ~Bug.assignees.any())
     if pq.text_search:
@@ -341,7 +341,7 @@ _INTENT_SUGGESTION: dict[str, str] = {
 }
 
 
-def _did_you_mean(message: str) -> Optional[str]:
+def _did_you_mean(message: str) -> str | None:
     """Return a near-miss intent suggestion, or None. A classifier failure must
     never break the unknown-fallback path, so exceptions are swallowed."""
     try:
@@ -651,7 +651,7 @@ def _dedupe_display_names(matches: list[str], pool: dict[str, str]) -> list[str]
     return out
 
 
-def _suggest_user(phrase: str, ctx: Optional[Context]) -> str:
+def _suggest_user(phrase: str, ctx: Context | None) -> str:
     """Return a "did you mean" hint for an unresolved user phrase (difflib over
     names and email local-parts), or "" if nothing is close. Never applied."""
     if not ctx or not phrase:
@@ -676,7 +676,7 @@ _LIST_BUGS_HEADERS = ["#", "Title", "Project", "Status", "Priority", "Env",
                       "Reporter", "Assignees", "Due"]
 
 
-def _clarify_ambiguous_names(pq: ParsedQuery) -> Optional[Response]:
+def _clarify_ambiguous_names(pq: ParsedQuery) -> Response | None:
     """Return a clarification Response if the parser saw an ambiguous name,
     otherwise None."""
     if not pq.ambiguous_names:
@@ -693,7 +693,7 @@ def _clarify_ambiguous_names(pq: ParsedQuery) -> Optional[Response]:
     )
 
 
-def _clarify_unresolved_user(pq: ParsedQuery, ctx: Optional[Context]) -> Optional[Response]:
+def _clarify_unresolved_user(pq: ParsedQuery, ctx: Context | None) -> Response | None:
     """Return a clarification Response when a named user couldn't be resolved,
     rather than dropping the filter and returning every bug. None if nothing to ask."""
     if not (pq.unresolved_assignee_names or pq.unresolved_reporter_names):
@@ -787,7 +787,7 @@ def _list_bugs_order(pq: ParsedQuery):
     return (Bug.updated_at.desc(), Bug.id.desc())
 
 
-def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Optional[Context] = None,
+def _handle_list_bugs(db: Session, pq: ParsedQuery, ctx: Context | None = None,
                       owner_id: int = 0, accessible=None) -> Response:
     """Run the parsed bug filter and render a count, inline list, or file.
 
@@ -891,7 +891,7 @@ def _build_export_response(rows: list[Bug], pq: ParsedQuery, total: int, cap: in
 _REPORTS_ROLE_ALLOWED = frozenset({"admin", "manager"})
 
 
-def _filters_from_parsed(pq: ParsedQuery) -> "Any":
+def _filters_from_parsed(pq: ParsedQuery) -> Any:
     """Translate a ParsedQuery into a reports-engine Filters object."""
     from app.reports import Filters
     date_from = None
@@ -941,7 +941,7 @@ def _stage_report_xlsx(result, report_key: str, owner_id: int) -> tuple[str, int
         payload = build_workbook_bytes(result)
     except XlsxBuildError as exc:
         raise _excel.ExcelGenerationError(str(exc)) from exc
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     filename = f"report-{report_key}-{stamp}.xlsx"
     token, size = _excel.stage_bytes(payload, filename, owner_id)
     return token, size, filename
@@ -983,7 +983,7 @@ def _format_summary_extras(s: dict) -> str:
     # Item Detail / Pending / Distribution reports
     if "total_items" in s:
         parts.append(f"**Total items**: {s['total_items']}")
-    # Timeline pair — skip when total_resolved already appeared above (throughput).
+    # Timeline pair: skip when total_resolved already appeared above (throughput).
     if "total_created" in s and "total_resolved" in s and "user_count" not in s:
         parts.append(
             f"**Created**: {s['total_created']} · "
@@ -1022,9 +1022,9 @@ def _build_report_preview_text(result, filters, preview_rows_count: int) -> str:
     return text
 
 
-def _try_stage_file_block(result, report_key: str, owner_id: int) -> Optional[Block]:
+def _try_stage_file_block(result, report_key: str, owner_id: int) -> Block | None:
     """Build and stage the XLSX bound to owner_id; return the file Block or None
-    on failure (logged). Never raises — the chat must always reply."""
+    on failure (logged). Never raises, the chat must always reply."""
     try:
         token, size, filename = _stage_report_xlsx(result, report_key, owner_id)
     except Exception as exc:   # noqa: BLE001 — file build must never crash chat
@@ -1201,7 +1201,7 @@ def _plan_create_project(plan, pq):
     return plan, None
 
 
-def _build_action_plan(pq, actor: User) -> "tuple[Any, Optional[str]]":
+def _build_action_plan(pq, actor: User) -> tuple[Any, str | None]:
     """Translate a parsed write-intent into an ActionPlan, returning
     (plan, error_message); plan is None with a message when it can't be built."""
     from app.chatbot.actions import ActionPlan
@@ -1245,7 +1245,7 @@ _BULK_SCOPE_RE = re.compile(
 _BULK_KINDS = frozenset({"assign", "unassign", "set_status", "set_priority"})
 
 
-def _bulk_kind_and_value(message: str, pq) -> "tuple[Optional[str], Optional[str]]":
+def _bulk_kind_and_value(message: str, pq) -> tuple[str | None, str | None]:
     """Determine the bulk action kind and value, reusing parse() output then
     falling back to direct matching for assign/unassign phrasings it missed."""
     from app.chatbot import nlu as _nlu
@@ -1253,13 +1253,13 @@ def _bulk_kind_and_value(message: str, pq) -> "tuple[Optional[str], Optional[str
         return pq.action_kind, pq.action_value
     if _nlu._UNASSIGN_RE.search(message):
         return "unassign", None
-    # Guard against "give me all bugs" — assign verb without a list-request verb.
+    # Guard against "give me all bugs", assign verb without a list-request verb.
     if _nlu._ASSIGN_RE.search(message) and not _nlu._LIST_VERB_RE.search(message):
         return "assign", None
     return None, None
 
 
-def _resolve_trailing_assignee(message: str, ctx) -> "tuple[list[int], list[str]]":
+def _resolve_trailing_assignee(message: str, ctx) -> tuple[list[int], list[str]]:
     """Resolve the assignee from a trailing "... to <name>" for bulk assigns,
     which the single-action parser misses. Returns ([], []) if not unambiguous."""
     from app.chatbot import nlu as _nlu
@@ -1277,7 +1277,7 @@ def _resolve_trailing_assignee(message: str, ctx) -> "tuple[list[int], list[str]
 
 # Bulk-scope noun → item_type it restricts to, so "assign all bugs" doesn't
 # touch Requirements/Tasks. Generic nouns map to None to sweep all types.
-_BULK_NOUN_TO_TYPE: dict[str, Optional[str]] = {
+_BULK_NOUN_TO_TYPE: dict[str, str | None] = {
     "bug": "Bug", "bugs": "Bug",
     "issue": "Bug", "issues": "Bug",
     "ticket": "Bug", "tickets": "Bug",
@@ -1287,14 +1287,14 @@ _BULK_NOUN_TO_TYPE: dict[str, Optional[str]] = {
 }
 
 
-def _bulk_item_type(scope_noun: str) -> Optional[str]:
+def _bulk_item_type(scope_noun: str) -> str | None:
     """The item_type a bulk scope noun restricts to, or None for all types
     (item / items / work item / work items)."""
     key = re.sub(r"\s+", "", (scope_noun or "").lower())  # "work items" → "workitems"
     return _BULK_NOUN_TO_TYPE.get(key)
 
 
-def _resolve_bulk_bug_ids(db: Session, pq, item_type: Optional[str]) -> list[int]:
+def _resolve_bulk_bug_ids(db: Session, pq, item_type: str | None) -> list[int]:
     """Resolve the work-item ids a bulk action targets, respecting the named
     item type and any status/priority/environment/project filters. For
     set_status/set_priority the target value is already consumed by parse()."""
@@ -1314,7 +1314,7 @@ def _resolve_bulk_bug_ids(db: Session, pq, item_type: Optional[str]) -> list[int
     return [int(i) for i in db.scalars(stmt).all()]
 
 
-def _bulk_scope_phrase(db: Session, bug_ids: list[int], item_type: Optional[str]) -> str:
+def _bulk_scope_phrase(db: Session, bug_ids: list[int], item_type: str | None) -> str:
     """Human description of what a bulk action will touch. An all-types scope is
     broken down by type so the user sees Requirements/Tasks before confirming."""
     n = len(bug_ids)
@@ -1330,7 +1330,7 @@ def _bulk_scope_phrase(db: Session, bug_ids: list[int], item_type: Optional[str]
     return f"all {n} {noun} ({', '.join(parts)})" if parts else f"all {n} {noun}"
 
 
-def _bulk_summary(kind: str, value: Optional[str], names: str, scope: str) -> str:
+def _bulk_summary(kind: str, value: str | None, names: str, scope: str) -> str:
     if kind == "assign":
         return f"Assign {names} to {scope}"
     if kind == "unassign":
@@ -1340,7 +1340,7 @@ def _bulk_summary(kind: str, value: Optional[str], names: str, scope: str) -> st
     return f"Set priority of {scope} to {value}"
 
 
-# "Remove/clear the assignees" — an unassign with no named user (clear everyone).
+# "Remove/clear the assignees", an unassign with no named user (clear everyone).
 # The status/priority words that scope it ("...from closed bugs") otherwise
 # misfire the single-action parser into a set-status command, so this is matched
 # and handled ahead of that path.
@@ -1351,7 +1351,7 @@ _CLEAR_ASSIGNEES_RE = re.compile(
 )
 
 
-def _item_type_hint(message: str) -> Optional[str]:
+def _item_type_hint(message: str) -> str | None:
     """Restrict a bulk scope to the work-item type named in the message
     ("...closed bugs" → Bug), or None to sweep every type."""
     m = re.search(r"\b(bugs?|issues?|tickets?|defects?|requirements?|tasks?)\b",
@@ -1359,8 +1359,8 @@ def _item_type_hint(message: str) -> Optional[str]:
     return _bulk_item_type(m.group(1)) if m else None
 
 
-def _stage_unassign_all(actor: User, *, bug_id: Optional[int] = None,
-                        bug_ids: Optional[list[int]] = None, summary: str) -> Response:
+def _stage_unassign_all(actor: User, *, bug_id: int | None = None,
+                        bug_ids: list[int] | None = None, summary: str) -> Response:
     """Stage a confirmable 'remove all assignees' plan and return its confirm Response."""
     from app.chatbot import actions as _actions
     from app.chatbot.memory import store as _mem
@@ -1405,13 +1405,13 @@ def _clear_assignees_bulk(message: str, db: Session, actor: User, pq) -> Respons
                                summary=f"Remove all assignees from {scope}")
 
 
-def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq) -> Optional[Response]:
+def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq) -> Response | None:
     """Stage a 'remove all assignees' unassign for one bug or a filtered set, or
     None when the message isn't a clear-assignees command."""
     from app.chatbot import actions as _actions
     if not _CLEAR_ASSIGNEES_RE.search(message):
         return None
-    # A named user means a targeted unassign, not a clear-all — let normal flow run.
+    # A named user means a targeted unassign, not a clear-all, let normal flow run.
     if pq.assignee_ids:
         return None
     denied = _actions.sleuth_write_denied(actor)
@@ -1424,7 +1424,7 @@ def _maybe_handle_clear_assignees(message: str, db: Session, actor: User, pq) ->
     return _clear_assignees_bulk(message, db, actor, pq)
 
 
-def _maybe_handle_bulk_action(message: str, db: Session, actor: User, pq, ctx) -> Optional[Response]:
+def _maybe_handle_bulk_action(message: str, db: Session, actor: User, pq, ctx) -> Response | None:
     """Catch bulk write commands and stage them as one confirmable plan, or
     None when the message isn't a bulk write so normal handling continues."""
     from app.chatbot import actions as _actions
@@ -1545,8 +1545,8 @@ def _handle_confirm_no(actor: User) -> Response:
 
 
 # Staged document ingest (admin): a doc is parsed and parked on upload, created
-# only on an explicit go-ahead. A go-ahead targets the STAGED items — a bare
-# affirmation or "create/add … them/these/all/the bugs" — not "create a bug
+# only on an explicit go-ahead. A go-ahead targets the STAGED items, a bare
+# affirmation or "create/add … them/these/all/the bugs", not "create a bug
 # titled X" (a single-item request handled elsewhere).
 _INGEST_CONFIRM_RE = re.compile(
     # Bare affirmations are anchored to the whole message so an incidental "ok"
@@ -1581,7 +1581,7 @@ def _ingest_created_response(summary: dict) -> Response:
     return Response(blocks=blocks, summary=f"Created {n} items", intent="ingest_done")
 
 
-def _maybe_handle_ingest_create(message: str, db: Session, actor: User) -> Optional[Response]:
+def _maybe_handle_ingest_create(message: str, db: Session, actor: User) -> Response | None:
     """Act on a staged document if the message is a go-ahead or cancel, else
     None so normal chat handling proceeds."""
     from app.chatbot.memory import store as _mem
@@ -1597,7 +1597,7 @@ def _maybe_handle_ingest_create(message: str, db: Session, actor: User) -> Optio
             summary="Ingest cancelled", intent="ingest_cancelled",
         )
     if not _INGEST_CONFIRM_RE.search(msg):
-        return None  # neither yes nor no — leave the staged doc parked
+        return None  # neither yes nor no, leave the staged doc parked
     data = _mem.take_ingest(actor.id)
     from app.chatbot import ingest as _ingest
     try:
@@ -1645,7 +1645,7 @@ def _remember_detail_bug(actor: User, pq, read_only: bool) -> None:
 
 
 def _dispatch_read_intent(intent: str, db: Session, pq, actor: User, ctx,
-                          read_only: bool = False, accessible=None) -> Optional[Response]:
+                          read_only: bool = False, accessible=None) -> Response | None:
     """Dispatch a read-side intent to its handler, or None for unknown intents.
 
     read_only gates whether bug_detail updates last_bug_id: False for the normal
@@ -1694,7 +1694,7 @@ def _classifier_action_invalid(pred_intent: str) -> Response:
 
 
 def _try_classifier(message: str, db: Session, pq, actor: User, ctx,
-                    accessible=None) -> Optional[Response]:
+                    accessible=None) -> Response | None:
     """Layer 2 fallback: statistical classifier. Returns a Response or None."""
     from app.chatbot import classifier as _clf
     pred = _clf.predict(message)
@@ -1708,7 +1708,7 @@ def _try_classifier(message: str, db: Session, pq, actor: User, ctx,
     return None
 
 
-def _try_llm(message: str, db: Session, actor: User) -> Optional[Response]:
+def _try_llm(message: str, db: Session, actor: User) -> Response | None:
     """Layer 3 fallback: optional local LLM. Faults are swallowed so the
     chat path stays up even when the LLM is unavailable or broken."""
     try:
@@ -1746,9 +1746,9 @@ def _cloud_available() -> bool:
 
 
 def _try_cloud_llm(message: str, db: Session, actor: User,
-                   now: Optional[datetime]) -> Optional[Response]:
+                   now: datetime | None) -> Response | None:
     """Layer 4 fallback: optional cloud LLM (Groq / OpenRouter), off unless
-    enabled with a key. Read-only by construction — data questions route back
+    enabled with a key. Read-only by construction, data questions route back
     through the SQL handlers and action_* intents are dropped in cloud_llm."""
     try:
         from app.chatbot import cloud_llm as _cloud
@@ -1761,7 +1761,7 @@ def _try_cloud_llm(message: str, db: Session, actor: User,
     return None
 
 
-def _action_intent_step(pq, actor: User) -> tuple[Optional[Response], Optional[Response]]:
+def _action_intent_step(pq, actor: User) -> tuple[Response | None, Response | None]:
     """Route an action_* intent. Returns (response_to_return_now, deferred_fallback):
     the fallback is only set when the intent misfired and the cloud layer is live
     to take a smarter pass before the canned "which bug?" prompt is used."""
@@ -1773,7 +1773,7 @@ def _action_intent_step(pq, actor: User) -> tuple[Optional[Response], Optional[R
     return None, action_resp
 
 
-def _maybe_cloud_response(message: str, db: Session, actor: User, pq, now: datetime) -> Optional[Response]:
+def _maybe_cloud_response(message: str, db: Session, actor: User, pq, now: datetime) -> Response | None:
     """Route to the cloud LLM layer unless the intent/message opts out of that hop."""
     msg_norm = message.strip().lower()
     if not msg_norm or pq.intent in _SKIP_CLOUD_INTENTS or msg_norm in _CLOUD_SKIP_EXACT:
@@ -1782,12 +1782,12 @@ def _maybe_cloud_response(message: str, db: Session, actor: User, pq, now: datet
 
 
 def execute(message: str, db: Session, actor: User,
-            now: Optional[datetime] = None) -> Response:
+            now: datetime | None = None) -> Response:
     """Parse the message and dispatch to the right handler.
 
     `now` lets tests inject a fixed timestamp; defaults to UTC now.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     ctx = build_context(db)
     pq = parse(message, ctx, now=now)
     # Project scope threaded into every read handler so restricted users can't
@@ -1810,13 +1810,13 @@ def execute(message: str, db: Session, actor: User,
         return _handle_confirm_no(actor)
 
     # When the fully LLM-driven tool-calling agent is enabled, it is
-    # the sole mainline engine for everything except confirm_yes/no above —
+    # the sole mainline engine for everything except confirm_yes/no above,
     # no deterministic rule-engine fallback runs underneath it.
     from app.chatbot import llm_tools_agent
     if llm_tools_agent.is_available():
         return llm_tools_agent.run(message, db, actor)
 
-    # "Remove all assignees from <bug|filter>" — caught ahead of the single-action
+    # "Remove all assignees from <bug|filter>", caught ahead of the single-action
     # handler, whose set-status detector otherwise hijacks the scoping status word.
     clear_resp = _maybe_handle_clear_assignees(message, db, actor, pq)
     if clear_resp is not None:
@@ -1829,7 +1829,7 @@ def execute(message: str, db: Session, actor: User,
         return bulk_resp
 
     # A parsed write-intent stages a confirmable plan. But action_invalid means
-    # an action verb matched without enough to act on — often an over-eager match
+    # an action verb matched without enough to act on, often an over-eager match
     # on a message that isn't really a write ("which bugs are closed?", "remove
     # the assignee from the closed ones"). When the cloud layer is live, let it
     # take a turn instead of dead-ending on the canned "which bug?" prompt; keep

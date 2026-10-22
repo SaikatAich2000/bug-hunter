@@ -18,7 +18,7 @@ describe("project setup", () => {
       return calls <= 1 ? { agile_enabled: true, board_id: 9 } : { agile_enabled: false, board_id: null };
     });
     await open(user, { backend });
-    expect(await screen.findByText("Scrum is not set up for this project yet.")).toBeInTheDocument();
+    expect(await screen.findByText("Scrum is not set up for this project yet")).toBeInTheDocument();
   });
 
   it("reports a failed settings check", async () => {
@@ -31,7 +31,7 @@ describe("project setup", () => {
     });
     await open(user, { backend });
     expect(await screen.findByText("Settings down")).toBeInTheDocument();
-    expect(screen.getByText("Scrum is not set up for this project yet.")).toBeInTheDocument();
+    expect(screen.getByText("Scrum is not set up for this project yet")).toBeInTheDocument();
   });
 });
 
@@ -101,7 +101,7 @@ describe("releases", () => {
     backend.state.releases = [];
     backend.on("POST", /^\/agile\/releases$/, () => reply(400, { detail: "Duplicate name" }));
     await open(user, { backend });
-    expect(await screen.findByText("No releases yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No releases yet")).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText("e.g. v2.1"), "v1");
     await user.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByText("Duplicate name")).toBeInTheDocument();
@@ -158,7 +158,7 @@ describe("components", () => {
     backend.state.components = [];
     await open(user, { backend });
     await subtab(user, "Components");
-    expect(await screen.findByText("No components yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No components yet")).toBeInTheDocument();
   });
 
   it("a load failure is reported", async () => {
@@ -184,7 +184,7 @@ describe("labels", () => {
     await waitFor(() => expect(backend.called("POST", "/agile/labels")[0].body).toEqual({ project_id: 1, display_name: "security" }));
     expect(await screen.findByText("Label created")).toBeInTheDocument();
     await user.click(within(document.querySelector(".taxonomy-panel")).getByTitle("Delete"));
-    expect(document.getElementById("modalConfirm")).toHaveTextContent('Delete label "backend"? Used on 3 item(s).');
+    expect(document.getElementById("modalConfirm")).toHaveTextContent('Delete label "backend"? Used on 3 item(s)');
     await confirm(user, "Cancel");
     expect(backend.called("DELETE", /labels/)).toHaveLength(0);
     await user.click(within(document.querySelector(".taxonomy-panel")).getByTitle("Delete"));
@@ -214,7 +214,7 @@ describe("labels", () => {
     backend.state.labels = [];
     await open(user, { backend, role: "user" });
     await subtab(user, "Labels");
-    expect(await screen.findByText("No labels yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No labels yet")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("e.g. security")).not.toBeInTheDocument();
   });
 

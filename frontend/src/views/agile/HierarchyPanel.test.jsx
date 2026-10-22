@@ -41,7 +41,7 @@ describe("epic tree", () => {
     const user = userEvent.setup();
     await open(user);
     await user.click(await screen.findByRole("button", { name: "Expand Billing" }));
-    expect(screen.getByText("No issues in this epic.")).toBeInTheDocument();
+    expect(screen.getByText("No issues in this epic")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Expand issues without epic" }));
     expect(screen.getByText("Loose story")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Collapse issues without epic" }));
@@ -54,7 +54,7 @@ describe("epic tree", () => {
     backend.state.hierarchy = hierarchyData({ unparented_total: 40 });
     await open(user, { backend });
     await user.click(await screen.findByRole("button", { name: "Expand issues without epic" }));
-    expect(screen.getByText("Showing 1 of 40. Search to find the others.")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 40. Search to find the others")).toBeInTheDocument();
   });
 
   it("with no epics and no search, explains what epics are", async () => {
@@ -225,7 +225,7 @@ describe("epic actions", () => {
     await user.click(within(dlg).getByRole("button", { name: "Target date" }));
     for (let i = 0; i < 3; i += 1) await user.click(screen.getByRole("button", { name: "Previous month" }));
     await user.click(document.querySelector('.bh-date-cell[data-iso="2025-12-15"]'));
-    expect(within(dlg).getByRole("alert")).toHaveTextContent("The target date cannot be before the start date.");
+    expect(within(dlg).getByRole("alert")).toHaveTextContent("The target date cannot be before the start date");
     expect(within(dlg).getByRole("button", { name: "Save" })).toBeDisabled();
     await user.click(within(dlg).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(document.getElementById("epicDialog")).toBeNull());

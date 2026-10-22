@@ -4,8 +4,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -28,7 +27,7 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 _VALID_TYPES = {"Bug", "Requirement", "Task"}
 
 
-def _by_project_stmt(item_type: Optional[str], status_filter: list[str], accessible):
+def _by_project_stmt(item_type: str | None, status_filter: list[str], accessible):
     """Bugs-per-project, scoped to item_type/status.
     Predicates live on the OUTER join condition so zero-count projects survive."""
     join_cond = Bug.project_id == Project.id
@@ -47,7 +46,7 @@ def _by_project_stmt(item_type: Optional[str], status_filter: list[str], accessi
     return stmt
 
 
-def _by_assignee_stmt(item_type: Optional[str], status_filter: list[str], accessible):
+def _by_assignee_stmt(item_type: str | None, status_filter: list[str], accessible):
     """Top 10 assignees by item count; Bug is only joined when a Bug-level scope applies."""
     stmt = (
         select(User.id, User.name, User.email, func.count(bug_assignees.c.bug_id))
@@ -69,11 +68,11 @@ def _by_assignee_stmt(item_type: Optional[str], status_filter: list[str], access
 
 def _timeline_14d(db: Session, scoped_f):
     """Return per-day created counts for the last 14 days as a dense, zero-filled list."""
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     start = today - timedelta(days=13)
     # raw-column comparison keeps the created_at index usable
-    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
-    # _utc_date forces UTC bucketing — Postgres func.date() uses session tz
+    start_dt = datetime.combine(start, time.min, tzinfo=UTC)
+    # _utc_date forces UTC bucketing, Postgres func.date() uses session tz
     day_col = _utc_date(db, Bug.created_at)
     rows = db.execute(
         scoped_f(
@@ -94,7 +93,7 @@ def _timeline_14d(db: Session, scoped_f):
 
 
 def _derive_kpis(
-    by_status_global: dict[str, int], item_type: Optional[str],
+    by_status_global: dict[str, int], item_type: str | None,
 ) -> tuple[int, int, int, int]:
     """Headline KPI counts (open, resolved, closed, resolve_later).
     Each type has its own open/resolved set; Closed and Resolve Later are Bug-only."""
@@ -117,7 +116,7 @@ def _derive_kpis(
     )
 
 
-def _fold_cube(cube, item_type: Optional[str], status_filter: list[str]):
+def _fold_cube(cube, item_type: str | None, status_filter: list[str]):
     """Slice the (item_type, status, priority, environment) cube into the per-dimension counts."""
     by_type: dict[str, int] = {}
     by_status_global: dict[str, int] = {}
@@ -144,7 +143,7 @@ def _fold_cube(cube, item_type: Optional[str], status_filter: list[str]):
 def stats(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    item_type: Optional[str] = Query(
+    item_type: str | None = Query(
         default=None,
         description=(
             "Scope every aggregation (KPIs, status/priority/env/project/"
@@ -153,7 +152,7 @@ def stats(
             "stay global so the tab-count badges always match reality."
         ),
     ),
-    status: Optional[list[str]] = Query(
+    status: list[str] | None = Query(
         default=None,
         description=(
             "Scope the CHART breakdowns (by_status/priority/env/project/"

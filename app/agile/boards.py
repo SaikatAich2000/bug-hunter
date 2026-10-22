@@ -75,7 +75,7 @@ def activate_agile_for_project(
         db.flush()
     except IntegrityError:
         # Lost a concurrent activation race; the winner's board is now
-        # visible — return it (idempotent success).
+        # visible: return it (idempotent success).
         db.rollback()
         winner = get_default_board(db, project.id)
         if winner is not None:

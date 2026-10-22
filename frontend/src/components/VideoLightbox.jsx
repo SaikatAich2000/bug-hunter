@@ -67,7 +67,7 @@ export default function VideoLightbox({ src, type, label, onClose }) {
   // imperatively so the overlay itself carries no JSX click handler.
   // The listener is added during the same task that opened the lightbox, so
   // the opening click (e.g. the "View" button) is still bubbling towards
-  // <document> when it registers — without the guard below it would close
+  // <document> when it registers, without the guard below it would close
   // the lightbox immediately, making it impossible to open via a click.
   const ignoreOpeningClick = useRef(true);
   useEffect(() => {

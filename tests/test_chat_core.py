@@ -3,12 +3,12 @@ Imports live inside tests (client fixture re-imports app.*); no network, real LL
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 
-# Seeding helpers — build users, projects, events, and bugs via the ORM.
+# Seeding helpers: build users, projects, events, and bugs via the ORM.
 def _seed(client):
     """Populate the per-test DB with a representative dataset; returns a dict of ids."""
     from app import models
@@ -39,7 +39,7 @@ def _seed(client):
         db.add(event)
         db.commit()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # (status, priority, env, project, age_days, title, event_id)
         spec = [
             ("New",           "Critical", "PROD", proj_a,  1, "Service down", event.id),
@@ -115,11 +115,11 @@ def _table(resp):
     return next((b for b in resp.blocks if b.kind == "table"), None)
 
 
-# nlu.py — time windows
+# nlu.py: time windows
 def test_cov_time_named_windows():
     from app.chatbot import nlu
     ctx = nlu.Context(users=[], projects=[])
-    fixed = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)  # a Monday
+    fixed = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)  # a Monday
     for phrase, label in [
         ("bugs today", "today"),
         ("bugs yesterday", "yesterday"),
@@ -141,14 +141,14 @@ def test_cov_time_relative_and_since_weekday():
     # Covers the since-weekday and relative-window branches.
     from app.chatbot import nlu
     ctx = nlu.Context(users=[], projects=[])
-    wed = datetime(2026, 6, 17, 9, 0, 0, tzinfo=timezone.utc)  # Wednesday
+    wed = datetime(2026, 6, 17, 9, 0, 0, tzinfo=UTC)  # Wednesday
 
     pq = nlu.parse("bugs since monday", ctx, now=wed)
     assert pq.time_window is not None
     assert pq.time_window.label == "since monday"
 
     # "since monday" on a Monday means a week ago (delta_days==0 -> 7).
-    mon = datetime(2026, 6, 15, 9, 0, 0, tzinfo=timezone.utc)
+    mon = datetime(2026, 6, 15, 9, 0, 0, tzinfo=UTC)
     pq2 = nlu.parse("bugs since monday", ctx, now=mon)
     assert pq2.time_window.start == mon.replace(
         hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
@@ -168,7 +168,7 @@ def test_cov_time_relative_and_since_weekday():
 def test_cov_time_relative_window_units_direct():
     # Each supported unit, plus an unknown unit that returns None.
     from app.chatbot import nlu
-    now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)
     assert nlu._relative_window(3, "hours", now).start == now - timedelta(hours=3)
     assert nlu._relative_window(2, "days", now).start == now - timedelta(days=2)
     assert nlu._relative_window(1, "weeks", now).start == now - timedelta(weeks=1)
@@ -181,7 +181,7 @@ def test_cov_time_no_window():
     assert nlu._parse_time_window("just a plain message") is None
 
 
-# nlu.py — enum extraction: statuses, priorities, environments, typos
+# nlu.py: enum extraction: statuses, priorities, environments, typos
 def test_cov_status_synonyms_all():
     from app.chatbot import nlu
     ctx = nlu.Context(users=[], projects=[])
@@ -246,7 +246,7 @@ def test_cov_typo_match_short_token_returns_none():
     assert nlu._typo_match("zzzzzzzz", nlu._PRIORITY_SYNONYMS) is None
 
 
-# nlu.py — name resolution
+# nlu.py: name resolution
 def test_cov_name_resolution_strategies():
     from app.chatbot import nlu
     # Email locals differ from first names so each strategy is exercised independently.
@@ -304,7 +304,7 @@ def test_cov_possessive_assignee():
     assert nlu._try_possessive_assignee("Zelda's bugs", nlu.ParsedQuery(), ctx) is False
 
 
-# nlu.py — projects, roles, bug ids, text search
+# nlu.py: projects, roles, bug ids, text search
 def test_cov_project_resolution_paths():
     from app.chatbot import nlu
     ctx = nlu.Context(
@@ -357,7 +357,7 @@ def test_cov_text_search_paths():
     assert nlu._extract_text_search("list open bugs") is None
 
 
-# nlu.py — action detection
+# nlu.py: action detection
 def test_cov_action_detection_variants():
     from app.chatbot import nlu
     ctx = nlu.Context(
@@ -474,7 +474,7 @@ def test_cov_describe_filters_branches():
         assert frag in out, (frag, out)
 
 
-# executor.py — build_context
+# executor.py: build_context
 def test_cov_build_context_email_without_at(client):
     _seed(client)
     from app import models
@@ -495,7 +495,7 @@ def test_cov_build_context_email_without_at(client):
         db.close()
 
 
-# executor.py — read handlers
+# executor.py: read handlers
 def test_cov_exec_greeting_thanks_help_empty(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -652,7 +652,7 @@ def test_cov_exec_stats(client):
         db.close()
 
 
-# executor.py — list_bugs
+# executor.py: list_bugs
 def test_cov_exec_list_count_and_filters(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -713,7 +713,7 @@ def test_cov_exec_clarify_ambiguous_and_unresolved(client):
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
-        # Two Franks whose email local-parts don't match "frank" — genuinely ambiguous.
+        # Two Franks whose email local-parts don't match "frank", genuinely ambiguous.
         from app import models
         from app.auth import hash_password
         db.add_all([
@@ -744,7 +744,7 @@ def test_cov_clarify_helpers_none_paths():
     assert executor._clarify_unresolved_user(nlu.ParsedQuery(), None) is None
 
 
-# executor.py — user-suggestion helpers
+# executor.py: user-suggestion helpers
 def test_cov_suggest_user_helpers():
     from app.chatbot import executor, nlu
     ctx = nlu.Context(
@@ -786,7 +786,7 @@ def test_cov_dedupe_display_names():
     assert executor._dedupe_display_names(["a", "a2", "b", "zzz"], pool) == ["Alice", "Bob"]
 
 
-# executor.py — export path
+# executor.py: export path
 def test_cov_exec_export_to_excel(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -832,7 +832,7 @@ def test_cov_exec_export_capped(client):
         db.close()
 
 
-# executor.py — reports
+# executor.py: reports
 def test_cov_exec_report_forbidden_for_user(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -939,7 +939,7 @@ def test_cov_filters_from_parsed_dates_and_types(client):
     db = _new_db()
     try:
         ctx = executor.build_context(db)
-        now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)
         # Time window + item-type word exercises date_from/date_to and item_types mapping.
         pq = nlu.parse("requirement report this month", ctx, now=now)
         filt = executor._filters_from_parsed(pq)
@@ -982,7 +982,7 @@ def test_cov_try_stage_file_block_failure():
     assert out is None
 
 
-# executor.py — action planning and confirmation flow
+# executor.py: action planning and confirmation flow
 def test_cov_exec_action_missing_slots(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -1028,7 +1028,7 @@ def test_action_misfire_defers_to_cloud_when_available(client, monkeypatch):
         r = executor.execute("please close the issue right now", db, admin)
         assert r is cloud_answer  # reached the smart layer, not the canned prompt
 
-        # A well-formed write must still stage a confirm — never divert to cloud.
+        # A well-formed write must still stage a confirm, never divert to cloud.
         mem.reset(admin.id)
         monkeypatch.setattr(executor, "_try_cloud_llm",
                             lambda *a, **k: pytest.fail("valid action must not reach cloud"))
@@ -1055,7 +1055,7 @@ def test_action_misfire_keeps_canned_prompt_when_cloud_off(client):
 
 
 def test_cloud_available_fails_closed_on_exception(monkeypatch):
-    """_cloud_available() must never raise — an import/call failure in the
+    """_cloud_available() must never raise, an import/call failure in the
     optional cloud layer degrades to 'not available', not a 500."""
     import app.chatbot.cloud_llm as cloud
     from app.chatbot import executor
@@ -1279,7 +1279,7 @@ def test_cov_resolve_pronouns_bug_memory(client):
         db.close()
 
 
-# executor.py — classifier fallback and unknown handler
+# executor.py: classifier fallback and unknown handler
 def test_cov_exec_unknown_hint_branches(client):
     ids = _seed(client)
     from app.chatbot import executor
@@ -1386,7 +1386,7 @@ def test_cov_former_legacy_passwords_are_rejected():
             _check_password_strength(pw)
 
 
-# Focused coverage — partial branches, error paths, monkeypatched modules.
+# Focused coverage: partial branches, error paths, monkeypatched modules.
 def test_cov_bug_detail_no_event_branch(client):
     # Bug #2 has no event (branch skipped); long description still hits truncation.
     ids = _seed(client)
@@ -1427,7 +1427,7 @@ def test_cov_recent_activity_start_only_and_end_only(client):
     db = _new_db()
     try:
         admin = _user(db, ids["admin"])
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         pq_start = nlu.ParsedQuery()
         pq_start.time_window = nlu.TimeWindow(
@@ -1510,7 +1510,7 @@ def test_cov_filters_from_parsed_start_only_end_only(client):
     db = _new_db()
     try:
         ctx = executor.build_context(db)
-        now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)
 
         pq = nlu.parse("report of all bugs", ctx)
         pq.time_window = nlu.TimeWindow(start=now, end=None, label="x")
@@ -2089,7 +2089,7 @@ def test_cov_apply_time_window_start_only_end_only(client):
     from app.chatbot.executor import _eager_bug_query
     db = _new_db()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         pq_start = nlu.ParsedQuery(raw_message="bugs created recently")
         pq_start.time_window = nlu.TimeWindow(
@@ -2256,7 +2256,7 @@ def test_cov_assign_bug_not_found_and_perm_denied(client):
         alice = db.get(models.User, ids["alice_id"])
         bob = db.get(models.User, ids["bob_id"])
 
-        # 228 — bug_id points at a non-existent bug.
+        # 228: bug_id points at a non-existent bug.
         # Applier called directly: execute_plan's admin-only gate hides per-action branches.
         plan_missing = actions.ActionPlan(
             kind="assign", actor_user_id=alice.id, bug_id=987654,
@@ -2296,7 +2296,7 @@ def test_cov_unassign_branches(client):
         bob = db.get(models.User, ids["bob_id"])
 
         # Appliers driven directly (execute_plan gates non-admins first).
-        # 256 — bug missing.
+        # 256: bug missing.
         r_missing = actions._apply_unassign(
             db,
             actions.ActionPlan(kind="unassign", actor_user_id=alice.id,
@@ -2311,7 +2311,7 @@ def test_cov_unassign_branches(client):
         bug = db.get(models.Bug, ids["bug_id"])
         has_item_type = hasattr(bug, "item_type")
 
-        # 259 — permission denied: bob (user) on a Task.
+        # 259: permission denied: bob (user) on a Task.
         if has_item_type:
             bug.item_type = "Task"
             db.commit()
@@ -2347,7 +2347,7 @@ def test_cov_unassign_branches(client):
 
 
 def test_cov_set_field_permission_denied(client):
-    """actions.py:285 — _apply_set_field permission-denied branch."""
+    """actions.py:285, _apply_set_field permission-denied branch."""
     ids = _seed_basic()
     from app import models
     from app.chatbot import actions
@@ -2384,7 +2384,7 @@ def test_cov_add_comment_empty_and_too_long(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 309 — whitespace-only body is treated as empty.
+        # 309: whitespace-only body is treated as empty.
         r_empty = actions.execute_plan(
             actions.ActionPlan(kind="add_comment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], comment_body="   ",
@@ -2394,7 +2394,7 @@ def test_cov_add_comment_empty_and_too_long(client):
         assert r_empty.intent == "action_error"
         assert "comment text" in r_empty.blocks[0].payload["text"].lower()
 
-        # 314 — body over the 4000-char limit.
+        # 314: body over the 4000-char limit.
         r_long = actions.execute_plan(
             actions.ActionPlan(kind="add_comment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], comment_body="x" * 4001,
@@ -2418,7 +2418,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 335 — whitespace-only title.
+        # 335: whitespace-only title.
         r_empty = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
                                new_title="   ", summary_human="Create"),
@@ -2427,7 +2427,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
         assert r_empty.intent == "action_error"
         assert "title" in r_empty.blocks[0].payload["text"].lower()
 
-        # 340 — title too long.
+        # 340: title too long.
         r_long = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
                                new_title="t" * 201, new_project_id=ids["proj_id"],
@@ -2437,7 +2437,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
         assert r_long.intent == "action_error"
         assert "too long" in r_long.blocks[0].payload["text"].lower()
 
-        # 352 — project id that doesn't exist.
+        # 352: project id that doesn't exist.
         r_badproj = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
                                new_title="Valid title", new_project_id=888777,
@@ -2447,7 +2447,7 @@ def test_cov_create_bug_title_validation_and_targets(client):
         assert r_badproj.intent == "action_error"
         assert "doesn't exist" in r_badproj.blocks[0].payload["text"].lower()
 
-        # 365-368 — assignee targets on create get attached to the new bug.
+        # 365-368: assignee targets on create get attached to the new bug.
         before = db.query(models.Bug).count()
         r_ok = actions.execute_plan(
             actions.ActionPlan(kind="create_bug", actor_user_id=admin.id,
@@ -2502,7 +2502,7 @@ def test_cov_create_project_validation(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 384 — whitespace-only name.
+        # 384: whitespace-only name.
         r_empty = actions.execute_plan(
             actions.ActionPlan(kind="create_project", actor_user_id=admin.id,
                                new_project_name="   ", summary_human="Create"),
@@ -2511,7 +2511,7 @@ def test_cov_create_project_validation(client):
         assert r_empty.intent == "action_error"
         assert "name" in r_empty.blocks[0].payload["text"].lower()
 
-        # 386 — name too long.
+        # 386: name too long.
         r_long = actions.execute_plan(
             actions.ActionPlan(kind="create_project", actor_user_id=admin.id,
                                new_project_name="p" * 121,
@@ -2521,7 +2521,7 @@ def test_cov_create_project_validation(client):
         assert r_long.intent == "action_error"
         assert "too long" in r_long.blocks[0].payload["text"].lower()
 
-        # 392 — case-insensitive duplicate of the seeded "Apollo Cov".
+        # 392: case-insensitive duplicate of the seeded "Apollo Cov".
         r_dupe = actions.execute_plan(
             actions.ActionPlan(kind="create_project", actor_user_id=admin.id,
                                new_project_name="apollo cov",
@@ -2545,7 +2545,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
     try:
         admin = db.get(models.User, ids["admin_id"])
 
-        # 417 — plan's actor_user_id doesn't match the authenticated actor.
+        # 417: plan's actor_user_id doesn't match the authenticated actor.
         r_mismatch = actions.execute_plan(
             actions.ActionPlan(kind="set_status", actor_user_id=999999,
                                bug_id=ids["bug_id"], new_value="Closed",
@@ -2555,7 +2555,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         assert r_mismatch.intent == "action_error"
         assert "different user" in r_mismatch.blocks[0].payload["text"].lower()
 
-        # 429 — set_environment dispatch path (admin changing PROD->DEV).
+        # 429: set_environment dispatch path (admin changing PROD->DEV).
         r_env = actions.execute_plan(
             actions.ActionPlan(kind="set_environment", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], new_value="DEV",
@@ -2566,7 +2566,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         db.expire_all()
         assert db.get(models.Bug, ids["bug_id"]).environment == "DEV"
 
-        # 431 — set_due_date dispatch path.
+        # 431: set_due_date dispatch path.
         r_due = actions.execute_plan(
             actions.ActionPlan(kind="set_due_date", actor_user_id=admin.id,
                                bug_id=ids["bug_id"], new_value="2026-06-15",
@@ -2575,7 +2575,7 @@ def test_cov_execute_plan_actor_mismatch_unknown_and_exception(client):
         )
         assert r_due.intent == "action_done"
 
-        # 438 — unknown action kind falls through to the error branch.
+        # 438: unknown action kind falls through to the error branch.
         r_unknown = actions.execute_plan(
             actions.ActionPlan(kind="totally_bogus", actor_user_id=admin.id,
                                summary_human="x"),
@@ -2703,7 +2703,7 @@ def test_cov_persist_turn_swallows_exception(admin_client, monkeypatch):
             blocks=[executor.Block("text", {"text": "hi"})],
             summary="s", intent="stats",
         )
-        # Must not raise — lines 93-95 swallow it.
+        # Must not raise, lines 93-95 swallow it.
         router._persist_turn(db, admin, "summary", resp)
     finally:
         # monkeypatch teardown restores db.query before close.
@@ -2757,7 +2757,7 @@ def test_cov_ask_graceful_on_executor_crash(admin_client, monkeypatch):
 
 # excel.py
 def test_cov_excel_evict_expired(client):
-    """excel.py:69 — _evict_expired_locked removes entries whose expiry has passed."""
+    """excel.py:69, _evict_expired_locked removes entries whose expiry has passed."""
     from app.chatbot import excel
     excel._cache.clear()
     now = 10_000.0
@@ -2798,7 +2798,7 @@ def test_cov_excel_fetch_staged_empty_token_and_expired(client, monkeypatch):
     from app.chatbot import excel
     excel._cache.clear()
 
-    # 200 — falsy token short-circuits to None.
+    # 200: falsy token short-circuits to None.
     assert excel.fetch_staged("", 1) is None
 
     # Freeze the clock and bypass the upfront eviction sweep.
@@ -2841,7 +2841,7 @@ def test_cov_classifier_train_skips_empty_example(client):
     assert model.docs[0][0] == "list_bugs"
 
 
-# app/chatbot/actions.py — write-path edge branches
+# app/chatbot/actions.py: write-path edge branches
 def _seed_chat_world(client):
     """Seed two users, an inactive user, a project, and a bug; return a dict of ids."""
     from app import models
@@ -3035,7 +3035,7 @@ def test_actions_bulk_all_skipped_rolls_back(client):
     assert "0" in resp.summary  # 0 updated, rollback path
 
 
-# app/chatbot/executor.py — bulk / report / ingest branches
+# app/chatbot/executor.py: bulk / report / ingest branches
 def test_executor_bulk_kind_detects_unassign(client):
     # An unassign phrase with no parsed action_kind resolves to "unassign".
     from app.chatbot import executor

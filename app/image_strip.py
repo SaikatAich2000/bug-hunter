@@ -34,7 +34,7 @@ class ImageTooLarge(ValueError):
     """The image cannot be cleaned within the server's memory budget."""
 
 
-# --- JPEG -------------------------------------------------------------------------------
+# JPEG
 
 _SOI, _SOS, _EOI = 0xD8, 0xDA, 0xD9
 _APP0, _APP1, _APP2, _APP14, _COM = 0xE0, 0xE1, 0xE2, 0xEE, 0xFE
@@ -134,7 +134,7 @@ def _strip_jpeg(data: bytes) -> bytes | None:
     return None
 
 
-# --- PNG ---------------------------------------------------------------------------------
+# PNG
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_DROP = {b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tIME"}
@@ -157,7 +157,7 @@ def _strip_png(data: bytes) -> bytes | None:
     return None
 
 
-# --- WebP --------------------------------------------------------------------------------
+# WebP
 
 _WEBP_DROP = {b"EXIF", b"XMP "}
 _VP8X_EXIF_XMP_FLAGS = 0x08 | 0x04
@@ -183,7 +183,7 @@ def _strip_webp(data: bytes) -> bytes | None:
     return b"RIFF" + struct.pack("<I", 4 + len(chunks)) + b"WEBP" + bytes(chunks)
 
 
-# --- Other formats (Pillow) --------------------------------------------------------------
+# Other formats (Pillow)
 
 def _bytes_per_pixel(mode: str) -> int:
     # Pillow keeps multi-band images at 4 bytes per pixel in memory.

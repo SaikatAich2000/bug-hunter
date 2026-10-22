@@ -383,7 +383,7 @@ def test_database_url_construction_prod_vs_dev(monkeypatch):
     assert "postgres" in s.DATABASE_URL or "sqlite" in s.DATABASE_URL
 
 
-# --- externalized tunables: env overrides reach Settings ---
+# externalized tunables: env overrides reach Settings
 def _fresh_settings(monkeypatch):
     """Settings re-read from the environment, with a developer's .env neutralized."""
     import importlib

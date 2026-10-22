@@ -57,7 +57,7 @@ def _evict_old(bucket: _Bucket, cutoff: float) -> None:
 
 
 def _reclaim_buckets(now: float) -> None:
-    """Bound _buckets by reclaiming idle/unlocked ones first — evicting active
+    """Bound _buckets by reclaiming idle/unlocked ones first, evicting active
     locks would let bucket-churn flush a victim's lock. Caller holds _lock."""
     cutoff = now - _LOGIN_FAIL_WINDOW_SECONDS
     dead = [

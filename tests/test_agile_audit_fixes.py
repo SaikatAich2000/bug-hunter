@@ -22,7 +22,7 @@ from tests.test_agile_scrum_rules import (
     _start,
 )
 
-# --- rank tokens ---------------------------------------------------------------
+# rank tokens
 
 
 def test_appending_and_prepending_keeps_tokens_short_and_ordered():
@@ -80,7 +80,7 @@ def test_no_token_fits_between_a_token_and_its_zero_extension():
     assert batch[-1] < "b"
 
 
-# --- placement in the database -------------------------------------------------
+# placement in the database
 
 
 def _ranked(project_id):
@@ -160,7 +160,7 @@ def test_duplicate_legacy_ranks_are_respaced_on_the_next_drop(admin_client):
     assert len(set(ranks)) == 3
 
 
-# --- deletes keep the hierarchy whole ------------------------------------------
+# deletes keep the hierarchy whole
 
 
 def test_bulk_delete_removes_sub_tasks_with_their_parent(admin_client):
@@ -193,7 +193,7 @@ def test_deleting_an_epic_unlinks_its_issues_and_logs_it(admin_client):
     assert "epic" in fields
 
 
-# --- backlog permissions on every path -----------------------------------------
+# backlog permissions on every path
 
 
 def _login_member(client, project_id):
@@ -233,7 +233,7 @@ def test_members_cannot_change_sprint_scope_through_any_path(admin_client):
     assert _row(planned["id"]).sprint_id == sprint["id"]
 
 
-# --- reopened issues from closed sprints ---------------------------------------
+# reopened issues from closed sprints
 
 
 def test_reopening_an_issue_from_a_closed_sprint_returns_it_to_the_backlog(admin_client):
@@ -291,7 +291,7 @@ def test_moving_a_finished_issue_to_another_project_keeps_the_closed_sprint_repo
     assert report["completed_estimate"] == 3
 
 
-# --- second audit round ----------------------------------------------------------
+# second audit round
 
 
 def test_moving_an_issue_out_of_an_open_sprint_by_changing_project_needs_backlog_rights(admin_client):

@@ -9,9 +9,9 @@ import logging
 import re
 import smtplib
 import ssl
+from collections.abc import Iterable
 from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import Iterable
 
 from app.config import Settings, get_settings
 
@@ -28,7 +28,7 @@ def _redact_secrets_for_log(text: str) -> str:
 _DESC_LABEL = "Description:"
 
 
-# --- Snapshot dataclasses (no SQLAlchemy objects past this point) ---
+# Snapshot dataclasses (no SQLAlchemy objects past this point)
 @dataclass(frozen=True)
 class UserSnapshot:
     id: int
@@ -59,7 +59,7 @@ class BugSnapshot:
     event_name: str | None = None
 
 
-# --- Low-level transport ---
+# Low-level transport
 def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
     """Synchronous SMTP send. Called from a worker thread by FastAPI."""
     if not settings.SMTP_HOST:
@@ -103,7 +103,7 @@ def _send_smtp(settings: Settings, msg: EmailMessage) -> bool:
 
 
 def _send_console(msg: EmailMessage) -> None:
-    # Body may contain a live reset link or PII — gate it behind DEBUG.
+    # Body may contain a live reset link or PII, gate it behind DEBUG.
     logger.info(
         "[console-email] to=%s subject=%r (body suppressed — set log level "
         "DEBUG to include it)",
@@ -172,7 +172,7 @@ def _digest_owns_work_item_email() -> bool:
     return get_settings().EMAIL_DIGEST_ENABLED
 
 
-# --- Recipient selection ---
+# Recipient selection
 def _recipients(bug: BugSnapshot, exclude_user_id: int | None) -> list[str]:
     """Reporter + all assignees, deduped, optionally minus the actor."""
     seen: dict[str, None] = {}
@@ -194,7 +194,7 @@ def _recipients(bug: BugSnapshot, exclude_user_id: int | None) -> list[str]:
     return out
 
 
-# Notification helpers — these are what routes call.
+# Notification helpers: these are what routes call.
 # Each takes only primitive data (no DB session, no ORM objects).
 def _bug_link(bug_id: int) -> str:
     base = get_settings().APP_BASE_URL.rstrip("/")
@@ -319,7 +319,7 @@ def notify_comment_added(
     deliver(subject, to, "\n".join(lines))
 
 
-# --- Event notifications (separate channel from per-item assignment emails) ---
+# Event notifications (separate channel from per-item assignment emails)
 @dataclass(frozen=True)
 class EventSnapshot:
     """Event snapshot for emails; ORM-free so BackgroundTasks can use it."""
@@ -444,7 +444,7 @@ def notify_password_reset(email: str, name: str, reset_url: str) -> None:
         "",
         f"— {app_name}",
     ])
-    # Transactional: log a clear error on failure — the user only sees the
+    # Transactional: log a clear error on failure, the user only sees the
     # generic "if an account exists" response.
     if not deliver(subject, [email], body) and get_settings().EMAIL_BACKEND != "disabled":
         logger.error("Password-reset email was NOT delivered for a reset request.")

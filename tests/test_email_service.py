@@ -85,7 +85,7 @@ def test_event_recipients_dedup_and_exclude():
     assert es._event_recipients(ev, exclude_user_id=2) == []
 
 
-# Console backend — every notify_* body builder runs end to end
+# Console backend: every notify_* body builder runs end to end
 def test_console_renders_every_notification(monkeypatch, caplog):
     _use_backend(monkeypatch, "console")
     bug = _bug(item_type="Task", event_name="Standup")
@@ -140,9 +140,9 @@ def test_deliver_drops_blank_recipients(monkeypatch, caplog):
     assert not any("console-email" in (r.message or "") for r in caplog.records)
 
 
-# SMTP transport (fake smtplib — no network)
+# SMTP transport (fake smtplib, no network)
 class _FakeSMTP:
-    instances: list["_FakeSMTP"] = []
+    instances: list[_FakeSMTP] = []
 
     def __init__(self, host, port, timeout=None, context=None):
         self.host, self.port = host, port

@@ -8,13 +8,13 @@ column defaults (applied only at flush) read back as None or [].
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 
 def _utc(y, m, d, hh=0, mm=0):
-    return datetime(y, m, d, hh, mm, tzinfo=timezone.utc)
+    return datetime(y, m, d, hh, mm, tzinfo=UTC)
 
 
 def _raw(detail, *, bug_id=5, actor_id=9, actor_name="Alice",
@@ -28,7 +28,7 @@ def _raw(detail, *, bug_id=5, actor_id=9, actor_name="Alice",
     )
 
 
-# --- _days_open_value ---
+# _days_open_value
 def test_days_open_value_resolved_span():
     from app.reports.engine import _days_open_value
     assert _days_open_value(_utc(2026, 1, 1), _utc(2026, 1, 6)) == 5
@@ -41,7 +41,7 @@ def test_days_open_value_none_creation_returns_none():
 
 def test_days_open_value_still_open_measures_to_now():
     from app.reports.engine import _days_open_value
-    created = datetime.now(timezone.utc) - timedelta(days=3, hours=1)
+    created = datetime.now(UTC) - timedelta(days=3, hours=1)
     assert _days_open_value(created, None) >= 3
 
 
@@ -58,7 +58,7 @@ def test_days_open_value_coerces_naive_datetimes():
     assert _days_open_value(created, resolved) == 3
 
 
-# --- _bug_scalar_fields / _bug_relation_fields  (real transient Bug instances) ---
+# _bug_scalar_fields / _bug_relation_fields  (real transient Bug instances)
 def test_bug_scalar_fields_applies_defaults():
     from app.models import Bug
     from app.reports.engine import _bug_scalar_fields
@@ -98,7 +98,7 @@ def test_bug_relation_fields_resolves_related_objects():
 def test_bug_relation_fields_handles_all_none():
     from app.models import Bug
     from app.reports.engine import _bug_relation_fields
-    # No project/event/reporter/assignees — every field falls back to "".
+    # No project/event/reporter/assignees: every field falls back to "".
     b = Bug(id=2, title="t")
     f = _bug_relation_fields(b)
     assert f["project"] == ""
@@ -108,7 +108,7 @@ def test_bug_relation_fields_handles_all_none():
     assert f["assignees"] == ""
 
 
-# --- _ttr_row ---
+# _ttr_row
 def test_ttr_row_builds_resolved_row():
     from app.reports.engine import _ttr_row
     raw = _raw("status: 'New' → 'Resolved'", created_at=_utc(2026, 1, 2))
@@ -142,7 +142,7 @@ def test_ttr_row_clamps_and_coerces_naive():
     assert row["hours_to_resolve"] == pytest.approx(12.0)
 
 
-# --- _ttr_summary ---
+# _ttr_summary
 def test_ttr_summary_empty_is_all_zero():
     from app.reports.engine import _ttr_summary
     s = _ttr_summary([])
@@ -162,7 +162,7 @@ def test_ttr_summary_aggregates_sorted_rows():
     assert s["p95_hours"] >= 5.0
 
 
-# --- _fold_throughput_row ---
+# _fold_throughput_row
 def test_fold_throughput_row_counts_resolution():
     from app.reports.engine import _fold_throughput_row
     per_user, details = {}, []
@@ -218,7 +218,7 @@ def test_fold_throughput_row_accumulates_multiple_for_one_user():
     assert len(details) == 2
 
 
-# --- _bucket_resolved_by_day ---
+# _bucket_resolved_by_day
 def test_bucket_resolved_by_day_counts_resolution():
     from app.reports.engine import _bucket_resolved_by_day
     rows = [_raw("status: 'New' → 'Resolved'", created_at=_utc(2026, 1, 2))]
@@ -240,7 +240,7 @@ def test_bucket_resolved_by_day_ignores_non_resolution():
     assert _bucket_resolved_by_day(rows) == {}
 
 
-# --- _percentile (NIST linear interpolation) ---
+# _percentile (NIST linear interpolation)
 def test_percentile_empty_is_zero():
     from app.reports.engine import _percentile
     assert _percentile([], 95) == pytest.approx(0.0)
@@ -260,7 +260,7 @@ def test_percentile_interpolates_between_ranks():
     assert _percentile(values, 95) == pytest.approx(95.0)
 
 
-# --- Filter-blob parsing helpers ---
+# Filter-blob parsing helpers
 def test_parse_date_variants():
     from datetime import date
 
@@ -301,7 +301,7 @@ def test_int_list_variants():
     assert _int_list("nope") == []
 
 
-# --- _age_bucket — boundary buckets ---
+# _age_bucket — boundary buckets
 @pytest.mark.parametrize("days,bucket", [
     (0, "0-7 days"),
     (7, "0-7 days"),
@@ -319,7 +319,7 @@ def test_age_bucket_boundaries(days, bucket):
     assert _age_bucket(days) == bucket
 
 
-# app/reports/engine.py — helpers
+# app/reports/engine.py: helpers
 def test_engine_parse_prior_status_empty_and_no_match():
     from app.reports.engine import _parse_prior_status
     assert _parse_prior_status("") is None               # empty detail
@@ -333,7 +333,7 @@ def test_engine_fetch_resolution_skips_unresolved_transition():
     details: list = []
     raw = (
         7, 3, "Dana",
-        datetime(2026, 1, 2, tzinfo=timezone.utc),
+        datetime(2026, 1, 2, tzinfo=UTC),
         "status: 'New' -> 'In Progress'", "Bug", "T", "High", "In Progress", "Apollo",
     )
     _fold_throughput_row(raw, per_user, details)
@@ -347,7 +347,7 @@ def test_engine_fold_throughput_skips_resolved_to_resolved():
     details: list = []
     raw = (
         9, 4, "Eve",
-        datetime(2026, 1, 3, tzinfo=timezone.utc),
+        datetime(2026, 1, 3, tzinfo=UTC),
         "status: 'Resolved' -> 'Closed'", "Bug", "T", "High", "Closed", "Apollo",
     )
     _fold_throughput_row(raw, per_user, details)

@@ -23,7 +23,7 @@ def _create_story(admin_client, project_id, title, **extra):
     return res.json()
 
 
-# --- Release readiness / roadmap ---
+# Release readiness / roadmap
 
 def test_release_action_and_double_release_rejected(admin_client):
     project, _board_id = _setup_project_with_board(admin_client, "Release Gate Suite")
@@ -32,7 +32,7 @@ def test_release_action_and_double_release_rejected(admin_client):
     assert v_res.status_code == 201, v_res.text
     version = v_res.json()
 
-    # No work items associated with this release — readiness has only the
+    # No work items associated with this release, readiness has only the
     # missing-release-date warning (not a hard error), so it should succeed.
     release_res = admin_client.post(f"/api/agile/releases/{version['id']}/release", json={
         "version": version["version"],
@@ -109,7 +109,7 @@ def test_reporting_follow_on_smoke(admin_client):
     assert cc_res.status_code == 200, cc_res.text
 
 
-# --- Sleuth LLM-driven tool-calling agent ---
+# Sleuth LLM-driven tool-calling agent
 
 def test_llm_tools_agent_disabled_by_default():
     from app.chatbot import llm_tools_agent
@@ -201,7 +201,7 @@ def test_llm_tools_provider_failure_returns_clear_error(monkeypatch, admin_clien
     assert "unavailable" in resp.blocks[0].payload["text"].lower()
 
 
-# --- release progress and readiness over real fix-version links ----------------------
+# release progress and readiness over real fix-version links
 
 def _release_fixture(db):
     from app.models import Bug, BugLink, Project, Version, WorkItemVersion
@@ -264,7 +264,7 @@ def test_release_readiness_names_every_blocking_problem(db_session):
     assert released.released_at is not None
 
 
-# --- provider selection, transport and the bounded tool loop --------------------------
+# provider selection, transport and the bounded tool loop
 
 def _tool_call(name, arguments="{}", call_id="c1"):
     return {"role": "assistant", "content": None,

@@ -1,6 +1,6 @@
 """Web push subscription endpoints (Firebase Cloud Messaging).
 
-Mutating endpoints are scoped to the authenticated user — you can only
+Mutating endpoints are scoped to the authenticated user, you can only
 register or remove your own tokens. ``GET /config`` exposes the public
 Firebase web config; the service-account key stays server-side.
 """

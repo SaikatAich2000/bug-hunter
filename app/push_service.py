@@ -38,7 +38,7 @@ def _deep_link(bug_id: int | None, event_id: int | None) -> str:
 
 
 def schedule(
-    background: "BackgroundTasks",
+    background: BackgroundTasks,
     user_ids: Iterable[int | None],
     *,
     title: str,

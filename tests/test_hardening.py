@@ -6,7 +6,7 @@ from __future__ import annotations
 import io
 import logging
 import sys
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -367,7 +367,7 @@ def test_chat_messages_ordered_by_id_within_same_second(client):
         conv = ChatConversation(user_id=admin.id)
         db.add(conv)
         db.flush()
-        ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         db.add_all([
             ChatMessage(conversation_id=conv.id, role="user", content="first", created_at=ts),
             ChatMessage(conversation_id=conv.id, role="assistant", content="second", created_at=ts),
@@ -557,7 +557,7 @@ def test_reopened_bug_has_no_resolved_info(admin_client):
 # malformed detail string); the lookup must fall back to an older row instead
 # of giving up, so a currently-resolved bug still gets credited.
 def test_resolution_info_falls_back_past_unparseable_row(admin_client):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from app.models import Activity
     from app.reports.engine import _fetch_resolution_info
@@ -572,7 +572,7 @@ def test_resolution_info_falls_back_past_unparseable_row(admin_client):
             bug_id=bug["id"], entity_type="bug", entity_id=bug["id"],
             action="status_changed", detail="status: 'New' → 'In Progress'",
             actor_name="Test Admin",
-            created_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            created_at=datetime.now(UTC) + timedelta(hours=1),
         )
         db.add(newest)
         db.commit()
@@ -598,7 +598,7 @@ def test_throughput_truncated_flag(admin_client, monkeypatch):
     assert res.truncated is True
 
 
-# config — _env_int / _env_float are crash-safe and clamped
+# config: _env_int / _env_float are crash-safe and clamped
 def test_env_int_garbage_and_clamp(monkeypatch):
     from app import config
     monkeypatch.setenv("BH_TEST_INT", "not-a-number")
@@ -611,20 +611,20 @@ def test_env_int_garbage_and_clamp(monkeypatch):
     assert config.env_float("BH_TEST_FLOAT", 0.5, minimum=0.0) == pytest.approx(0.0)
 
 
-# scheduler — "N/step" expands to a series, not a single value
+# scheduler: "N/step" expands to a series, not a single value
 def test_cron_value_step_expands_series():
     from app.scheduler import CronSchedule
     sch = CronSchedule("5/15 * * * *")
     assert sch.minute == {5, 20, 35, 50}
 
 
-# cloud_llm — _extract_json scans past a non-dict brace
+# cloud_llm: _extract_json scans past a non-dict brace
 def test_extract_json_skips_non_dict():
     from app.chatbot.cloud_llm import _extract_json
     assert _extract_json('[]  {"mode": "answer"}') == {"mode": "answer"}
 
 
-# memory — staged ingest expires after the confirm window
+# memory: staged ingest expires after the confirm window
 def test_ingest_confirm_ttl(monkeypatch):
     import types
 
@@ -640,7 +640,7 @@ def test_ingest_confirm_ttl(monkeypatch):
     assert store.take_ingest(1) is None
 
 
-# push_service — register survives a unique-token insert race
+# push_service: register survives a unique-token insert race
 def test_push_register_when_another_request_already_inserted_the_token(admin_client):
     # The row a concurrent request just inserted is refreshed, not duplicated or a 500.
     from sqlalchemy import func, select
@@ -678,7 +678,7 @@ def test_push_register_refuses_a_token_bound_to_another_account(admin_client):
     assert owner == other.id
 
 
-# download — a Range request returns the exact sliced bytes
+# download: a Range request returns the exact sliced bytes
 def test_download_range_slice(admin_client):
     proj = _mk_project(admin_client, "PDl")
     bug = admin_client.post("/api/bugs", json={"project_id": proj["id"], "title": "download bug"}).json()
@@ -703,14 +703,14 @@ def test_login_not_csrf_exempt(client):
 
 
 def test_sessions_list_hides_expired_rows_without_writing(admin_client):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import func, select
 
     from app.models import Session as SessionRow
     db = _session()
     row = db.scalars(select(SessionRow)).first()
-    db.add(SessionRow(user_id=row.user_id, jti="expired-jti", expires_at=datetime.now(timezone.utc) - timedelta(days=1)))
+    db.add(SessionRow(user_id=row.user_id, jti="expired-jti", expires_at=datetime.now(UTC) - timedelta(days=1)))
     db.commit()
     listed = admin_client.get("/api/sessions")
     assert listed.status_code == 200
@@ -730,7 +730,7 @@ def test_update_reporter_to_inactive_rejected(admin_client):
     assert "deactivated" in r.json()["detail"].lower()
 
 
-# database — _add_column_safely logs-and-skips a failing ALTER (savepoint)
+# database: _add_column_safely logs-and-skips a failing ALTER (savepoint)
 def test_add_column_safely_skips_on_error(tmp_path):
     from sqlalchemy import create_engine
 

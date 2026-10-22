@@ -195,7 +195,7 @@ def test_html_has_chrome_theme_color(html):
     assert "#171a21" in src, f"{html} theme-color should be the chrome colour"
 
 
-# Identity tokens — pin the palette so a reskin can't silently revert it.
+# Identity tokens: pin the palette so a reskin can't silently revert it.
 def test_identity_tokens_present():
     css = _read(STYLES)
     assert "--chrome: #171a21" in css, "chrome token"

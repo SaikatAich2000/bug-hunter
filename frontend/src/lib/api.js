@@ -26,10 +26,20 @@ function bounceToLogin() {
 }
 
 /** Readable message from a FastAPI error body. */
+const PROPER = /^(Paddle|Android|GitHub|Sleuth|Google|Firebase|Excel|Git|JSON|UPI|PayPal)$/;
+/** Server sentences are shown without full stops: "A. B." becomes "A, b". */
+const trimStop = (s) =>
+  s
+    .replace(/(?<!\.)\.\s*$/, "")
+    .replace(/([a-z)]{2,})\.(\s+)([A-Z][A-Za-z'-]*)/g, (_m, before, ws, word) => {
+      const keep = PROPER.test(word) || /^[A-Z]{2,}$/.test(word);
+      return `${before},${ws}${keep ? word : word[0].toLowerCase() + word.slice(1)}`;
+    });
+
 function detailToMessage(body, fallback) {
   if (!body || typeof body !== "object") return fallback;
   const detail = body.detail;
-  if (typeof detail === "string") return detail;
+  if (typeof detail === "string") return trimStop(detail);
   if (Array.isArray(detail)) {
     // Pydantic validation error list
     const msgs = detail
@@ -39,7 +49,7 @@ function detailToMessage(body, fallback) {
           : "",
       )
       .filter(Boolean);
-    if (msgs.length) return msgs.join("; ");
+    if (msgs.length) return trimStop(msgs.join("; "));
   }
   return fallback;
 }
@@ -63,8 +73,8 @@ export function requestInit(opts = {}) {
 // forever; uploads get longer.
 const REQUEST_TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
-export const OFFLINE_MESSAGE = "Can't reach the server. Check your connection and try again.";
-export const TIMEOUT_MESSAGE = "The server took too long to respond. Please try again.";
+export const OFFLINE_MESSAGE = "Can't reach the server, check your connection and try again";
+export const TIMEOUT_MESSAGE = "The server took too long to respond, please try again";
 
 /** fetch with a timeout, turning network failures into readable ApiErrors (status 0). */
 async function send(path, init, timeoutMs) {

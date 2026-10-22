@@ -5,8 +5,6 @@ the last remaining admin is protected.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -94,8 +92,8 @@ def _log_removals(db: Session, actor: User, user: User, label: str) -> None:
 
 
 
-def _email_in_use(db: Session, email: str, exclude_id: Optional[int] = None) -> bool:
-    """Case-insensitive uniqueness check — catches mixed-case rows the DB constraint misses."""
+def _email_in_use(db: Session, email: str, exclude_id: int | None = None) -> bool:
+    """Case-insensitive uniqueness check: catches mixed-case rows the DB constraint misses."""
     stmt = select(User.id).where(func.lower(User.email) == email.lower())
     if exclude_id is not None:
         stmt = stmt.where(User.id != exclude_id)
@@ -150,7 +148,7 @@ def _projects_by_user(db: Session, user_ids: list[int]) -> dict[int, list[int]]:
 @router.get("", response_model=list[UserOut])
 def list_users(
     include_inactive: bool = Query(default=True),
-    q: Optional[str] = Query(default=None, max_length=200),
+    q: str | None = Query(default=None, max_length=200),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
@@ -158,7 +156,7 @@ def list_users(
     if not include_inactive:
         stmt = stmt.where(User.is_active.is_(True))
     if q:
-        # name/email only — searching role would let anyone enumerate admins
+        # name/email only: searching role would let anyone enumerate admins
         like = f"%{like_escape(q.lower())}%"
         stmt = stmt.where(or_(
             func.lower(User.name).like(like, escape="\\"),
@@ -291,7 +289,7 @@ def _apply_user_field_changes(user: User, fields: dict, changes: list[str]) -> N
 
 
 def _apply_project_tag_changes(db: Session, user_id: int,
-                               new_project_ids: Optional[list[int]],
+                               new_project_ids: list[int] | None,
                                changes: list[str]) -> None:
     """Replace project memberships. None = omitted (keep); an explicit list (even empty) replaces."""
     if new_project_ids is None:
@@ -307,7 +305,7 @@ def _apply_project_tag_changes(db: Session, user_id: int,
 def _apply_admin_password_reset(user: User, db: Session, new_password: str,
                                 changes: list[str]) -> None:
     """Admin password reset: invalidate existing sessions and outstanding reset tokens."""
-    # still HIBP-checked — the user may keep the assigned password
+    # still HIBP-checked: the user may keep the assigned password
     _reject_if_breached(new_password)
     user.password_hash = hash_password(new_password)
     user.session_version = (user.session_version or 0) + 1

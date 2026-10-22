@@ -3,7 +3,7 @@ DB-backed cases (end-to-end filtering, get_event truncation) use the client fixt
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.chatbot import classifier, nlu
 
@@ -14,7 +14,7 @@ def _ctx(projects=None, users=None):
 
 # Time window parsing tolerates irregular internal whitespace.
 def test_time_window_tolerates_extra_whitespace():
-    now = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
     for phrase in ("this week", "this  week", "this\tweek"):
         tw = nlu._parse_time_window(f"bugs from {phrase}", now=now)
         assert tw is not None, phrase

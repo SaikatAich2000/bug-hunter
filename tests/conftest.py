@@ -149,9 +149,7 @@ def _cleanup_session_resources() -> None:
     shutil.rmtree(_SESSION_DIR, ignore_errors=True)
 
 
-# ---------------------------------------------------------------------------
 # Baseline capture and rollback of in-process state
-# ---------------------------------------------------------------------------
 _CONTAINERS = (dict, list, set, deque)
 _SCALARS = (int, float, str, bytes, bool, type(None))
 _baseline: dict = {}
@@ -352,9 +350,7 @@ def _isolate(_app_runtime):
     _baseline["modules"]["app.database"].engine.dispose()
 
 
-# ---------------------------------------------------------------------------
 # Database reset and the public fixtures
-# ---------------------------------------------------------------------------
 def _truncate_all_tables(engine) -> None:
     from sqlalchemy import inspect, text
     from sqlalchemy.orm import close_all_sessions
@@ -448,7 +444,7 @@ def user_client(client):
         "password": "User12345",
     })
     assert res.status_code == 201, res.text
-    # Same TestClient is fine; the cookie is simply replaced.
+    # Same TestClient is fine; the cookie is replaced.
     client.post("/api/auth/logout")
     res = client.post("/api/auth/login", json={
         "email": "user@test.local", "password": "User12345",

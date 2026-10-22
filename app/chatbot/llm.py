@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
@@ -67,7 +67,7 @@ class _MemoryBudget:
     sufficient: bool            # estimated_need_mb <= available_mb
 
 
-def _read_int(path: str) -> Optional[int]:
+def _read_int(path: str) -> int | None:
     """Read a single integer from a sysfs file, or None on any failure."""
     try:
         with open(path) as fh:
@@ -79,7 +79,7 @@ def _read_int(path: str) -> Optional[int]:
         return None
 
 
-def _read_meminfo_kb(key: str) -> Optional[int]:
+def _read_meminfo_kb(key: str) -> int | None:
     """Read /proc/meminfo's value for `key` (e.g. 'MemAvailable'), in kB."""
     try:
         with open("/proc/meminfo") as fh:
@@ -92,14 +92,14 @@ def _read_meminfo_kb(key: str) -> Optional[int]:
     return None
 
 
-def _detect_container_limit_mb() -> Optional[int]:
+def _detect_container_limit_mb() -> int | None:
     """Return the cgroup memory limit in MB, or None if unbounded / not in a
     container. Checks cgroup v2 first, then v1."""
     # cgroup v2
     v = _read_int("/sys/fs/cgroup/memory.max")
     if v is not None and v > 0:
         return v // (1024 * 1024)
-    # cgroup v1 — the "no limit" sentinel is near INT64_MAX; skip above 2^62.
+    # cgroup v1: the "no limit" sentinel is near INT64_MAX; skip above 2^62.
     v = _read_int("/sys/fs/cgroup/memory/memory.limit_in_bytes")
     if v is not None and 0 < v < (1 << 62):
         return v // (1024 * 1024)
@@ -120,7 +120,7 @@ def _detect_available_mb() -> int:
     return 512   # pessimistic fallback
 
 
-def _model_file_size_mb() -> Optional[int]:
+def _model_file_size_mb() -> int | None:
     """Return the GGUF file size in MB, or None if the file is missing."""
     try:
         return _MODEL_PATH.stat().st_size // (1024 * 1024)
@@ -128,7 +128,7 @@ def _model_file_size_mb() -> Optional[int]:
         return None
 
 
-def memory_budget() -> Optional[_MemoryBudget]:
+def memory_budget() -> _MemoryBudget | None:
     """Compute the LLM memory budget, or None if no model file is present."""
     model_mb = _model_file_size_mb()
     if model_mb is None:
@@ -145,7 +145,7 @@ def memory_budget() -> Optional[_MemoryBudget]:
     )
 
 
-def memory_shortfall_message() -> Optional[str]:
+def memory_shortfall_message() -> str | None:
     """Short user-facing notice when the LLM is disabled for low memory, or None.
     The detailed operator breakdown is logged by is_available()."""
     budget = memory_budget()
@@ -297,10 +297,10 @@ def _ensure_reaper() -> None:
 # Memory-budget cache: is_available() runs per message, but the budget inputs
 # are static after startup, so cache briefly to avoid re-parsing /proc + sysfs.
 _BUDGET_TTL_S = 300.0
-_budget_cache: Optional[tuple[float, Optional["_MemoryBudget"]]] = None
+_budget_cache: tuple[float, _MemoryBudget | None] | None = None
 
 
-def _cached_budget() -> Optional["_MemoryBudget"]:
+def _cached_budget() -> _MemoryBudget | None:
     global _budget_cache
     now = time.time()
     if _budget_cache is not None and (now - _budget_cache[0]) < _BUDGET_TTL_S:
@@ -310,7 +310,7 @@ def _cached_budget() -> Optional["_MemoryBudget"]:
     return budget
 
 
-# --- Prompt (kept short to minimise prefill cost on CPU) ---
+# Prompt (kept short to minimise prefill cost on CPU)
 _SYSTEM_PROMPT = (
     "You are Sleuth, an assistant for a bug tracker. Read the user's "
     "request and respond ONLY with a single JSON object describing the "
@@ -343,7 +343,7 @@ def _build_prompt(user_message: str) -> str:
     )
 
 
-def _extract_json(raw: str) -> Optional[dict[str, Any]]:
+def _extract_json(raw: str) -> dict[str, Any] | None:
     """Extract the first JSON object from the reply, tolerating markdown fences
     and prose. raw_decode is string-aware, so a brace inside a string value
     doesn't truncate parsing."""
@@ -365,7 +365,7 @@ def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     return None
 
 
-def _run_inference(message: str) -> Optional[dict[str, Any]]:
+def _run_inference(message: str) -> dict[str, Any] | None:
     """Run a synchronous LLM call. Returns the parsed JSON dict, or None on
     any failure (load error, timeout, parse error). Never raises."""
     global _last_used_at
@@ -417,7 +417,7 @@ _LLM_PRIORITIES = frozenset({"Low", "Medium", "High", "Critical"})
 _LLM_ENVIRONMENTS = frozenset({"DEV", "UAT", "PROD"})
 
 
-def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
+def _build_pq_from_llm(message: str, parsed: dict) -> _nlu.ParsedQuery:
     """Translate the LLM's JSON output into a ParsedQuery for the rule-based
     handlers."""
     from app.chatbot import nlu as _nlu
@@ -436,7 +436,7 @@ def _build_pq_from_llm(message: str, parsed: dict) -> "_nlu.ParsedQuery":
     return pq
 
 
-def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Optional[Response]:
+def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Response | None:
     """Route a predicted intent to its rule-based handler. Read-only."""
     from app.access import accessible_project_ids
     from app.chatbot.executor import (
@@ -469,9 +469,9 @@ def _dispatch_llm_intent(intent: str, db: Session, pq, ctx, actor: User) -> Opti
     return None
 
 
-def try_understand(message: str, db: Session, actor: User) -> Optional[Response]:
+def try_understand(message: str, db: Session, actor: User) -> Response | None:
     """Run the LLM and map its predicted intent onto a read handler, or None if
-    it's unavailable/failed/"unknown". Read handlers only — writes always go
+    it's unavailable/failed/"unknown". Read handlers only, writes always go
     through the rule-based parser so the user sees a confirmation first."""
     if not is_available():
         return None

@@ -1,7 +1,7 @@
 /** Behavioral tests for the real second chrome band (`./SuperNav.jsx`).
  *
  * The band owns the type tabs and the list-only search input whose value is
- * debounce-pushed into the shared filters — these tests pin the view gating,
+ * debounce-pushed into the shared filters, these tests pin the view gating,
  * the search push, and the external-clear adoption that avoids echo loops.
  */
 import React, { act } from "react";

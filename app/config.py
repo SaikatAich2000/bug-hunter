@@ -173,7 +173,7 @@ class Settings:
     APP_NAME: str = os.getenv("APP_NAME", "Bug Hunter").strip()
     # Single source of truth: APP_VERSION in .env (loaded by _load_dotenv above,
     # or injected by the container/platform). There is deliberately NO fallback
-    # literal here — a hardcoded copy is what silently drifts out of lockstep
+    # literal here: a hardcoded copy is what silently drifts out of lockstep
     # with .env and mislabels every build. Blank is a valid, honest state.
     APP_VERSION: str = os.getenv("APP_VERSION", "").strip()
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -193,9 +193,9 @@ class Settings:
 
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "").strip() or _default_base_url()
 
-    # --- Authentication ---
+    # Authentication
     # Signs session cookies; if blank a per-process random secret is used
-    # (sessions die on restart — dev only).
+    # (sessions die on restart, dev only).
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", "")
     # Session lifetime in seconds (default 1 day).
     SESSION_TTL_SECONDS: int = env_int("SESSION_TTL_SECONDS", 86400, minimum=60)
@@ -219,7 +219,7 @@ class Settings:
     # Dev/local convenience only, not a hardened auth mode; logs a startup warning while on.
     AUTO_LOGIN_ENABLED: bool = env_bool("AUTO_LOGIN_ENABLED", False)
 
-    # --- Password policy ----------------------------------------------------
+    # Password policy
     # Enforced in app/schemas._check_password_strength whenever a password is set.
     PASSWORD_MIN_LENGTH: int = env_int("PASSWORD_MIN_LENGTH", 8, minimum=1)
     # Require at least one letter and one digit.
@@ -229,12 +229,12 @@ class Settings:
         "FORGOT_PASSWORD_ENUMERATION_SAFE", True
     )
 
-    # --- Reports ------------------------------------------------------------
+    # Reports
     # XLSX export row ceiling; the workbook is buffered in memory, so unbounded
     # exports could OOM a small worker (over-limit returns 413).
     MAX_REPORT_ROWS: int = env_int("MAX_REPORT_ROWS", 50000, minimum=1)
 
-    # --- Sleuth cloud LLM (optional) --- off by default; no outbound HTTP unless enabled + keyed.
+    # Sleuth cloud LLM (optional) --- off by default; no outbound HTTP unless enabled + keyed.
     # Cloud layer never writes or invents counts: data questions route back through deterministic SQL.
     SLEUTH_CLOUD_ENABLED: bool = env_bool("SLEUTH_CLOUD_ENABLED", False)
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")  # primary provider
@@ -265,19 +265,19 @@ class Settings:
     # Flags cited bug numbers the retrieval step didn't actually surface.
     SLEUTH_VERIFY_ANSWERS: bool = env_bool("SLEUTH_VERIFY_ANSWERS", False)
 
-    # --- Sleuth agent (optional, bounded read-only ReAct loop over SQL/retrieval tools) ---
+    # Sleuth agent (optional, bounded read-only ReAct loop over SQL/retrieval tools)
     SLEUTH_AGENT_ENABLED: bool = env_bool("SLEUTH_AGENT_ENABLED", False)
     SLEUTH_AGENT_MAX_STEPS: int = env_int("SLEUTH_AGENT_MAX_STEPS", 4, minimum=1)
 
-    # --- Sleuth LLM-driven tool-calling agent — off by default. When
+    # Sleuth LLM-driven tool-calling agent — off by default. When
     # enabled, every message is interpreted by the LLM via allow-listed
     # read/write tools (app/chatbot/tools.py); mutating tool calls always stop
     # for explicit user confirmation before executing. Requires the cloud layer
-    # (SLEUTH_CLOUD_ENABLED + a provider key) — it reuses that HTTP client.
+    # (SLEUTH_CLOUD_ENABLED + a provider key), it reuses that HTTP client.
     SLEUTH_LLM_TOOLS_ENABLED: bool = env_bool("SLEUTH_LLM_TOOLS_ENABLED", False)
     SLEUTH_LLM_TOOLS_MAX_ROUNDS: int = env_int("SLEUTH_LLM_TOOLS_MAX_ROUNDS", 4, minimum=1)
 
-    # --- Sleuth answer evaluation (optional LLM-as-judge; fails open, only ever appends a caveat) ---
+    # Sleuth answer evaluation (optional LLM-as-judge; fails open, only ever appends a caveat)
     SLEUTH_EVAL_ENABLED: bool = env_bool("SLEUTH_EVAL_ENABLED", False)
     SLEUTH_EVAL_MIN_SCORE: float = env_float("SLEUTH_EVAL_MIN_SCORE", 0.5, minimum=0.0)
     # Character ceiling on a cloud answer, applied last so it can't cut an appended caveat.
@@ -293,14 +293,14 @@ class Settings:
     # Gmail (and most providers) display app passwords as 4 space-separated
     # groups for on-screen readability, but the actual secret has no spaces.
     # Pasting the display form straight into .env sends the wrong credential
-    # and SMTP AUTH fails silently from the caller's point of view — strip any
+    # and SMTP AUTH fails silently from the caller's point of view, strip any
     # spaces so both the raw and display-formatted values work.
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "").replace(" ", "")
     SMTP_USE_TLS: bool = env_bool("SMTP_USE_TLS", True)
     SMTP_USE_SSL: bool = env_bool("SMTP_USE_SSL", False)
     SMTP_TIMEOUT: int = env_int("SMTP_TIMEOUT", 10, minimum=1)
 
-    # --- Daily email digest --- batches per-operation emails into one per user per day.
+    # Daily email digest --- batches per-operation emails into one per user per day.
     # Password reset and other transactional emails are never batched.
     EMAIL_DIGEST_ENABLED: bool = env_bool("EMAIL_DIGEST_ENABLED", False)
     # Lookback window for un-emailed rows; wide enough to catch up a missed run, rows are
@@ -312,10 +312,10 @@ class Settings:
     EMAIL_DIGEST_CRON: str = os.getenv("EMAIL_DIGEST_CRON", "").strip()
     EMAIL_DIGEST_TIMEZONE: str = os.getenv("EMAIL_DIGEST_TIMEZONE", "").strip()  # IANA tz, empty = UTC
 
-    # --- Web push (Firebase Cloud Messaging) --- off by default, independent of the email digest.
+    # Web push (Firebase Cloud Messaging) --- off by default, independent of the email digest.
     WEB_PUSH_ENABLED: bool = env_bool("WEB_PUSH_ENABLED", False)
     # Service-account key, either as a mounted file path (FCM_CREDENTIALS_FILE) or
-    # inline as an env var (FCM_CREDENTIALS_JSON — raw JSON or base64-encoded JSON).
+    # inline as an env var (FCM_CREDENTIALS_JSON, raw JSON or base64-encoded JSON).
     # JSON takes priority when both are set; the env var form suits platforms
     # like Azure Container Apps where mounting a secret file is impractical.
     FCM_CREDENTIALS_FILE: str = _env_path(
@@ -329,14 +329,14 @@ class Settings:
     FIREBASE_APP_ID: str = os.getenv("FIREBASE_APP_ID", "")
     FIREBASE_VAPID_KEY: str = os.getenv("FIREBASE_VAPID_KEY", "")
 
-    # --- Retention (app/jobs/retention.py, run daily by the app) ---
+    # Retention (app/jobs/retention.py, run daily by the app)
     # Days to keep notifications and Sleuth conversations (by last activity); 0 keeps them
     # forever. Expired sessions, reset tokens and idempotency keys are always removed.
     NOTIFICATION_RETENTION_DAYS: int = env_int("NOTIFICATION_RETENTION_DAYS", 180, minimum=0)
     CHAT_RETENTION_DAYS: int = env_int("CHAT_RETENTION_DAYS", 180, minimum=0)
     RETENTION_JOB_ENABLED: bool = env_bool("RETENTION_JOB_ENABLED", True)
 
-    # --- GitHub (optional; branch creation only) ---
+    # GitHub (optional; branch creation only)
     # PAT-only auth. Two credential sources, in this order: a per-project PAT
     # stored encrypted in project_git_configs (sent only to the server it was
     # saved for), then the global GITHUB_TOKEN below (sent only to
@@ -390,11 +390,11 @@ class Settings:
     GITHUB_BRANCH_TITLE_MAX_LENGTH: int = env_int(
         "GITHUB_BRANCH_TITLE_MAX_LENGTH", 25, minimum=1
     )
-    # --- Listener (python -m app.main) ---
+    # Listener (python -m app.main)
     UVICORN_HOST: str = os.getenv("UVICORN_HOST", "127.0.0.1").strip() or "127.0.0.1"
     UVICORN_PORT: int = env_int("UVICORN_PORT", 8000, minimum=1)
 
-    # --- Rate limits (in-memory sliding windows, per worker) ---
+    # Rate limits (in-memory sliding windows, per worker)
     # Auth endpoints, per client IP, within RATE_AUTH_WINDOW_SECONDS.
     RATE_AUTH_WINDOW_SECONDS: int = env_int("RATE_AUTH_WINDOW_SECONDS", 60, minimum=1)
     RATE_LOGIN_MAX: int = env_int("RATE_LOGIN_MAX", 8, minimum=1)
@@ -408,18 +408,18 @@ class Settings:
     RATE_COMMENT_MAX: int = env_int("RATE_COMMENT_MAX", 30, minimum=1)
     RATE_CHAT_MAX: int = env_int("RATE_CHAT_MAX", 30, minimum=1)
 
-    # --- Login lockout (app/account_lockout.py) ---
+    # Login lockout (app/account_lockout.py)
     LOGIN_FAIL_LIMIT: int = env_int("LOGIN_FAIL_LIMIT", 10, minimum=1)
     LOGIN_FAIL_EMAIL_LIMIT: int = env_int("LOGIN_FAIL_EMAIL_LIMIT", 50, minimum=1)
     LOGIN_FAIL_WINDOW_SECONDS: int = env_int("LOGIN_FAIL_WINDOW_SECONDS", 900, minimum=1)
     LOGIN_LOCKOUT_SECONDS: int = env_int("LOGIN_LOCKOUT_SECONDS", 900, minimum=1)
 
-    # --- Paging and size limits ---
+    # Paging and size limits
     PAGE_SIZE_DEFAULT: int = env_int("PAGE_SIZE_DEFAULT", 50, minimum=1)
     PAGE_SIZE_MAX: int = max(env_int("PAGE_SIZE_MAX", 200, minimum=1), PAGE_SIZE_DEFAULT)
     MAX_ATTACHMENT_BYTES: int = env_int("MAX_ATTACHMENT_BYTES", 50 * 1024 * 1024, minimum=1)
 
-    # --- Third-party endpoints (https only; never put credentials in a URL) ---
+    # Third-party endpoints (https only; never put credentials in a URL)
     HIBP_API_URL: str = (
         os.getenv("HIBP_API_URL", "https://api.pwnedpasswords.com/range/").strip()
         or "https://api.pwnedpasswords.com/range/"
@@ -444,7 +444,7 @@ class Settings:
         "https://firebaseinstallations.googleapis.com https://www.googleapis.com",
     ).strip()
 
-    # --- Limits, caps, TTLs (defaults = previous built-in values) ---
+    # Limits, caps, TTLs (defaults = previous built-in values)
     IMPORT_MAX_ROWS: int = env_int("IMPORT_MAX_ROWS", 1000, minimum=1)
     IMPORT_MAX_FILE_BYTES: int = env_int("IMPORT_MAX_FILE_BYTES", 10 * 1024 * 1024, minimum=1024)
     MAX_ASSET_FILE_BYTES: int = env_int("MAX_ASSET_FILE_BYTES", 8 * 1024 * 1024, minimum=1024)

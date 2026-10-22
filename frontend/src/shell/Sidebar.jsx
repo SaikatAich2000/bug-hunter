@@ -1,4 +1,4 @@
-// Sidebar — project/team rail. Swatch/avatar click = filter, name click = edit.
+// Sidebar: project/team rail. Swatch/avatar click = filter, name click = edit.
 import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";

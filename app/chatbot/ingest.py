@@ -1,4 +1,4 @@
-"""Sleuth document ingest — the admin "upload a doc full of bugs" feature.
+"""Sleuth document ingest: the admin "upload a doc full of bugs" feature.
 
 Admin-only (enforced in router.py). Two extraction paths tried in order: the
 cloud AI when configured, else a deterministic parser (xlsx/JSON/CSV/free text)
@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from itertools import islice
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ from app.schemas import (
 
 logger = logging.getLogger("bug_hunter.sleuth.ingest")
 
-# Hard cap on items per upload — bounds the DB against a runaway spreadsheet.
+# Hard cap on items per upload, bounds the DB against a runaway spreadsheet.
 MAX_SPECS = 500
 # Soft cap on uploaded document size; the route also enforces the body limit.
 MAX_DOC_BYTES = get_settings().SLEUTH_INGEST_MAX_BYTES
@@ -94,7 +94,7 @@ def _first_key(row: dict, keys: tuple[str, ...]) -> Any:
     return None
 
 
-def _clean_spec(raw: Any) -> Optional[dict]:
+def _clean_spec(raw: Any) -> dict | None:
     """Normalise one raw entry into a validated spec, or None if it has no title."""
     if isinstance(raw, str):
         raw = {"title": raw}
@@ -125,8 +125,8 @@ def _clean_all(rows: list[Any]) -> list[dict]:
     return out
 
 
-# --- Format detection + per-format parsers (deterministic path) ---
-def _specs_from_json(text: str) -> Optional[list[dict]]:
+# Format detection + per-format parsers (deterministic path)
+def _specs_from_json(text: str) -> list[dict] | None:
     try:
         data = json.loads(text)
     except ValueError:
@@ -203,7 +203,7 @@ _MAX_XLSX_ROWS = 5000
 _MAX_XLSX_COLS = 100
 
 
-def _xlsx_rows(raw: bytes) -> Optional[list[list[str]]]:
+def _xlsx_rows(raw: bytes) -> list[list[str]] | None:
     """Read the first sheet's non-empty rows as lists of strings, or None if the
     bytes aren't a readable workbook."""
     try:
@@ -236,7 +236,7 @@ def _rows_to_specs(rows: list[list[str]]) -> list[dict]:
     return _clean_all([r[0] for r in rows])
 
 
-def _specs_from_xlsx(raw: bytes) -> Optional[list[dict]]:
+def _specs_from_xlsx(raw: bytes) -> list[dict] | None:
     """Parse the first sheet of an xlsx into specs, or None if the bytes aren't
     a readable workbook."""
     rows = _xlsx_rows(raw)
@@ -272,7 +272,7 @@ def parse_document(filename: str, raw: bytes) -> list[dict]:
     return _specs_from_lines(text)
 
 
-# --- AI extraction (optional, isolated, mockable) ---
+# AI extraction (optional, isolated, mockable)
 _AI_SYSTEM = (
     "You read a document an admin uploaded (it may be a spreadsheet rendered as "
     "a pipe-delimited table, CSV, JSON, or free prose) and extract the software "
@@ -290,7 +290,7 @@ _AI_SYSTEM = (
 )
 
 
-def ai_extract_specs(text: str) -> Optional[list[dict]]:
+def ai_extract_specs(text: str) -> list[dict] | None:
     """Read the document with the cloud assistant when configured. Returns cleaned
     specs, or None when the layer is off/unavailable/unhelpful (caller falls back)."""
     try:
@@ -329,13 +329,13 @@ def extract_specs(filename: str, raw: bytes) -> tuple[list[dict], str]:
     return parse_document(filename, raw), "parser"
 
 
-def resolve_project_for_preview(db: Session, project_id: Optional[int]) -> Optional[Project]:
+def resolve_project_for_preview(db: Session, project_id: int | None) -> Project | None:
     """Resolve the project ingested items would land in (for the preview),
     without creating anything. None when there's no project."""
     return _resolve_project(db, project_id)
 
 
-def _resolve_project(db: Session, project_id: Optional[int]) -> Optional[Project]:
+def _resolve_project(db: Session, project_id: int | None) -> Project | None:
     if project_id is not None:
         return db.get(Project, project_id)
     # Default to the lowest-id (bootstrap "General") project so ingest needs no pick.
@@ -343,7 +343,7 @@ def _resolve_project(db: Session, project_id: Optional[int]) -> Optional[Project
 
 
 def create_bugs_from_specs(
-    db: Session, specs: list[dict], actor: User, project_id: Optional[int] = None,
+    db: Session, specs: list[dict], actor: User, project_id: int | None = None,
 ) -> dict:
     """Create one audited Bug per spec under a project, reported by the admin.
     Returns a summary dict; raises ValueError if the project can't be resolved."""

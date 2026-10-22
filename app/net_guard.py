@@ -14,7 +14,6 @@ from __future__ import annotations
 import ipaddress
 import socket
 import urllib.request
-from typing import Optional
 
 import httpcore
 import httpx
@@ -40,7 +39,7 @@ class HostNotAllowed(Exception):
     """The destination resolves to an address the server must not connect to."""
 
 
-def address_problem(ip: Address, allow_private: bool) -> Optional[str]:
+def address_problem(ip: Address, allow_private: bool) -> str | None:
     """Why ``ip`` may not be connected to, or None when it may."""
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
@@ -84,7 +83,7 @@ class _GuardedBackend(httpcore.SyncBackend):
             addresses = allowed_addresses(host, port, self._allow_private)
         except socket.gaierror as exc:
             raise httpcore.ConnectError(str(exc)) from exc
-        last: Optional[Exception] = None
+        last: Exception | None = None
         for ip in addresses:
             try:
                 return super().connect_tcp(str(ip), port, timeout, local_address, socket_options)

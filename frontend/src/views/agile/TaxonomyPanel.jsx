@@ -64,7 +64,7 @@ function ReleasesTab({ projectId, canManage }) {
   };
 
   const release = async (row) => {
-    const ok = await confirmDialog(`Release "${row.name}"? This marks it released.`, { title: "Release Version", okLabel: "Release", danger: false });
+    const ok = await confirmDialog(`Release "${row.name}"? This marks it released`, { title: "Release Version", okLabel: "Release", danger: false });
     if (!ok) return;
     try {
       await api(`/agile/releases/${row.id}/release`, { method: "POST", json: { version: row.version } });
@@ -91,7 +91,7 @@ function ReleasesTab({ projectId, canManage }) {
   return (
     <div>
       {canManage && <CreateRow fields={[{ key: "name", placeholder: "e.g. v2.1", grow: true }]} onCreate={create} />}
-      {rows.length === 0 ? <p className="muted small">No releases yet.</p> : (
+      {rows.length === 0 ? <p className="muted small">No releases yet</p> : (
         <table className="sprints-backlog-table">
           <thead><tr><th>Name</th><th>Status</th><th>Release date</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
           <tbody>
@@ -161,7 +161,7 @@ function ComponentsTab({ projectId, canManage }) {
   return (
     <div>
       {canManage && <CreateRow fields={[{ key: "name", placeholder: "e.g. Backend", grow: true }]} onCreate={create} />}
-      {rows.length === 0 ? <p className="muted small">No components yet.</p> : (
+      {rows.length === 0 ? <p className="muted small">No components yet</p> : (
         <table className="sprints-backlog-table">
           <thead><tr><th>Name</th><th>Assignee policy</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
           <tbody>
@@ -210,7 +210,7 @@ function LabelsTab({ projectId, canManage }) {
   };
 
   const remove = async (row) => {
-    const ok = await confirmDialog(`Delete label "${row.display_name}"? Used on ${row.usage_count} item(s).`, {
+    const ok = await confirmDialog(`Delete label "${row.display_name}"? Used on ${row.usage_count} item(s)`, {
       title: "Delete Label", okLabel: "Delete", danger: true,
     });
     if (!ok) return;
@@ -227,7 +227,7 @@ function LabelsTab({ projectId, canManage }) {
   return (
     <div>
       {canManage && <CreateRow fields={[{ key: "display_name", placeholder: "e.g. security", grow: true }]} onCreate={create} />}
-      {rows.length === 0 ? <p className="muted small">No labels yet.</p> : (
+      {rows.length === 0 ? <p className="muted small">No labels yet</p> : (
         <div className="epic-filter-row">
           {rows.map((r) => (
             <span key={r.id} className="epic-chip" style={{ "--epic-color": r.color || "#607d8b" }}>
@@ -263,7 +263,7 @@ export default function TaxonomyPanel({ projectId, canManage }) {
   if (!agileEnabled) {
     return (
       <div className="empty-state">
-        <p>Scrum is not set up for this project yet.</p>
+        <p>Scrum is not set up for this project yet</p>
       </div>
     );
   }

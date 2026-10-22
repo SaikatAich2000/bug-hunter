@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from datetime import timedelta
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -31,7 +31,7 @@ AdminUser = Annotated[User, Depends(require_admin)]
 
 
 def _persist_turn(db: Session, actor: User, user_msg: str,
-                  resp: "executor.Response") -> None:
+                  resp: executor.Response) -> None:
     """Append the turn to the chat transcript (reuses a conversation active in
     the last 30 min, else starts one). Gated by a setting; failures swallowed."""
     if not get_settings().SLEUTH_CHAT_MEMORY_ENABLED:
@@ -220,7 +220,7 @@ async def ingest_document(
     db: DbDep,
     actor: AdminUser,
     file: Annotated[UploadFile, File()],
-    project_id: Annotated[Optional[int], Form()] = None,
+    project_id: Annotated[int | None, Form()] = None,
 ) -> ChatOut:
     """Admin-only document import: extract candidates, stage them, return a
     preview. Nothing is created until the admin replies 'create them'."""

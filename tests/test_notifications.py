@@ -258,7 +258,7 @@ def test_user_cannot_see_or_mutate_another_users_notifications(client):
     assert carolc.delete(f"{_NOTIFS}/{bob_notif_id}").status_code == 404
     # Bob's notification must be untouched.
     assert bobc.get(f"{_NOTIFS}/unread_count").json()["unread"] >= 1
-    _ = bug  # silence "unused" — keeps the assignment intent explicit
+    _ = bug  # silence "unused", keeps the assignment intent explicit
 
 
 # Read / unread / delete lifecycle

@@ -128,7 +128,7 @@ def test_upload_of_an_oversized_bmp_is_a_clear_413(admin_client, monkeypatch):
     assert admin_client.get(f"/api/bugs/{bug['id']}").json()["attachments"] == []
 
 
-# --- Pillow-backed formats and malformed input ---------------------------------------------
+# Pillow-backed formats and malformed input
 
 def _encoded(img, fmt, **save):
     out = io.BytesIO()

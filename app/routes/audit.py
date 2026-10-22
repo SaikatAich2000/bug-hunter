@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, cast, or_, select
@@ -57,9 +56,9 @@ def _scope_to_projects(stmt, accessible):
 
 @router.get("", response_model=list[ActivityOut])
 def list_audit(
-    entity_type: Optional[str] = None,
-    actor_user_id: Optional[int] = None,
-    q: Optional[str] = Query(default=None, max_length=200),
+    entity_type: str | None = None,
+    actor_user_id: int | None = None,
+    q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=200, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),

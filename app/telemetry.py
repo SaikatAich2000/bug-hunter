@@ -55,7 +55,7 @@ import socket
 import threading
 import uuid
 import weakref
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.config import env_bool, env_float, env_int, env_str
@@ -119,7 +119,7 @@ _app_instrumented = False
 _INSTANCE_ID = uuid.uuid4().hex  # one id per process, so replicas can be told apart
 
 
-# --------------------------------------------------------------------- env reading
+# env reading
 
 
 _SIGNALS = ("traces", "metrics", "logs")
@@ -208,7 +208,7 @@ def _app_setting(name: str) -> str:
         return ""
 
 
-# ------------------------------------------------------------- secrets + filters
+# secrets + filters
 
 
 def _is_sensitive_key(key: object) -> bool:
@@ -247,11 +247,11 @@ class SensitiveAttributeFilter(logging.Filter):
         return True
 
 
-# ----------------------------------------------------------------- console format
+# console format
 
 
 def _iso_utc(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -293,7 +293,7 @@ def _is_otel_handler(handler: logging.Handler) -> bool:
 
 
 # Original (basicConfig) formatters, so switching LOG_FORMAT back to text restores
-# the console exactly as it was — telemetry must never rewrite console output.
+# the console exactly as it was, telemetry must never rewrite console output.
 _console_formatters: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
@@ -320,7 +320,7 @@ def configure_console_logging() -> str:
     return fmt
 
 
-# ------------------------------------------------------- exporters + resource
+# exporters + resource
 
 
 def _headers(signal: str | None) -> list[tuple[str, str]]:
@@ -483,7 +483,7 @@ def _setup_logs(resource):
     return provider
 
 
-# ------------------------------------------------------------- instrumentation
+# instrumentation
 
 # Header names never captured onto spans (session cookies / API keys).
 _SANITIZED_HEADERS = ("authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization")
@@ -580,7 +580,7 @@ def _instrument_httpx() -> None:
         _logger.warning("httpx instrumentation unavailable; outbound HTTP spans are off", exc_info=True)
 
 
-# ------------------------------------------------------------------ public API
+# public API
 
 
 def setup_telemetry() -> bool:

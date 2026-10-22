@@ -1,7 +1,7 @@
 /** Behavioral tests for the real project-list helpers in
  * `../projectList.js` (the exact module AppContext imports).
  *
- * They exercise production code — normalize/upsert plus the staleness rule —
+ * They exercise production code, normalize/upsert plus the staleness rule,
  * so a drift in the app logic fails these tests.
  */
 import { describe, expect, it } from "vitest";

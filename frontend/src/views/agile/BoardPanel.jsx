@@ -32,7 +32,7 @@ const WIP_TITLES = { over: "Over the column's maximum", under: "Under the column
 // What screen readers hear on a card: there is no keyboard drag on the board.
 const DND_ACCESSIBILITY = {
   screenReaderInstructions: {
-    draggable: "Open an issue with its title. Use its actions menu to move it to another column.",
+    draggable: "Open an issue with its title, use its actions menu to move it to another column",
   },
 };
 
@@ -198,7 +198,7 @@ export default function BoardPanel({ canManage, board, onOpenTab }) {
     if (!card || !column) return;
     const status = dropStatus(column, card);
     if (status === undefined) {
-      toast(`${column.name} has no status mapped to it. Map one in Board settings.`, "error");
+      toast(`${column.name} has no status mapped to it, map one in Board settings`, "error");
       return;
     }
     if (status === null) return;
@@ -212,7 +212,7 @@ export default function BoardPanel({ canManage, board, onOpenTab }) {
     return (
       <div className="empty-state">
         <h2>No active sprint</h2>
-        <p className="muted">Plan a sprint in the backlog and start it to see its board here.</p>
+        <p className="muted">Plan a sprint in the backlog and start it to see its board here</p>
         <button type="button" className="btn primary" onClick={() => onOpenTab("backlog")}>Go to backlog</button>
       </div>
     );
@@ -279,10 +279,10 @@ export default function BoardPanel({ canManage, board, onOpenTab }) {
           {data.unmapped.length} issue{data.unmapped.length === 1 ? " is" : "s are"} not shown because
           {data.unmapped.length === 1 ? " its" : " their"} status ({[...new Set(data.unmapped.map((c) => c.status))].join(", ")})
           {" "}is not in any column.
-          {canManage && <> <button type="button" className="ag-link" onClick={() => onOpenTab("settings")}>Map it in Board settings</button>.</>}
+          {canManage && <> <button type="button" className="ag-link" onClick={() => onOpenTab("settings")}>Map it in Board settings</button></>}
         </output>
       )}
-      {hidden > 0 && <p className="muted small">{hidden} card{hidden === 1 ? "" : "s"} hidden by quick filters.</p>}
+      {hidden > 0 && <p className="muted small">{hidden} card{hidden === 1 ? "" : "s"} hidden by quick filters</p>}
 
       <DndContext sensors={sensors} collisionDetection={dropUnderPointer} accessibility={DND_ACCESSIBILITY}
         onDragStart={({ active: a }) => setDragCard(a.data.current?.card ?? null)}

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,7 +22,7 @@ logger = logging.getLogger("bug_hunter.sleuth.rag")
 _COLLECTION = "sleuth"
 
 
-def _embed(texts: list[str]) -> Optional[list[list[float]]]:
+def _embed(texts: list[str]) -> list[list[float]] | None:
     """Batch-embed texts with Gemini. Returns None on any failure."""
     s = get_settings()
     if not s.GEMINI_API_KEY or not texts:
@@ -92,7 +91,7 @@ def _gather_db_docs(db: Session) -> tuple[list[str], list[str], list[dict]]:
     return ids, docs, metas
 
 
-def _read_doc(path: str) -> Optional[str]:
+def _read_doc(path: str) -> str | None:
     """Read a text/markdown doc (capped), or None if it can't be read."""
     try:
         with open(path, encoding="utf-8", errors="ignore") as fh:
@@ -172,7 +171,7 @@ def upsert_bug(db: Session, bug_id: int) -> None:
         logger.debug("Sleuth RAG upsert_bug failed", exc_info=True)
 
 
-def retrieve_text(message: str, where: Optional[dict] = None) -> str:
+def retrieve_text(message: str, where: dict | None = None) -> str:
     """Return a compact context block of the top-k snippets, or "" if RAG
     is disabled or unavailable.
 

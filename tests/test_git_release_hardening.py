@@ -68,9 +68,7 @@ def git_project(git_env, admin_client):
     return {"project": project}
 
 
-# ===========================================================================
 # Configuration change between preview and create
-# ===========================================================================
 
 def test_integration_disabled_between_preview_and_create(
     git_project, admin_client, git_env, provider
@@ -111,9 +109,7 @@ def test_branch_creation_globally_disabled_between_preview_and_create(
     assert provider.calls.count("create_branch") == 0
 
 
-# ===========================================================================
 # Concurrent duplicate creation across workers
-# ===========================================================================
 
 @pytest.mark.parametrize("forced_overlap", [False, True], ids=["free-race", "forced-overlap"])
 def test_concurrent_duplicate_creation_creates_one_remote_branch(
@@ -217,9 +213,7 @@ def test_concurrent_duplicate_creation_creates_one_remote_branch(
     assert len(rows) == 1
 
 
-# ===========================================================================
 # Project scoping and isolation
-# ===========================================================================
 
 def test_branch_project_follows_the_story_not_the_caller(
     git_project, admin_client, git_env

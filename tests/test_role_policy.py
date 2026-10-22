@@ -87,7 +87,7 @@ class TestBugDeletePermissions:
         assert r.status_code == 403
 
 
-# Every user can edit any bug — edit/reassign is unrestricted.
+# Every user can edit any bug, edit/reassign is unrestricted.
 class TestBugEditPermissions:
     def test_user_can_edit_someone_elses_bug(self, admin_client):
         p = _make_project(admin_client, name="EditProj1")
@@ -257,7 +257,7 @@ class TestAuditVisibility:
 
 
 def _new_client():
-    """Fresh TestClient with its own cookie jar — session tests needing independent cookies spin up their own."""
+    """Fresh TestClient with its own cookie jar, session tests needing independent cookies spin up their own."""
     from fastapi.testclient import TestClient
 
     from app.main import app

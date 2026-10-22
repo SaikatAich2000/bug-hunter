@@ -26,7 +26,7 @@ python -m uvicorn app.main:app --reload    # http://127.0.0.1:8000
 ```
 
 `requirements.txt` / `requirements-dev.txt` stay the human-maintained source of
-truth. After any dependency change, regenerate both Linux locks — the dev lock
+truth. After any dependency change, regenerate both Linux locks, the dev lock
 first, then the runtime lock constrained to it, so the Docker image ships exactly
 the versions CI tested (`tests/test_release_hygiene.py` fails on any drift):
 
@@ -43,7 +43,7 @@ Or via Docker (the canonical run path):
 
 ### Frontend
 
-The SPA source lives in `frontend/` (React + JavaScript + Vite — no
+The SPA source lives in `frontend/` (React + JavaScript + Vite, no
 TypeScript anywhere in this repo). The build writes the static bundle to
 `app/static/`, which FastAPI serves. After any frontend change, rebuild:
 
@@ -59,7 +59,7 @@ npm run build
 Traces, metrics and logs stay console-only unless `OTEL_EXPORTER_OTLP_ENDPOINT` is
 set in `.env` (OTLP/gRPC; full flag list in the *Observability (SigNoz)* section of
 [README.md](README.md)). Tests force the endpoint off in `tests/conftest.py`, so the
-suite never talks to a collector — `tests/test_telemetry.py` covers export behaviour
+suite never talks to a collector, `tests/test_telemetry.py` covers export behaviour
 with fakes plus an in-process OTLP/gRPC receiver.
 
 ## Tests
@@ -85,11 +85,11 @@ More in [docs/testing.md](docs/testing.md).
 
 Local development uses SQLite (`bug_hunter.db` in the repo root). To reset
 it back to the first-launch state, delete the database files (including the
-write-ahead-log sidecars) and restart the app — the schema and default data
+write-ahead-log sidecars) and restart the app, the schema and default data
 are recreated on boot:
 
 ```bash
-# Windows PowerShell — stop the server first, then:
+# Windows PowerShell, stop the server first, then:
 Remove-Item -Force bug_hunter.db, bug_hunter.db-wal, bug_hunter.db-shm
 python -m uvicorn app.main:app --reload
 ```
@@ -128,7 +128,7 @@ workflow test there, and new views should be added to its axe checks.
 
 ### Lint & security
 
-Run these before opening a PR — the CI pipeline runs the same checks:
+Run these before opening a PR, the CI pipeline runs the same checks:
 
 ```bash
 python -m compileall -q app tests scripts    # syntax gate
@@ -141,11 +141,11 @@ cd frontend && npm run lint && npm test && npm audit --omit=dev --audit-level=hi
 ## Code style
 
 - Match the surrounding code.
-- Keep comments concise: one short line stating a non-obvious *why* — a hidden
+- Keep comments concise: one short line stating a non-obvious *why*, a hidden
   constraint, a subtle rule, or a workaround for a specific bug. No essay
   blocks; docstrings are one line (two for genuinely complex APIs).
 - New routes need tests; new schemas need validators.
-- Database changes must only *add* — see *Live-data safety* in
+- Database changes must only *add*, see *Live-data safety* in
   [README.md](README.md). No destructive migrations.
 - The live FastAPI app is the source of truth for the API: browse `/docs` on a
   running instance.
@@ -153,7 +153,7 @@ cd frontend && npm run lint && npm test && npm audit --omit=dev --audit-level=hi
 ## Version bumps
 
 `APP_VERSION` in `.env` is the **single source of truth** for the product
-version. There is deliberately no hardcoded copy anywhere else — not in
+version. There is deliberately no hardcoded copy anywhere else, not in
 `app/config.py`, `docker-compose.yml`, `frontend/package.json`,
 `sonar-project.properties`, CI, or the release scripts. A second literal is
 exactly how a release ends up labelled with the previous version.
@@ -193,3 +193,8 @@ for the private disclosure path.
 
 By submitting a contribution you agree it will be licensed under the project's
 [MIT license](LICENSE.txt).
+
+## Writing style
+
+- UI text has no trailing full stops. Keep headings, labels, toasts and hints short, and join two thoughts with a comma.
+- Comments say why, not what, in a line or two. No em dashes, emoji or banner rulers.

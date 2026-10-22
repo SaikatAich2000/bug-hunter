@@ -141,9 +141,9 @@ export default function ProjectModal() {
             <div className="field">
               <small className="hint" id="projectAgileHint">
                 Creates the project with its Scrum board and backlog ready, so Epics,
-                Stories and Sub-tasks can be added straight away. Turn it off for a
+                Stories and Sub-tasks can be added straight away, turn it off for a
                 plain Bug / Requirement / Task tracker; the board can be set up later
-                from the Sprints page.
+                from the Sprints page
               </small>
             </div>
           </>

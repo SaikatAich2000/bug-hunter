@@ -369,7 +369,7 @@ class TestAdminOnlyMutations:
 
 
 class TestInitDbIsIdempotent:
-    """init_db (create/add-column/add-index) run twice leaves the schema identical — no destructive DDL on redeploy."""
+    """init_db (create/add-column/add-index) run twice leaves the schema identical, no destructive DDL on redeploy."""
 
     def test_running_init_twice_does_not_recreate_tables(self, tmp_path, monkeypatch):
         import sys
@@ -508,9 +508,7 @@ class TestHardening:
         assert "relative_files = true" in text
 
 
-# ===========================================================================
 # Plain-text descriptions in the API (no HTML storage, no *_text twin)
-# ===========================================================================
 
 def test_bug_stores_and_returns_plain_text_description(admin_client):
     """The description is one plain-text field, returned exactly as stored."""

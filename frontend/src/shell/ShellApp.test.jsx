@@ -234,7 +234,7 @@ describe("notifications", () => {
     await user.click(within(dialog).getByRole("button", { name: "Mark all read" }));
     await waitFor(() => expect(backend.called("POST", "/notifications/read-all")).toHaveLength(1));
     await user.click(within(dialog).getByLabelText("Dismiss notification"));
-    expect(await within(dialog).findByText("You're all caught up.")).toBeInTheDocument();
+    expect(await within(dialog).findByText("You're all caught up")).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Notifications" })).not.toBeInTheDocument();
   });

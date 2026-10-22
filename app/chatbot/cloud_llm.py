@@ -1,4 +1,4 @@
-"""Sleuth Layer 4 — optional cloud LLM (Groq primary, OpenRouter fallback).
+"""Sleuth Layer 4: optional cloud LLM (Groq primary, OpenRouter fallback).
 
 Safety in code, not just the prompt: data questions are re-parsed by the
 deterministic NLU (no invented numbers), action_* intents are dropped (no
@@ -11,8 +11,8 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -46,7 +46,7 @@ def is_available() -> bool:
     return True
 
 
-# System prompt — one JSON object: mode="data" routes to SQL handlers,
+# System prompt: one JSON object: mode="data" routes to SQL handlers,
 # mode="answer" is free-form. The model never produces counts or writes.
 SYSTEM_PROMPT = (
     f"You are Sleuth, the assistant built into the {get_settings().APP_NAME} work tracker. "
@@ -121,10 +121,10 @@ SYSTEM_PROMPT = (
 )
 
 
-# --- Provider calls (httpx REST — no SDK dependency) ---
+# Provider calls (httpx REST — no SDK dependency)
 def _call_groq(system: str, user: str, *, temperature: float = 0.0,
                frequency_penalty: float = 0.0,
-               presence_penalty: float = 0.0) -> Optional[str]:
+               presence_penalty: float = 0.0) -> str | None:
     s = get_settings()
     if not s.GROQ_API_KEY:
         return None
@@ -160,7 +160,7 @@ def _call_groq(system: str, user: str, *, temperature: float = 0.0,
 
 def _call_openrouter(system: str, user: str, *, temperature: float = 0.0,
                      frequency_penalty: float = 0.0,
-                     presence_penalty: float = 0.0) -> Optional[str]:
+                     presence_penalty: float = 0.0) -> str | None:
     s = get_settings()
     if not s.OPENROUTER_API_KEY:
         return None
@@ -193,7 +193,7 @@ def _call_openrouter(system: str, user: str, *, temperature: float = 0.0,
         return None
 
 
-# In-process observability counters. Unlocked on purpose — an off-by-one under
+# In-process observability counters. Unlocked on purpose, an off-by-one under
 # a race is fine for diagnostics.
 _metrics: dict[str, int] = {}
 
@@ -244,12 +244,12 @@ def _complete(system: str, user_raw: str, *,
               trip_cooldown: bool = True,
               temperature: float = 0.0,
               frequency_penalty: float = 0.0,
-              presence_penalty: float = 0.0) -> Optional[dict[str, Any]]:
+              presence_penalty: float = 0.0) -> dict[str, Any] | None:
     """Redact, call Groq, fall back to OpenRouter, parse the JSON reply.
     Returns the parsed dict or None on any failure.
 
     trip_cooldown=False is for sub-calls (judge, agent loop) that should not
-    trip the chat path's circuit breaker on their own flakiness — only a
+    trip the chat path's circuit breaker on their own flakiness, only a
     primary chat completion should arm the cooldown.
 
     Sampling knobs are forwarded to both providers. The conversational path
@@ -291,7 +291,7 @@ def _complete(system: str, user_raw: str, *,
     return parsed
 
 
-def complete_json(system: str, user: str) -> Optional[dict[str, Any]]:
+def complete_json(system: str, user: str) -> dict[str, Any] | None:
     """Provider call + JSON parse, shared with the document-ingest feature.
 
     trip_cooldown=False because ingest is a sub-call: a failed document upload
@@ -321,7 +321,7 @@ def _strip_wrapping_fence(text: str) -> str:
     return inner.strip()
 
 
-def _extract_json(raw: str) -> Optional[dict[str, Any]]:
+def _extract_json(raw: str) -> dict[str, Any] | None:
     """Pull the first JSON object from the reply, tolerating a wrapping code fence.
 
     Uses raw_decode so a brace inside a JSON string value (e.g. "a{2,}" in a
@@ -348,7 +348,7 @@ def _grounding(message: str, db: Session, actor: User, settings) -> tuple[str, s
 
     SQL keyword retrieval (no vector store) runs when SLEUTH_RETRIEVAL_ENABLED;
     the optional Chroma RAG layer is additive when configured. Both are
-    best-effort — retrieval failures never break the call.
+    best-effort: retrieval failures never break the call.
 
     Results are scoped to the actor's accessible projects so a restricted
     manager or user never gets out-of-scope bug text injected into the prompt.
@@ -408,7 +408,7 @@ def _judge_text(message: str, context: str, text: str, settings) -> str:
 
 
 def _answer_response(text: str, settings, grounded_ids: set[int], *,
-                     message: str = "", context: str = "") -> Optional[Response]:
+                     message: str = "", context: str = "") -> Response | None:
     """Wrap a free-form answer, optionally flagging ungrounded citations.
 
     The answer is only annotated, never rewritten. With SLEUTH_VERIFY_ANSWERS,
@@ -461,9 +461,9 @@ def try_understand(
     message: str,
     db: Session,
     actor: User,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     history: str = "",
-) -> Optional[Response]:
+) -> Response | None:
     """Layer 4 entry point. Returns a Response, or None to fall through.
 
     Data questions are routed to the deterministic SQL handlers (the model
@@ -473,8 +473,8 @@ def try_understand(
     if not is_available():
         return None
     if _in_cooldown():
-        return None  # recent provider failure — let the rules answer
-    now = now or datetime.now(timezone.utc)
+        return None  # recent provider failure, let the rules answer
+    now = now or datetime.now(UTC)
 
     # Pull a few recent turns so follow-ups ("and the critical ones?") resolve
     # correctly. Best-effort; redacted later with the rest of the prompt.
@@ -498,12 +498,12 @@ def try_understand(
 
 def _single_shot(message: str, db: Session, actor: User, now: datetime,
                  history: str, context_text: str, grounded_ids: set[int],
-                 settings) -> Optional[Response]:
+                 settings) -> Response | None:
     """One model round-trip: route a data question to the SQL handlers, or answer
     a free-form question from the grounding context."""
     prompt = message
     if history:
-        # Fence the history the same way as retrieved context — a prior turn
+        # Fence the history the same way as retrieved context, a prior turn
         # may echo record text, so treat it as DATA, not instructions.
         safe_hist = history.replace("<<", "< <")
         prompt = (
@@ -540,7 +540,7 @@ def _single_shot(message: str, db: Session, actor: User, now: datetime,
 
 def _run_agent(message: str, db: Session, actor: User, now: datetime,
                history: str, context_text: str, grounded_ids: set[int],
-               settings) -> Optional[Response]:
+               settings) -> Response | None:
     """Drive the read-only agent loop, then render its outcome.
 
     Tools are bound to the live DB but stay read-only: the query tool goes
@@ -559,7 +559,7 @@ def _run_agent(message: str, db: Session, actor: User, now: datetime,
     # could tie up a worker for max_steps * 2 * timeout seconds.
     deadline = time.monotonic() + (settings.SLEUTH_CLOUD_TIMEOUT_S * 2)
 
-    def call_model(prompt: str) -> Optional[dict[str, Any]]:
+    def call_model(prompt: str) -> dict[str, Any] | None:
         if time.monotonic() >= deadline:
             logger.info("Sleuth agent: aggregate time budget exhausted; stopping.")
             return None
@@ -628,7 +628,7 @@ def _recent_history(db: Session, actor: User, limit: int = 6) -> str:
 
 
 def _route_data_query(canonical: str, db: Session, actor: User,
-                      now: datetime) -> Optional[Response]:
+                      now: datetime) -> Response | None:
     """Re-parse the canonical query with the deterministic NLU and dispatch
     through read handlers only, so numbers come from real SQL and writes are
     impossible."""
@@ -656,7 +656,7 @@ def _route_data_query(canonical: str, db: Session, actor: User,
 
     # Re-apply the actor's project scope. The cloud layer leads for free-form
     # messages, so a restricted user who phrases a data ask in plain English
-    # must not get rows from projects they can't access — the same boundary the
+    # must not get rows from projects they can't access, the same boundary the
     # deterministic path enforces. Returns None for admins (unrestricted).
     accessible = accessible_project_ids(db, actor)
     # read_only=True so a model-chosen 'bug N' lookup doesn't update the

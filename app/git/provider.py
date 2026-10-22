@@ -2,7 +2,7 @@
 
 Only GitHub Enterprise is implemented today (app/git/github.py). The Protocol
 and the error taxonomy below are the only things a second provider would need
-to satisfy — GitLab/Bitbucket/Azure DevOps are intentionally NOT implemented.
+to satisfy: GitLab/Bitbucket/Azure DevOps are intentionally NOT implemented.
 
 Everything a provider reports passes through `sanitize_provider_message` before
 it can reach a log line, an audit row or an API response, because provider
@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-# --- Stable error classifiers -------------------------------------------------
+# Stable error classifiers
 AUTH_FAILED = "auth_failed"
 PERMISSION_DENIED = "permission_denied"
 NOT_FOUND = "not_found"
@@ -38,7 +38,7 @@ INVALID_BASE_BRANCH = "invalid_base_branch"
 
 # Only these may be retried: everything else is either a definitive failure or
 # could already have created the branch, which the caller reconciles instead.
-# A TLS trust failure is deliberately NOT retryable — retrying an untrusted
+# A TLS trust failure is deliberately NOT retryable, retrying an untrusted
 # certificate chain cannot succeed and would only delay the diagnosis.
 RETRYABLE_CODES = frozenset(
     {TIMEOUT, UNAVAILABLE, PROXY_ERROR, DNS_ERROR}

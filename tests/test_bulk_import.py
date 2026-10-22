@@ -59,7 +59,7 @@ def _upload(client, data: bytes, filename: str):
     )
 
 
-# --- Auth / permission gates ---
+# Auth / permission gates
 
 def test_template_requires_auth(client):
     assert client.get(_TEMPLATE).status_code == 401
@@ -77,7 +77,7 @@ def test_import_forbidden_for_regular_user(user_client):
     assert _upload(user_client, _xlsx_bytes([]), "x.xlsx").status_code == 403
 
 
-# --- Template download ---
+# Template download
 
 def test_download_template_matches_headers(admin_client):
     res = admin_client.get(_TEMPLATE)
@@ -105,7 +105,7 @@ def test_download_template_build_failure_returns_500(admin_client, monkeypatch):
     assert "workbook build failed" in res.json()["detail"]
 
 
-# --- Happy path ---
+# Happy path
 
 def test_import_creates_bugs_xlsx(admin_client):
     proj = _make_project(admin_client, "Import Proj A")
@@ -175,7 +175,7 @@ def test_import_unresolved_assignee_is_a_warning_not_a_failure(admin_client):
     assert listed["items"][0]["assignees"] == []
 
 
-# --- Row-level validation errors ---
+# Row-level validation errors
 
 def test_import_reports_row_errors_and_skips_them(admin_client):
     proj = _make_project(admin_client, "Import Proj D")
@@ -201,7 +201,7 @@ def test_import_reports_row_errors_and_skips_them(admin_client):
     assert any("Invalid Status" in msg for msg in errors_by_row.values())
 
 
-# --- Every column is optional; blanks degrade gracefully, never crash ---
+# Every column is optional; blanks degrade gracefully, never crash
 
 def test_import_blank_title_gets_a_placeholder(admin_client):
     proj = _make_project(admin_client, "Import Proj E")
@@ -216,7 +216,7 @@ def test_import_blank_title_gets_a_placeholder(admin_client):
 
 def test_import_blank_project_defaults_when_only_one_exists(admin_client):
     # A fresh app always seeds exactly one project ("General") on first boot
-    # (see app/main.py::_bootstrap) — no need to create another to test this.
+    # (see app/main.py::_bootstrap), no need to create another to test this.
     projects = admin_client.get("/api/projects").json()
     assert len(projects) == 1
     general = projects[0]
@@ -257,7 +257,7 @@ def test_import_every_optional_column_blank_still_creates(admin_client):
     assert row["assignees"] == []
 
 
-# --- Whole-file problems ---
+# Whole-file problems
 
 def test_import_rejects_unsupported_file_type(admin_client):
     res = _upload(admin_client, b"just some text", "bugs.txt")
@@ -282,7 +282,7 @@ def test_import_empty_file_reports_no_rows(admin_client):
     assert "No data rows" in body["message"]
 
 
-# --- Row-level validation: priority / environment / due date ---
+# Row-level validation: priority / environment / due date
 
 def test_import_invalid_priority_environment_due_date(admin_client):
     proj = _make_project(admin_client, "Import Proj Bad Enums")
@@ -325,7 +325,7 @@ def test_import_deactivated_assignee_is_a_warning(admin_client):
     assert listed["items"][0]["assignees"] == []
 
 
-# --- Row-level validation: reporter resolution by name ---
+# Row-level validation: reporter resolution by name
 
 def test_import_reporter_by_name_resolved_not_found_ambiguous_deactivated(admin_client):
     proj = _make_project(admin_client, "Import Proj Reporter")
@@ -363,7 +363,7 @@ def test_import_reporter_by_name_resolved_not_found_ambiguous_deactivated(admin_
     assert resolved["reporter"]["email"] == solo["email"]
 
 
-# --- Row-level validation: assignees ---
+# Row-level validation: assignees
 
 def test_import_assignees_ambiguous_blank_token_and_duplicate(admin_client):
     proj = _make_project(admin_client, "Import Proj Assignees")
@@ -391,7 +391,7 @@ def test_import_assignees_ambiguous_blank_token_and_duplicate(admin_client):
     assert [a["email"] for a in row["assignees"]] == [solo["email"]]
 
 
-# --- Row-level validation: event resolution ---
+# Row-level validation: event resolution
 
 def test_import_event_resolved_not_found_and_ambiguous(admin_client):
     proj = _make_project(admin_client, "Import Proj Event")
@@ -417,7 +417,7 @@ def test_import_event_resolved_not_found_and_ambiguous(admin_client):
     assert resolved["event_id"] == ev["id"]
 
 
-# --- Low-level parsing helpers (app/bulk_import.py internals) ---
+# Low-level parsing helpers (app/bulk_import.py internals)
 
 def test_ensure_openpyxl_raises_when_unavailable(monkeypatch):
     from app import bulk_import
@@ -479,7 +479,7 @@ def test_rows_from_csv_stops_scanning_past_the_cap():
 
 def test_import_rejects_oversized_file(admin_client):
     # The route pre-checks size while streaming the upload (_read_upload_with_limit),
-    # so run_import()'s own guard is only reachable by calling it directly —
+    # so run_import()'s own guard is only reachable by calling it directly,
     # exercised here as the defensive check it's meant to be for any other caller.
     from sqlalchemy import select
 
@@ -542,7 +542,7 @@ def test_create_validated_rows_integrity_error_rolls_back(admin_client, monkeypa
         db.close()
 
 
-# --- Project scoping for managers ---
+# Project scoping for managers
 
 def test_manager_cannot_import_into_project_outside_scope(admin_client):
     outside = _make_project(admin_client, "Admin Only Proj")

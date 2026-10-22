@@ -25,7 +25,7 @@ def _make_bug(client, project_id, status="New", title="A test bug", priority="Me
     return r.json()
 
 
-# --- 1. New statuses ---
+# 1. New statuses
 class TestNewStatuses:
     def test_meta_lists_both_new_statuses(self, admin_client):
         r = admin_client.get("/api/meta")
@@ -62,7 +62,7 @@ class TestNewStatuses:
         assert any(b["title"] == "oops" for b in items)
 
 
-# --- 2. KPI / stats response shape ---
+# 2. KPI / stats response shape
 class TestStatsShape:
     def test_stats_includes_new_kpi_fields(self, admin_client):
         r = admin_client.get("/api/stats")
@@ -111,7 +111,7 @@ class TestStatsShape:
         assert body["closed"] == body["by_status"].get("Closed", 0)
 
 
-# --- 3. Multi-select filters ---
+# 3. Multi-select filters
 class TestMultiSelectFilters:
     def test_repeat_status_param_is_or_match(self, admin_client):
         p = _make_project(admin_client, "MS-1")
@@ -189,7 +189,7 @@ class TestMultiSelectFilters:
         assert "empty-ok" in titles
 
 
-# --- 4. Backward compat — schema additions must not break existing rows ---
+# 4. Backward compat — schema additions must not break existing rows
 class TestBackwardCompat:
     def test_existing_bug_with_old_status_still_listable(self, admin_client):
         """Bugs using the original 5 statuses must round-trip cleanly through the new validator."""
@@ -210,7 +210,7 @@ class TestBackwardCompat:
         assert any(b["title"] == "in-prog" for b in r.json()["items"])
 
 
-# --- 5. Performance — attachment counts use a single aggregate query ---
+# 5. Performance — attachment counts use a single aggregate query
 class TestAttachmentCountPerf:
     def test_list_bugs_returns_correct_attachment_counts(self, admin_client):
         """The aggregate-query path must still return correct attachment counts."""

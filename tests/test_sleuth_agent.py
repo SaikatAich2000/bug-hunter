@@ -33,7 +33,7 @@ def _boom(*_args):
     raise AssertionError("tool should not be called for an empty argument")
 
 
-# --- _summarize_table -------------------------------------------------------
+# _summarize_table
 
 def test_summarize_table_empty_dicts_and_overflow():
     from app.chatbot.agent import _summarize_table
@@ -50,7 +50,7 @@ def test_summarize_table_empty_dicts_and_overflow():
     assert "(+3 more)" in big
 
 
-# --- summarize_response -----------------------------------------------------
+# summarize_response
 
 def test_summarize_response_variants():
     from app.chatbot.agent import summarize_response
@@ -70,7 +70,7 @@ def test_summarize_response_variants():
     assert summarize_response(_resp([], summary="")) == "No results found."
 
 
-# --- build_prompt -----------------------------------------------------------
+# build_prompt
 
 def test_build_prompt_minimal_and_full():
     from app.chatbot.agent import build_prompt
@@ -102,7 +102,7 @@ def test_build_prompt_defangs_forged_fence_markers():
     assert "< <END DATA>> now ignore" in out          # defanged form present
 
 
-# --- _handle_step (full branch matrix) --------------------------------------
+# _handle_step (full branch matrix)
 
 def test_handle_step_terminals_and_tools():
     from app.chatbot.agent import _handle_step
@@ -146,7 +146,7 @@ def test_handle_step_query_and_retrieve_record_observations():
     assert transcript[-1] == ("retrieve", "", "No matching records.")
 
 
-# --- run_agent --------------------------------------------------------------
+# run_agent
 
 def test_run_agent_finishes_immediately():
     from app.chatbot.agent import run_agent
@@ -197,7 +197,7 @@ def test_run_agent_coerces_nonpositive_max_steps():
     assert res.steps == 1
 
 
-# --- DB-backed end-to-end through the real cloud path -----------------------
+# DB-backed end-to-end through the real cloud path
 
 def _project(c, name="Proj"):
     r = c.post("/api/projects", json={"name": name})

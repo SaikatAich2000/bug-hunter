@@ -80,7 +80,7 @@ def required_conditions(coverage_threshold: str = DEFAULT_COVERAGE_THRESHOLD) ->
 
 
 def _auth_header(token: str) -> dict[str, str]:
-    encoded = base64.b64encode(f"{token}:".encode("utf-8")).decode("ascii")
+    encoded = base64.b64encode(f"{token}:".encode()).decode("ascii")
     return {"Authorization": f"Basic {encoded}"}
 
 

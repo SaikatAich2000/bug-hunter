@@ -1,11 +1,11 @@
 """Retention job (app/jobs/retention.py): what it removes, what it keeps, and that it batches."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 1, tzinfo=UTC)
 
 
 def _count(db, model, *where):

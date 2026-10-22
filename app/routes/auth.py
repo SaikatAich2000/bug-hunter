@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -53,7 +53,7 @@ logger = logging.getLogger("bug_hunter.auth")
 # in tests/conftest.py, but conftest imports app modules first is NOT guaranteed
 # across files (pytest resolves conftest at collection; imports of app.routes by
 # earlier test modules can happen first). So compute it lazily per call instead
-# of baking a production-cost hash at import time — otherwise CI pays rounds=12
+# of baking a production-cost hash at import time, otherwise CI pays rounds=12
 # on EVERY unknown-email verify (~0.5s each) even when the override is set.
 def _dummy_password_hash() -> str:
     if not hasattr(_dummy_password_hash, "cached"):
@@ -156,7 +156,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: Annotated[
 
     settings = get_settings()
     jti = new_jti()
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+    expires_at = datetime.now(UTC) + timedelta(seconds=settings.SESSION_TTL_SECONDS)
     sess = SessionRow(
         user_id=user.id,
         jti=jti,
@@ -232,7 +232,7 @@ def change_password(
         jti=jti,
         user_agent=(request.headers.get("user-agent") or "")[:400],
         ip_address=_client_ip(request),
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.SESSION_TTL_SECONDS),
+        expires_at=datetime.now(UTC) + timedelta(seconds=settings.SESSION_TTL_SECONDS),
     )
     db.add(new_sess)
 
@@ -275,7 +275,7 @@ def forgot_password(
     prt = PasswordResetToken(
         user_id=user.id,
         token_hash=token_hash,
-        expires_at=datetime.now(timezone.utc) + PASSWORD_RESET_TTL,
+        expires_at=datetime.now(UTC) + PASSWORD_RESET_TTL,
     )
     db.add(prt)
     _audit(db, None, "password_reset_requested",
@@ -298,10 +298,10 @@ def reset_password(payload: ResetPasswordIn, db: Annotated[Session, Depends(get_
     prt = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == h))
     if prt is None:
         raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires = prt.expires_at
     if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
+        expires = expires.replace(tzinfo=UTC)
     if expires < now:
         raise HTTPException(status_code=400, detail=_DETAIL_INVALID_RESET_TOKEN)
 

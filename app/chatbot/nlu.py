@@ -1,4 +1,4 @@
-"""Sleuth NLU — turn a free-form English message into a structured query or
+"""Sleuth NLU: turn a free-form English message into a structured query or
 action. Extracts entities (status, priority, env, names, project, bug id, time
 window) and an intent into a dataclass the executor turns into SQL. Canonical
 values come from live DB context, so renames reflect on the next request.
@@ -7,8 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 # Canonical enums, mirrored from app.schemas so parse-time stays decoupled from
 # Pydantic; the executor re-validates against live schema constants.
@@ -326,7 +325,7 @@ _ME_REPORTER_RE = re.compile(
     r"i\s+(?:reported|filed|raised|opened|logged|created|submitted))\b",
     re.IGNORECASE,
 )
-# "assign … to me/myself" — paired with an assign verb so a bare "to me"
+# "assign … to me/myself", paired with an assign verb so a bare "to me"
 # elsewhere isn't misread as self-assign.
 _TO_SELF_RE = re.compile(r"\b(?:to|for)\s+(?:me|myself)\b", re.IGNORECASE)
 
@@ -335,8 +334,8 @@ _TO_SELF_RE = re.compile(r"\b(?:to|for)\s+(?:me|myself)\b", re.IGNORECASE)
 @dataclass
 class TimeWindow:
     """A relative time range. start/end may be None for open-ended."""
-    start: Optional[datetime] = None
-    end: Optional[datetime] = None
+    start: datetime | None = None
+    end: datetime | None = None
     label: str = ""
 
 
@@ -356,10 +355,10 @@ class ParsedQuery:
     assignee_names: list[str] = field(default_factory=list)
     reporter_ids: list[int] = field(default_factory=list)
     reporter_names: list[str] = field(default_factory=list)
-    bug_id: Optional[int] = None
-    text_search: Optional[str] = None
-    time_window: Optional[TimeWindow] = None
-    role_filter: Optional[str] = None  # admin/manager/user
+    bug_id: int | None = None
+    text_search: str | None = None
+    time_window: TimeWindow | None = None
+    role_filter: str | None = None  # admin/manager/user
 
     wants_export: bool = False    # excel
     wants_count: bool = False
@@ -369,22 +368,22 @@ class ParsedQuery:
     unassigned: bool = False
     sort_oldest: bool = False
     sort_newest: bool = False
-    # "me" / "mine" — executor swaps for the actor's id.
+    # "me" / "mine", executor swaps for the actor's id.
     used_pronoun_me: bool = False
-    me_role: Optional[str] = None    # "assignee" or "reporter"
+    me_role: str | None = None    # "assignee" or "reporter"
 
     # Write-side fields, populated when the user wants Sleuth to act; the
     # executor reads these to build an ActionPlan.
-    action_kind: Optional[str] = None   # "assign" | "unassign" | "set_status"
+    action_kind: str | None = None   # "assign" | "unassign" | "set_status"
                                          # | "set_priority" | "set_environment"
                                          # | "set_due_date" | "add_comment"
                                          # | "create_bug" | "create_project"
-    action_value: Optional[str] = None   # canonical new value for set_*
-    action_comment: Optional[str] = None # body for add_comment
-    action_title: Optional[str] = None   # title for create_bug
-    action_description: Optional[str] = None
-    confirmation: Optional[str] = None   # "yes" | "no" | None
-    # Pronoun ref ("it", "that bug") — executor resolves via memory's last_bug_id.
+    action_value: str | None = None   # canonical new value for set_*
+    action_comment: str | None = None # body for add_comment
+    action_title: str | None = None   # title for create_bug
+    action_description: str | None = None
+    confirmation: str | None = None   # "yes" | "no" | None
+    # Pronoun ref ("it", "that bug"), executor resolves via memory's last_bug_id.
     used_pronoun_bug: bool = False
     used_pronoun_user: bool = False
 
@@ -428,7 +427,7 @@ _WEEKDAY_TO_DOW = {
 }
 
 
-def _named_window(phrase: str, today_start: datetime, now: datetime) -> Optional[TimeWindow]:
+def _named_window(phrase: str, today_start: datetime, now: datetime) -> TimeWindow | None:
     """Resolve a named time phrase (today, this week, last quarter, etc.), or None."""
     if phrase == "today":
         return TimeWindow(today_start, now, "today")
@@ -474,7 +473,7 @@ def _since_weekday_window(weekday_name: str, today_start: datetime, now: datetim
     return TimeWindow(anchor, now, f"since {weekday_name.lower()}")
 
 
-def _first_int_match(matches: tuple) -> Optional[int]:
+def _first_int_match(matches: tuple) -> int | None:
     for grp in matches:
         if grp:
             try:
@@ -484,14 +483,14 @@ def _first_int_match(matches: tuple) -> Optional[int]:
     return None
 
 
-def _first_str_match(matches: tuple) -> Optional[str]:
+def _first_str_match(matches: tuple) -> str | None:
     for grp in matches:
         if grp:
             return grp.lower()
     return None
 
 
-def _relative_window(qty: int, unit: str, now: datetime) -> Optional[TimeWindow]:
+def _relative_window(qty: int, unit: str, now: datetime) -> TimeWindow | None:
     """Map "past N days/weeks/months/hours" or "last N ..." to a window."""
     if unit.startswith("hour"):
         delta = timedelta(hours=qty)
@@ -506,9 +505,9 @@ def _relative_window(qty: int, unit: str, now: datetime) -> Optional[TimeWindow]
     return TimeWindow(now - delta, now, f"last {qty} {unit}")
 
 
-def _parse_time_window(message: str, now: Optional[datetime] = None) -> Optional[TimeWindow]:
+def _parse_time_window(message: str, now: datetime | None = None) -> TimeWindow | None:
     """Extract a time-window hint from the message, or return None."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     m = _TIME_RE.search(message)
     if not m:
@@ -572,7 +571,7 @@ def _extract_priorities(text: str) -> list[str]:
     return out
 
 
-def _typo_match(token: str, candidates: dict, min_len: int = 4) -> Optional[str]:
+def _typo_match(token: str, candidates: dict, min_len: int = 4) -> str | None:
     """Return the best difflib match for `token` in `candidates`, or None.
 
     Short tokens (< min_len) are skipped to avoid noise ("low" -> "log"); the
@@ -725,7 +724,7 @@ def _resolve_project(phrase: str, ctx: Context) -> list[tuple[int, str]]:
 _MAX_BUG_ID = 2_147_483_647
 
 
-def _coerce_bug_id(raw: str) -> Optional[int]:
+def _coerce_bug_id(raw: str) -> int | None:
     """Parse a bug id, rejecting zero, negatives, and values over int4 max."""
     try:
         n = int(raw)
@@ -736,7 +735,7 @@ def _coerce_bug_id(raw: str) -> Optional[int]:
     return n
 
 
-def _extract_bug_id(message: str) -> Optional[int]:
+def _extract_bug_id(message: str) -> int | None:
     m = _BUG_ID_RE.search(message)
     if m:
         n = _coerce_bug_id(m.group(1))
@@ -766,7 +765,7 @@ _FREE_TEXT_CUE_RE = re.compile(
 )
 
 
-def _extract_text_search(message: str) -> Optional[str]:
+def _extract_text_search(message: str) -> str | None:
     m = _QUOTED_RE.search(message)
     if m:
         return m.group(1).strip() or None
@@ -775,7 +774,7 @@ def _extract_text_search(message: str) -> Optional[str]:
         # Strip trailing filter clauses ("in project X", "with priority Y").
         term = _strip_create_bug_tail(m.group(1).strip()).strip(" .?!,")
         # A short term that's entirely a status/priority word is a filter, not
-        # a search topic — let the enum extractors handle it.
+        # a search topic, let the enum extractors handle it.
         only_enum = bool(_extract_statuses(term) or _extract_priorities(term))
         if term and not (only_enum and len(term.split()) <= 2):
             return term or None
@@ -795,7 +794,7 @@ _STATUS_VERB_MAP: dict[str, str] = {
 }
 
 # Extract the comment body from phrases like "comment on bug 5: this is fixed"
-# or "leave a note on bug 5 — try again".
+# or "leave a note on bug 5, try again".
 _COMMENT_BODY_RE = re.compile(
     r"(?:comment|note|reply)(?:\s+on\s+\S+|\s+to\s+\S+|"
     r"\s+about\s+\S+|\s+(?:#|bug\s+#?|issue\s+#?)\d+|\s+saying|\s+with)?"
@@ -842,13 +841,13 @@ _LIST_VERB_RE = re.compile(
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 
-def _action_add_comment(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_add_comment(msg: str, pq: ParsedQuery) -> str | None:
     if not _COMMENT_RE.search(msg):
         return None
     # "show comments on #5" is a read, not a write.
     if _LIST_VERB_RE.search(msg):
         return None
-    # A comment needs a specific target — don't stage a write with no bug id.
+    # A comment needs a specific target, don't stage a write with no bug id.
     # (Comments are never bulk.)
     if not (pq.bug_id or pq.used_pronoun_bug):
         return None
@@ -860,7 +859,7 @@ def _action_add_comment(msg: str, pq: ParsedQuery) -> Optional[str]:
     return "add_comment"
 
 
-def _action_create_project(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_create_project(msg: str, pq: ParsedQuery) -> str | None:
     if not _CREATE_PROJECT_RE.search(msg):
         return None
     m = _CREATE_PROJECT_NAME_RE.search(msg)
@@ -895,7 +894,7 @@ def _strip_create_bug_tail(title: str) -> str:
     return title[:cut].rstrip()
 
 
-def _action_create_bug(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_create_bug(msg: str, pq: ParsedQuery) -> str | None:
     if not _CREATE_BUG_RE.search(msg):
         return None
     m = _CREATE_BUG_TITLE_RE.search(msg)
@@ -910,7 +909,7 @@ def _action_create_bug(msg: str, pq: ParsedQuery) -> Optional[str]:
     return "create_bug"
 
 
-def _action_set_status(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_set_status(msg: str, pq: ParsedQuery) -> str | None:
     # "list resolved bugs" is a filter, not a write; bail on list/count verbs.
     # Bulk writes ("close all bugs") carry no list verb, so they still pass.
     if _LIST_VERB_RE.search(msg):
@@ -927,7 +926,7 @@ def _action_set_status(msg: str, pq: ParsedQuery) -> Optional[str]:
     return "set_status"
 
 
-def _action_set_priority(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_set_priority(msg: str, pq: ParsedQuery) -> str | None:
     if not (_PRIORITY_CHANGE_RE.search(msg) and pq.priorities):
         return None
     pq.action_value = pq.priorities[0]
@@ -935,7 +934,7 @@ def _action_set_priority(msg: str, pq: ParsedQuery) -> Optional[str]:
     return "set_priority"
 
 
-def _action_set_due_date(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_set_due_date(msg: str, pq: ParsedQuery) -> str | None:
     if not _DUE_DATE_RE.search(msg):
         return None
     date_m = _ISO_DATE_RE.search(msg)
@@ -944,7 +943,7 @@ def _action_set_due_date(msg: str, pq: ParsedQuery) -> Optional[str]:
     return "set_due_date"
 
 
-def _action_assign(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _action_assign(msg: str, pq: ParsedQuery) -> str | None:
     # "assign … to me": the executor resolves the current user after parse, so
     # accept it here even though no assignee id is set yet.
     self_assign = pq.used_pronoun_me and pq.me_role == "assignee"
@@ -957,7 +956,7 @@ def _action_assign(msg: str, pq: ParsedQuery) -> Optional[str]:
     return "assign"
 
 
-def _detect_action(msg: str, pq: ParsedQuery) -> Optional[str]:
+def _detect_action(msg: str, pq: ParsedQuery) -> str | None:
     """Return the write-intent kind (assign, set_status, create_bug, ...) or None,
     mutating pq with the action value. Order matters: create_project before
     create_bug (overlapping verbs); assign/unassign last ("give" overlaps reads)."""
@@ -1012,7 +1011,7 @@ _REPORT_KEY_KEYWORDS: list[tuple[str, str]] = [
 ]
 
 
-def pick_report_key(message: str) -> Optional[str]:
+def pick_report_key(message: str) -> str | None:
     """Return the best-matching report key, or None to fall back to item_detail.
     Exposed so the executor can reuse the same mapping."""
     if not message:
@@ -1064,7 +1063,7 @@ def _classify_short_intent(msg: str, pq: ParsedQuery) -> bool:
     return False
 
 
-def _populate_filters(msg: str, pq: ParsedQuery, now: Optional[datetime]) -> None:
+def _populate_filters(msg: str, pq: ParsedQuery, now: datetime | None) -> None:
     bid = _extract_bug_id(msg)
     if bid is not None:
         pq.bug_id = bid
@@ -1274,7 +1273,7 @@ def _classify_final_intent(msg: str, pq: ParsedQuery, ctx: Context) -> str:
         return "list_users"
     if _is_list_projects(msg_lower, pq):
         return "list_projects"
-    # Report beats stats and list_bugs — it's a more specific signal. parse()
+    # Report beats stats and list_bugs, it's a more specific signal. parse()
     # already short-circuits on this via _REPORT_RE, but this function is also
     # unit-tested as an independent classifier, so it must not depend on that.
     if _REPORT_RE.search(msg):
@@ -1292,7 +1291,7 @@ def _classify_final_intent(msg: str, pq: ParsedQuery, ctx: Context) -> str:
     return "unknown"
 
 
-def parse(message: str, ctx: Context, now: Optional[datetime] = None) -> ParsedQuery:
+def parse(message: str, ctx: Context, now: datetime | None = None) -> ParsedQuery:
     """Parse a chat message and return a ParsedQuery for the executor.
 
     `now` can be injected by tests to make time-window assertions deterministic;

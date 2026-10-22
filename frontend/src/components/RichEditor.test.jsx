@@ -315,7 +315,7 @@ describe("files", () => {
   it("with no handler a dropped file explains there is nowhere to attach it", () => {
     const { editor } = setup();
     fireEvent.drop(editor, { dataTransfer: { files: [new File(["x"], "n.png", { type: "image/png" })], types: ["Files"] } });
-    expect(toastText()).toBe(`There's nowhere to attach "n.png" here.`);
+    expect(toastText()).toBe(`There's nowhere to attach "n.png" here`);
   });
 
   it("drag-over with files shows the copy cursor; non-file drags and drops are ignored; disabled ignores all", () => {
@@ -382,6 +382,6 @@ describe("files", () => {
 
     setup();
     fireEvent.mouseDown(tool("Insert image"));
-    expect(toastText()).toBe("Attach files via the attachment area for this form.");
+    expect(toastText()).toBe("Attach files via the attachment area for this form");
   });
 });

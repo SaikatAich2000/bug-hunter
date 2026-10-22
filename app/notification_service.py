@@ -31,7 +31,7 @@ def notify(
     event_id: int | None = None,
     actor_name: str = "",
     exclude: int | None = None,
-    background: "BackgroundTasks | None" = None,
+    background: BackgroundTasks | None = None,
 ) -> list[int]:
     """Queue an in-app notification per distinct recipient; with a ``background``
     runner, also schedule an immediate web push to them.

@@ -26,7 +26,7 @@ export function epicTitle(epicId, epicsById) {
 }
 
 export function AssigneeStack({ assignees }) {
-  // Unassigned renders nothing — the old "＋" placeholder looked like an
+  // Unassigned renders nothing, the old "＋" placeholder looked like an
   // action button but had no handler behind it.
   if (!assignees?.length) return null;
   const shown = assignees.slice(0, 3);

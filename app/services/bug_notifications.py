@@ -84,7 +84,7 @@ def schedule_update_notifications(background: BackgroundTasks, snap: BugSnapshot
 # reporter + assignees and feeds the email digest.
 def notify_item_stakeholders(
     db: Session, bug: Bug, actor: User, *, kind: str, title: str, body: str,
-    background: "BackgroundTasks | None" = None, link_bug: bool = True,
+    background: BackgroundTasks | None = None, link_bug: bool = True,
 ) -> None:
     """Notify a work item's reporter and assignees, excluding the actor.
 
@@ -109,7 +109,7 @@ def link_stakeholders(bug: Bug) -> list[int | None]:
 
 def notify_link_endpoints(
     db: Session, recipients: list[int | None], primary_id: int, actor: User, *,
-    background: "BackgroundTasks | None", title: str, body: str,
+    background: BackgroundTasks | None, title: str, body: str,
 ) -> None:
     """Notify the reporters + assignees of both link endpoints. notify()
     deduplicates ids and drops the actor, so a user on both ends gets one

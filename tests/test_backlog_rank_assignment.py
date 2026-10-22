@@ -57,7 +57,7 @@ def test_create_bug_gets_backlog_rank_scope(admin_client):
 
 def test_create_bug_appears_in_backlog_after_agile_enabled_later(admin_client):
     """Items created before Agile is enabled for the project still show up in
-    the backlog once Agile is turned on — no manual backfill required."""
+    the backlog once Agile is turned on, no manual backfill required."""
     project = _make_project(admin_client, "Rank Fix — Late Enable")
     res = admin_client.post("/api/bugs", json={
         "project_id": project["id"], "title": "Pre-agile bug",
@@ -94,7 +94,7 @@ def test_create_bug_sequential_ranks_ordered_by_creation(admin_client):
 
 
 def test_create_bug_rank_scope_isolated_per_project(admin_client):
-    """rank_scope is per-project — items in different projects never share
+    """rank_scope is per-project: items in different projects never share
     a backlog ranking sequence."""
     project_a = _make_project(admin_client, "Rank Fix — Proj A")
     project_b = _make_project(admin_client, "Rank Fix — Proj B")
@@ -117,7 +117,7 @@ def test_create_bug_rank_scope_isolated_per_project(admin_client):
     assert row_a.rank_scope != row_b.rank_scope
 
 
-# --- Bulk import: same fix, same guarantees ---
+# Bulk import: same fix, same guarantees
 
 def _xlsx_bytes(rows: list[dict[str, str]]) -> bytes:
     wb = Workbook()

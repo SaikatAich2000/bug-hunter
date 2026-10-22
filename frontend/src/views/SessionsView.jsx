@@ -68,7 +68,7 @@ export default function SessionsView() {
         : `session #${s.id}`;
       const ok = await confirmDialog(
         `Revoke this session for ${who}?\n\n` +
-          `That device will be immediately logged out. Other sessions for the ` +
+          `That device will be immediately logged out, other sessions for the ` +
           `same user are not affected`,
         { title: "Revoke session", okLabel: "Revoke", danger: true },
       );
@@ -90,7 +90,7 @@ export default function SessionsView() {
     <section className="view" id="viewSessions">
       <div className="sessions-controls">
         <p className="sessions-help">
-          Click <strong>Revoke</strong> to log a specific device out without affecting any other session for that user. Your own current session can&apos;t be revoked from here — use <strong>Log out</strong> in the profile menu instead
+          Click <strong>Revoke</strong> to log a specific device out without affecting any other session for that user, your own current session can&apos;t be revoked from here — use <strong>Log out</strong> in the profile menu instead
         </p>
         <button
           type="button"

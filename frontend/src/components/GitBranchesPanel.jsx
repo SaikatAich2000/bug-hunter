@@ -66,7 +66,7 @@ export default function GitBranchesPanel({ targetType = "work-item", targetId, v
   }, [endpoint, visible, load]);
 
   // Repositories are loaded from live provider discovery, once, when the user
-  // starts the create action — never on render, never from an allow-list.
+  // starts the create action, never on render, never from an allow-list.
   async function loadProviderRepositories() {
     if (!data?.project_id || reposLoaded.current) return;
     reposLoaded.current = true;
@@ -81,7 +81,7 @@ export default function GitBranchesPanel({ targetType = "work-item", targetId, v
       }
     } catch (error) {
       reposLoaded.current = false;
-      setReposError(error?.message || "Repositories could not be loaded.");
+      setReposError(error?.message || "Repositories could not be loaded");
     } finally {
       setReposLoading(false);
     }
@@ -254,7 +254,7 @@ export default function GitBranchesPanel({ targetType = "work-item", targetId, v
   function renderNoReposNotice() {
     return (
       <p className="muted small">
-        No repositories are accessible with this project&apos;s Git credential.
+        No repositories are accessible with this project&apos;s Git credential
       </p>
     );
   }
@@ -281,7 +281,7 @@ export default function GitBranchesPanel({ targetType = "work-item", targetId, v
             </button>
           </div>
         ) : (
-          <p className="muted small">{preview.reason || "This branch cannot be created."}</p>
+          <p className="muted small">{preview.reason || "This branch cannot be created"}</p>
         )}
       </div>
     );

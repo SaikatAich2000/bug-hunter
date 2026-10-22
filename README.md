@@ -170,7 +170,7 @@ Everything comes from environment variables. Copy [`.env.example`](.env.example)
 | `APP_ENV` | development | Set `production` to turn on strict start-up checks. |
 | `SESSION_SECRET` | blank | Signs session cookies. Use a long random value in production. |
 | `EMAIL_BACKEND` | `console` | `console`, `smtp` or `disabled`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | blank | Send traces, metrics and logs to SigNoz or any OTLP collector. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | blank | Send metrics, events, logs and traces to SigNoz or any OpenTelemetry backend. Blank means off. |
 | `SLEUTH_CLOUD_ENABLED` | `0` | Opt in to a cloud LLM fallback for Sleuth. |
 
 All settings: [Key settings](docs/environment.md).
@@ -211,6 +211,7 @@ All commands and CI jobs: [Testing](docs/testing.md) · [Local development](docs
 | Key settings, email, push, telemetry | [environment.md](docs/environment.md) |
 | Deploy, backup, upgrade | [operations.md](docs/operations.md) · [upgrading.md](docs/upgrading.md) |
 | Sleuth and Git integration | [sleuth.md](docs/sleuth.md) · [git-integration.md](docs/git-integration.md) |
+| Observability (OpenTelemetry, SigNoz) | [observability.md](docs/observability.md) |
 | Security model | [security-model.md](docs/security-model.md) |
 | Code layout | [architecture.md](docs/architecture.md) |
 | Tests, CI and performance | [testing.md](docs/testing.md) · [development.md](docs/development.md) · [performance.md](docs/performance.md) |

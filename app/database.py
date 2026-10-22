@@ -179,6 +179,12 @@ def _emit_stashed_activity(session: Session) -> None:
             "audit %s %s#%s by %s: %s",
             activity.action, activity.entity_type, activity.entity_id,
             activity.actor_name, activity.detail,
+            # OpenTelemetry event: SigNoz and friends can filter on event.name.
+            extra={
+                "event.name": f"audit.{activity.action}",
+                "bh.entity_type": activity.entity_type,
+                "bh.entity_id": activity.entity_id,
+            },
         )
 
 

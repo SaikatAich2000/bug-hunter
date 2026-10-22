@@ -36,26 +36,11 @@ image or the repository. The ones that matter most:
 | `LOG_FORMAT` | `text` | `json` writes one JSON object per line for log shippers. |
 | `SLEUTH_CLOUD_ENABLED` | `0` | Opt-in cloud LLM fallback for Sleuth. |
 
-### Observability (OpenTelemetry / SigNoz)
+### Observability (OpenTelemetry)
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the app streams three signals to the
-collector over OTLP/gRPC. Leave it blank and everything stays on the console.
-
-| Signal | Details |
-| --- | --- |
-| **Traces** | One server span per HTTP request from FastAPI, DB spans from SQLAlchemy, and outbound spans from `httpx`. Health checks and `/static` are excluded by default (`OTEL_TRACES_EXCLUDED_URLS`). |
-| **Metrics** | HTTP server and DB client metrics, exported every `OTEL_METRICS_EXPORT_INTERVAL_MS` (default 60 s). |
-| **Logs** | The same `bug_hunter.*` records as the console, with `trace_id`/`span_id` so a log pivots to its request. Audit-trail entries arrive as `audit …` records. Sensitive attribute keys are redacted before export (`OTEL_LOG_REDACT_SENSITIVE`). |
-
-The service name defaults to `bug-hunter` (`OTEL_SERVICE_NAME`), and the
-deployment environment defaults to `APP_ENV` (`OTEL_DEPLOYMENT_ENVIRONMENT`).
-Per-signal switches (`OTEL_TRACES_ENABLED`, `OTEL_METRICS_ENABLED`,
-`OTEL_LOGS_ENABLED`), the sampler (`OTEL_TRACES_SAMPLER`), collector headers and
-TLS options are all documented in `.env.example`.
-
-**No traces?** Check, in order: the startup log says `OTLP export enabled -> …`,
-`OTEL_TRACES_ENABLED` isn't `false`, the sampler isn't `always_off`, and your
-collector's environment filter includes `OTEL_DEPLOYMENT_ENVIRONMENT`.
+Bug Hunter can send **MELT** (metrics, events, logs and traces) to SigNoz or any OpenTelemetry backend. It is off until you set
+`OTEL_EXPORTER_OTLP_ENDPOINT`, so connecting a backend later takes only a few lines in `.env`. The full guide, with every setting and
+the SigNoz steps, is in [Observability](observability.md).
 
 ### Email (optional)
 

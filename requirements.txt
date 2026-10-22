@@ -69,6 +69,7 @@ firebase-admin>=7.7.0
 # gRPC receiver confirmed at OTEL_EXPORTER_OTLP_ENDPOINT (http:// scheme = cleartext h2c).
 opentelemetry-sdk>=1.45.1
 opentelemetry-exporter-otlp-proto-grpc>=1.45.1
+opentelemetry-exporter-otlp-proto-http>=1.45.1
 # Auto-instrumentation: FastAPI server spans/HTTP metrics, SQLAlchemy DB spans,
 # httpx outbound spans, and the stdlib-logging bridge (trace correlation).
 opentelemetry-instrumentation-fastapi>=0.66b1

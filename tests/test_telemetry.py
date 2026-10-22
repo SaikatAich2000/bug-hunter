@@ -696,3 +696,73 @@ def test_audit_rows_mirrored_to_logs(admin_client, caplog):
     assert res.status_code == 201, res.text
     messages = [r.getMessage() for r in caplog.records if r.name == "bug_hunter.audit"]
     assert any(m.startswith("audit project_created project#") for m in messages), messages
+
+
+# ------------------------------------------------- OTLP protocol, events (MELT completeness)
+
+
+def test_http_protobuf_protocol_and_per_signal_endpoints(telemetry, monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example.com")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "signoz-ingestion-key=k")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "5000")
+    kwargs = telemetry._exporter_kwargs("traces")
+    assert kwargs["endpoint"] == "https://collector.example.com/v1/traces"
+    assert kwargs["headers"] == {"signoz-ingestion-key": "k"}
+    assert kwargs["timeout"] == 5.0
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "https://m.example.com/custom")
+    assert telemetry._exporter_kwargs("metrics")["endpoint"] == "https://m.example.com/custom"
+    # The real HTTP exporters construct offline and are the HTTP flavour.
+    for factory, name in (
+        (telemetry._make_span_exporter, "OTLPSpanExporter"),
+        (telemetry._make_metric_exporter, "OTLPMetricExporter"),
+        (telemetry._make_log_exporter, "OTLPLogExporter"),
+    ):
+        exporter = factory()
+        assert type(exporter).__name__ == name
+        assert ".proto.http." in type(exporter).__module__
+
+
+def test_protocol_can_differ_per_signal_and_unknown_falls_back(telemetry, monkeypatch, caplog):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4317")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
+    assert telemetry._protocol("logs") == "http/protobuf"
+    assert telemetry._protocol("traces") == "grpc"
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
+    with caplog.at_level(logging.WARNING, logger="bug_hunter.telemetry"):
+        assert telemetry._protocol("traces") == "grpc"
+    assert "Unsupported OTEL_EXPORTER_OTLP_PROTOCOL" in caplog.text
+
+
+def test_gzip_compression_option(telemetry, monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4317")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")
+    assert "compression" in telemetry._exporter_kwargs("traces")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    assert "compression" in telemetry._exporter_kwargs("traces")
+
+
+def test_per_signal_endpoint_alone_enables_export(telemetry, fake_signals, monkeypatch):
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", ENDPOINT)
+    assert telemetry.setup_telemetry() is True
+
+
+def test_sdk_disabled_switches_everything_off(telemetry, fake_signals, monkeypatch):
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+    assert telemetry.setup_telemetry() is False
+
+
+def test_resource_identifies_the_instance(telemetry):
+    attrs = telemetry._resource().attributes
+    assert attrs["service.instance.id"] and attrs["host.name"]
+
+
+def test_emit_event_exports_event_name_and_attributes(real_log_bridge, telemetry):
+    logging.getLogger("bug_hunter.events").setLevel(logging.INFO)
+    telemetry.emit_event("unit.event", user="alice")
+    assert telemetry._logger_provider.force_flush(5000)
+    records = [r.log_record for r in real_log_bridge["logs"].records]
+    exported = next(r for r in records if getattr(r, "event_name", None) == "unit.event")
+    assert exported.attributes["bh.user"] == "alice"
+    assert str(exported.body) == "unit.event"

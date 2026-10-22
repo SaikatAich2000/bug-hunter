@@ -101,3 +101,7 @@ docker-compose.override.yml
 
 # Database dumps from scripts/backup.sh
 backups/
+
+# Documentation images (README banners, GIFs) must be committed
+!docs/assets/
+!docs/assets/**

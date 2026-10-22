@@ -21,6 +21,10 @@ Design rules
 
 Environment (all optional; see README "Observability"):
   OTEL_EXPORTER_OTLP_ENDPOINT      collector URL (``http://`` = cleartext gRPC)
+  OTEL_EXPORTER_OTLP_PROTOCOL      grpc (default) | http/protobuf (also per signal: ..._TRACES_PROTOCOL etc.)
+  OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT / _HEADERS   per-signal overrides
+  OTEL_EXPORTER_OTLP_TIMEOUT       milliseconds; OTEL_EXPORTER_OTLP_COMPRESSION=gzip
+  OTEL_SDK_DISABLED                true switches all export off
   OTEL_EXPORTER_OTLP_INSECURE      override TLS detection (default: not https)
   OTEL_EXPORTER_OTLP_HEADERS       ``k=v,k=v`` collector auth headers
   OTEL_SERVICE_NAME                default ``bug-hunter``
@@ -47,7 +51,9 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
+import uuid
 import weakref
 from datetime import datetime, timezone
 from typing import Any
@@ -110,18 +116,49 @@ _enabled = False
 _app_instrumented = False
 
 
+_INSTANCE_ID = uuid.uuid4().hex  # one id per process, so replicas can be told apart
+
+
 # --------------------------------------------------------------------- env reading
 
 
-def _endpoint() -> str:
-    return env_str("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+_SIGNALS = ("traces", "metrics", "logs")
 
 
-def _insecure() -> bool:
+def _signal_env(signal: str | None, suffix: str) -> str:
+    """OTEL_EXPORTER_OTLP_<SIGNAL>_<SUFFIX> if set, else the generic OTEL_EXPORTER_OTLP_<SUFFIX>."""
+    if signal:
+        specific = env_str(f"OTEL_EXPORTER_OTLP_{signal.upper()}_{suffix}", "").strip()
+        if specific:
+            return specific
+    return env_str(f"OTEL_EXPORTER_OTLP_{suffix}", "").strip()
+
+
+def _endpoint(signal: str | None = None) -> str:
+    return _signal_env(signal, "ENDPOINT")
+
+
+def _configured() -> bool:
+    """True when any collector endpoint (generic or per signal) is set."""
+    return bool(_endpoint() or any(_endpoint(signal) for signal in _SIGNALS))
+
+
+def _protocol(signal: str | None = None) -> str:
+    """``grpc`` (default) or ``http/protobuf``, per the OTLP exporter spec."""
+    raw = _signal_env(signal, "PROTOCOL").lower()
+    if raw in ("", "grpc"):
+        return "grpc"
+    if raw in ("http/protobuf", "http"):
+        return "http/protobuf"
+    _logger.warning("Unsupported OTEL_EXPORTER_OTLP_PROTOCOL=%r (use grpc or http/protobuf); using grpc", raw)
+    return "grpc"
+
+
+def _insecure(signal: str | None = None) -> bool:
     """Cleartext gRPC unless the endpoint says https:// (or the flag overrides)."""
     if env_str("OTEL_EXPORTER_OTLP_INSECURE", "").strip():
         return env_bool("OTEL_EXPORTER_OTLP_INSECURE", True)
-    return not _endpoint().startswith("https://")
+    return not _endpoint(signal).startswith("https://")
 
 
 def _service_name() -> str:
@@ -286,44 +323,74 @@ def configure_console_logging() -> str:
 # ------------------------------------------------------- exporters + resource
 
 
-def _exporter_kwargs() -> dict[str, Any]:
-    """Common OTLP/gRPC exporter options derived from the environment."""
-    endpoint = _endpoint()
-    kwargs: dict[str, Any] = {
+def _headers(signal: str | None) -> list[tuple[str, str]]:
+    raw = _signal_env(signal, "HEADERS")
+    return [
+        (key.strip(), value.strip())
+        for key, sep, value in (item.partition("=") for item in raw.split(","))
+        if sep and key.strip()
+    ]
+
+
+def _exporter_kwargs(signal: str | None = None) -> dict[str, Any]:
+    """OTLP exporter options from the standard OTEL_EXPORTER_OTLP_* variables (gRPC or HTTP)."""
+    endpoint = _endpoint(signal)
+    headers = _headers(signal)
+    timeout_ms = _signal_env(signal, "TIMEOUT")
+    gzip = _signal_env(signal, "COMPRESSION").lower() == "gzip"
+    kwargs: dict[str, Any] = {}
+    if _protocol(signal) == "http/protobuf":
+        # The generic endpoint is a base URL (the signal path is appended); a per-signal one is used as given.
+        specific = signal and env_str(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "").strip()
+        kwargs["endpoint"] = endpoint if specific else f"{endpoint.rstrip('/')}/v1/{signal}"
+        if headers:
+            kwargs["headers"] = dict(headers)
+        if gzip:
+            from opentelemetry.exporter.otlp.proto.http import Compression
+
+            kwargs["compression"] = Compression.Gzip
+    else:
         # "http://host:4327" -> "host:4327"; the scheme is notation, not REST.
-        "endpoint": endpoint.split("://", 1)[-1],
-        "insecure": _insecure(),
-    }
-    headers = env_str("OTEL_EXPORTER_OTLP_HEADERS", "").strip()
-    if headers:
-        parsed = [
-            (key.strip(), value.strip())
-            for key, sep, value in (item.partition("=") for item in headers.split(","))
-            if sep and key.strip()
-        ]
-        if parsed:
-            kwargs["headers"] = tuple(parsed)
+        kwargs["endpoint"] = endpoint.split("://", 1)[-1]
+        kwargs["insecure"] = _insecure(signal)
+        if headers:
+            kwargs["headers"] = tuple(headers)
+        if gzip:
+            import grpc
+
+            kwargs["compression"] = grpc.Compression.Gzip
+    if timeout_ms.isdigit():
+        kwargs["timeout"] = int(timeout_ms) / 1000
     return kwargs
 
 
 # These three are the test seam: every exporter is built here, so tests inject
 # in-memory exporters instead of dialling a collector.
 def _make_span_exporter():
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    if _protocol("traces") == "http/protobuf":
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    else:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
-    return OTLPSpanExporter(**_exporter_kwargs())
+    return OTLPSpanExporter(**_exporter_kwargs("traces"))
 
 
 def _make_metric_exporter():
-    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+    if _protocol("metrics") == "http/protobuf":
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+    else:
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 
-    return OTLPMetricExporter(**_exporter_kwargs())
+    return OTLPMetricExporter(**_exporter_kwargs("metrics"))
 
 
 def _make_log_exporter():
-    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+    if _protocol("logs") == "http/protobuf":
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    else:
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
-    return OTLPLogExporter(**_exporter_kwargs())
+    return OTLPLogExporter(**_exporter_kwargs("logs"))
 
 
 def _parse_resource_attributes(raw: str) -> dict[str, str]:
@@ -339,7 +406,11 @@ def _resource():
     """service.name/version + deployment.environment so SigNoz can filter."""
     from opentelemetry.sdk.resources import Resource
 
-    attributes: dict[str, str] = {"service.name": _service_name()}
+    attributes: dict[str, str] = {
+        "service.name": _service_name(),
+        "service.instance.id": _INSTANCE_ID,
+        "host.name": socket.gethostname(),
+    }
     version = env_str("OTEL_SERVICE_VERSION", "").strip() or _app_setting("APP_VERSION")
     environment = env_str("OTEL_DEPLOYMENT_ENVIRONMENT", "").strip() or _app_setting("APP_ENV")
     if version:
@@ -524,7 +595,9 @@ def setup_telemetry() -> bool:
     with _lock:
         if _enabled:
             return True
-        if not _endpoint():
+        if env_bool("OTEL_SDK_DISABLED", False):  # the standard kill switch
+            return False
+        if not _configured():
             return False
         if not (_traces_enabled() or _metrics_enabled() or _logs_enabled()):
             _logger.warning(
@@ -548,8 +621,9 @@ def setup_telemetry() -> bool:
             return False
         _enabled = True
         _logger.info(
-            "OTLP export enabled -> %s (service.name=%s, traces=%s, metrics=%s, logs=%s)",
-            _endpoint(),
+            "OTLP export enabled -> %s [%s] (service.name=%s, traces=%s, metrics=%s, logs=%s)",
+            _endpoint() or "per-signal endpoints",
+            _protocol(),
             _service_name(),
             _traces_enabled(),
             _metrics_enabled(),
@@ -614,3 +688,14 @@ def get_tracer(name: str = DEFAULT_SERVICE_NAME):
     from opentelemetry import trace
 
     return trace.get_tracer(name)
+
+
+def emit_event(name: str, message: str | None = None, **attributes: Any) -> None:
+    """Emit an OpenTelemetry *event*: a log record carrying ``event.name``.
+
+    It goes to the console like any log and, when log export is on, to the collector with its
+    attributes (prefixed ``bh.``) and the current trace context.
+    """
+    extra: dict[str, Any] = {"event.name": name}
+    extra.update({f"bh.{key}": value for key, value in attributes.items()})
+    logging.getLogger("bug_hunter.events").info(message or name, extra=extra)

@@ -1,4 +1,8 @@
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg"><img alt="Bug Hunter" src="assets/logo-light.svg" width="64"></picture></p>
+
 # Security model
+
+> [← Back to the README](../README.md)
 
 What the app enforces, where, and where it stops. [SECURITY.md](../SECURITY.md) has the
 reporting policy and the summary list. Each statement below was checked against the code at

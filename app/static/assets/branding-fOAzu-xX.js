@@ -1,0 +1,1 @@
+function e(e){return document.querySelector(`meta[name="${e}"]`)?.getAttribute(`content`)||``}function t(){return e(`application-name`)}function n(){let[e=``,...n]=t().trim().split(/\s+/);return{first:e.toUpperCase(),rest:n.join(` `).toUpperCase()}}export{n,t};

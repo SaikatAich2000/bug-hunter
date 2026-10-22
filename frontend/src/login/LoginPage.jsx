@@ -2,8 +2,9 @@
 // Strict CSP (no inline scripts/styles); __APP_VERSION__ is substituted server-side — keep verbatim.
 import { useEffect, useRef, useState } from "react";
 import PasswordInput from "../components/PasswordInput";
-import { getAppName, getStaticAssetUrl } from "../lib/branding";
+import { getAppName } from "../lib/branding";
 import { loginTarget } from "../lib/safeRedirect.js";
+import BrandMark from "../components/BrandMark";
 
 // detail can be a plain string or a Pydantic validation-error array.
 function detailMessage(data, fallback) {
@@ -134,7 +135,7 @@ export default function LoginPage() {
       <div className="auth-card">
         <div className="auth-brand">
           <div className="auth-logo">
-            <img src={getStaticAssetUrl("icon.png")} alt={appName} />
+            <BrandMark label={appName} />
           </div>
           <h1>{appName}</h1>
           <p className="auth-tagline">Sign in to continue</p>

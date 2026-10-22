@@ -514,7 +514,8 @@ def swagger_docs() -> responses.HTMLResponse:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(settings.APP_NAME)} — API docs</title>
   <link rel="stylesheet" href="/static/swagger-ui/swagger-ui.css">
-  <link rel="icon" type="image/png" href="/static/icon.png?v={app.state.asset_version}" />
+  <link rel="icon" type="image/svg+xml" sizes="any" href="/static/favicon.svg?v={app.state.asset_version}" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/static/icon.png?v={app.state.asset_version}" />
 </head>
 <body>
   <div id="swagger-ui"></div>
@@ -533,7 +534,8 @@ def redoc_docs() -> responses.HTMLResponse:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(settings.APP_NAME)} — API reference</title>
-  <link rel="icon" type="image/png" href="/static/icon.png?v={app.state.asset_version}" />
+  <link rel="icon" type="image/svg+xml" sizes="any" href="/static/favicon.svg?v={app.state.asset_version}" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/static/icon.png?v={app.state.asset_version}" />
 </head>
 <body>
   <redoc spec-url="/openapi.json"></redoc>

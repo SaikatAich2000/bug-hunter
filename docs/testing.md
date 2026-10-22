@@ -1,4 +1,8 @@
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg"><img alt="Bug Hunter" src="assets/logo-light.svg" width="64"></picture></p>
+
 # Testing
+
+> [← Back to the README](../README.md)
 
 Python 3.12 and Node 22 (`.nvmrc`). Install the dev dependencies first:
 `pip install -r requirements.txt -r requirements-dev.txt` (on Linux, CI uses

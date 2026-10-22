@@ -1,11 +1,12 @@
 // Top bar: hamburger, brand, role-gated nav (VIEW_MIN_ROLE, shared with Shell/Sidebar),
 // notifications, profile menu.
 import { useApp } from "../state/AppContext";
-import { getAppName, getStaticAssetUrl, getWordmarkParts } from "../lib/branding";
+import { getAppName, getWordmarkParts } from "../lib/branding";
 import NotificationsBell from "./NotificationsBell";
 import ProfileMenu from "./ProfileMenu";
 import { VIEW_MIN_ROLE } from "../types";
 import { NAV_ITEMS } from "./navItems";
+import BrandMark from "../components/BrandMark";
 
 export default function TopChrome({ onOpenMobile }) {
   const appName = getAppName();
@@ -24,7 +25,7 @@ export default function TopChrome({ onOpenMobile }) {
       </button>
 
       <div className="brandmark" id="brandMark">
-        <img className="logo" src={getStaticAssetUrl("icon.png")} alt={appName} />
+        <BrandMark className="logo" size={36} label={appName} />
         <div className="wm">
           <b aria-label={appName}>{wordmark.first}{wordmark.rest && <span>{wordmark.rest}</span>}</b>
           {health && <small id="brandVersion">{`Version ${health.version}`}</small>}
@@ -56,7 +57,7 @@ export default function TopChrome({ onOpenMobile }) {
           title="Ask Sleuth — the AI assistant"
           onClick={() => document.getElementById("sleuthFab")?.click()}
         >
-          <img className="chrome-sleuth-logo" src="/static/sleuth.svg" alt="" draggable={false} />
+          <BrandMark kind="sleuth" className="chrome-sleuth-logo" size={22} />
           <span>Ask Sleuth</span>
         </button>
         <NotificationsBell />

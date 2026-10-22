@@ -3,11 +3,12 @@ import { useApp } from "../state/AppContext";
 import { api } from "../lib/api";
 import { toast, toastError } from "../lib/toast";
 import { initials } from "../lib/format";
-import { getAppName, getStaticAssetUrl, getWordmarkParts } from "../lib/branding";
+import { getAppName, getWordmarkParts } from "../lib/branding";
 import { withLoader } from "../lib/loader";
 import { confirmDialog } from "../components/ConfirmHost";
 import { VIEW_MIN_ROLE } from "../types";
 import { NAV_ITEMS } from "./navItems";
+import BrandMark from "../components/BrandMark";
 
 // Enter/Space activation for interactive spans (spans keep the grid layout intact).
 function keyActivate(fn) {
@@ -129,7 +130,7 @@ export default function Sidebar({ mobileOpen, onNavigate }) {
     >
       {/* Mobile-only brand header (desktop brand is in TopChrome). */}
       <div className="sidebar-brand">
-        <img className="logo" src={getStaticAssetUrl("icon.png")} alt={appName} />
+        <BrandMark className="logo" size={38} label={appName} />
         <div className="wm">
           <b aria-label={appName}>{wordmark.first}{wordmark.rest && <span>{wordmark.rest}</span>}</b>
           {health && <small>{`Version ${health.version}`}</small>}

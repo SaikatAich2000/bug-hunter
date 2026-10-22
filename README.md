@@ -1,564 +1,232 @@
-# Bug Hunter
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+    <img alt="Bug Hunter: self-hosted bug, requirement and task tracking" src="docs/assets/banner-light.png" width="100%">
+  </picture>
+</p>
 
-Bug Hunter is a self-hosted tracker for bugs, requirements, tasks and agile
-delivery. It runs as a single Docker Compose stack: a FastAPI + PostgreSQL
-backend and a React (JavaScript) frontend. It doesn't need an external login
-provider, and attachments are stored in PostgreSQL, so one database backup
-saves everything.
+<p align="center">
+  <a href="LICENSE.txt"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-backend-009688?logo=fastapi&logoColor=white">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=black">
+  <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-2496ed?logo=docker&logoColor=white">
+  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-yes-67c1f5">
+</p>
 
-On top of classic issue tracking it has opt-in, per-project **Sprints & Agile**
-(boards, a ranked backlog, sprint planning, releases and reports), optional
-**GitHub feature branches** for User Stories, **bulk import** from Excel/CSV,
-**OpenTelemetry** observability, and an in-app assistant called **Sleuth**.
+<p align="center">
+  <b>Track bugs, requirements and tasks. Plan sprints. Own your data.</b><br>
+  One Docker Compose stack: FastAPI, PostgreSQL and React. No outside login service needed.
+</p>
 
-Upgrades only *add* tables and columns. Existing data is never removed or
-changed (see [Live-data safety](#live-data-safety)). The running version is
-whatever `APP_VERSION` in `.env` says, and `/api/health` reports it.
+<p align="center">
+  <img alt="A tour of Bug Hunter: work items, sprints, events, analytics, reports and audit trail" src="docs/assets/tour.gif" width="860">
+</p>
 
-## Contents
+---
 
-- [Features](#features)
-- [Sprints & Agile](#sprints--agile)
-- [Architecture](#architecture)
-- [Quick start](#quick-start)
-- [Configuration](#configuration)
-- [Local development](#local-development)
-- [Operations, security, testing and performance docs](#more-documentation)
-- [Live-data safety](#live-data-safety)
-- [Deployment](#deployment)
-- [Sleuth](#sleuth)
-- [Git integration (Story feature branches)](#git-integration-story-feature-branches)
-- [Troubleshooting](#troubleshooting)
-- [Security, contributing, license](#security)
+## ✨ What you get
 
-## Features
+| | | |
+|---|---|---|
+| 🐞 **Work items**<br>Bugs, requirements, tasks, stories and epics in one list. Filters, bulk edit, Excel import. | 🏁 **Sprints & Agile**<br>Ranked backlog, sprint board, epics, burndown and velocity. | 📊 **Analytics & reports**<br>Live charts and a report builder that exports to Excel. |
+| 📅 **Events**<br>Group items for a stand-up or a review. | 🔔 **Notifications**<br>In-app bell, email digest and push, each linking to the item. | 🛡️ **Audit trail & sessions**<br>See who changed what, and log out any device. |
+| 🕵️ **Sleuth assistant**<br>Ask in plain English. Runs on your server by default. | 🐙 **Git branches**<br>Create a feature branch for a User Story in one click. | 🌗 **Light and dark**<br>Responsive layout that respects reduced motion. |
 
-| Area | What it does |
-|---|---|
-| Work items | Bugs, requirements and tasks share one `#N` counter with the agile types (Epic, Story, Sub-task). A tab strip filters KPIs, columns and analytics by type. Each type has its own statuses; bugs also have a DEV/UAT/PROD environment. Items can be converted between types in place. |
-| Sprints & Agile | Opt-in per project, Scrum-style: ranked backlog and sprint planning, the active sprint board, Epic → issue → Sub-task hierarchy, board settings, and burndown/sprint/velocity/flow reports. See [Sprints & Agile](#sprints--agile). |
-| Projects & events | Projects group your work. Events group items for a standup or review and have one or more managers. |
-| Item links | Link items together: relates, blocks, or duplicate. |
-| Comments & attachments | Rich-text comments (bold, italic, lists, code, quotes) and plain-text descriptions that keep line breaks. Images, PDF, video, Office documents and txt/csv/log/zip files, up to 50 MB each, are stored in the database. Only listed extensions are accepted and each file's leading bytes must match its extension (`app/upload_policy.py`; SVG and HTML are refused). Pasted images become real attachments, and image metadata is stripped. |
-| Bulk actions | Change status, priority or environment, or delete, across many items at once. |
-| Bulk import | Download an Excel template, fill it in (or use CSV), and import. Every row is validated on its own and errors are reported per row. |
-| Reports | A report builder (manager/admin) that exports a multi-sheet Excel file, plus agile reports (burndown, burnup, velocity, cumulative flow, control chart, workload, scope change, epic progress). |
-| Notifications | In-app bell, email (per event or one daily digest), and optional browser/FCM push. Every notification links straight to its item or event, through the login page if needed. |
-| Audit log | Item, project, user, sprint and board changes, sign-ins (including failures and lockouts) and password events are recorded for admins and managers. Entries stay even after an item is deleted. |
-| Sessions | Admins see every active session (user, role, IP, browser, time) and can log out a single device. |
-| Login | Local accounts with bcrypt-hashed passwords, three roles (admin / manager / user), and email password reset. |
-| Git integration | Optional: create a deterministic `feature_<id>_<slug>` branch in a GitHub repository for a User Story, and remove exactly that branch again. |
-| Observability | Optional OpenTelemetry export (traces, metrics, logs) to SigNoz or any OTLP/gRPC collector. |
-| API docs | Self-hosted Swagger UI (`/docs`) and ReDoc (`/redoc`) in development. Production hides them unless `ENABLE_API_DOCS=true`. |
-| Sleuth assistant | Answers plain-English questions and runs actions (with confirmation). Runs locally by default; see [Sleuth](#sleuth). |
-| Onboarding & help | A welcome screen, a resumable product tour and a help center with bundled guides. Progress is stored per user on the server (`GET`/`PUT /api/me/preferences`), so it follows you across browsers. |
-| UI | A dark theme and a light theme, responsive layout, auto-refresh, motion that respects `prefers-reduced-motion`. |
+<details>
+<summary><b>See it in light and dark</b></summary>
+<br>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/analytics-dark.webp">
+    <img alt="Analytics view" src="docs/assets/screens/analytics-light.webp" width="49%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/sprints-dark.webp">
+    <img alt="Sprints view" src="docs/assets/screens/sprints-light.webp" width="49%">
+  </picture>
+</p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/list-dark.webp">
+    <img alt="Work items list" src="docs/assets/screens/list-light.webp" width="49%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/audit-dark.webp">
+    <img alt="Audit trail" src="docs/assets/screens/audit-light.webp" width="49%">
+  </picture>
+</p>
+</details>
 
-### Roles
+## 🚀 Quick start
 
-- **Admin** has full access, including user management and all deletes.
-- **Manager** can edit any item or event, enable Agile, and manage sprints, boards, releases and labels. Managers can't delete items, grant the admin role, or edit existing admins.
-- **User** can create and edit Bugs, User Stories and Sub-tasks, move them on the board, and view and export agile reports. Tasks and Requirements are read-only to users, and sprint lifecycle and board/workflow/taxonomy configuration need a manager.
-
-Deleting items, editing/deleting comments, and deleting attachments are
-admin-only for every type. Everyone sees only the projects they are a member of,
-except admins.
-
-## Sprints & Agile
-
-Sprints follow the usual Scrum board workflow. Agile is **off for every
-project** until a manager or admin opens **Sprints**, picks the project and
-clicks **Set up Scrum board**. That creates the project's board (To Do, In
-Progress, Testing, Done) and a backlog ranked from its open issues; nothing is
-deleted or changed.
-
-**Hierarchy.** There are three levels:
-
-- **Epic**: a large body of work. Epics are never in a sprint.
-- **Standard issues**: Story, Task, Bug and Requirement. Each can belong to one
-  Epic and is planned into sprints.
-- **Sub-task**: always has a standard issue as its parent, and always follows
-  that parent's sprint and Epic.
-
-The server enforces these rules on every write path (API, bulk edit, import,
-Sleuth), and records each change to status, sprint, estimate, Epic, parent,
-type and project in a change log the reports are built from.
-
-| Tab | What it does |
-|---|---|
-| Backlog | Future and active sprints above the ranked backlog. Drag issues (or several ticked issues) to rank them or plan them into a sprint; the ⋯ menu and the keyboard do the same without dragging. Create, edit, start and complete sprints here. Starting needs at least one issue and opens the board. Completing keeps finished issues with the closed sprint and moves the rest to the backlog, a future sprint or a new sprint. |
-| Active sprint | The board: columns map to statuses, and dragging a card moves it to that column's status. Column min/max (WIP) limits, swimlanes (stories, assignees, Epics, priority), quick filters and flags. An issue is done when its status is in the right-most column. |
-| Epics | Each Epic with its issues and their sub-tasks, progress by estimate, and the issues not yet in an Epic. Link or unlink issues here. |
-| Reports | Burndown, burnup, sprint report, velocity, cumulative flow diagram, control chart, Epic report, daily summary and workload, each with CSV export. |
-| Releases & labels | Versions/releases, components and labels. |
-| Capacity | Per-sprint capacity: each member's hours per day and days off against the committed estimate. |
-| Board settings | Columns and their statuses, column limits, estimation statistic (story points, hours or issue count), working days and time zone (used by the burndown guideline), and quick filters. |
-
-Reports replay the change log, so a sprint's commitment is what it held when
-it started, scope added or removed afterwards is shown separately, and
-re-estimates count as scope changes. Lifecycle and bulk endpoints accept an
-`Idempotency-Key` header so retried requests are safe.
-
-**Upgrading from the earlier Sprints preview.** The first boot converts the
-retired Collection and Feature levels into labels on the issues they grouped
-(a Story under a Feature joins that Feature's Epic), turns sub-tasks without a
-valid parent into Tasks, takes Epics out of sprints and re-ranks every issue in
-the list it sits in. The conversion runs once and is safe to repeat.
-
-## Architecture
-
-- **Backend:** FastAPI, SQLAlchemy 2.x and Pydantic 2. PostgreSQL 16 in production; SQLite for tests and quick local runs.
-- **Frontend:** React 19 in plain JavaScript (JSX), built with Vite into `app/static`, which FastAPI serves directly. Tested with Vitest and linted with ESLint.
-- **Packaging:** Docker Compose runs the app and its own PostgreSQL. The image is built on `python:3.12-slim`, and the frontend is compiled in a throwaway `node:22-slim` stage.
-- **Sleuth:** pure-Python rules and a TF-IDF classifier, plus an optional local LLM and an optional cloud LLM with tool calling.
-
-```
-app/
-├── config.py · database.py · main.py · models.py · schemas.py · telemetry.py
-├── auth.py · access.py · email_service.py · notification_service.py · push_service.py
-├── bulk_import.py  # spreadsheet template + row-by-row validation
-├── agile/       # boards · workflow · sprints · backlog/ranking · planning
-│                # hierarchy · integrity · item types · releases · taxonomy
-│                # reports · permissions · idempotency · upgrade
-├── git/         # branches · naming · provider · github · credentials · tls
-├── routes/      # auth · users · projects · bugs · events · stats · audit
-│                # sessions · reports · notifications · push · git
-│                # agile · agile_board · agile_planning · agile_reports · agile_taxonomy
-├── chatbot/     # Sleuth: nlu · classifier · llm · cloud_llm · redaction
-│                # rag · retrieval · verify · agent · evals · tools
-│                # llm_tools_agent · executor · actions · memory · excel · router
-├── jobs/        # email_digest · retention (daily cleanup)
-└── static/      # built React bundle + icon.png / favicon.png
-frontend/        # React + Vite SPA source → builds into app/static
-tests/           # SQLite-backed pytest suite (+ optional Playwright UI smoke)
-scripts/         # backup/restore, load tests, release packaging, SonarQube, RAG index builder
-docs/            # operations, security model, testing, performance
-models/          # GGUF files for Sleuth's optional local LLM (gitignored)
-```
-
-There's no `migrations/` folder or Alembic. Schema changes are additive edits
-in `app/models.py`, applied automatically and idempotently by `init_db()` on
-every boot. On PostgreSQL, a database advisory lock serializes concurrent boots.
-
-## Quick start
-
-You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Docker Engine + Compose v2).
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Docker Engine and Compose v2).
 
 ```bash
 git clone https://github.com/<your-org>/bug-hunter.git
 cd bug-hunter
-cp .env.example .env       # set APP_VERSION, POSTGRES_PASSWORD, BOOTSTRAP_ADMIN_* at minimum
-./deploy.sh
+cp .env.example .env     # set APP_VERSION, POSTGRES_PASSWORD and BOOTSTRAP_ADMIN_* at least
+./deploy.sh              # builds, starts PostgreSQL, then the app
 ```
 
-`./deploy.sh` builds the image (including the frontend), starts PostgreSQL,
-waits for it to be healthy, then starts the app. Open <http://localhost:8765>.
+Open <http://localhost:8765> and sign in with the `BOOTSTRAP_ADMIN_*` account from `.env`.
+To stop: `./down.sh`. Your data stays in the `bugtracker_pgdata` volume.
 
-PostgreSQL runs in its own container, published only on `127.0.0.1:55432` so it
-doesn't clash with a local PostgreSQL install. Data lives in the named volume
-`bugtracker_pgdata`, which `./deploy.sh` and `./down.sh` never delete.
+> 💡 **No Docker?** Run `bash scripts/run_local.sh` (or `.\scripts\run_local.ps1` on Windows). It uses SQLite and needs no Node.
+> See [Local development](docs/development.md).
 
-For a clean rebuild, run `BUILD_CLEAN=1 ./deploy.sh`. Behind a corporate proxy or
-air gap, set `BASE_IMAGE` in `.env` to an internal mirror, or pre-load
-`python:3.12-slim` and `node:22-slim` with `docker save | docker load`.
+## 🧭 How it fits together
 
-### First login
-
-On an empty database, Bug Hunter creates a first admin from
-`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` (Compose defaults the email
-to `admin@bughunter.local`; the password has no default and must be set). Change
-the password right away from the profile menu. A production deploy refuses to
-start while the `.env.example` placeholder password is still set.
-
-Set `AUTO_LOGIN_ENABLED=true` to skip the login screen entirely: every visitor
-is signed in automatically as the bootstrap admin. Use it only on a trusted
-local deployment. Production refuses to start with it on.
-
-### Production checklist
-
-```bash
-APP_VERSION=<release tag>
-SESSION_SECRET=$(openssl rand -hex 32)    # at least 32 characters, never the placeholder
-COOKIE_SECURE=true                        # only when serving over HTTPS
-BOOTSTRAP_ADMIN_EMAIL=you@example.com
-BOOTSTRAP_ADMIN_PASSWORD=<a strong password>
-APP_BASE_URL=https://bugs.example.com
-CORS_ORIGINS=https://bugs.example.com
-APP_ENV=production                        # strict checks: https URL, secure cookies, real email backend
+```mermaid
+flowchart LR
+    W["🌐 Web app<br>React 19 + Vite"] --> API
+    subgraph Server["Bug Hunter (one container)"]
+      API["⚙️ FastAPI<br>REST API + static files"]
+      SL["🕵️ Sleuth<br>rules, classifier, optional LLM"]
+      JOBS["⏱️ Daily jobs<br>digest and retention"]
+    end
+    API --> SL
+    API --> DB[("🐘 PostgreSQL 16<br>data and attachments")]
+    JOBS --> DB
+    API -. "optional" .-> EXT["✉️ SMTP · 🔔 FCM push · 🐙 GitHub"]
 ```
 
-Then `./down.sh && ./deploy.sh`. If a requirement is unmet, the app logs every
-problem at once and refuses to start.
+One database holds everything, including attachments, so **one backup saves it all**.
+More in [Architecture](docs/architecture.md).
 
-### Stopping
+### 👥 Roles at a glance
 
-```bash
-./down.sh                  # stop containers; keep database volume and image
-./down.sh --wipe-db        # also delete the database volume (asks for confirmation)
-./down.sh --remove-images  # also remove the built image
-./down.sh --full-clean     # both
+| Role | Can do |
+|---|---|
+| 👑 **Admin** | Everything: people, deletes, all projects. |
+| 🧑‍💼 **Manager** | Edit any item or event, run sprints and boards. Cannot delete items or make admins. |
+| 🙋 **User** | Create and edit bugs, stories and sub-tasks, move cards, view reports. |
+
+Managers and users only see the projects they belong to.
+
+## 🏁 Sprints, the Scrum way
+
+```mermaid
+stateDiagram-v2
+    [*] --> Backlog: create issue
+    Backlog --> Planned: add to a sprint
+    Planned --> Active: start sprint
+    Active --> Done: move to the last column
+    Active --> Backlog: sprint completes, not done
+    Done --> [*]
 ```
 
-## Configuration
+Agile is off until a manager clicks **Set up Scrum board**. Nothing is changed or deleted when you do.
+Details: [Sprints and Agile](docs/agile.md).
 
-All settings come from environment variables. Copy [`.env.example`](.env.example)
-to `.env`. Every variable is explained inline there and read in
-[`app/config.py`](app/config.py). Never commit `.env`. Secret values belong in
-`.env` (local), a Compose `--env-file`, or a platform secret store, never in the
-image or the repository. The ones that matter most:
+## 🕵️ Sleuth, the assistant
 
-| Variable | Default | Purpose |
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sleuth-dark.svg">
+    <img alt="Sleuth logo" src="docs/assets/sleuth-light.svg" width="72" align="left" hspace="12">
+  </picture>
+  Ask <i>"show open bugs assigned to alice"</i>, <i>"how many critical bugs are in PROD?"</i>
+  or <i>"close bug 5"</i>. Every change asks you first and is written to the audit trail.
+  By default Sleuth runs fully on your server and sends nothing out.
+</p>
+
+<br clear="left">
+
+```mermaid
+flowchart LR
+    Q["💬 Your question"] --> R["1 Rules<br>fast, exact"]
+    R -->|not sure| C["2 Classifier<br>TF-IDF"]
+    C -->|not sure| LL["3 Local LLM<br>optional"]
+    LL -->|not sure| CL["4 Cloud LLM<br>optional, off by default"]
+    R --> A["✅ Answer or confirmed action"]
+    C --> A
+    LL --> A
+    CL --> A
+```
+
+More in [Sleuth](docs/sleuth.md).
+
+## 🐙 Git feature branches
+
+```mermaid
+flowchart LR
+    S["📘 User Story #42<br>Dark mode for settings"] -->|Create branch| G["🐙 GitHub"]
+    G --> B["feature_42_dark-mode-for-settings"]
+    B -->|Remove branch| X["🗑️ Deleted, kept as history"]
+```
+
+Off by default. Only User Stories get branches, and only the exact branch Bug Hunter created can be removed.
+Setup: [Git integration](docs/git-integration.md).
+
+## ⚙️ Settings that matter
+
+Everything comes from environment variables. Copy [`.env.example`](.env.example); each line is explained there.
+
+| Setting | Default | What it does |
 |---|---|---|
-| `APP_VERSION` | _(required)_ | Release shown in the UI, API docs and `/api/health`, and the image tag. The single source of truth; there's no hardcoded fallback. |
-| `APP_NAME` | `Bug Hunter` | Product name in HTML titles, API docs, email subjects, reports and notifications. |
-| `APP_ENV` | _(blank = development)_ | `production` turns on the strict start-up checks. |
-| `SESSION_SECRET` | _(blank)_ | Signs session cookies. Blank makes a new secret every restart, which logs everyone out, and is refused in production. |
-| `COOKIE_SECURE` | `false` | Set `true` only when serving over HTTPS. Also counts as a production deploy. |
-| `APP_BASE_URL` | `http://localhost:8765` | Public URL used in email links. |
-| `CORS_ORIGINS` | _(blank = same-origin)_ | Comma-separated list of allowed cross-origin clients. |
-| `ENABLE_API_DOCS` | `false` | Serve `/docs`, `/redoc` and `/openapi.json` in production too. They are always on in development. |
-| `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `_NAME` | `admin@bughunter.local` (Compose) / _(required)_ / `Admin` | First admin, created only when the database has no users. |
-| `AUTO_LOGIN_ENABLED` | `false` | Sign every visitor in as the bootstrap admin. Trusted local use only. |
-| `EMAIL_BACKEND` | `console` | `console` (log to stdout), `smtp`, or `disabled`. |
-| `EMAIL_DIGEST_ENABLED` | `false` | Batch per-event emails into one daily digest. |
-| `MAX_REPORT_ROWS` | `50000` | Max rows in one Reports Excel export (returns 413 above it). |
-| `WEB_PUSH_ENABLED` | `false` | Master switch for browser push (FCM). |
-| `GIT_BRANCH_CREATION_ENABLED` / `GIT_BRANCH_DELETION_ENABLED` | `false` / `false` | Story feature branches; see [Git integration](#git-integration-story-feature-branches). |
-| `GIT_CREDENTIAL_ENCRYPTION_KEY` | _(blank)_ | Fernet key that encrypts per-project Git tokens. Required before a token can be saved. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(blank)_ | OTLP/**gRPC** collector, e.g. `http://otel-collector:4317`. Blank means console-only, with nothing exported. |
-| `LOG_FORMAT` | `text` | `json` writes one JSON object per line for log shippers. |
-| `SLEUTH_CLOUD_ENABLED` | `0` | Opt-in cloud LLM fallback for Sleuth. |
+| `APP_VERSION` | required | Version shown in the UI and at `/api/health`. |
+| `APP_ENV` | development | Set `production` to turn on strict start-up checks. |
+| `SESSION_SECRET` | blank | Signs session cookies. Use a long random value in production. |
+| `EMAIL_BACKEND` | `console` | `console`, `smtp` or `disabled`. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | blank | Send traces, metrics and logs to SigNoz or any OTLP collector. |
+| `SLEUTH_CLOUD_ENABLED` | `0` | Opt in to a cloud LLM fallback for Sleuth. |
 
-### Observability (OpenTelemetry / SigNoz)
+All settings: [Key settings](docs/environment.md).
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the app streams three signals to the
-collector over OTLP/gRPC. Leave it blank and everything stays on the console.
+## 🛡️ Your data stays safe
 
-| Signal | Details |
-| --- | --- |
-| **Traces** | One server span per HTTP request from FastAPI, DB spans from SQLAlchemy, and outbound spans from `httpx`. Health checks and `/static` are excluded by default (`OTEL_TRACES_EXCLUDED_URLS`). |
-| **Metrics** | HTTP server and DB client metrics, exported every `OTEL_METRICS_EXPORT_INTERVAL_MS` (default 60 s). |
-| **Logs** | The same `bug_hunter.*` records as the console, with `trace_id`/`span_id` so a log pivots to its request. Audit-trail entries arrive as `audit …` records. Sensitive attribute keys are redacted before export (`OTEL_LOG_REDACT_SENSITIVE`). |
+- ✅ Upgrades only **add** tables and columns. Nothing is removed or rewritten.
+- ✅ `./deploy.sh` takes a database dump first, and never touches the data volume.
+- ✅ `./down.sh` keeps your data. Only `./down.sh --wipe-db` deletes it, after asking.
+- ✅ Passwords use bcrypt. Uploads are checked by type and content.
 
-The service name defaults to `bug-hunter` (`OTEL_SERVICE_NAME`), and the
-deployment environment defaults to `APP_ENV` (`OTEL_DEPLOYMENT_ENVIRONMENT`).
-Per-signal switches (`OTEL_TRACES_ENABLED`, `OTEL_METRICS_ENABLED`,
-`OTEL_LOGS_ENABLED`), the sampler (`OTEL_TRACES_SAMPLER`), collector headers and
-TLS options are all documented in `.env.example`.
+Read [Live-data safety and deployment](docs/upgrading.md) and the [Security model](docs/security-model.md).
 
-**No traces?** Check, in order: the startup log says `OTLP export enabled -> …`,
-`OTEL_TRACES_ENABLED` isn't `false`, the sampler isn't `always_off`, and your
-collector's environment filter includes `OTEL_DEPLOYMENT_ENVIRONMENT`.
+## 🧪 Quality
 
-### Email (optional)
-
-By default, `EMAIL_BACKEND=console` prints emails to the log. For real delivery,
-set `EMAIL_BACKEND=smtp` and the `SMTP_*` variables (host, port, username,
-password, TLS), then restart. Any standard SMTP provider works. For Gmail, use an
-[App Password](https://myaccount.google.com/apppasswords), not the account
-password.
-
-Set `EMAIL_DIGEST_ENABLED=true` to batch each user's notifications into one
-email per day. Password-reset and other security emails always send immediately.
-With the digest on, immediate work-item emails are off, so make sure a scheduler
-runs. Either run `python -m app.jobs.email_digest` from cron/Task Scheduler, or
-set `EMAIL_DIGEST_CRON` (5-field cron) and `EMAIL_DIGEST_TIMEZONE` (IANA name) to
-let the app run it itself (the log confirms with `Email-digest scheduler started`).
-The job is idempotent, bounded by `EMAIL_DIGEST_LOOKBACK_HOURS` (default 50), and
-retries failed sends on the next run.
-
-### Web push (optional)
-
-Browser push uses Firebase Cloud Messaging and is off by default. One-time setup:
-
-1. Create or reuse a project at <https://console.firebase.google.com>.
-2. Add a Web app and copy its config into `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_MESSAGING_SENDER_ID` and `FIREBASE_APP_ID`.
-3. Generate a Web Push key pair and put the public key in `FIREBASE_VAPID_KEY`.
-4. Provide a service-account key in one of two ways:
-   - **File mount** (default Compose setup): save it as `secrets/firebase-admin.json` (`FCM_CREDENTIALS_FILE`).
-   - **Env var** (no mount, e.g. Azure Container Apps): put the JSON, raw or base64-encoded, in `FCM_CREDENTIALS_JSON` as a platform secret. It takes priority over the file.
-5. Set `WEB_PUSH_ENABLED=true`, restart, and serve over HTTPS (`localhost` is exempt).
-
-Each user then enables push once from the profile menu. The Firebase SDK is
-self-hosted (no CDN). If a token fails to register, the client retries with
-backoff and again on reconnect. Devices still need to reach Google's FCM
-endpoints, and on networks that block them push never arrives. The in-app bell
-doesn't depend on FCM.
-
-## Local development
-
-### One command
-
-```powershell
-.\scripts\run_local.ps1              # Windows; add -Reload to auto-restart on code changes
-```
+| Layer | Tooling |
+|---|---|
+| Backend | `pytest` on SQLite and PostgreSQL 16, with an 80% coverage gate |
+| Frontend | Vitest, ESLint, axe-core accessibility checks in light and dark |
+| Browser | Playwright suites for the main journeys and phone width |
+| Security | ruff, bandit, pip-audit, gitleaks, Trivy, hadolint |
+| Quality gate | SonarQube, run locally with `scripts/sonar-scan.*` |
 
 ```bash
-bash scripts/run_local.sh            # macOS / Linux / Git Bash; RELOAD=1 for auto-restart
+pytest -m "not ui" -n auto --cov=app      # backend
+cd frontend && npm test && npm run lint   # frontend
 ```
 
-The first run creates `.venv` (Python 3.12, via [uv](https://docs.astral.sh/uv/)
-when installed) and a `.env` with generated secrets. Set `APP_VERSION` in `.env`,
-then open <http://127.0.0.1:8000> and sign in with `BOOTSTRAP_ADMIN_EMAIL` /
-`BOOTSTRAP_ADMIN_PASSWORD` from `.env`. The prebuilt frontend in `app/static` is
-served as-is, so Node isn't needed just to run the app.
+All commands and CI jobs: [Testing](docs/testing.md) · [Local development](docs/development.md).
 
-### Backend by hand
+## 📚 Documentation
 
-```bash
-python -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt -r requirements-dev.txt
-python scripts/gen_local_env_secrets.py   # creates .env with generated secrets
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
+| Topic | Page |
+|---|---|
+| Every feature and role | [features.md](docs/features.md) |
+| Run it with Docker | [getting-started.md](docs/getting-started.md) |
+| Sprints and boards | [agile.md](docs/agile.md) |
+| Key settings, email, push, telemetry | [environment.md](docs/environment.md) |
+| Deploy, backup, upgrade | [operations.md](docs/operations.md) · [upgrading.md](docs/upgrading.md) |
+| Sleuth and Git integration | [sleuth.md](docs/sleuth.md) · [git-integration.md](docs/git-integration.md) |
+| Security model | [security-model.md](docs/security-model.md) |
+| Code layout | [architecture.md](docs/architecture.md) |
+| Tests, CI and performance | [testing.md](docs/testing.md) · [development.md](docs/development.md) · [performance.md](docs/performance.md) |
+| Fixes for common problems | [troubleshooting.md](docs/troubleshooting.md) |
 
-On Linux you can install the exact CI pins instead with
-`pip install --require-hashes -r requirements-dev-lock.txt`. The lockfile is
-compiled for Linux, so it doesn't install on Windows or macOS.
+Need several teams on one install, with billing? See **Bug Hunter Enterprise**.
 
-Without `DATABASE_URL`, the app uses SQLite (`bug_hunter.db`) and creates the
-schema on first run. API docs are at <http://127.0.0.1:8000/docs> and `/redoc`.
+## 🤝 Contributing, security, license
 
-To use PostgreSQL instead, set
-`DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/bughunter`.
+- Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md). Run the tests before you open a pull request.
+- Found a vulnerability? Report it privately, see [SECURITY.md](SECURITY.md).
+- License: [MIT](LICENSE.txt).
 
-### Frontend
-
-```bash
-cd frontend
-npm ci               # lockfile-faithful install
-npm test             # Vitest behaviour tests
-npm run lint         # ESLint
-npm run build        # writes the bundle into ../app/static
-npm run dev          # optional Vite dev server on :5173, proxies /api (see vite.config.js)
-```
-
-Commit the rebuilt `app/static` together with frontend changes so a plain
-`uvicorn` run serves the current UI. The Docker image rebuilds it anyway.
-
-### Tests and checks
-
-```bash
-pytest -m "not ui" -n auto --cov=app         # backend suite, parallel (coverage gate: 80%)
-python -m playwright install chromium        # one-time browser download (add firefox webkit if wanted)
-pytest -m ui                                 # browser suites (Chromium)
-PW_BROWSERS=chromium,firefox,webkit pytest tests/test_e2e_browser.py -m ui
-```
-
-Browser env vars: `PW_BROWSERS` (comma list, default `chromium`), `PW_EXECUTABLE_PATH`
-(use an installed browser binary), `PW_HEADED=1` (show the window). Add
-`BH_TEST_DB=postgres BH_TEST_POSTGRES_URL=...` to run the backend suite on PostgreSQL.
-See [docs/testing.md](docs/testing.md).
-
-```bash
-python -m compileall -q app tests scripts
-ruff check app tests scripts
-bandit -c pyproject.toml -r app -q
-pip-audit -r requirements-lock.txt --strict
-cd frontend && npm run lint && npm test && npm audit --omit=dev --audit-level=high
-```
-
-The browser suites start their own server on a throwaway database. Besides
-the main workflows (login and deep links, every view, board drag-and-drop,
-sprint configuration and reports, role gating, logout, phone width) they run
-axe-core WCAG 2.1 AA checks in the dark and light themes, which needs
-`npm ci` in `frontend/` first. Any uncaught page error, browser console error
-or HTTP 5xx fails a test.
-
-Load test a running instance. `scripts/load_test.py` is read-only and bounded
-(credentials from `--email/--password` or `BH_LOAD_EMAIL`/`BH_LOAD_PASSWORD`);
-`scripts/loadtest.py` ramps 10 to 200 users with reads and writes and needs a test
-instance (see [docs/performance.md](docs/performance.md)):
-
-```bash
-python scripts/load_test.py --base-url http://localhost:8765 --users 15 --duration 90 --docker-container bugtracker_app
-```
-
-SonarQube: `scripts/sonar-server-up.ps1` starts a local server,
-`scripts/sonar-scan.ps1` / `sonar-scan.sh` scan, and
-`python scripts/sonar_gate.py apply` installs the `bug-hunter-gate` quality gate
-(80% coverage overall and on new code, security rating A, zero vulnerabilities).
-The token comes only from the `SONAR_TOKEN` environment variable. Shell scripts keep LF
-endings (`.gitattributes`). Details and the last verified results (0 bugs, 0 vulnerabilities,
-0 code smells, 0 hotspots, 95.5% combined coverage, 0.5% duplication, gate passed;
-Schemathesis: zero 5xx) are in [docs/testing.md](docs/testing.md).
-
-GitHub Actions runs on pushes and pull requests to `main`. `build-and-push.yml`
-(CI): lint (compile, ruff, ESLint), backend tests with coverage on SQLite and on
-PostgreSQL 16, Playwright browser tests, the frontend tests and build, then the
-optional SonarQube and image-push jobs. `security.yml`: conflict markers, gitleaks,
-Trivy (filesystem), bandit, hadolint, ShellCheck. `docker.yml` (pull requests):
-image build plus a Trivy image scan. Dependabot proposes weekly updates. All
-actions are pinned to commit SHAs. Three repository variables control the rest:
-
-| Variable | Effect |
-| --- | --- |
-| `SONAR_ENABLED=true` | Run the SonarQube scan and wait for its quality gate (needs `SONAR_TOKEN` and `SONAR_HOST_URL` secrets). |
-| `IMAGE_PUSH_ENABLED=true` | Build and push the image on `main` after every check passes (needs the `ACR_*` secrets). |
-| `RUN_TESTS=false` | Skip the backend and frontend test jobs and the SonarQube gate for an image-only run. Lint, build and dependency audits still gate the push. |
-
-Details per job: [docs/testing.md](docs/testing.md).
-
-## Live-data safety
-
-- `./deploy.sh` rebuilds the image and restarts containers without touching the `bugtracker_pgdata` volume.
-- `./down.sh` (no flags) stops containers and keeps the volume.
-- Data is lost only through explicit commands: `./down.sh --wipe-db` (asks for confirmation) or `docker compose down -v`.
-- `init_db()` only creates missing tables, columns and indexes. Existing rows are never deleted, and the only in-place writes are one-time backfills of new columns (for example display IDs and default workflow statuses).
-- Because the schema is additive, an older release still runs against a newer database. Rolling back is a manual step (below), so take a backup before upgrading. A drill of backup, delete, restore and rollback to the previous `APP_VERSION` kept the data.
-
-**Backup & restore:** `./deploy.sh` takes a dump first (`SKIP_BACKUP=1` skips it).
-Manually:
-
-```bash
-./scripts/backup.sh                       # backups/bughunter-<UTC time>.dump, keeps the newest 14
-./scripts/restore.sh backups/<file>.dump  # asks to confirm, takes a safety dump, stops the app, restores
-```
-
-Copy dumps off the host. Details in [docs/operations.md](docs/operations.md).
-
-**Rollback:** `./down.sh`, check out the previous tag (or `docker load` a saved
-image and set `APP_VERSION` to it), then `./deploy.sh`. To also revert data, use `restore.sh`.
-
-## Deployment
-
-To upgrade production: take a database backup, `git pull`, set `APP_VERSION`
-in `.env` to the new release, and run `./deploy.sh`. There's no separate
-migration step: `init_db()` adds missing tables, columns and indexes on boot and
-never drops or rewrites existing rows (see *Live-data safety*), apart from
-the one-time Sprints upgrade described under *Features*. `./down.sh`
-keeps all data; only `./down.sh --wipe-db` deletes it. To roll back, `./down.sh`,
-check out the previous tag and `./deploy.sh` again (an older app still runs
-against a newer schema).
-
-| Aspect | How it's handled |
-| --- | --- |
-| Services | The app container and a PostgreSQL container |
-| Ports | App `8765 → 8000`; PostgreSQL only on `127.0.0.1:55432` |
-| Resource limits | Compose caps the stack at 0.5 vCPU / 512 MB (app 0.30 / 320 MB, database 0.20 / 192 MB). Measured results and how to reproduce them: [docs/performance.md](docs/performance.md). |
-| Workers | One Uvicorn worker and a small SQLAlchemy pool (`DB_POOL_SIZE` + `DB_MAX_OVERFLOW`, 2 + 2 in Compose). The digest scheduler and rate limiters are per process, so scale out only after moving them out of the app. |
-| Secrets | Injected from `.env` / `secrets/` by Compose, or by the platform; never baked into the image |
-| Health | `curl -fsS http://localhost:8765/api/health` |
-
-The app container runs only the app. It doesn't run Docker or Compose and
-doesn't mount the Docker socket. Without Compose (for example on Azure Container
-Apps), the platform must inject a `DATABASE_URL` that points at an external
-PostgreSQL, never `localhost`.
-
-## Sleuth
-
-Sleuth is the in-app assistant, a floating widget on every page (open it with
-`Ctrl + /` or `⌘ + /`).
-
-**Ask questions** (answered by exact SQL handlers):
-
-- *show open bugs assigned to alice*
-- *how many critical bugs are in PROD?*
-- *export all bugs in apollo to excel* (returns a real `.xlsx`)
-
-**Run actions** (always confirmed before any change, always audited):
-
-- *close bug 5* · *reopen #12* · *assign bug 3 to alice* · *set bug 9 priority to high*
-- *comment on #5: looks fixed in v2.1*
-- *create a bug titled "Login broken" in project Apollo*
-
-With the cloud layer on, Sleuth can also call tools for agile work: create a
-work item under a parent, move it through the workflow, and add it to or remove
-it from a sprint. Every write still needs your confirmation and uses your own
-permissions.
-
-### How it works
-
-Sleuth tries the cheapest layer first:
-
-1. **Rules** (`app/chatbot/nlu.py`) is a regex parser over verbs, filters, names and IDs.
-2. **Statistical classifier** (`app/chatbot/classifier.py`) uses TF-IDF and cosine similarity, with no external models.
-3. **Local LLM** (`app/chatbot/llm.py`) is an optional `llama.cpp` backend for a GGUF model in `models/`. It stays dormant without a model file.
-4. **Cloud LLM** (`app/chatbot/cloud_llm.py`, `llm_tools_agent.py`) is optional and off by default: Groq (primary) or OpenRouter (fallback), with tool calling.
-
-With the defaults (`SLEUTH_CLOUD_ENABLED=0`, no model file), Sleuth is fully
-local and makes no outbound HTTP calls. The cloud layer is the only path that
-sends text off the box, and all text first passes through a secret-redaction
-filter (`app/chatbot/redaction.py`). Optional read-only add-ons for the cloud
-layer are `SLEUTH_RETRIEVAL_ENABLED` (keyword grounding),
-`SLEUTH_AGENT_ENABLED` (multi-step lookups), `SLEUTH_VERIFY_ANSWERS` (citation
-check) and `SLEUTH_EVAL_ENABLED` (LLM-as-judge note). `/api/chat` is limited to
-30 messages per minute per user.
-
-## Git integration (Story feature branches)
-
-Bug Hunter supports exactly two optional remote Git operations, both disabled by
-default:
-
-1. create one feature branch for one **User Story** in one GitHub repository;
-2. remove exactly that tracked branch again.
-
-Pull requests, merges, tags, pipeline sync and bulk deletion are out of scope.
-Bug Hunter never runs local `git`; every provider call is REST.
-
-**Project settings → Git integration** holds the API base URL, organization,
-default base branch and an encrypted project token (Fernet, via
-`GIT_CREDENTIAL_ENCRYPTION_KEY`), and has **Test connection** and read-only
-repository discovery (at most 200 repositories). There's no repository
-allow-list: the repository is chosen when a branch is created.
-
-**Creating.** `POST /api/git/work-items/{id}/branches` accepts only
-`provider_repo_id` and `base_branch`. The name is deterministic:
-`feature_<story-number>_<title-slug>` (slug from the first 25 characters of the
-title). The server verifies the repository and base branch, reads the base SHA,
-creates the branch, reconciles an uncertain success, and audits the outcome.
-Repeated requests are idempotent. `GET .../branches/preview` validates the same
-way without creating anything. Other item types are refused with
-`Feature branches can be created only for User Stories.`
-
-**Removing.** `DELETE /api/git/branches/{branch_record_id}` needs
-`GIT_BRANCH_DELETION_ENABLED=true`. Any member of the Story's project may remove
-the branch, and anyone outside the project gets a 404. The server deletes only
-the exact `refs/heads/<stored-name>` of an `Active` record with a `feature_`
-prefix, and it refuses protected names (`main`, `master`, `dev`, `develop`,
-`release`) and the project's base branch. A provider 404 counts as already gone.
-Auth, TLS, timeout, rate-limit and 5xx failures leave the record `Active` so the
-removal can be retried. Removed branches stay visible as history.
-
-**Credentials.** The project token takes precedence over the deployment-wide
-`GITHUB_TOKEN`. A token is never accepted from API payloads, returned in a
-response, or written to logs or audit rows. Use a fine-grained PAT with
-`Metadata: Read` and `Contents: Read and Write`, and set `GIT_CA_BUNDLE_FILE`
-behind a TLS-intercepting proxy.
-
-## Troubleshooting
-
-- **`APP_VERSION is required`:** add `APP_VERSION=<release>` to `.env`.
-- **App refuses to start in production:** the log lists every unmet requirement (session secret, bootstrap password, auto-login, Git encryption key, and with `APP_ENV=production` also https URL, secure cookies and email backend).
-- **Database connection refused:** check `docker compose ps`; the app waits for the database health check, so rerun `./deploy.sh` once it's healthy.
-- **Port 8765 in use:** stop the other service or change the host port in `docker-compose.yml`.
-- **Logged out after every restart:** set a fixed `SESSION_SECRET`.
-- **Password rejected as too weak:** the default policy is at least `PASSWORD_MIN_LENGTH` (8) characters containing at least one letter and one number (`PASSWORD_REQUIRE_COMPLEXITY`); a few very common passwords are refused outright.
-- **Emails not sent:** check `EMAIL_BACKEND=smtp` and the `SMTP_*` values, and set `LOG_LEVEL=DEBUG` for SMTP details.
-- **Blank page or 404 on assets:** rebuild the frontend (`cd frontend && npm run build`) and restart the backend so it recalculates the asset version.
-- **401s right after login:** `COOKIE_SECURE=true` needs https; use `false` for plain http.
-- **Sprints shows "Scrum isn't set up":** Agile is off for that project. A manager or admin clicks **Set up Scrum board** on the Sprints page.
-- **Logs:** `docker compose logs -f app`.
-
-## More documentation
-
-- [docs/operations.md](docs/operations.md): deploy, backup/restore, retention, health, logs, telemetry, upgrades.
-- [docs/security-model.md](docs/security-model.md): what is enforced where, and the known limits.
-- [docs/testing.md](docs/testing.md): test layers, commands, CI jobs.
-- [docs/performance.md](docs/performance.md): measured load-test results and how to reproduce them.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for supported versions, private vulnerability
-reporting, and the security posture.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Run the test suites before opening a pull
-request. Report vulnerabilities privately via [SECURITY.md](SECURITY.md), not as
-public issues.
-
-## License
-
-[MIT](LICENSE.txt).
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img alt="Bug Hunter" src="docs/assets/logo-light.svg" width="44">
+  </picture>
+</p>

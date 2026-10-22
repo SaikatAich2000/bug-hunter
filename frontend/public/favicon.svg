@@ -1,18 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <defs>
-    <radialGradient id="b" cx="0.4" cy="0.35">
-      <stop offset="0%" stop-color="#ff6b5e"/>
-      <stop offset="60%" stop-color="#c83a30"/>
-      <stop offset="100%" stop-color="#7a1e18"/>
-    </radialGradient>
-  </defs>
-  <ellipse cx="16" cy="18" rx="13" ry="11" fill="url(#b)" stroke="#3a0d0a" stroke-width="1"/>
-  <line x1="16" y1="7" x2="16" y2="29" stroke="#3a0d0a" stroke-width="1"/>
-  <circle cx="9" cy="14" r="2" fill="#1a0a08"/>
-  <circle cx="23" cy="14" r="2" fill="#1a0a08"/>
-  <circle cx="8" cy="22" r="1.7" fill="#1a0a08"/>
-  <circle cx="24" cy="22" r="1.7" fill="#1a0a08"/>
-  <ellipse cx="16" cy="7" rx="6" ry="4.5" fill="#1a0a08"/>
-  <circle cx="13.5" cy="6.5" r="1" fill="#fff"/>
-  <circle cx="18.5" cy="6.5" r="1" fill="#fff"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Bug Hunter"><style>.fi{fill:#0f1924}.fh{fill:#d63a34}.fk{fill:#ffffff}.fg{fill:#b06d14}.fa{fill:#1570c0}.si{stroke:#0f1924}.sa{stroke:#1570c0}.sh{stroke:#d63a34}.sk{stroke:#ffffff}.sg{stroke:#b06d14}@media(prefers-color-scheme:dark){.fi{fill:#e8eff6}.fh{fill:#ef5350}.fk{fill:#0f1924}.fg{fill:#e6a23c}.fa{fill:#67c1f5}.si{stroke:#e8eff6}.sa{stroke:#67c1f5}.sh{stroke:#ef5350}.sk{stroke:#0f1924}.sg{stroke:#e6a23c}}</style><path d="M26 44h48M26 56h48M26 68h48" class="sa" stroke-width="4" stroke-linecap="round" fill="none"/><rect x="10" y="8" width="16" height="84" rx="8" class="fi"/><rect x="74" y="8" width="16" height="84" rx="8" class="fi"/><ellipse cx="50" cy="57" rx="16" ry="19" class="fh"/><circle cx="50" cy="36" r="7" class="fi"/><path d="M50 41v34" class="sk" stroke-width="2.5" fill="none"/></svg>

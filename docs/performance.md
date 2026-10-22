@@ -1,4 +1,8 @@
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg"><img alt="Bug Hunter" src="assets/logo-light.svg" width="64"></picture></p>
+
 # Performance
+
+> [← Back to the README](../README.md)
 
 Measured results are in [Results](#results); they come from `scripts/loadtest.py` on one test machine
 and will differ on other hardware.

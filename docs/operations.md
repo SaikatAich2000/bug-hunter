@@ -1,4 +1,8 @@
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg"><img alt="Bug Hunter" src="assets/logo-light.svg" width="64"></picture></p>
+
 # Operations
+
+> [← Back to the README](../README.md)
 
 Everything here is for the Docker Compose deployment (`docker-compose.yml`, `deploy.sh`,
 `down.sh`). Settings are environment variables; every one is listed in
@@ -157,4 +161,4 @@ The bootstrap admin is only created in an empty database, so delete `bug_hunter.
 
 ## Troubleshooting
 
-See the *Troubleshooting* section of the [README](../README.md#troubleshooting).
+See [Troubleshooting](troubleshooting.md).

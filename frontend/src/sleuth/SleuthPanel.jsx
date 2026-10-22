@@ -7,6 +7,7 @@ import { api, ApiError } from "../lib/api";
 import { getAppName } from "../lib/branding";
 import { sanitizeSleuth } from "../lib/sanitize";
 import { useApp } from "../state/AppContext";
+import BrandMark from "../components/BrandMark";
 // Tiny helpers (.replace(/g) not replaceAll — tsconfig targets ES2020).
 const ESCAPE_MAP = {
   "&": "&amp;",
@@ -687,12 +688,7 @@ export default function SleuthPanel() {
           toggle();
         }}
       >
-        <img
-          src="/static/sleuth.svg"
-          alt=""
-          draggable={false}
-          className="sleuth-fab-icon"
-        />
+        <BrandMark kind="sleuth" tone="dark" className="sleuth-fab-icon" />
       </button>
 
       <aside
@@ -715,7 +711,7 @@ export default function SleuthPanel() {
         />
         <header className="sleuth-header">
           <div className="sleuth-avatar" aria-hidden="true">
-            <img src="/static/sleuth.svg" alt="" className="sleuth-avatar-icon" />
+            <BrandMark kind="sleuth" tone="dark" className="sleuth-avatar-icon" />
           </div>
           <div className="sleuth-title-block">
             <div className="sleuth-title">{appName} AI Assistant</div>

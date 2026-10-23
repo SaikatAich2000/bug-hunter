@@ -11,10 +11,10 @@
 # ), consumed via `pip install -r requirements-lock.txt`. Keep this file
 # the human-maintained source of truth; regenerate the lock after any
 # dependency change and after a successful `pip-audit`.
-fastapi>=0.143.0
+fastapi>=0.143.3
 uvicorn[standard]>=0.54.0
-sqlalchemy>=2.1.4
-pydantic>=2.14.0
+sqlalchemy>=2.1.5
+pydantic>=2.14.1
 psycopg[binary]>=3.3.6
 python-dotenv>=1.2.4
 httpx>=0.28.1
@@ -39,7 +39,7 @@ Pillow>=12.3.0
 # interception CA, so httpx fails with CERTIFICATE_VERIFY_FAILED even though the
 # OS trusts it. truststore delegates verification to the platform trust store
 # instead (app/git/tls.py). Verification is never disabled. Data-only package.
-truststore>=0.10.4
+truststore>=0.10.5
 
 # Fernet (AES-128-CBC + HMAC-SHA256) for project-level Git credentials at rest
 # (app/git/credentials.py). The key is server-only (GIT_CREDENTIAL_ENCRYPTION_KEY)

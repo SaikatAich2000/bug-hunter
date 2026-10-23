@@ -38,6 +38,7 @@ the path shown.
 | Control | Limit | File |
 |---|---|---|
 | Per-IP window, `POST /api/auth/login` | 8 / 60 s (`RATE_LOGIN_MAX`, `RATE_FORGOT_PASSWORD_MAX`, `RATE_RESET_PASSWORD_MAX`, `RATE_CHANGE_PASSWORD_MAX`, `RATE_AUTH_WINDOW_SECONDS`) | `app/main.py` `_RATE_RULES` |
+| Per-IP ceiling, every `/api` request | 1200 / 60 s (`API_RATE_MAX`, `0` turns it off; `/api/health` exempt) | `app/main.py` `_api_ceiling` |
 | `forgot-password` | 3 / 60 s | same |
 | `reset-password`, `change-password` | 5 / 60 s each | same |
 | Per-user upload / comment / chat limits | `RATE_UPLOAD_MAX` (20), `RATE_COMMENT_MAX` (30), `RATE_CHAT_MAX` (30) per `RATE_USER_WINDOW_SECONDS` (60 s) | `app/routes/bugs.py`, `app/chatbot/router.py` |
@@ -109,3 +110,13 @@ survive deletion of the item they describe. Not recorded: reads and most setting
 - Container image and dependency scanning run in CI (Trivy, pip-audit, npm audit, bandit,
   gitleaks); they find known issues only.
 - No webhook, SSO or MFA support exists. Do not assume them.
+
+## External audit (2026-10-22)
+
+A manual pass with OWASP ZAP (full authenticated active scan), Nuclei (1,811 templates),
+sqlmap, Semgrep (OWASP Top 10 + Python/JS rule packs), Schemathesis (API fuzzing, ~1,100
+generated requests, 0 server errors), Gitleaks, OSV-Scanner, k6 and MobSF-style dependency
+review found no exploitable issue. Two dependencies (`pillow`, `certifi`) were bumped to
+patched versions, nine SQL-string false positives were annotated with a reason, and the CI
+Dependabot config gained a 5-day update cooldown. Full findings: ask the maintainer for
+`FINDINGS.md`.

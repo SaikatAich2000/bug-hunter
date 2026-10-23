@@ -5,6 +5,7 @@
  * are both admin-only. The current session is flagged and its Revoke button
  * is disabled.
  */
+import { startPoller } from "../lib/poller";
 import EmptyGuide from "../onboarding/EmptyGuide";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
@@ -56,10 +57,7 @@ export default function SessionsView() {
   // Poll so logins/revokes from other devices appear without a manual reload.
   // Quiet (no toast per tick), paused while the tab is hidden, fires on refocus.
   useEffect(() => {
-    const tick = () => { if (!document.hidden) void refreshSessions(true); };
-    const id = setInterval(tick, dataPollMs());
-    document.addEventListener("visibilitychange", tick);
-    return () => { clearInterval(id); document.removeEventListener("visibilitychange", tick); };
+    return startPoller(() => refreshSessions(true), dataPollMs());
   }, [refreshSessions]);
 
   const handleRevoke = useCallback(async (s) => {

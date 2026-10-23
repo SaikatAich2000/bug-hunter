@@ -13,6 +13,7 @@ httpx2  # starlette's TestClient backend; plain httpx there is deprecated
 playwright>=1.63.0,<2
 
 # Coverage
+hypothesis>=6.140,<7  # property-based tests (tests/test_properties.py)
 pytest-cov>=7.1.0
 coverage>=7.16.2
 

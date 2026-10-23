@@ -2,6 +2,7 @@
  * Events view: list mode (card grid, debounced search, date filter) and
  * detail mode (one event + filterable item table).
  */
+import { startPoller } from "../lib/poller";
 import EmptyGuide from "../onboarding/EmptyGuide";
 import {
   useCallback,
@@ -458,13 +459,7 @@ export default function EventsView() {
   });
   useEffect(() => {
     if (view !== "events") return;
-    const tick = () => pollRef.current();
-    const id = setInterval(tick, dataPollMs());
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", tick);
-    };
+    return startPoller(() => pollRef.current(), dataPollMs());
   }, [view]);
 
   // Refetch detail when the bug modal closes, the user may have changed an item.

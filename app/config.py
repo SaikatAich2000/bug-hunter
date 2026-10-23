@@ -397,6 +397,8 @@ class Settings:
     # Rate limits (in-memory sliding windows, per worker)
     # Auth endpoints, per client IP, within RATE_AUTH_WINDOW_SECONDS.
     RATE_AUTH_WINDOW_SECONDS: int = env_int("RATE_AUTH_WINDOW_SECONDS", 60, minimum=1)
+    # General per-IP ceiling on every /api request per RATE_AUTH_WINDOW_SECONDS (0 turns it off).
+    API_RATE_MAX: int = env_int("API_RATE_MAX", 1200, minimum=0)
     RATE_LOGIN_MAX: int = env_int("RATE_LOGIN_MAX", 8, minimum=1)
     RATE_FORGOT_PASSWORD_MAX: int = env_int("RATE_FORGOT_PASSWORD_MAX", 3, minimum=1)
     RATE_RESET_PASSWORD_MAX: int = env_int("RATE_RESET_PASSWORD_MAX", 5, minimum=1)

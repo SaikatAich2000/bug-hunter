@@ -465,12 +465,12 @@ def _unescape_plain_text_fields(conn) -> None:
     for table, key, column in (("sprints", "id", "goal"), ("bugs", "id", "blocked_reason"),
                                ("epic_details", "epic_id", "summary_note")):
         rows = conn.execute(text(
-            f"SELECT {key}, {column} FROM {table} WHERE {column} LIKE :amp"  # noqa: S608 - fixed names
+            f"SELECT {key}, {column} FROM {table} WHERE {column} LIKE :amp"  # noqa: S608  # nosec B608 - fixed names, not user input
         ), {"amp": "%&%"}).all()
         for row_id, value in rows:
             plain = html.unescape(value)
             if plain != value:
-                conn.execute(text(f"UPDATE {table} SET {column} = :v WHERE {key} = :i"),  # noqa: S608
+                conn.execute(text(f"UPDATE {table} SET {column} = :v WHERE {key} = :i"),  # noqa: S608  # nosec B608 - fixed names, not user input
                              {"v": plain, "i": row_id})
 
 
@@ -637,7 +637,7 @@ def _add_check_not_valid(conn, table, constraint) -> bool:
     """Add the CHECK without scanning the table; False when the database refuses it."""
     try:
         with conn.begin_nested():
-            conn.execute(text(
+            conn.execute(text(  # nosec B608 - table/constraint are our own SQLAlchemy metadata (DDL identifiers, not user input)
                 f'ALTER TABLE "{table.name}" ADD CONSTRAINT "{constraint.name}" '
                 f"CHECK ({constraint.sqltext}) NOT VALID"
             ))
@@ -650,7 +650,7 @@ def _add_check_not_valid(conn, table, constraint) -> bool:
 def _validate_check(conn, table, constraint) -> None:
     try:
         with conn.begin_nested():
-            conn.execute(text(
+            conn.execute(text(  # nosec B608 - same: SQLAlchemy metadata, not user input
                 f'ALTER TABLE "{table.name}" VALIDATE CONSTRAINT "{constraint.name}"'
             ))
     except SQLAlchemyError:

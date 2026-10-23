@@ -155,10 +155,13 @@ def _rows_from_csv(data: bytes) -> list[list[str]]:
     except UnicodeDecodeError as exc:
         raise BulkImportError("This CSV file isn't valid UTF-8 text.") from exc
     rows: list[list[str]] = []
-    for raw_row in csv.reader(io.StringIO(text)):
-        rows.append([_stringify_cell(v) for v in raw_row])
-        if len(rows) > _MAX_SCAN_ROWS:
-            break
+    try:
+        for raw_row in csv.reader(io.StringIO(text)):
+            rows.append([_stringify_cell(v) for v in raw_row])
+            if len(rows) > _MAX_SCAN_ROWS:
+                break
+    except csv.Error as exc:  # a stray carriage return, NUL byte or oversized field
+        raise BulkImportError("This CSV file is malformed and can't be read.") from exc
     return rows
 
 

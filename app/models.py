@@ -1419,3 +1419,26 @@ class UserPreference(Base):
         CheckConstraint(_one_of("tour_status", TOUR_STATUSES), name="ck_user_preferences_tour_status"),
         CheckConstraint("tour_step >= 0", name="ck_user_preferences_tour_step"),
     )
+
+
+def _index_foreign_keys() -> None:
+    """Give every foreign key an index that leads with its column, unless one already does.
+
+    PostgreSQL does not index foreign keys itself, so without this each delete or update of a
+    parent row (a user, a work item, a sprint) scans the whole child table to find its dependents.
+    init_db creates the missing indexes on existing databases, so this also fixes them on upgrade.
+    """
+    from sqlalchemy import Index, PrimaryKeyConstraint, UniqueConstraint
+
+    for table in Base.metadata.tables.values():
+        leading = {next(iter(ix.columns)).name for ix in table.indexes if len(ix.columns)}
+        leading |= {next(iter(c.columns)).name for c in table.constraints
+                    if isinstance(c, PrimaryKeyConstraint | UniqueConstraint) and len(c.columns)}
+        for fk in table.foreign_key_constraints:
+            column = next(iter(fk.columns))
+            if column.name not in leading:
+                Index(f"ix_{table.name}_{column.name}", column)
+                leading.add(column.name)
+
+
+_index_foreign_keys()

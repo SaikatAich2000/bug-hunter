@@ -32,7 +32,7 @@ from app.auth import (
     verify_password,
 )
 from app.config import get_settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.email_service import mask_email, notify_password_reset
 from app.models import PasswordResetToken, User
 from app.models import Session as SessionRow
@@ -246,6 +246,31 @@ def change_password(
     return out
 
 
+def _issue_password_reset(user_id: int | None, email: str) -> None:
+    """Create the reset token and email it. Runs after the response, so a known and an unknown
+    address cost the request the same single lookup and timing cannot reveal which exists."""
+    with SessionLocal() as db:
+        user = db.get(User, user_id) if user_id is not None else None
+        if user is None or not user.is_active:
+            generate_reset_token()
+            _audit(db, None, "password_reset_no_account",
+                   f"Password reset attempted for unknown/inactive email: {mask_email(email)}")
+            db.commit()
+            return
+        # Purge stale tokens inline; there's no background job for this table.
+        purge_consumed_reset_tokens(db)
+        raw_token, token_hash = generate_reset_token()
+        db.add(PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=datetime.now(UTC) + PASSWORD_RESET_TTL,
+        ))
+        _audit(db, None, "password_reset_requested", f"Password reset requested for {user.email}")
+        db.commit()
+        reset_url = f"{get_settings().APP_BASE_URL.rstrip('/')}/reset.html?token={raw_token}"
+        notify_password_reset(user.email, user.name, reset_url)
+
+
 @router.post("/forgot-password", status_code=204, responses=_FORGOT_PASSWORD_RESPONSES)
 def forgot_password(
     payload: ForgotPasswordIn,
@@ -254,39 +279,14 @@ def forgot_password(
 ) -> Response:
     """Issue a password-reset email. With FORGOT_PASSWORD_ENUMERATION_SAFE (default)
     always 204 so account existence never leaks; otherwise 404s on unknown addresses."""
-    settings = get_settings()
     user = db.scalar(select(User).where(User.email == payload.email))
-    if user is None or not user.is_active:
-        # Run (and discard) the same token work so timing doesn't reveal account existence.
-        if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
-            generate_reset_token()
-        _audit(db, None, "password_reset_no_account",
-               f"Password reset attempted for unknown/inactive email: {mask_email(payload.email)}")
-        db.commit()
-        if settings.FORGOT_PASSWORD_ENUMERATION_SAFE:
-            return Response(status_code=204)
+    if not get_settings().FORGOT_PASSWORD_ENUMERATION_SAFE and (user is None or not user.is_active):
+        _issue_password_reset(None, payload.email)  # keeps the audit row for the attempt
         raise HTTPException(
             status_code=404,
             detail="We couldn't find an account with that email. Check the address or contact an administrator",
         )
-    # Purge stale tokens inline; there's no background job for this table.
-    purge_consumed_reset_tokens(db)
-    raw_token, token_hash = generate_reset_token()
-    prt = PasswordResetToken(
-        user_id=user.id,
-        token_hash=token_hash,
-        expires_at=datetime.now(UTC) + PASSWORD_RESET_TTL,
-    )
-    db.add(prt)
-    _audit(db, None, "password_reset_requested",
-           f"Password reset requested for {user.email}")
-    db.commit()
-
-    base = get_settings().APP_BASE_URL.rstrip("/")
-    reset_url = f"{base}/reset.html?token={raw_token}"
-    background.add_task(
-        notify_password_reset, user.email, user.name, reset_url,
-    )
+    background.add_task(_issue_password_reset, user.id if user else None, payload.email)
     return Response(status_code=204)
 
 

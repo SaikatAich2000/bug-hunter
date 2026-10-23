@@ -143,6 +143,15 @@ describe("sidebar", () => {
     await user.click(screen.getByRole("button", { name: "Close navigation" }));
     expect(document.getElementById("sidebar")).not.toHaveClass("open");
   });
+
+  it("the Escape key closes the mobile drawer", async () => {
+    const user = userEvent.setup();
+    await mountApp();
+    await user.click(screen.getByRole("button", { name: "Open menu" }));
+    expect(document.getElementById("sidebar")).toHaveClass("open");
+    await user.keyboard("{Escape}");
+    expect(document.getElementById("sidebar")).not.toHaveClass("open");
+  });
 });
 
 describe("role gating", () => {

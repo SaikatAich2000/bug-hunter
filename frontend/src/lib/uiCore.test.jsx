@@ -69,6 +69,12 @@ describe("sanitization boundaries (real lib/sanitize.js)", () => {
     expect(sanitizeSleuth("<strong>hi</strong>")).toContain("<strong>hi</strong>");
   });
 
+  it("keeps only the data-open-bug attribute in Sleuth chat", () => {
+    const out = sanitizeSleuth('<a href="#" data-evil="1" data-open-bug="7">b</a>');
+    expect(out).toContain('data-open-bug="7"');
+    expect(out).not.toContain("data-evil");
+  });
+
   it("preserves legitimately unsaved plain text unchanged", () => {
     expect(sanitizeHtml("plain title 42")).toBe("plain title 42");
   });

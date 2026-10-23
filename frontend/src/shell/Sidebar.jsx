@@ -182,7 +182,7 @@ export default function Sidebar({ mobileOpen, onNavigate }) {
                 <span // NOSONAR S6819: styled inline label inside a clickable row; a <button> would need a reset of the row styling
                   className="swatch"
                   data-act="filter"
-                  style={{ background: p.color }}
+                  style={{ backgroundColor: p.color }}
                   title="Toggle filter"
                   role="button" /* NOSONAR S6819: styled inline label inside a clickable row; a <button> would need a reset of the row styling */
                   tabIndex={0}

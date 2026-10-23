@@ -31,9 +31,9 @@ from fastapi.responses import (
     JSONResponse,
     RedirectResponse,
 )
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
-from sqlalchemy.exc import DataError, SQLAlchemyError
+from sqlalchemy.exc import DataError, InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session as OrmSession
 from starlette.datastructures import MutableHeaders
 
@@ -86,6 +86,7 @@ from app.schemas import (
     ALLOWED_STATUSES,
     STATUSES_BY_TYPE,
 )
+from app.static_files import CompressedStaticFiles
 from app.telemetry import instrument_app, setup_telemetry, shutdown_telemetry
 
 logger = logging.getLogger("bug_hunter")
@@ -812,6 +813,9 @@ _RATE_RULES: dict[str, tuple[int, int]] = {
     "/api/auth/reset-password": (settings.RATE_RESET_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
     "/api/auth/change-password": (settings.RATE_CHANGE_PASSWORD_MAX, settings.RATE_AUTH_WINDOW_SECONDS),
 }
+# One ceiling over every /api request from an IP, so a single client cannot flood reads or writes.
+_API_RULE = (settings.API_RATE_MAX, settings.RATE_AUTH_WINDOW_SECONDS) if settings.API_RATE_MAX else None
+_API_EXEMPT = frozenset({"/api/health"})
 _rate_buckets: dict[tuple[str, str], deque] = {}
 _rate_lock = Lock()
 # Soft cap to bound memory when hammered from many IPs.
@@ -848,8 +852,33 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _api_ceiling(request: Request) -> Response | None:
+    """429 once this IP has made _API_RULE requests to /api within the window."""
+    path = request.url.path
+    if _API_RULE is None or not path.startswith("/api/") or path in _API_EXEMPT:
+        return None
+    max_req, window = _API_RULE
+    ip = _client_ip(request)
+    now = time.monotonic()
+    with _rate_lock:
+        bucket = _rate_buckets.get(("/api", ip))
+        if bucket is None:
+            if len(_rate_buckets) >= _RATE_BUCKETS_MAX:
+                _evict_one_rate_bucket(now)
+            bucket = _rate_buckets[("/api", ip)] = deque()
+        while bucket and bucket[0] < now - window:
+            bucket.popleft()
+        if len(bucket) >= max_req:
+            logger.warning("API rate ceiling hit from %s (%d/%d in %ss)", ip, len(bucket), max_req, window)
+            return _blocked(429, "Too many requests. Please slow down.", {"Retry-After": str(max(1, int(window - (now - bucket[0]))))})
+        bucket.append(now)
+    return None
+
+
 def rate_limit_check(request: Request) -> Response | None:
-    """429 when this IP has used up the endpoint's window; None lets it through."""
+    """429 when this IP has used up the endpoint's window (or the general /api ceiling); None lets it through."""
+    if (over := _api_ceiling(request)) is not None:
+        return over
     path = request.url.path
     rule = _RATE_RULES.get(path)
     if rule is None or request.method.upper() != "POST":
@@ -952,7 +981,7 @@ if _origins:
         expose_headers=["X-Request-ID"],
     )
 
-app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
+app.mount("/static", CompressedStaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
 # Rendered pages are stable per process; keyed on asset_version so tests
@@ -1263,6 +1292,23 @@ async def out_of_range_handler(request: Request, exc: Exception) -> JSONResponse
     return JSONResponse(status_code=422, content={
         "detail": [_single_error("A value in the request is out of range.")],
     })
+
+
+@app.exception_handler(OperationalError)
+@app.exception_handler(InterfaceError)
+@app.exception_handler(PoolTimeoutError)
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    # The database refused or dropped the connection, or every pooled connection is busy: a
+    # temporary condition, not a bug. 503 plus Retry-After tells clients and proxies to retry.
+    logger.error("Database unavailable on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    resp = JSONResponse(status_code=503, content={
+        "detail": "The service is temporarily unavailable. Please try again in a moment.",
+        "request_id": current_request_id(),
+    }, headers={"Retry-After": "5"})
+    _apply_security_headers(resp.headers)
+    resp.headers.setdefault("Cache-Control", "no-store")
+    resp.headers["X-Request-ID"] = current_request_id()
+    return resp
 
 
 @app.exception_handler(Exception)

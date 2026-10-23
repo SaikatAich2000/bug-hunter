@@ -159,6 +159,45 @@ http://127.0.0.1:8025. With the server running, `python scripts/seed_local.py` c
 manager and user accounts and sample items through the API (idempotent; values come from `.env`).
 The bootstrap admin is only created in an empty database, so delete `bug_hunter.db` to change it.
 
+
+## Incidents, recovery targets and alerts
+
+### Recovery targets
+
+| Target | Value | Basis |
+|---|---|---|
+| Data loss window (RPO) | up to the backup interval: 24 hours with a nightly `scripts/backup.sh`; minutes with point-in-time recovery from a managed PostgreSQL plan | backups are only as fresh as the schedule you run |
+| Time to restore (RTO) | minutes for a small database | the restore drill (backup, delete data, `scripts/restore.sh`) returned every table byte-identical; the app restarts on its own afterwards |
+| Planned deploy | about 20 s of cold start on a 0.1 CPU instance, none of it serving traffic | measured in [performance.md](performance.md) |
+
+Take a backup before every upgrade, copy it off the host, and rehearse one restore a month: a backup that has never been restored is a hope, not a backup.
+
+### When the service is down or slow
+
+1. **Is it up?** `GET /api/health` answers `status: ok` when the database is reachable. `degraded` means the app is running but the database is not.
+2. **Database lost or exhausted:** the API answers `503` with `Retry-After`, never a bare `500`, and recovers by itself when the database returns (tested with a 30-second outage). Check the database service first; then `DB_POOL_SIZE` and the connection limit of the database plan.
+3. **Everything is slow:** the instance is probably CPU-bound. Look at CPU and request rate; on a 0.1 CPU instance a sign-in (bcrypt) stalls other requests for about 2 s, see `BCRYPT_ROUNDS` in [performance.md](performance.md).
+4. **Many 429 responses:** per-address limits are working. A shared office address or a load test can trip them; raise `RATE_LIMIT_SCALE` or `API_RATE_MAX` for a known address range only if the traffic is legitimate.
+5. **Bad release:** redeploy the previous image tag. The schema changes are additive, so the older version keeps working against a newer schema.
+6. **Suspected account takeover:** end the user's sessions (Sessions view, or change their password, which bumps the session version), check the audit trail for sign-in, reset and e-mail-change events, and ask the user to enable two-factor authentication.
+7. **Suspected data exposure:** rotate `SESSION_SECRET` (ends every session) and the encryption key, restore from a clean backup if rows were altered, and follow the disclosure steps in [SECURITY.md](../SECURITY.md).
+
+After an incident write down what happened, how it was noticed, and what changed; add a test when the cause was a bug.
+
+### Alerts worth setting
+
+With an OpenTelemetry backend (see [observability.md](observability.md)) or the Prometheus endpoint, alert on:
+
+| Alert | Rule of thumb |
+|---|---|
+| Uptime | `/api/health` fails 2 checks in a row (use an external checker; it also keeps a free-tier instance awake) |
+| Server errors | 5xx responses above 2% of requests for 5 minutes |
+| Database unavailable | any 503 for more than 1 minute |
+| Latency | p95 above 1 s for 10 minutes |
+| Memory | resident memory above 80% of the limit (400 MB of 512 MB) |
+| Sign-in abuse | a sudden rise in failed sign-ins or lockouts (audit trail, `bh.events` counter) |
+| Backups | no new backup file in 26 hours |
+
 ## Troubleshooting
 
 See [Troubleshooting](troubleshooting.md).

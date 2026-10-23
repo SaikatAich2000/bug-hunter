@@ -235,6 +235,10 @@ class Problems:
         # the browser as a failed resource; the response itself is asserted.
         if "Failed to load resource" in text and ("401" in text or "403" in text):
             return
+        # Firefox reports a font request cancelled by a navigation (the login redirect) as an error;
+        # 2152398850 is NS_BINDING_ABORTED, not a failure of the app.
+        if "downloadable font: download failed" in text and "status=2152398850" in text:
+            return
         self.items.append(f"console: {text}")
 
     def assert_clean(self):

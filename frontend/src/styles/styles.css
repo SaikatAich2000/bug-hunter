@@ -701,15 +701,22 @@ body.sidebar-collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(
 .side-item:hover { background: var(--accent-soft); }
 .side-item.active { background: var(--accent-soft); color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
 .side-item .swatch {
+  /* A 10px dot with a 24px hit area (WCAG 2.5.8): the padding is the target, the colour paints only the centre,
+     and the negative margin keeps the row exactly as tall and wide as before. */
+  box-sizing: content-box;
   width: 10px;
   height: 10px;
+  padding: 7px;
+  margin: -7px -4px -7px -7px; /* the right side stops short of the label so the two targets do not overlap */
+  background-clip: content-box;
   border-radius: 50%;
   flex-shrink: 0;
-  box-shadow: 0 0 0 2px var(--bg-elev);
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition: transform 0.12s ease;
 }
-.side-item .swatch:hover { transform: scale(1.25); box-shadow: 0 0 0 3px var(--accent-soft); }
+.side-item .swatch:hover { transform: scale(1.25); }
+/* The user-filter avatar is a button too: 24px is the minimum target size. */
+.side-item .avatar { width: 24px; height: 24px; }
 .side-item .label-text {
   flex: 1;
   min-width: 0;

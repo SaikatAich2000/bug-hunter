@@ -463,7 +463,7 @@ export function AppProvider({
     let warned = false;
     const boot = health?.asset_version;
     if (!boot) return;
-    const id = setInterval(async () => {
+    return startPoller(async () => {
       try {
         const h = await api("/health");
         if (!warned && h.asset_version && h.asset_version !== boot) {
@@ -474,7 +474,6 @@ export function AppProvider({
         /* ignore */
       }
     }, VERSION_POLL_MS);
-    return () => clearInterval(id);
   }, [health?.asset_version]);
 
   const setActiveTab = useCallback((t) => {
@@ -581,15 +580,7 @@ export function AppProvider({
   const bugModalOpenId = bugModal.open && bugModal.bug ? bugModal.bug.id : null;
   useEffect(() => {
     if (bugModalOpenId == null) return;
-    const tick = () => {
-      if (!document.hidden) void reloadBugModalRef.current();
-    };
-    const id = setInterval(tick, dataPollMs());
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", tick);
-    };
+    return startPoller(() => reloadBugModalRef.current(), dataPollMs());
   }, [bugModalOpenId]);
 
   const openProjectForm = useCallback((project) => {

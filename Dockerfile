@@ -32,6 +32,7 @@ COPY app/static ./app/static
 WORKDIR /repo/frontend
 RUN npm ci && npm run build
 
+# checkov:skip=CKV_DOCKER_7: BASE_IMAGE defaults to a version tag and may be overridden with a digest
 FROM ${BASE_IMAGE} AS base
 
 # Don't write .pyc files, flush logs immediately, no pip version-check chatter.
@@ -52,6 +53,9 @@ RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
+
+# The base image's pip lags its security fixes; the app's dependencies are installed with the fixed one.
+RUN pip install --no-cache-dir pip==26.2.0
 
 WORKDIR /app
 

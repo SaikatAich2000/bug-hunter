@@ -230,7 +230,7 @@ def _retire_levels_to_labels(conn, tables: set[str], bug_columns: set[str]) -> i
         converted += _features_to_labels(conn, touched_labels)
     for column in ("collection_id", "feature_id"):
         if column in bug_columns:
-            conn.execute(text(f"UPDATE bugs SET {column} = NULL WHERE {column} IS NOT NULL"))
+            conn.execute(text(f"UPDATE bugs SET {column} = NULL WHERE {column} IS NOT NULL"))  # noqa: S608  # nosec B608 - column is from a fixed internal tuple, not user input
     if "collection_items" in tables:
         conn.execute(text("DELETE FROM collection_items"))
     labels, links = Label.__table__, WorkItemLabel.__table__

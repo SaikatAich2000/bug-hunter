@@ -117,6 +117,23 @@ Last full verification of this release:
 | Schemathesis against the OpenAPI schema | zero 5xx responses |
 | Backup / restore / rollback drill | backup taken, data deleted, restore verified; rolling back to the previous `APP_VERSION` kept the data |
 
+## Audit suites
+
+Added by the pre-launch audit; results and how to run everything are in [security-testing.md](security-testing.md).
+
+| File or folder | What it pins |
+|---|---|
+| `tests/test_properties.py` | Hypothesis properties: the outbound-address guard, upload policy, formula defanging, CSV import, money parsing |
+| `tests/test_access_net_guard_units.py` | the address guard's full table, proxy pre-check, guarded connection backend |
+| `tests/test_fk_indexes.py` | every foreign key is covered by an index |
+| `tests/test_api_rate_ceiling.py` | the general per-address API limit |
+| `tests/test_database_unavailable.py` | a lost database answers 503 with `Retry-After` |
+| `tests/test_forgot_password_uniform.py` | known and unknown addresses cost the request the same work |
+| `tests/test_bulk_import_malformed.py` | a malformed CSV is a 400, never a 500 |
+| `tests/test_static_compression.py` | static files are gzipped once and served from memory; every shipped file type has a MIME type |
+| `tests/db/schema.sql` | generated pgTAP schema tests (`scripts/qa/gen_pgtap.py`, `scripts/qa/run_pgtap.sh`) |
+| `scripts/qa/smoke.hurl`, `scripts/qa/k6/mixed.js`, `scripts/qa/ui_audit.py`, `scripts/qa/seed_scale.py` | smoke, load, responsive and accessibility, and large-dataset tooling |
+
 ## Adding tests
 
 - New route: a test in the matching `tests/test_*.py`; new schema: a validator and a test.

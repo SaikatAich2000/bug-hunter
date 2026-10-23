@@ -31,6 +31,16 @@ export default function Shell() {
 
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // Escape closes the mobile menu drawer, as it does for any modal panel.
+  useEffect(() => {
+    if (!mobileOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
+
   // Refresh FCM token on boot; no-op when push is unsupported/ungranted.
   useEffect(() => {
     void initPushOnBoot();

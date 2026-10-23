@@ -147,6 +147,31 @@ describe("api() error handling", () => {
     expect(replaceSpy).not.toHaveBeenCalled();
   });
 
+  it("reports an abort nobody asked for as offline, and rethrows unknown errors untouched", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new DOMException("aborted", "AbortError"); }));
+    const aborted = await apiMod.api("/x").catch((e) => e);
+    expect(aborted).toBeInstanceOf(apiMod.ApiError);
+    expect(aborted.message).toBe(apiMod.OFFLINE_MESSAGE);
+    const odd = new RangeError("boom");
+    vi.stubGlobal("fetch", vi.fn(async () => { throw odd; }));
+    expect(await apiMod.api("/x").catch((e) => e)).toBe(odd);
+  });
+
+  it("rethrows the caller's own abort untouched", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new DOMException("aborted", "AbortError"); }));
+    const err = await apiMod.api("/x", { signal: ctrl.signal }).catch((e) => e);
+    expect(err).not.toBeInstanceOf(apiMod.ApiError);
+    expect(err.name).toBe("AbortError");
+  });
+
+  it("drops full stops from server sentences but keeps product names and acronyms capitalised", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ detail: "Saved ok. Paddle works. ABC runs. Next step." }, { status: 400 })));
+    const err = await apiMod.api("/x").catch((e) => e);
+    expect(err.message).toBe("Saved ok, Paddle works, ABC runs, next step");
+  });
+
   it("gives up on a request that never answers", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       init.signal.throwIfAborted();

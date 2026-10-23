@@ -2,6 +2,7 @@
  * Audit Trail view. Paginates GET /api/audit; filter changes replace the list,
  * "Load older entries" appends, a short page signals end-of-history.
  */
+import { startPoller } from "../lib/poller";
 import EmptyGuide from "../onboarding/EmptyGuide";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
@@ -109,14 +110,10 @@ export default function AuditView() {
 
   // Background poll; paused while hidden.
   useEffect(() => {
-    const refresh = () => {
-      if (document.hidden) return;
+    return startPoller(async () => {
       if (loadedCountRef.current > AUDIT_PAGE_SIZE) return; // user paged back; don't collapse
-      void fetchAudit(true);
-    };
-    const id = setInterval(refresh, dataPollMs());
-    document.addEventListener("visibilitychange", refresh);
-    return () => { clearInterval(id); document.removeEventListener("visibilitychange", refresh); };
+      await fetchAudit(true);
+    }, dataPollMs());
   }, [fetchAudit]);
 
   // Reset filters; tick bump triggers the immediate clean fetch.

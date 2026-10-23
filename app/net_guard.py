@@ -39,17 +39,23 @@ class HostNotAllowed(Exception):
     """The destination resolves to an address the server must not connect to."""
 
 
+def _embedded_ipv4(ip: Address) -> Address:
+    """The IPv4 address an IPv6 one tunnels to (mapped, or 6to4 as 2002:7f00:1:: -> 127.0.0.1), else ``ip``."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        return ip.ipv4_mapped or ip.sixtofour or ip
+    return ip
+
+
 def address_problem(ip: Address, allow_private: bool) -> str | None:
     """Why ``ip`` may not be connected to, or None when it may."""
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    ip = _embedded_ipv4(ip)
     if any(ip in net for net in _METADATA if net.version == ip.version) or ip.is_link_local:
         return "a link-local or cloud metadata address"
     if ip.is_unspecified or ip.is_multicast:
         return "a reserved address"
     if ip.is_loopback or ip.is_private or (ip.version == 4 and ip in _SHARED):
         return None if allow_private else "a private network address"
-    if ip.is_reserved:
+    if ip.is_reserved or (not allow_private and not ip.is_global):
         return "a reserved address"
     return None
 

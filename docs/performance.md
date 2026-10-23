@@ -84,3 +84,33 @@ client-bound and is not a capacity figure.
 - Errors above zero at a level means that level is past what the deployment sustains (or a
   limiter fired).
 - SQLite results do not transfer; these figures are PostgreSQL only.
+
+
+## Small instances: 0.1 CPU, 512 MB, slow disk
+
+The app is meant to stay responsive on a free-tier web service (a tenth of a core, 512 MB) with the database
+on a separate service. Measured with the container capped at exactly 0.1 CPU and 512 MB:
+
+| What | Result |
+|---|---|
+| Cold start to a healthy `/api/health` | about 20 s (the imports of FastAPI, SQLAlchemy and Pydantic dominate) |
+| Idle memory | about 120 MB; 30 minutes under load stayed under 140 MB |
+| Everyday calls (`/api/auth/me`, projects, small lists, create a work item) | 4-110 ms |
+| First load of the large JavaScript and CSS bundles (11 files at once) | 400 ms cold, 110 ms once cached |
+| Sign in | about 1.9 s at bcrypt cost 12 |
+| Capacity | roughly 10 requests per second at 0.1 CPU (27-38 at 0.3 CPU); beyond that latency grows and nothing fails |
+
+What keeps it light:
+
+- **Static files** are compressed once per process and served from memory (`app/static_files.py`), not recompressed on every request.
+- **Background polling** slows to a quarter after two idle minutes and stops after ten (`frontend/src/lib/poller.js`); hidden tabs never poll. A visible, active tab costs about 0.15 requests per second.
+- **Per-request cost** is about 2-4 ms of CPU: one session lookup, a handful of statements, no N+1 (`tests/test_sql_budget.py` pins the statement counts).
+- **Database**: every foreign key has an index, so deletes stay cheap as tables grow. SQLite (self-hosted) runs in WAL mode with `synchronous=NORMAL`, which suits a spinning disk.
+- **Telemetry** costs nothing until `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+Settings worth changing on a small instance:
+
+- `BCRYPT_ROUNDS=10` (the minimum the app allows and OWASP's floor) makes sign-in about four times faster. Every sign-in stalls other requests for its duration, because the whole container is throttled together. Existing password hashes keep working.
+- `DB_POOL_SIZE` 3-5 and `DB_MAX_OVERFLOW` 2-5; a larger pool did not make anything faster in testing and holds more database memory.
+- Keep one Uvicorn worker (the default). Several workers share the same tenth of a core and multiply memory.
+- A free-tier service sleeps when idle and the next request waits for the cold start; an external uptime check keeps it warm.

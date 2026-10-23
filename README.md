@@ -214,7 +214,7 @@ All commands and CI jobs: [Testing](docs/testing.md) · [Local development](docs
 | Observability (OpenTelemetry, SigNoz) | [observability.md](docs/observability.md) |
 | Security model | [security-model.md](docs/security-model.md) |
 | Code layout | [architecture.md](docs/architecture.md) |
-| Tests, CI and performance | [testing.md](docs/testing.md) · [development.md](docs/development.md) · [performance.md](docs/performance.md) |
+| Tests, CI and performance | [testing.md](docs/testing.md) · [development.md](docs/development.md) · [performance.md](docs/performance.md) · [security-testing.md](docs/security-testing.md) |
 | Fixes for common problems | [troubleshooting.md](docs/troubleshooting.md) |
 
 Need several teams on one install, with billing? See **Bug Hunter Enterprise**.

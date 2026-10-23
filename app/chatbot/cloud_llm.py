@@ -122,6 +122,13 @@ SYSTEM_PROMPT = (
 
 
 # Provider calls (httpx REST — no SDK dependency)
+def _groq_reasoning_params(model: str) -> dict[str, Any]:
+    """gpt-oss models think before answering; keep that short and out of the reply so the token budget goes to the JSON answer."""
+    if (model or "").startswith("openai/gpt-oss"):
+        return {"reasoning_effort": "low", "include_reasoning": False}
+    return {}
+
+
 def _call_groq(system: str, user: str, *, temperature: float = 0.0,
                frequency_penalty: float = 0.0,
                presence_penalty: float = 0.0) -> str | None:
@@ -148,6 +155,7 @@ def _call_groq(system: str, user: str, *, temperature: float = 0.0,
                 "response_format": {"type": "json_object"},
                 "frequency_penalty": frequency_penalty,
                 "presence_penalty": presence_penalty,
+                **_groq_reasoning_params(s.GROQ_MODEL),
             },
             timeout=s.SLEUTH_CLOUD_TIMEOUT_S,
         )

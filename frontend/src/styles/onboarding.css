@@ -113,3 +113,10 @@
 .empty-guide { margin-top: 14px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .empty-guide-hint { margin: 0; color: var(--text-muted); font-size: 13px; }
 .empty-guide-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+/* Phones: stack the actions full width instead of letting them run off the edge. */
+@media (max-width: 560px) {
+  .welcome-foot { flex-direction: column-reverse; align-items: stretch; }
+  .welcome-foot .grow { display: none; }
+  .welcome-foot .btn { width: 100%; justify-content: center; text-align: center; }
+}

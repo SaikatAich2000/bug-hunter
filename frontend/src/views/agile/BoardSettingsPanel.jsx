@@ -232,11 +232,11 @@ function ColumnsSettings({ board, onSaved }) {
             </div>
             <div className="ag-form-row">
               <label className="field"><span>Min</span>
-                <input type="number" min="1" value={col.min_cards ?? ""} aria-label={`${col.name} minimum`}
+                <input type="number" min="1" max="1000" value={col.min_cards ?? ""} aria-label={`${col.name} minimum`}
                   onChange={(e) => update(index, { min_cards: numberOrNull(e.target.value) })} />
               </label>
               <label className="field"><span>Max</span>
-                <input type="number" min="1" value={col.wip_limit ?? ""} aria-label={`${col.name} maximum`}
+                <input type="number" min="1" max="1000" value={col.wip_limit ?? ""} aria-label={`${col.name} maximum`}
                   onChange={(e) => update(index, { wip_limit: numberOrNull(e.target.value) })} />
               </label>
             </div>

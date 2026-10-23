@@ -341,7 +341,7 @@ export default function BugModal() {
       } catch {
         if (!cancelled) setAvailableSprints([]);
       }
-    })();
+    })().catch(() => undefined);
     return () => { cancelled = true; };
   }, [open, isEdit, bugId, bug?.project_id, projectId]);
 

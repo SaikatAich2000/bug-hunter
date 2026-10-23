@@ -140,8 +140,8 @@ class BoardColumnIn(BaseModel):
     id: int | None = None
     name: str = Field(max_length=80)
     category: str
-    wip_limit: int | None = Field(default=None, ge=1)
-    min_cards: int | None = Field(default=None, ge=1)
+    wip_limit: int | None = Field(default=None, ge=1, le=1000)
+    min_cards: int | None = Field(default=None, ge=1, le=1000)
     wip_enforcement: str = "off"
     color: str = Field(default="", max_length=20)
     statuses: list[str] = Field(default_factory=list, max_length=100)

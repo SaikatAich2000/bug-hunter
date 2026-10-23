@@ -11,7 +11,7 @@ from app.schemas.common import ALLOWED_CAPACITY_UNITS, normalize_choice
 # Agile: capacity, planning readiness.
 class SprintCapacityIn(BaseModel):
     user_id: int
-    capacity_value: float = Field(ge=0)
+    capacity_value: float = Field(ge=0, le=100_000, allow_inf_nan=False)
     capacity_unit: str
     days_off: list[str] = Field(default_factory=list, max_length=366)
     notes: str = Field(default="", max_length=500)

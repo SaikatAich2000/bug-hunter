@@ -169,7 +169,7 @@ export default function ReportsView() {
       } catch (err) {
         toastError(err);
       }
-    })();
+    })().catch(() => undefined);
   }, []);
 
   const selectedMeta = catalog?.types.find((t) => t.key === reportKey);

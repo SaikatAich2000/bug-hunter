@@ -94,7 +94,7 @@ services:
       # Sleuth cloud assistant: off unless enabled with a key in .env.
       SLEUTH_CLOUD_ENABLED: ${SLEUTH_CLOUD_ENABLED:-0}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       SLEUTH_RAG_ENABLED: ${SLEUTH_RAG_ENABLED:-0}
       # Independent read-only add-ons, all off by default.
@@ -108,9 +108,9 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen-2.5-7b-instruct:free}
       # Embeddings for RAG only; Groq has no embeddings endpoint.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-text-embedding-004}
+      GEMINI_EMBED_MODEL: ${GEMINI_EMBED_MODEL:-gemini-embedding-001}
       SLEUTH_CLOUD_TIMEOUT_S: ${SLEUTH_CLOUD_TIMEOUT_S:-20}
-      SLEUTH_CLOUD_MAX_TOKENS: ${SLEUTH_CLOUD_MAX_TOKENS:-600}
+      SLEUTH_CLOUD_MAX_TOKENS: ${SLEUTH_CLOUD_MAX_TOKENS:-1024}
       # Tool, judge and agent calls stay at temperature 0 for deterministic routing.
       SLEUTH_CLOUD_TEMPERATURE: ${SLEUTH_CLOUD_TEMPERATURE:-0.6}
       SLEUTH_CLOUD_TEMPERATURE_TOOLS: ${SLEUTH_CLOUD_TEMPERATURE_TOOLS:-0.0}

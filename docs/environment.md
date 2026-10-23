@@ -87,11 +87,11 @@ doesn't depend on FCM.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `GROQ_MODEL` | llama-3.3-70b-versatile | Groq chat model |
+| `GROQ_MODEL` | openai/gpt-oss-120b | Groq chat model |
 | `OPENROUTER_API_KEY` | empty | Fallback model provider when no Groq key is set |
 | `OPENROUTER_MODEL` | qwen/qwen-2.5-7b-instruct:free | Model used with OpenRouter |
-| `GEMINI_EMBED_MODEL` | text-embedding-004 | Embedding model for document search (chat itself never calls Gemini) |
-| `SLEUTH_CLOUD_MAX_TOKENS` | 600 | Longest cloud reply, in tokens |
+| `GEMINI_EMBED_MODEL` | gemini-embedding-001 | Embedding model for document search (chat itself never calls Gemini) |
+| `SLEUTH_CLOUD_MAX_TOKENS` | 1024 | Longest cloud reply, in tokens |
 | `SLEUTH_CLOUD_TEMPERATURE` | 0.6 | Randomness of conversational replies |
 | `SLEUTH_CLOUD_TEMPERATURE_TOOLS` | 0.0 | Randomness for tool and evaluation calls |
 | `SLEUTH_CLOUD_FREQUENCY_PENALTY` | 0.3 | Discourages repeated words |

@@ -389,7 +389,7 @@ export function AppProvider({
       void loadNotifications();
       await refreshAll();
       setBooted(true);
-    })();
+    })().catch(() => undefined);
   }, [loadUsers, loadProjects, refreshAll, loadNotifications]);
 
   // Re-fetch the list on page / filter / tab change.

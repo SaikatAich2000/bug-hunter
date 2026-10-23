@@ -174,6 +174,7 @@ export default function PlanningPanel({ projectId, canManage }) {
                       <input
                         type="number"
                         min="0"
+                        max="100000"
                         disabled={!canManage}
                         value={capacityDraftState.entries[u.id]?.value ?? ""}
                         onChange={(e) => setDraft(u.id, "value", e.target.value)}
@@ -184,6 +185,7 @@ export default function PlanningPanel({ projectId, canManage }) {
                     <td>
                       <input
                         disabled={!canManage}
+                        maxLength={500}
                         value={capacityDraftState.entries[u.id]?.notes ?? ""}
                         onChange={(e) => setDraft(u.id, "notes", e.target.value)}
                         placeholder="Optional"

@@ -22,6 +22,7 @@ def _load_dotenv() -> None:
         return
     try:
         load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+        load_dotenv("/etc/secrets/.env", override=False)  # Render secret file
     except OSError as exc:
         logger.warning("Could not load .env file: %s", exc)
 
@@ -238,14 +239,14 @@ class Settings:
     # Cloud layer never writes or invents counts: data questions route back through deterministic SQL.
     SLEUTH_CLOUD_ENABLED: bool = env_bool("SLEUTH_CLOUD_ENABLED", False)
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")  # primary provider
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")  # fallback provider
     OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-7b-instruct:free")
     # RAG embeddings only (Groq has no embeddings endpoint); chat itself never calls Gemini.
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_EMBED_MODEL: str = os.getenv("GEMINI_EMBED_MODEL", "text-embedding-004")
+    GEMINI_EMBED_MODEL: str = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
     SLEUTH_CLOUD_TIMEOUT_S: float = env_float("SLEUTH_CLOUD_TIMEOUT_S", 20, minimum=1)
-    SLEUTH_CLOUD_MAX_TOKENS: int = env_int("SLEUTH_CLOUD_MAX_TOKENS", 600, minimum=1)
+    SLEUTH_CLOUD_MAX_TOKENS: int = env_int("SLEUTH_CLOUD_MAX_TOKENS", 1024, minimum=1)
     # Small temperature for the conversational path only; tool/eval sub-calls use TEMPERATURE_TOOLS (0.0).
     SLEUTH_CLOUD_TEMPERATURE: float = env_float("SLEUTH_CLOUD_TEMPERATURE", 0.6, minimum=0.0)
     SLEUTH_CLOUD_TEMPERATURE_TOOLS: float = env_float("SLEUTH_CLOUD_TEMPERATURE_TOOLS", 0.0, minimum=0.0)

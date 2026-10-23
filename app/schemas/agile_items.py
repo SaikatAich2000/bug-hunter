@@ -75,7 +75,7 @@ class AgileWorkItemCreateIn(BaseModel):
     priority: str = Field(default="Medium")
     parent_id: int | None = None
     epic_id: int | None = None
-    story_points: float | None = Field(default=None, ge=0)
+    story_points: float | None = Field(default=None, ge=0, le=10_000, allow_inf_nan=False)
     assignee_ids: list[int] = Field(default_factory=list, max_length=200)
     start_date: str | None = None
     end_date: str | None = None
@@ -181,9 +181,9 @@ class WorkItemTransitionIn(BaseModel):
 
 
 class WorkItemEstimateIn(BaseModel):
-    story_points: float | None = Field(default=None, ge=0)
-    original_estimate_minutes: int | None = Field(default=None, ge=0)
-    remaining_estimate_minutes: int | None = Field(default=None, ge=0)
+    story_points: float | None = Field(default=None, ge=0, le=10_000, allow_inf_nan=False)
+    original_estimate_minutes: int | None = Field(default=None, ge=0, le=1_000_000)
+    remaining_estimate_minutes: int | None = Field(default=None, ge=0, le=1_000_000)
     version: int = Field(ge=0)
 
 

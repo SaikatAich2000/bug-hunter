@@ -164,6 +164,7 @@ export default function LoginPage() {
               ref={loginEmailRef}
               name="email"
               type="email"
+              maxLength={254}
               required
               autoComplete="username"
               autoFocus
@@ -261,6 +262,7 @@ export default function LoginPage() {
               ref={forgotEmailRef}
               name="email"
               type="email"
+              maxLength={254}
               required
               autoComplete="username"
             />

@@ -44,6 +44,12 @@ export default [
     },
   },
   {
+    // Build scripts and the Vite config run in Node, not the browser.
+    files: ["scripts/**/*.mjs", "vite.config.js"],
+    languageOptions: { globals: { ...globals.node } },
+    rules: { "no-useless-escape": "off" },
+  },
+  {
     // Vendored/generated output never gets linted.
     ignores: ["dist/**", "../app/static/**", "node_modules/**"],
   },

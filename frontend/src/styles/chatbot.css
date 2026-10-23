@@ -651,6 +651,11 @@ a.sleuth-file-btn:active,
   }
   /* Panel is near-fullscreen here; manual resize doesn't apply. */
   .sleuth-resize { display: none; }
+  /* dvh follows the on-screen keyboard (the viewport meta asks browsers to resize the page for it). */
+  .sleuth-panel { height: 80dvh; max-height: calc(100dvh - 96px); }
+  /* Typing: use every pixel above the keyboard and get the round button out of the way. */
+  .sleuth-panel:focus-within { bottom: 8px; height: calc(100dvh - 16px); max-height: calc(100dvh - 16px); }
+  body:has(.sleuth-panel:focus-within) .sleuth-fab { display: none; }
 }
 
 @media (forced-colors: active) {

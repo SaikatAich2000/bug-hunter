@@ -28,10 +28,14 @@ function bounceToLogin() {
 /** Readable message from a FastAPI error body. */
 const PROPER = /^(Paddle|Android|GitHub|Sleuth|Google|Firebase|Excel|Git|JSON|UPI|PayPal)$/;
 /** Server sentences are shown without full stops: "A. B." becomes "A, b". */
+// Drops one closing full stop (not an ellipsis) and the whitespace after it.
+const dropFinalStop = (s) => {
+  const t = s.trimEnd();
+  return t.endsWith(".") && !t.endsWith("..") ? t.slice(0, -1) : s;
+};
 const trimStop = (s) =>
-  s
-    .replace(/(?<!\.)\.\s*$/, "")
-    .replace(/([a-z)]{2,})\.(\s+)([A-Z][A-Za-z'-]*)/g, (_m, before, ws, word) => {
+  dropFinalStop(s)
+    .replace(/([a-z)]{2})\.(\s+)([A-Z][A-Za-z'-]*)/g, (_m, before, ws, word) => {
       const keep = PROPER.test(word) || /^[A-Z]{2,}$/.test(word);
       return `${before},${ws}${keep ? word : word[0].toLowerCase() + word.slice(1)}`;
     });

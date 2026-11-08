@@ -11,14 +11,14 @@
 # ), consumed via `pip install -r requirements-lock.txt`. Keep this file
 # the human-maintained source of truth; regenerate the lock after any
 # dependency change and after a successful `pip-audit`.
-fastapi>=0.143.0
+fastapi>=0.162.0
 uvicorn[standard]>=0.54.0
-sqlalchemy>=2.1.4
-pydantic>=2.14.0
-psycopg[binary]>=3.3.6
+sqlalchemy>=2.1.6
+pydantic>=2.14.2
+psycopg[binary]>=3.3.7
 python-dotenv>=1.2.4
 httpx>=0.28.1
-python-multipart>=0.0.32
+python-multipart>=0.0.33
 bcrypt>=5.0.0
 itsdangerous>=2.2.0
 
@@ -27,7 +27,7 @@ itsdangerous>=2.2.0
 # ZoneInfo(EMAIL_DIGEST_TIMEZONE) — e.g. "Asia/Kolkata" — cannot resolve and the
 # scheduler silently falls back to UTC, firing the digest at the cron time in UTC
 # instead of local time (08:00 IST would run at 13:30 IST). Data-only package.
-tzdata>=2026.5
+tzdata>=2026.6
 
 # T6: EXIF / metadata stripper for uploaded images. Pillow is lazily
 # imported by app/image_strip.py so deploys that skip it (or fail to
@@ -39,7 +39,7 @@ Pillow>=12.3.0
 # interception CA, so httpx fails with CERTIFICATE_VERIFY_FAILED even though the
 # OS trusts it. truststore delegates verification to the platform trust store
 # instead (app/git/tls.py). Verification is never disabled. Data-only package.
-truststore>=0.10.4
+truststore>=0.10.5
 
 # Fernet (AES-128-CBC + HMAC-SHA256) for project-level Git credentials at rest
 # (app/git/credentials.py). The key is server-only (GIT_CREDENTIAL_ENCRYPTION_KEY)
@@ -67,9 +67,9 @@ firebase-admin>=7.7.0
 
 # --- SigNoz observability: OTLP/gRPC traces + metrics + logs (app/telemetry.py) ---
 # gRPC receiver confirmed at OTEL_EXPORTER_OTLP_ENDPOINT (http:// scheme = cleartext h2c).
-opentelemetry-sdk>=1.45.1
-opentelemetry-exporter-otlp-proto-grpc>=1.45.1
-opentelemetry-exporter-otlp-proto-http>=1.45.1
+opentelemetry-sdk>=1.45.2
+opentelemetry-exporter-otlp-proto-grpc>=1.45.2
+opentelemetry-exporter-otlp-proto-http>=1.45.2
 # Auto-instrumentation: FastAPI server spans/HTTP metrics, SQLAlchemy DB spans,
 # httpx outbound spans, and the stdlib-logging bridge (trace correlation).
 opentelemetry-instrumentation-fastapi>=0.66b1
